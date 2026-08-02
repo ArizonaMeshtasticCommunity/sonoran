@@ -844,3 +844,63 @@ def test_a_request_only_link_is_marked_one_way(migrated_engine, timescale_url: s
     link = by_pair[frozenset(("!00002261", "!00002262"))]
     assert link["confirmed"] is False, "no reply came back, so the evidence runs one way"
     assert link["snr"] == 3.0, "the hop was still measured"
+
+
+def test_map_nodes_follow_the_preset(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The dots on the map belong to the preset the lines belong to.
+
+    A node on LongFast cannot hear a node on MediumFast, so drawing both
+    sets of dots under one preset's lines invites the reader to join two
+    nodes that have no way to reach each other. See AGENTS.md 9.7.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for node_num, lat in ((8901, 33.1), (8902, 33.2), (8903, 33.3)):
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, first_seen, updated_at, "
+                    "last_heard, last_lat, last_lon) "
+                    "VALUES (:n, :nid, :sn, :now, :now, :now, :lat, -112.0) "
+                    "ON CONFLICT (node_num) DO NOTHING"
+                ),
+                {
+                    "n": node_num,
+                    "nid": f"!{node_num:08x}",
+                    "sn": f"M{node_num}",
+                    "now": now,
+                    "lat": lat,
+                },
+            )
+        # 8901 talks on LongFast, 8902 on MediumFast. 8903 talks on both,
+        # which a real dual-preset node does.
+        for node_num, packet_id, channel in (
+            (8901, 890001, "LongFast"),
+            (8902, 890002, "MediumFast"),
+            (8903, 890003, "LongFast"),
+            (8903, 890004, "MediumFast"),
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, channel, seen_at) "
+                    "VALUES (:n, :p, 8901, 'msh/US/AZ/t', :c, :now) ON CONFLICT DO NOTHING"
+                ),
+                {"n": node_num, "p": packet_id, "c": channel, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        long_fast = {n["node_id"] for n in client.get("/api/map/nodes?channel=LongFast").json()}
+        medium = {n["node_id"] for n in client.get("/api/map/nodes?channel=MediumFast").json()}
+        every = {n["node_id"] for n in client.get("/api/map/nodes").json()}
+
+    assert "!000022c5" in long_fast  # 8901
+    assert "!000022c6" not in long_fast, "a MediumFast node must not sit under LongFast lines"
+    assert "!000022c6" in medium  # 8902
+    assert "!000022c5" not in medium
+
+    # A node that really runs both presets belongs to both.
+    assert "!000022c7" in long_fast and "!000022c7" in medium
+
+    # Without the parameter the map holds every positioned node.
+    assert {"!000022c5", "!000022c6", "!000022c7"} <= every

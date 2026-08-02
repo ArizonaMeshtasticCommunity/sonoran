@@ -128,6 +128,12 @@
               <label class="muted" data-link-channel-wrap>Preset
                 <select data-link-channel></select>
               </label>
+              <!--
+                The dots follow the preset with the lines. A topic
+                channel such as Weather has few nodes of its own, so
+                this brings the whole mesh back when that is wanted.
+              -->
+              <button type="button" class="toggle" data-map-all-nodes aria-pressed="false">Every node</button>
               <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
             </div>
           </div>

@@ -60,6 +60,8 @@ def _require_node_num(value: str) -> int:
 @router.get("/nodes")
 async def map_nodes(
     active_hours: int | None = Query(default=None, ge=1, le=720),
+    channel: str | None = None,
+    hours: int = Query(default=32, ge=1, le=720),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
     """Return nodes with a current position.
@@ -67,12 +69,35 @@ async def map_nodes(
     A node whose position is not a real place is left out. See
     `sonoran.positions`. Rows written before that check went into the
     ingest still hold one, and a map is the wrong place to show it.
+
+    The `channel` parameter keeps one preset on the map. A node on
+    LongFast cannot hear a node on MediumFast, so drawing both sets of
+    dots under one set of lines invites the reader to join two nodes
+    that have no way to reach each other. Every other layer on that page
+    already took this parameter. See AGENTS.md 9.7.
+
+    A node belongs to a channel when it sent traffic seen on it inside
+    `hours`. That is a claim about what the node was doing, not about
+    how it is configured, so a node that really does run two presets
+    appears on both. Live data had 14 such nodes against 709.
+
+    Without the parameter the response holds every positioned node.
     """
     statement = select(Node).where(Node.last_lat.is_not(None), Node.last_lon.is_not(None))
     if active_hours is not None:
         statement = statement.where(
             Node.last_heard >= datetime.now(UTC) - timedelta(hours=active_hours)
         )
+    if channel is not None:
+        on_channel = (
+            select(PacketSeen.from_node_num)
+            .where(
+                PacketSeen.seen_at >= datetime.now(UTC) - timedelta(hours=hours),
+                channel_filter(PacketSeen.channel, channel),
+            )
+            .distinct()
+        )
+        statement = statement.where(Node.node_num.in_(on_channel))
     nodes = [
         node
         for node in (await session.scalars(statement)).all()

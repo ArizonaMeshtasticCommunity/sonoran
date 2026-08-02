@@ -259,6 +259,20 @@ cannot hear a node on MediumFast. Never draw two presets in one graph:
 the lines between them cannot exist. `neighbor_metrics` and
 `traceroute` both store `channel` for this reason.
 
+The rule covers the dots as well as the lines. `/api/map/nodes` took no
+`channel` for a long time while every other layer on that page took
+one, so switching the preset picker changed the lines and left all 395
+positioned nodes in place. The reader is then invited to join two nodes
+that have no way to reach each other. A node belongs to a channel when
+it sent traffic seen on it, which is a claim about what it was doing
+rather than how it is configured, so a genuine dual-preset node appears
+on both. Live data had 14 of those against 709.
+
+The picker also offers channels that are not presets, such as Weather
+and PKI. Those ride on top of a preset, so filtering the nodes by one
+of them gives the handful that talk there rather than a radio set. The
+map keeps an "Every node" toggle for that reason.
+
 ### 9.8 mesh-graph keys a trace on the request ID
 
 mesh-graph serves `/graph/trace/{trace_id}`, where its ingest reads:

@@ -277,6 +277,26 @@ Returns one message with its replies. Replies match on `reply_id`.
 
 Returns nodes that have a current position.
 
+Query parameters:
+
+- `active_hours` — keep nodes heard inside this window. Optional.
+- `channel` — keep nodes that sent traffic seen on this channel. Use
+  `unknown` for traffic with no stored channel. Without this parameter
+  the response holds every positioned node.
+- `hours` — the window `channel` looks over. Default 32, which is the
+  window the map's neighbour links use, so a line always has both of
+  its nodes on the map.
+
+A node belongs to a channel when it sent traffic seen on it inside the
+window. That is a claim about what the node was doing, not about how it
+is configured, so a node that really does run two presets appears on
+both. Live data had 14 such nodes against 709.
+
+The map must pass `channel` whenever it draws one preset. A node on
+LongFast cannot hear a node on MediumFast, so drawing both sets of dots
+under one preset's lines invites the reader to join two nodes that have
+no way to reach each other. See AGENTS.md 9.7.
+
 Response item: `node_id`, `short_name`, `lat`, `lon`, `altitude`,
 `last_heard`, `role`, `is_mqtt_gateway`.
 

@@ -530,6 +530,13 @@ function applyRoleFilter() {
  * so this counts what came back and shows only those. Each entry is a
  * button that limits the map to that role.
  */
+/*
+ * What the dots on the map are, in words. The map draws one preset at a
+ * time, so the count changes when the picker does, and a reader who
+ * does not know that sees nodes disappear for no reason.
+ */
+let mapNodeScope = '';
+
 function drawMapLegend(target, rows) {
   const counts = new Map();
   for (const row of rows) {
@@ -566,6 +573,8 @@ function drawMapLegend(target, rows) {
     el('span', { class: 'legend-note' }, el('span', { class: 'line direct' }), 'Heard direct'),
     el('span', { class: 'legend-note' }, el('span', { class: 'line relayed' }), 'Relayed, arrow shows where it went'),
     el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }), 'Neighbour link'),
+    // Which nodes these dots are, so a shrunken map is never a mystery.
+    mapNodeScope ? el('span', { class: 'legend-note muted', text: mapNodeScope }) : null,
   ]);
 
   // The handlers are attached after the fact so each button carries the
@@ -985,8 +994,23 @@ PAGES.map = async (page) => {
   const showTraces = $('[data-show-traces]', page).getAttribute('aria-pressed') === 'true';
 
   const channel = await linkChannelOptions(page);
-
-  const nodes = await get('api/map/nodes').catch(() => null);
+  /*
+   * The dots follow the preset that the lines follow. A node on
+   * LongFast cannot hear a node on MediumFast, so showing every dot
+   * under one preset's lines invites the reader to join two nodes that
+   * have no way to reach each other. Every other layer already did
+   * this. See AGENTS.md 9.7.
+   *
+   * The window is the one the neighbour links use, so a line always has
+   * both of its nodes on the map.
+   */
+  const allNodes = $('[data-map-all-nodes]', page).getAttribute('aria-pressed') === 'true';
+  const nodes = await get(
+    'api/map/nodes'
+    + (channel && !allNodes
+      ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}`
+      : ''),
+  ).catch(() => null);
   if (!nodes) return;
   const [traffic, edges, traces] = await getAll([
     showTraffic
@@ -1001,6 +1025,10 @@ PAGES.map = async (page) => {
         (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
   ]);
+
+  mapNodeScope = channel && !allNodes
+    ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
+    : `${count(nodes.length)} nodes, every preset`;
 
   // Held so the legend filter can redraw without another request.
   mapState.lastNodes = nodes;
