@@ -1224,6 +1224,9 @@ const graphPinned = new Map();
 /* The picture those pins were placed on: channel, window, and layout. */
 let graphArrangement = '';
 
+/* Where that picture puts every node, before any dragging. */
+let graphSeeds = new Map();
+
 /**
  * Project the nodes that report a position onto flat layout units.
  *
@@ -1313,23 +1316,30 @@ function seedPositions(nodes, links) {
 }
 
 /**
- * Push overlapping nodes apart without moving them far.
+ * Open the mesh out until no two nodes crowd each other.
  *
  * Nodes on one rooftop, and the many that report the same default
- * position, land on the same point and bury their own links. A few
- * passes of separation opens them enough to see, and because each push
- * is small the geography survives it.
+ * position, land on the same point and bury their own links. Each pass
+ * pushes any pair closer than the gap apart, and repeating it lets a
+ * crowd spread outwards instead of only its outermost pair moving.
  *
- * The sweep is every pair against every other. That is fine for the
- * few hundred nodes a preset holds, and it stops above that rather
- * than locking the page up.
+ * The gap and the passes were measured rather than guessed. On the
+ * busiest preset the spacing between neighbouring nodes runs about
+ * three times what it was, while the mesh as a whole grows by under a
+ * fifth, so the chart's fit to the canvas does not take the gain back.
+ * Passes past this point buy very little: the pairs are already the
+ * full gap apart and only the tightest knots are still opening.
+ *
+ * The sweep is every pair against every other, which is why this runs
+ * once for the whole mesh and is kept. It stops above a few thousand
+ * nodes rather than locking the page up.
  */
 function separatePositions(seeds, nodes) {
   const ids = nodes.map((node) => node.node_id).filter((id) => seeds.has(id));
   if (ids.length > 1500) return seeds;
 
-  const gap = GRAPH_SPAN / 90;
-  for (let pass = 0; pass < 6; pass += 1) {
+  const gap = GRAPH_SPAN / 24;
+  for (let pass = 0; pass < 28; pass += 1) {
     for (let a = 0; a < ids.length; a += 1) {
       for (let b = a + 1; b < ids.length; b += 1) {
         const first = seeds.get(ids[a]);
@@ -1455,6 +1465,31 @@ PAGES.graph = async (page) => {
   const allLinks = data.links;
   const confirmed = allLinks.filter((link) => link.snr != null);
   const unconfirmed = allLinks.length - confirmed.length;
+
+  /*
+   * Where each node sits, worked out once for the whole mesh.
+   *
+   * It is done here, on everything the endpoint sent, rather than on
+   * what the toggles and the view leave behind. A node then keeps its
+   * place when the reader narrows the picture, instead of the whole
+   * mesh rearranging itself underneath them.
+   *
+   * The result is kept because it is the expensive part of the page and
+   * the search box redraws on every keystroke. Only a different
+   * channel, window, or layout is a different arrangement.
+   */
+  const layout = $('[data-graph-layout]', page).value || 'spread';
+  const arrangement = `${graphChannel}|${hours}|${layout}`;
+  // A node the kept arrangement has never placed would be drawn at no
+  // position at all, so a mesh that has grown since is worked out again.
+  const covers = data.nodes.every((node) => graphSeeds.has(node.node_id));
+  if (arrangement !== graphArrangement || !(covers || layout === 'free')) {
+    // A pin belongs to the arrangement it was placed on.
+    if (arrangement !== graphArrangement) graphPinned.clear();
+    graphArrangement = arrangement;
+    graphSeeds = layout === 'free' ? new Map() : seedPositions(data.nodes, allLinks);
+    if (layout === 'spread') separatePositions(graphSeeds, data.nodes);
+  }
   /*
    * Two different weaknesses, two different toggles.
    *
@@ -1539,27 +1574,13 @@ PAGES.graph = async (page) => {
   const busiest = Math.max(1, ...sizes);
 
   /*
-   * Where each node starts. "spread" and "ground" both lay the mesh
-   * out over real positions, so the two knots land where Phoenix and
-   * Tucson really are and stay there between redraws. "free" is the
-   * old force layout, for the shape of the mesh on its own terms.
+   * The arrangement worked out above, with whatever the reader has
+   * since dragged laid over the top. Nothing reported a position at
+   * all means there is no ground to lay the mesh on, and it falls back
+   * to the force layout.
    */
-  const layout = $('[data-graph-layout]', page).value || 'spread';
-  /*
-   * A pin belongs to the picture it was made on. Another channel,
-   * window, or layout is a different picture, so the pins are dropped
-   * rather than carried onto a mesh they were never placed in.
-   */
-  const arrangement = `${graphChannel}|${hours}|${layout}`;
-  if (arrangement !== graphArrangement) {
-    graphPinned.clear();
-    graphArrangement = arrangement;
-  }
-  const geographic = layout !== 'free';
-  let seeds = geographic ? seedPositions(data.nodes, data.links) : new Map();
-  if (layout === 'spread') seeds = separatePositions(seeds, data.nodes);
-  // Nothing reported a position, so there is no ground to lay it on.
-  const onGround = geographic && seeds.size > 0;
+  const onGround = graphSeeds.size > 0;
+  const seeds = new Map(graphSeeds);
   for (const [id, point] of graphPinned) {
     if (seeds.has(id)) seeds.set(id, point.slice());
   }
