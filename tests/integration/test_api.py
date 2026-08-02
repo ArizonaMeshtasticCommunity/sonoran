@@ -715,3 +715,46 @@ def test_a_sender_gatewaying_itself_is_not_a_direct_observation(
     # Three uploads arrived, but only two gateways sent them.
     assert len(body["observations"]) == 3
     assert body["gateway_count"] == 2
+
+
+def test_traffic_events_carry_the_hop_count(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The live map says how far a relayed line is from the truth.
+
+    An ordinary packet carries no route, so which nodes it passed
+    through is not recorded and cannot be drawn. The hop count is the
+    whole of what is known.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                "first_seen_at) VALUES (8601, 93, 1, 5, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"now": now},
+        )
+        for gateway, hop_limit in ((8602, 2), (8603, 5)):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, channel, hop_limit, seen_at) "
+                    "VALUES (8601, 93, :g, 'msh/US/AZ/t', 'LongFast', :h, :now) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"g": gateway, "h": hop_limit, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        events = client.get("/api/map/traffic?minutes=60&limit=400").json()["events"]
+
+    mine = {e["gateway"]["node_id"]: e for e in events if e["packet_id"] == 93}
+    relayed = mine["!0000219a"]
+    straight = mine["!0000219b"]
+
+    # Five hops were available and two remain, so three were burned.
+    assert relayed["hops_taken"] == 3
+    assert relayed["direct"] is False
+    # Nothing was burned, so this gateway heard the sender itself.
+    assert straight["hops_taken"] == 0
+    assert straight["direct"] is True

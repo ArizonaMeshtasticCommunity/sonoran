@@ -443,6 +443,24 @@ a fixed 24 hours while the graph drew whatever `[data-graph-hours]`
 said. A link found over seven days then opened an empty page.
 `graphHours` carries the window across.
 
+### 9.20 An ordinary packet does not carry its route
+
+Only a traceroute holds the nodes it passed through. Every other packet
+arrives with the sender, the gateway that uploaded it, and a hop count,
+and nothing at all about the ground between them. A live traffic line is
+therefore a straight line between two ends of a route that was never
+straight. Say the hop count and leave the rest unclaimed. The one place
+a true path can be drawn is `/api/map/traceroute-paths`.
+
+`MeshPacket.relay_node` looks like the missing piece and is not. The
+firmware truncates it to one byte, the low byte of the relayer's node
+number, and `mesh_packet_metrics.relay_node_num` stores that byte as it
+arrives. Values run 2 to 255. With 694 nodes active in a day this mesh
+had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for
+the worst, and only 5.4 percent of relay observations resolving to a
+single node. It also names the last hop alone, never the path. Drawing
+a line from it would be a guess.
+
 ## 10. Reference documents
 
 - `docs/PLAN.md` — the purpose, decisions, and requirements

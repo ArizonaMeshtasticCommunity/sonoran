@@ -324,13 +324,20 @@ Query parameters:
 
 Response: `window_minutes`, `event_count`, `direct_count`, and `events`.
 Each event has `time`, `packet_id`, `channel`, `portnum`, `snr`, `rssi`,
-`hop_limit`, `hop_start`, `direct`, `from`, `gateway`, and `has_line`.
+`hop_limit`, `hop_start`, `hops_taken`, `direct`, `from`, `gateway`, and
+`has_line`.
 
 `direct` is true only when the packet used no hop
 (`packet.hop_start = packet_seen.hop_limit`). It is false when either
 value is unknown. A line for a relayed observation is a path, not a
 radio link: the packet reached the gateway through other nodes, so the
 straight line crosses ground the signal never took. See AGENTS.md 9.5.
+
+`hops_taken` is how many hops the packet burned to reach this gateway.
+It is the whole of what is known about a relayed route. Which nodes the
+packet passed through is recorded nowhere, because an ordinary packet
+carries no route. Only a traceroute holds its own path, which is what
+`/api/map/traceroute-paths` draws. See AGENTS.md 9.20.
 
 `portnum` is the readable name, or the number as text when this build of
 the protobufs does not know it.

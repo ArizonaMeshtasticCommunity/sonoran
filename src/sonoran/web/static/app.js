@@ -715,12 +715,25 @@ function flashTraffic(event) {
   }
   for (const part of parts) part.addTo(mapState.traffic);
 
+  /*
+   * A relayed line says how far it is from the truth. An ordinary
+   * packet carries no route, so which nodes it passed through is not
+   * recorded anywhere and cannot be drawn. The hop count is the whole
+   * of what is known, and saying it is better than leaving a straight
+   * line to imply a path that was never taken. Only a traceroute holds
+   * its route, which is what the live traceroute layer draws.
+   */
+  const hops = event.hops_taken == null
+    ? 'relayed, path not recorded'
+    : `relayed over ${event.hops_taken} ${event.hops_taken === 1 ? 'hop' : 'hops'}, `
+      + 'path not recorded';
+
   parts[0].bindTooltip(
     `${portnumLabel(event.portnum)} from ${event.from.display_name}, ` +
-    `heard by ${event.gateway.display_name}` +
+    `uploaded by ${event.gateway.display_name}` +
     (direct
       ? `, direct${event.snr == null ? '' : `, ${round(event.snr, 1)} dB`}`
-      : ', relayed, so this is a path and not a radio link') +
+      : `, ${hops}, so this line is not the route`) +
     '. Click for the packet.',
   );
   for (const part of parts) {

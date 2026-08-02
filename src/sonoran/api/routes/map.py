@@ -206,6 +206,16 @@ async def traffic(
                 "rssi": row.rx_rssi,
                 "hop_limit": row.hop_limit,
                 "hop_start": hop_start,
+                # How many hops the packet burned to reach this gateway.
+                # Which nodes it passed through is not recorded anywhere:
+                # an ordinary packet carries no route. The count is all
+                # there is, so a client can at least say how far the line
+                # it draws is from the ground the signal took.
+                "hops_taken": (
+                    None
+                    if hop_start is None or row.hop_limit is None
+                    else hop_start - row.hop_limit
+                ),
                 "direct": direct,
                 # What kind of packet it was, so the feed can say more
                 # than "something was heard".
