@@ -336,16 +336,23 @@ with no configured key decodes as `UNKNOWN_APP`, which is normal.
 
 Query parameters:
 
-- `minutes` — time window. Default 15.
-- `limit` — maximum observations. Default 300.
+- `minutes` — time window. Default 15. Maximum 1440.
+- `limit` — maximum observations returned. Default 300. Maximum 2000.
+  It caps the events only. The counts are of the whole window.
 - `channel` — the modem preset to return. A node on one preset cannot
   hear a node on another, so a map layer must draw one at a time.
   Without it the response mixes every channel together.
 
-Response: `window_minutes`, `event_count`, `direct_count`, and `events`.
-Each event has `time`, `packet_id`, `channel`, `portnum`, `snr`, `rssi`,
-`hop_limit`, `hop_start`, `hops_taken`, `direct`, `from`, `gateway`, and
-`has_line`.
+Response: `window_minutes`, `event_count`, `direct_count`,
+`returned_count`, `truncated`, and `events`. Each event has `time`,
+`packet_id`, `channel`, `portnum`, `snr`, `rssi`, `hop_limit`,
+`hop_start`, `hops_taken`, `direct`, `from`, `gateway`, and `has_line`.
+
+`event_count` and `direct_count` count the window, not the rows that
+came back, so a wider window always answers with more. `returned_count`
+is how many events the limit left, and `truncated` says the window held
+more than that. The events are the newest ones, so a client that draws
+observations as they arrive needs only enough to cover a refresh.
 
 `direct` is true only when the packet used no hop
 (`packet.hop_start = packet_seen.hop_limit`). It is false when either

@@ -664,6 +664,14 @@ function portnumLabel(portnum) {
  * packet ended up here" rather than "these two can hear each other".
  * Most observations are relayed. See AGENTS.md 9.5.
  */
+/*
+ * How many observations to ask for. Only the ones that arrived since
+ * the last refresh are ever drawn, so this needs to cover a refresh and
+ * not the window: the counts in the summary come from the endpoint and
+ * are of the whole window whatever this is. It is the endpoint maximum,
+ * which a refresh has no way of overrunning.
+ */
+const TRAFFIC_LIMIT = 2000;
 const TRAFFIC_VISIBLE_MS = 7000;
 const TRAFFIC_FADE_MS = 2500;
 const DIRECT_OPACITY = 0.95;
@@ -1014,7 +1022,7 @@ PAGES.map = async (page) => {
   if (!nodes) return;
   const [traffic, edges, traces] = await getAll([
     showTraffic
-      ? `api/map/traffic?minutes=${minutes}&limit=400` +
+      ? `api/map/traffic?minutes=${minutes}&limit=${TRAFFIC_LIMIT}` +
         (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
     showLinks && channel

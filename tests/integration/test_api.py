@@ -760,6 +760,47 @@ def test_traffic_events_carry_the_hop_count(migrated_engine, timescale_url: str)
     assert straight["direct"] is True
 
 
+def test_traffic_counts_the_window_not_the_limit(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The summary answers the window the reader picked.
+
+    Counting the rows that came back reported the cap instead: a busy
+    mesh fills it in a couple of minutes, so every longer window
+    answered with the same number and the picker looked broken.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for offset in range(6):
+            # Half of them used no hop, so half are direct.
+            hop_limit = 4 if offset % 2 else 3
+            connection.execute(
+                text(
+                    "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                    "first_seen_at) VALUES (8801, :p, 1, 4, :now) ON CONFLICT DO NOTHING"
+                ),
+                {"p": 9400 + offset, "now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, channel, hop_limit, seen_at) "
+                    "VALUES (8801, :p, 8802, 'msh/US/AZ/t', 'MediumFast', :h, :now) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"p": 9400 + offset, "h": hop_limit, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/map/traffic?minutes=60&limit=2&channel=MediumFast").json()
+
+    # The limit holds back the events, and nothing else.
+    assert body["returned_count"] == 2
+    assert len(body["events"]) == 2
+    assert body["truncated"] is True
+    assert body["event_count"] == 6
+    assert body["direct_count"] == 3
+
+
 def test_a_link_says_whether_a_reply_confirmed_it(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
     """A hop known only from an unanswered request is marked one way.
 

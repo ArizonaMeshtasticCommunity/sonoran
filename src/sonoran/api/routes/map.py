@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.channels import channel_filter
@@ -136,6 +136,14 @@ def portnum_name(value: int | None) -> str | None:
         return str(value)
 
 
+# A packet row is written when the packet is first heard, and the other
+# gateways that heard it upload their own observations after that. So an
+# observation inside the window can belong to a packet first seen a
+# little before it, and the packet is looked for from slightly earlier.
+# Uploads arrive within seconds, so this is generous.
+PACKET_LOOKBACK = timedelta(minutes=10)
+
+
 @router.get("/traffic")
 async def traffic(
     minutes: int = Query(default=15, ge=1, le=1440),
@@ -148,6 +156,12 @@ async def traffic(
     Each event holds the sender, the gateway that heard it, and what
     kind of packet it was. Every packet family is included: position,
     telemetry, node info, text, traceroute, and the rest.
+
+    `limit` caps the events that come back, but the counts are of the
+    whole window. Counting the returned rows instead reported the cap:
+    a busy mesh fills it in a couple of minutes, so every longer window
+    answered with the same number and the window picker looked broken.
+    `returned_count` says how many events the cap left.
 
     The `channel` parameter selects one modem preset. A node on one
     preset cannot hear a node on another, so a map layer must draw one
@@ -174,16 +188,46 @@ async def traffic(
         )
     ).all()
 
+    # Both counts are of the window, not of the rows above, so the
+    # summary answers the window the reader picked rather than the cap.
     # The hop count a packet started with is on the packet, not on the
-    # observation, so it takes a second read. Only the packets in this
-    # window are wanted.
+    # observation, so "direct" needs a look across at the packet row. A
+    # correlated read keeps this one row per observation: a join could
+    # multiply an observation whose packet id came round again.
+    hop_start_of = (
+        select(Packet.hop_start)
+        .where(
+            Packet.from_node_num == PacketSeen.from_node_num,
+            Packet.packet_id == PacketSeen.packet_id,
+            Packet.first_seen_at >= since - PACKET_LOOKBACK,
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
+    window_count, window_direct = (
+        await session.execute(
+            select(
+                func.count(),
+                # An unknown hop count on either side compares as null
+                # and so is not counted, which is the rule the events
+                # below follow too.
+                func.count().filter(hop_start_of == PacketSeen.hop_limit),
+            )
+            .select_from(PacketSeen)
+            .where(PacketSeen.seen_at >= since, channel_filter(PacketSeen.channel, channel))
+        )
+    ).one()
+
+    # The same look across at the packet row, for the events that came
+    # back. Only the packets behind those rows are wanted.
     hop_starts: dict[tuple[int, int], int | None] = {}
     portnums: dict[tuple[int, int], str | None] = {}
     keys = {(row.from_node_num, row.packet_id) for row in rows}
     if keys:
         packet_rows = await session.execute(
             select(Packet.from_node_num, Packet.packet_id, Packet.hop_start, Packet.portnum).where(
-                tuple_(Packet.from_node_num, Packet.packet_id).in_(keys)
+                tuple_(Packet.from_node_num, Packet.packet_id).in_(keys),
+                Packet.first_seen_at >= since - PACKET_LOOKBACK,
             )
         )
         for from_node_num, packet_id, hop_start, portnum in packet_rows.all():
@@ -212,15 +256,12 @@ async def traffic(
         }
 
     events = []
-    direct_count = 0
     for row in rows:
         source = endpoint(row.from_node_num)
         gateway = endpoint(row.gateway_node_num)
         hop_start = hop_starts.get((row.from_node_num, row.packet_id))
         # Unknown on either side means it cannot be called direct.
         direct = hop_start is not None and row.hop_limit is not None and hop_start == row.hop_limit
-        if direct:
-            direct_count += 1
         events.append(
             {
                 "time": row.seen_at,
@@ -256,8 +297,10 @@ async def traffic(
         )
     return {
         "window_minutes": minutes,
-        "event_count": len(events),
-        "direct_count": direct_count,
+        "event_count": window_count,
+        "direct_count": window_direct,
+        "returned_count": len(events),
+        "truncated": window_count > len(events),
         "events": events,
     }
 
