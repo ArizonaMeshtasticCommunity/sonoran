@@ -1312,6 +1312,16 @@ PAGES.graph = async (page) => {
   const sizes = data.nodes.map((node) => node.packet_count || 0);
   const busiest = Math.max(1, ...sizes);
 
+  /*
+   * How crowded this graph is, from 0 for a handful of nodes to 1 for a
+   * few hundred. `lerp` reads the setting for a small graph and the one
+   * for a large graph, and gives the value in between. Every force
+   * setting moves together, so the layout keeps one character over the
+   * whole range instead of changing at a threshold.
+   */
+  const crowding = Math.min(1, Math.max(0, (data.nodes.length - 40) / 260));
+  const lerp = (small, large) => small + (large - small) * crowding;
+
   chart(target, {
     backgroundColor: 'transparent',
     tooltip: {
@@ -1345,15 +1355,33 @@ PAGES.graph = async (page) => {
        * every other, so a fixed repulsion that suits a dozen nodes
        * throws hundreds of them off the canvas. Gravity pulls the whole
        * layout back to the middle.
+       *
+       * The scale is smooth. It used to step at 120 nodes, so the
+       * layout changed character the moment a channel or a window
+       * crossed that line, and a graph either side of it looked like a
+       * different page.
+       *
+       * Friction is the damping. A high value locks the web in place as
+       * soon as it lands, which is what made it feel stiff to drag. A
+       * low one lets the whole mesh keep answering the node in hand.
        */
       force: {
-        repulsion: Math.max(40, Math.min(900, 3200 / Math.sqrt(Math.max(1, data.nodes.length)))),
-        edgeLength: data.nodes.length > 120 ? [20, 60] : [60, 160],
-        gravity: data.nodes.length > 120 ? 0.22 : 0.08,
-        friction: 0.35,
+        repulsion: lerp(340, 90),
+        edgeLength: [lerp(70, 34), lerp(190, 100)],
+        gravity: lerp(0.05, 0.16),
+        friction: lerp(0.10, 0.20),
+        /*
+         * The settling motion is the point, not a cost: it shows which
+         * nodes are pulled together. Hundreds of nodes are still fast
+         * enough to watch. Past that the animation is slow and lands in
+         * a worse place, so the layout is solved before it is drawn.
+         *
+         * This option belongs to `force`. It sat on the series for a
+         * while, where ECharts reads nothing, so the animation was
+         * always on whatever the size of the graph.
+         */
+        layoutAnimation: data.nodes.length <= 500,
       },
-      // Animating hundreds of nodes is slow and lands in a worse place.
-      layoutAnimation: data.nodes.length <= 120,
       emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
       label: {
         show: data.nodes.length <= 90,
@@ -1362,7 +1390,14 @@ PAGES.graph = async (page) => {
         fontSize: 10,
         formatter: (item) => item.data.raw.short_name || item.data.raw.display_name,
       },
-      lineStyle: { color: 'source', curveness: 0.08, opacity: 0.45 },
+      /*
+       * A curve separates two links that run between the same pair of
+       * nodes and shows the direction of a path. At 0.08 the lines were
+       * all but straight, which is what made a dense graph read as a
+       * ball of wire. A busy graph curves less, or the arcs cross each
+       * other more than the straight lines did.
+       */
+      lineStyle: { color: 'source', curveness: lerp(0.3, 0.16), opacity: 0.45 },
       data: data.nodes.map((node) => {
         const match = query && node.display_name.toLowerCase().includes(query);
         return {
