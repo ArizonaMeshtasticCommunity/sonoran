@@ -1,0 +1,11 @@
+# Configuration for the mesh-graph container.
+# See https://github.com/ianmcorvidae/mesh-graph for all options.
+# Fill in the azmsh.net broker values before deploy.
+
+[mqtt]
+broker = "mqtt.azmsh.net"
+topic = "msh/US/AZ/#"
+encryption_key = "1PG7OiApB1nwvP+rz05pAQ=="
+
+[db]
+path = "/data/trace-graph.db"

@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sonoran</title>
+    <meta name="theme-color" content="#17100b" />
+    <!--
+      The tab icon keeps its transparent background so it suits light and
+      dark browser chrome. iOS ignores transparency and composites onto
+      black, so the touch icon carries a solid tile of the page colour.
+    -->
+    <link rel="icon" type="image/png" sizes="256x256" href="static/favicon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="static/apple-touch-icon.png" />
+    <link rel="manifest" href="static/manifest.webmanifest" />
+    <link rel="stylesheet" href="static/vendor/leaflet.css" />
+    <link rel="stylesheet" href="static/app.css" />
+  </head>
+  <body>
+    <!--
+      Material Design Icons, Apache License 2.0.
+      https://github.com/Templarian/MaterialDesign
+      Inlined as a sprite so the page loads no external asset and
+      the strict Content-Security-Policy needs no exception.
+    -->
+    <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-dashboard" viewBox="0 0 24 24"><path d="M13,3V9H21V3M13,21H21V11H13M3,21H11V15H3M3,13H11V3H3V13Z"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="M12,2C15.31,2 18,4.66 18,7.95C18,12.41 12,19 12,19C12,19 6,12.41 6,7.95C6,4.66 8.69,2 12,2M12,6A2,2 0 0,0 10,8A2,2 0 0,0 12,10A2,2 0 0,0 14,8A2,2 0 0,0 12,6M20,19C20,21.21 16.42,23 12,23C7.58,23 4,21.21 4,19C4,17.71 5.22,16.56 7.11,15.83L7.75,16.74C6.67,17.19 6,17.81 6,18.5C6,19.88 8.69,21 12,21C15.31,21 18,19.88 18,18.5C18,17.81 17.33,17.19 16.25,16.74L16.89,15.83C18.78,16.56 20,17.71 20,19Z"/></symbol>
+    <symbol id="i-planner" viewBox="0 0 24 24"><path d="M12,2A3,3 0 0,1 15,5C15,6.31 14.17,7.42 13,7.83V10H17A2,2 0 0,1 19,12V13.17C20.17,13.58 21,14.69 21,16A3,3 0 0,1 18,19A3,3 0 0,1 15,16C15,14.69 15.83,13.58 17,13.17V12H13V17.17C14.17,17.58 15,18.69 15,20A3,3 0 0,1 12,23A3,3 0 0,1 9,20C9,18.69 9.83,17.58 11,17.17V12H7V13.17C8.17,13.58 9,14.69 9,16A3,3 0 0,1 6,19A3,3 0 0,1 3,16C3,14.69 3.83,13.58 5,13.17V12A2,2 0 0,1 7,10H11V7.83C9.83,7.42 9,6.31 9,5A3,3 0 0,1 12,2Z"/></symbol>
+    <symbol id="i-config" viewBox="0 0 24 24"><path d="M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M10.5,17.5L7,14L8.41,12.59L10.5,14.67L15.59,9.59L17,11L10.5,17.5Z"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><path d="M2 3V9H4.95L6.95 15H6V21H12V16.41L17.41 11H22V5H16V9.57L10.59 15H9.06L7.06 9H8V3M4 5H6V7H4M18 7H20V9H18M8 17H10V19H8Z"/></symbol>
+    <symbol id="i-nodes" viewBox="0 0 24 24"><path d="M12,10A2,2 0 0,1 14,12C14,12.5 13.82,12.94 13.53,13.29L16.7,22H14.57L12,14.93L9.43,22H7.3L10.47,13.29C10.18,12.94 10,12.5 10,12A2,2 0 0,1 12,10M12,8A4,4 0 0,0 8,12C8,12.5 8.1,13 8.28,13.46L7.4,15.86C6.53,14.81 6,13.47 6,12A6,6 0 0,1 12,6A6,6 0 0,1 18,12C18,13.47 17.47,14.81 16.6,15.86L15.72,13.46C15.9,13 16,12.5 16,12A4,4 0 0,0 12,8M12,4A8,8 0 0,0 4,12C4,14.36 5,16.5 6.64,17.94L5.92,19.94C3.54,18.11 2,15.23 2,12A10,10 0 0,1 12,2A10,10 0 0,1 22,12C22,15.23 20.46,18.11 18.08,19.94L17.36,17.94C19,16.5 20,14.36 20,12A8,8 0 0,0 12,4Z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M17,12V3A1,1 0 0,0 16,2H3A1,1 0 0,0 2,3V17L6,13H16A1,1 0 0,0 17,12M21,6H19V15H6V17A1,1 0 0,0 7,18H18L22,22V7A1,1 0 0,0 21,6Z"/></symbol>
+    <symbol id="i-meshnet" viewBox="0 0 24 24"><path d="M19,19H5V8H19M19,3H18V1H16V3H8V1H6V3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M16.53,11.06L15.47,10L10.59,14.88L8.47,12.76L7.41,13.82L10.59,17L16.53,11.06Z"/></symbol>
+    <symbol id="i-firehose" viewBox="0 0 24 24"><path d="M7,5H21V7H7V5M7,13V11H21V13H7M4,4.5A1.5,1.5 0 0,1 5.5,6A1.5,1.5 0 0,1 4,7.5A1.5,1.5 0 0,1 2.5,6A1.5,1.5 0 0,1 4,4.5M4,10.5A1.5,1.5 0 0,1 5.5,12A1.5,1.5 0 0,1 4,13.5A1.5,1.5 0 0,1 2.5,12A1.5,1.5 0 0,1 4,10.5M7,19V17H21V19H7M4,16.5A1.5,1.5 0 0,1 5.5,18A1.5,1.5 0 0,1 4,19.5A1.5,1.5 0 0,1 2.5,18A1.5,1.5 0 0,1 4,16.5Z"/></symbol>
+    <symbol id="i-traceroutes" viewBox="0 0 24 24"><path d="M18,11H14.82C14.4,9.84 13.3,9 12,9C10.7,9 9.6,9.84 9.18,11H6C5.67,11 4,10.9 4,9V8C4,6.17 5.54,6 6,6H16.18C16.6,7.16 17.7,8 19,8A3,3 0 0,0 22,5A3,3 0 0,0 19,2C17.7,2 16.6,2.84 16.18,4H6C4.39,4 2,5.06 2,8V9C2,11.94 4.39,13 6,13H9.18C9.6,14.16 10.7,15 12,15C13.3,15 14.4,14.16 14.82,13H18C18.33,13 20,13.1 20,15V16C20,17.83 18.46,18 18,18H7.82C7.4,16.84 6.3,16 5,16A3,3 0 0,0 2,19A3,3 0 0,0 5,22C6.3,22 7.4,21.16 7.82,20H18C19.61,20 22,18.93 22,16V15C22,12.07 19.61,11 18,11M19,4A1,1 0 0,1 20,5A1,1 0 0,1 19,6A1,1 0 0,1 18,5A1,1 0 0,1 19,4M5,20A1,1 0 0,1 4,19A1,1 0 0,1 5,18A1,1 0 0,1 6,19A1,1 0 0,1 5,20Z"/></symbol>
+    <symbol id="i-stats" viewBox="0 0 24 24"><path d="M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.75L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z"/></symbol>
+    </svg>
+    <div class="shell">
+      <aside class="sidebar">
+        <!--
+          The brand mark is optional. When static/logo.png is present the
+          script shows it and hides the text. When the file is absent the
+          text stays, so the page never shows a broken image.
+        -->
+        <div class="brand">
+          <img class="brand-mark" data-brand-mark src="static/logo.png" alt="Sonoran" />
+          <div class="brand-text" data-brand-text>
+            <h1>Sonoran</h1>
+            <span>azmsh.net</span>
+          </div>
+        </div>
+        <nav aria-label="Dashboard pages">
+          <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a>
+          <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
+          <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg>Coverage planner</a>
+          <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg>Config check</a>
+          <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg>Mesh graph</a>
+          <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg>Nodes</a>
+          <a href="#chat" data-nav="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat</a>
+          <a href="#meshnet" data-nav="meshnet"><svg class="icon" aria-hidden="true"><use href="#i-meshnet"/></svg>Weekly check-in</a>
+          <a href="#firehose" data-nav="firehose"><svg class="icon" aria-hidden="true"><use href="#i-firehose"/></svg>Firehose</a>
+          <a href="#traceroutes" data-nav="traceroutes"><svg class="icon" aria-hidden="true"><use href="#i-traceroutes"/></svg>Traceroutes</a>
+          <a href="#stats" data-nav="stats"><svg class="icon" aria-hidden="true"><use href="#i-stats"/></svg>Statistics</a>
+        </nav>
+        <p class="status" data-status>
+          <span class="dot"></span><span data-status-text>Connecting</span>
+        </p>
+      </aside>
+
+      <main class="content">
+        <!-- Dashboard -->
+        <section class="page" data-page="dashboard">
+          <div class="page-head">
+            <div>
+              <h2>Dashboard</h2>
+              <p class="sub">Live view of the azmsh.net mesh.</p>
+            </div>
+            <div class="controls">
+              <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
+            </div>
+          </div>
+          <div class="grid" data-summary></div>
+          <div class="grid two" style="margin-top: 1rem">
+            <div class="panel">
+              <h3>Recently heard nodes</h3>
+              <div class="table-wrap" data-recent-nodes></div>
+            </div>
+            <div class="panel">
+              <h3>Latest messages</h3>
+              <ul class="feed" data-recent-chat></ul>
+            </div>
+            <div class="panel">
+              <h3>Busiest nodes (24 h)</h3>
+              <div class="table-wrap" data-top-talkers></div>
+            </div>
+            <div class="panel">
+              <h3>Packet types (24 h)</h3>
+              <div class="chart" data-portnum-chart></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Map -->
+        <section class="page" data-page="map">
+          <div class="page-head">
+            <div>
+              <h2>Live map</h2>
+              <p class="sub">Node positions with live packet traffic.</p>
+            </div>
+            <div class="controls">
+              <label class="muted">Traffic window
+                <select data-traffic-minutes>
+                  <option value="5">5 min</option>
+                  <option value="15" selected>15 min</option>
+                  <option value="60">1 h</option>
+                  <option value="360">6 h</option>
+                </select>
+              </label>
+              <button type="button" class="toggle" data-show-traffic aria-pressed="true">Traffic</button>
+              <button type="button" class="toggle" data-show-traces aria-pressed="true">Live traceroutes</button>
+              <button type="button" class="toggle" data-show-links aria-pressed="false">Neighbor links</button>
+              <!--
+                One preset at a time. A node on LongFast cannot hear a
+                node on MediumFast, so lines from both in one picture
+                would be links that cannot exist. See AGENTS.md 9.7.
+              -->
+              <label class="muted" data-link-channel-wrap>Preset
+                <select data-link-channel></select>
+              </label>
+              <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
+            </div>
+          </div>
+          <div class="map-shell">
+            <div id="map"></div>
+          </div>
+          <!--
+            Built from the roles the mesh is actually running. Each entry
+            is a button that filters the map to that role.
+          -->
+          <div class="legend legend-filter" style="margin-top: .75rem" data-map-legend></div>
+          <p class="muted" style="margin: .5rem 0 0; font-size: .8rem" data-link-summary></p>
+          <!--
+            The map lines are live and go away after a few seconds. These
+            lists do not, so anything that flashed past is still here.
+          -->
+          <div class="grid two" style="margin-top: 1rem">
+            <div class="panel">
+              <h3><span>Live traffic</span> <span class="muted head-note" data-traffic-summary>Loading</span></h3>
+              <ul class="feed" data-traffic-feed></ul>
+            </div>
+            <div class="panel">
+              <h3><span>Traceroutes</span> <span class="muted head-note" data-trace-summary></span></h3>
+              <ul class="feed" data-trace-feed></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- Coverage planner -->
+        <section class="page" data-page="planner">
+          <div class="page-head">
+            <div>
+              <h2>Coverage planner</h2>
+              <p class="sub">Predict where a radio would be heard, over the nodes we already have.</p>
+            </div>
+            <div class="controls">
+              <button type="button" class="primary" data-planner-run>Run prediction</button>
+              <button type="button" class="toggle" data-planner-cancel hidden>Stop</button>
+              <button type="button" class="toggle" data-planner-clear>Clear</button>
+            </div>
+          </div>
+
+          <p class="notice" data-planner-notice hidden></p>
+          <p class="muted" data-planner-progress style="min-height: 1.2rem; font-size: .82rem"></p>
+
+          <div class="planner-layout">
+            <div class="panel planner-form">
+              <h3>Transmitter</h3>
+              <label>Site name <input data-planner="site_name" placeholder="Ridge above the pass" /></label>
+              <div class="pair">
+                <label>Latitude <input data-planner="lat" inputmode="decimal" placeholder="click the map" /></label>
+                <label>Longitude <input data-planner="lon" inputmode="decimal" placeholder="click the map" /></label>
+              </div>
+              <div class="pair">
+                <label>Antenna height (m) <input data-planner="tx_height" inputmode="decimal" /></label>
+                <label>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
+              </div>
+              <div class="pair">
+                <label>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
+                <label>Frequency (MHz) <input data-planner="frequency_mhz" inputmode="decimal" /></label>
+              </div>
+
+              <h3>Receiver</h3>
+              <label>Modem preset <select data-planner="preset"></select></label>
+              <div class="pair">
+                <label>Sensitivity (dBm) <input data-planner="sensitivity" inputmode="decimal" /></label>
+                <label>Height (m) <input data-planner="rx_height" inputmode="decimal" /></label>
+              </div>
+              <div class="pair">
+                <label>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
+                <label>Cable loss (dB) <input data-planner="system_loss" inputmode="decimal" /></label>
+              </div>
+              <p class="muted" style="font-size: .78rem">
+                The sensitivity follows the preset. Lower it by a few dB in town,
+                where the band is shared and noisy.
+              </p>
+
+              <h3>Ground and air</h3>
+              <div class="pair">
+                <label>Radio climate <select data-planner="radio_climate"></select></label>
+                <label>Polarization
+                  <select data-planner="polarization">
+                    <option value="vertical">Vertical</option>
+                    <option value="horizontal">Horizontal</option>
+                  </select>
+                </label>
+              </div>
+              <div class="pair">
+                <label>Clutter height (m) <input data-planner="clutter_height" inputmode="decimal" /></label>
+                <label>Range (km) <input data-planner="radius" inputmode="decimal" /></label>
+              </div>
+              <details>
+                <summary class="muted">Model constants</summary>
+                <div class="pair">
+                  <label>Ground dielectric <input data-planner="ground_dielectric" inputmode="decimal" /></label>
+                  <label>Ground conductivity (S/m) <input data-planner="ground_conductivity" inputmode="decimal" /></label>
+                </div>
+                <div class="pair">
+                  <label>Atmosphere bending <input data-planner="atmosphere_bending" inputmode="decimal" /></label>
+                  <label>Situation fraction (%) <input data-planner="situation_fraction" inputmode="decimal" /></label>
+                </div>
+                <label>Time fraction (%) <input data-planner="time_fraction" inputmode="decimal" /></label>
+                <p class="muted" style="font-size: .78rem">
+                  Leave these alone unless you know why you are changing them.
+                </p>
+              </details>
+            </div>
+
+            <div class="planner-map-side">
+              <div class="map-shell">
+                <div id="planner-map"></div>
+              </div>
+              <p class="legend" style="margin-top: .75rem">
+                <span><span class="swatch reached"></span>Node reached</span>
+                <span><span class="swatch stale"></span>Node not reached</span>
+                <span class="muted">Click the map to place the site. Click a node to use it, or to check that one link.</span>
+              </p>
+              <div data-planner-summary></div>
+              <div class="panel" data-planner-link style="margin-top: 1rem"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Config check -->
+        <section class="page" data-page="config">
+          <div class="page-head">
+            <div>
+              <h2>Config check</h2>
+              <p class="sub">Check a node against the azmsh.net recommendations. Nothing leaves your device.</p>
+            </div>
+            <div class="controls" data-config-exports hidden>
+              <button type="button" class="primary" data-config-fix>Download corrected config</button>
+              <button type="button" class="toggle" data-config-report>Download report</button>
+            </div>
+          </div>
+
+          <p class="notice" data-config-notice hidden></p>
+
+          <div class="panel">
+            <h3>1. Where is the node</h3>
+            <div class="controls">
+              <button type="button" class="toggle" data-config-region="metro" aria-pressed="true">
+                Phoenix and Tucson metro
+              </button>
+              <button type="button" class="toggle" data-config-region="rural" aria-pressed="false">
+                Rural Arizona
+              </button>
+            </div>
+            <h3 style="margin-top:1rem">2. How does it sit</h3>
+            <div class="controls">
+              <button type="button" class="toggle" data-config-node="stationary" aria-pressed="true">
+                Stationary, on a roof or a mast
+              </button>
+              <button type="button" class="toggle" data-config-node="mobile" aria-pressed="false">
+                Mobile, handheld or in a vehicle
+              </button>
+            </div>
+          </div>
+
+          <div class="grid two" style="margin-top:1rem">
+            <div class="panel">
+              <h3>3. Load a config</h3>
+              <!--
+                The file never leaves the browser. It is read with the
+                File API and parsed here. There is no upload.
+              -->
+              <div class="dropzone" data-config-drop>
+                <strong>Drop a config here, or click to choose</strong>
+                <span class="muted">Android .cfg, CLI YAML, iOS or web JSON</span>
+              </div>
+              <input type="file" data-config-file accept=".yaml,.yml,.json,.cfg" hidden />
+            </div>
+            <div class="panel">
+              <h3>Or start from scratch</h3>
+              <p class="muted" style="font-size:.85rem">
+                Build a config with the azmsh.net recommended values already set,
+                then import it to a node with
+                <code>meshtastic --configure</code>.
+              </p>
+              <button type="button" class="toggle" data-config-new>Build a new config</button>
+            </div>
+          </div>
+
+          <div data-config-source style="margin-top:1rem"></div>
+          <div data-config-result></div>
+        </section>
+
+        <!-- Mesh graph -->
+        <section class="page" data-page="graph">
+          <div class="page-head">
+            <div>
+              <h2>Mesh graph</h2>
+              <p class="sub">One graph per channel. Nodes on different presets cannot hear each other.</p>
+            </div>
+            <div class="controls">
+              <label class="muted">Window
+                <select data-graph-hours>
+                  <option value="6">6 h</option>
+                  <option value="24" selected>24 h</option>
+                  <option value="72">3 days</option>
+                  <option value="168">7 days</option>
+                </select>
+              </label>
+              <input data-graph-search placeholder="Find a node" />
+              <label class="muted">View
+                <select data-graph-view>
+                  <option value="all" selected>Whole preset</option>
+                  <option value="backbone">Backbone</option>
+                  <option value="focus">One node</option>
+                </select>
+              </label>
+              <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
+              <a class="linky" data-graph-external target="_blank" rel="noopener">Open mesh-graph</a>
+            </div>
+          </div>
+          <div class="tabs" data-graph-tabs role="tablist" aria-label="Channels"></div>
+          <div class="panel">
+            <h3><span data-graph-counts>Loading</span></h3>
+            <p class="notice" data-graph-warning hidden></p>
+            <div class="chart tall" data-graph-chart></div>
+            <p class="legend" style="margin: .5rem 0 0">
+              <span><span class="line solid"></span>Neighbour report, SNR measured</span>
+              <span><span class="line dashed"></span>Traceroute hop, SNR measured</span>
+              <span data-legend-unconfirmed hidden><span class="line dotted"></span>Path seen, no signal reading</span>
+            </p>
+          </div>
+        </section>
+
+        <!-- Nodes -->
+        <section class="page" data-page="nodes">
+          <div class="page-head">
+            <div>
+              <h2>Nodes</h2>
+              <p class="sub" data-node-count></p>
+            </div>
+            <div class="controls">
+              <input data-node-search placeholder="Name or node ID" />
+              <select data-node-active>
+                <option value="">Any time</option>
+                <option value="1">Last hour</option>
+                <option value="24" selected>Last 24 h</option>
+                <option value="168">Last 7 days</option>
+              </select>
+              <select data-node-role>
+                <option value="">Any role</option>
+              </select>
+              <button type="button" class="toggle" data-node-gateway aria-pressed="false">Gateways</button>
+              <button type="button" class="primary" data-node-apply>Search</button>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="table-wrap" data-node-table></div>
+          </div>
+        </section>
+
+        <!-- Node detail -->
+        <section class="page" data-page="node">
+          <div class="page-head">
+            <div data-node-title>
+              <h2>Node</h2>
+              <p class="sub">Select a node from the Nodes page.</p>
+            </div>
+            <div class="controls">
+              <select data-node-hours>
+                <option value="6">6 h</option>
+                <option value="24" selected>24 h</option>
+                <option value="168">7 days</option>
+                <option value="720">30 days</option>
+              </select>
+              <a class="linky" data-node-graph-link target="_blank" rel="noopener" hidden>Open in mesh-graph</a>
+            </div>
+          </div>
+          <div data-node-body></div>
+        </section>
+
+        <!-- Chat -->
+        <section class="page" data-page="chat">
+          <div class="page-head">
+            <div>
+              <h2>Chat</h2>
+              <p class="sub">One section for each detected channel, grouped by modem preset.</p>
+            </div>
+            <div class="controls">
+              <select data-chat-hours>
+                <option value="24">Last 24 h</option>
+                <option value="168" selected>Last 7 days</option>
+                <option value="720">Last 30 days</option>
+              </select>
+              <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
+            </div>
+          </div>
+          <div data-chat-body><p class="loading">Loading</p></div>
+        </section>
+
+        <!-- Weekly check-in -->
+        <section class="page" data-page="meshnet">
+          <div class="page-head">
+            <div>
+              <h2>Weekly mesh net check-in</h2>
+              <p class="sub">Every message that carries the <code>#meshnet</code> tag, by week.</p>
+            </div>
+            <div class="controls">
+              <label class="muted">Tag <input data-meshnet-tag value="meshnet" size="10" /></label>
+              <select data-meshnet-weeks>
+                <option value="4">4 weeks</option>
+                <option value="8" selected>8 weeks</option>
+                <option value="26">26 weeks</option>
+              </select>
+              <button type="button" class="primary" data-meshnet-apply>Show</button>
+            </div>
+          </div>
+          <div data-meshnet-body><p class="loading">Loading</p></div>
+        </section>
+
+        <!-- Firehose -->
+        <section class="page" data-page="firehose">
+          <div class="page-head">
+            <div>
+              <h2>Packet firehose</h2>
+              <p class="sub">Every packet the mesh sees, newest first.</p>
+            </div>
+            <div class="controls">
+              <input data-firehose-portnum placeholder="Port number or name" />
+              <button type="button" class="primary" data-firehose-apply>Filter</button>
+              <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
+            </div>
+          </div>
+          <div class="panel"><div class="table-wrap" data-firehose-table></div></div>
+        </section>
+
+        <!-- Traceroutes -->
+        <section class="page" data-page="traceroutes">
+          <div class="page-head">
+            <div>
+              <h2>Traceroutes</h2>
+              <p class="sub">Recorded paths through the mesh.</p>
+            </div>
+          </div>
+          <div class="panel"><div class="table-wrap" data-traceroute-table></div></div>
+        </section>
+
+
+        <!-- One link between two nodes -->
+        <section class="page" data-page="link">
+          <div class="page-head">
+            <div data-link-title>
+              <h2>Link</h2>
+              <p class="sub">The reports that evidence one radio link.</p>
+            </div>
+          </div>
+          <div data-link-body></div>
+        </section>
+
+        <!-- One packet -->
+        <section class="page" data-page="packet">
+          <div class="page-head">
+            <div data-packet-title>
+              <h2>Packet</h2>
+              <p class="sub">Everything stored about one packet.</p>
+            </div>
+          </div>
+          <div data-packet-body></div>
+        </section>
+
+        <!-- One traceroute -->
+        <section class="page" data-page="traceroute">
+          <div class="page-head">
+            <div data-trace-title>
+              <h2>Traceroute</h2>
+              <p class="sub">The path one packet took through the mesh.</p>
+            </div>
+          </div>
+          <div data-trace-body></div>
+        </section>
+
+        <!-- Statistics -->
+        <section class="page" data-page="stats">
+          <div class="page-head">
+            <div>
+              <h2>Network statistics</h2>
+              <p class="sub">Totals, hardware mix, and daily history.</p>
+            </div>
+          </div>
+          <div class="grid" data-summary></div>
+          <div class="grid two" style="margin-top: 1rem">
+            <div class="panel"><h3>Daily activity</h3><div class="chart" data-daily-chart></div></div>
+            <div class="panel"><h3>Hardware models</h3><div class="chart" data-hardware-chart></div></div>
+            <div class="panel span-2">
+              <h3><span>What the mesh is sending, by hour</span>
+                <span class="muted head-note" data-activity-note></span></h3>
+              <div class="chart" data-activity-chart></div>
+            </div>
+            <div class="panel span-2"><h3>Busiest nodes (24 h)</h3><div class="table-wrap" data-top-talkers></div></div>
+            <div class="panel span-2">
+              <h3><span>Nodes worth a look</span>
+                <span class="muted head-note" data-broadcast-note></span></h3>
+              <p class="muted" style="margin: -.25rem 0 .75rem; font-size: .8rem">
+                How often each node sends, against the firmware defaults. A node
+                that keeps announcing itself is usually restarting, and a node
+                that keeps restarting usually needs power rather than a change
+                of settings. Counts include packets sent on boot and in reply to
+                a request, so read this as a reason to ask, not as a verdict.
+              </p>
+              <div class="table-wrap" data-broadcast-table></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+
+    <script>window.SONORAN = __SONORAN_CONFIG__;</script>
+    <script src="static/vendor/leaflet.js"></script>
+    <script src="static/vendor/echarts.min.js"></script>
+    <!--
+      The planner loads before app.js on purpose. app.js runs the router
+      as its last act, and the router needs window.SonoranPlanner to
+      already exist or a reload on #planner would fall back to the
+      dashboard. The planner uses helpers from app.js only inside
+      functions, which run long after both files are loaded.
+    -->
+    <script src="static/planner-params.js"></script>
+    <script src="static/planner.js"></script>
+    <script src="static/app.js"></script>
+    <!--
+      The config checker's logic expects three globals, which its own
+      page loads the same way: the protobuf runtime, the YAML parser,
+      and the Meshtastic protobuf descriptor. Its modules read them off
+      `window`, so they must be here and they must load before the
+      module below. Without them every parse fails with
+      "jsyaml is not defined", and only the build-from-scratch path
+      works. The integrity hashes are upstream's, unchanged.
+    -->
+    <script src="static/vendor/config-checker/js/vendor/protobuf.min.js" integrity="sha384-BGZSJW0orEarb+6hjaZkIh5GqTIGkZc86kh+9qAZpJPniwsiGHRi0vJ02S+rTztc" crossorigin="anonymous"></script>
+    <script src="static/vendor/config-checker/js/vendor/js-yaml.min.js" integrity="sha384-hyhT0yrWXjngXhDa5wpJTU0pt/Djmlx4KtZECqqS6ZHf3ah4fWkFeW/2eWX9cX5J" crossorigin="anonymous"></script>
+    <script src="static/vendor/config-checker/js/protobuf/meshtastic-proto.js"></script>
+    <!--
+      The config check page imports the checker's logic from
+      vendor/config-checker/. That code is ES modules, so this file is
+      one too, which means it runs after app.js. app.js waits for it.
+    -->
+    <script type="module" src="static/config-check.js"></script>
+  </body>
+</html>

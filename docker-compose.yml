@@ -1,0 +1,81 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: azmsh
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - tsdb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d azmsh"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: ["sonoran-api"]
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      # Terrain pages for the coverage planner. They are made once and
+      # never change, so they must survive a rebuild of the image.
+      - terrain_cache:/var/lib/sonoran/terrain
+    ports:
+      - "8000:8000"
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env
+    environment:
+      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@timescaledb:5432/azmsh
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  ingest:
+    build: .
+    restart: unless-stopped
+    command: ["sonoran-ingest"]
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+
+  jobs:
+    build: .
+    restart: unless-stopped
+    command: ["sonoran-jobs"]
+    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+
+  mesh-graph:
+    image: ghcr.io/ianmcorvidae/mesh-graph:latest
+    restart: unless-stopped
+    env_file: .env
+    entrypoint: ["sh", "-c"]
+    volumes:
+      - meshgraph_data:/data
+      - ./mesh-graph.config.toml:/config.toml:ro
+    ports:
+      - "8080:8080"
+    command: ["awk -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^\\[db\\]/{print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"} {print}' /config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]
+
+volumes:
+  tsdb_data:
+  meshgraph_data:
+  terrain_cache:

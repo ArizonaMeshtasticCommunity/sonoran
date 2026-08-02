@@ -1,0 +1,231 @@
+"""The FastAPI application factory.
+
+The API is read-only. It registers GET routes only.
+It connects to the database with the SELECT-only role.
+"""
+
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, Response
+
+from sonoran import __version__
+from sonoran.api.routes.chat import router as chat_router
+from sonoran.api.routes.graph import router as graph_router
+from sonoran.api.routes.map import router as map_router
+from sonoran.api.routes.nodes import router as nodes_router
+from sonoran.api.routes.packets import router as packets_router
+from sonoran.api.routes.stats import router as stats_router
+from sonoran.api.routes.terrain import router as terrain_router
+from sonoran.api.routes.traceroutes import router as traceroutes_router
+from sonoran.config import Settings, get_settings
+from sonoran.db.session import make_engine, make_session_factory
+from sonoran.logging import configure_logging, get_logger
+
+logger = get_logger(__name__)
+
+STATIC_DIR = Path(__file__).parent.parent / "web" / "static"
+
+
+def _origin(url: str) -> str | None:
+    """Return the scheme and host of a URL, or None when it has neither."""
+    parts = urlsplit(url)
+    if parts.scheme in {"http", "https"} and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return None
+
+
+def _frame_source(graph_url: str) -> str:
+    """Return a safe CSP source for the configured graph service."""
+    return _origin(graph_url) or "'self'"
+
+
+def _image_sources(tile_url: str, graph_url: str) -> str:
+    """Return the CSP image sources.
+
+    The map needs the tile host. The traceroute inspector embeds the
+    drawing that mesh-graph renders, so that origin is an image source
+    too.
+    """
+    sources = ["'self'", "data:"]
+    for candidate in (tile_url, graph_url):
+        origin = _origin(candidate)
+        if origin is not None and origin not in sources:
+            sources.append(origin)
+    return " ".join(sources)
+
+
+# The config check page asks GitHub which firmware release is current.
+# That is the only outbound request the dashboard makes, and it carries
+# no user data. See web/static/vendor/config-checker/PROVENANCE.md.
+FIRMWARE_RELEASES_ORIGIN = "https://api.github.com"
+
+# What the dashboard is allowed to use.
+#
+# The browser denies everything named here whatever a page asks for, so
+# a feature added later cannot quietly reach the camera or the location
+# of whoever is looking at the mesh.
+#
+# `serial` is the exception, and it is the reason this header exists.
+# The config checker reads a node over USB and writes settings back to
+# it, which needs Web Serial. Granting it to this origin alone keeps it
+# out of any frame from anywhere else.
+PERMISSIONS_POLICY = ", ".join(
+    (
+        "serial=(self)",
+        "accelerometer=()",
+        "ambient-light-sensor=()",
+        "autoplay=()",
+        "bluetooth=()",
+        "camera=()",
+        "display-capture=()",
+        "geolocation=()",
+        "gyroscope=()",
+        "hid=()",
+        "idle-detection=()",
+        "magnetometer=()",
+        "microphone=()",
+        "midi=()",
+        "payment=()",
+        "usb=()",
+        "xr-spatial-tracking=()",
+    )
+)
+
+
+def _connect_sources(api_base_url: str) -> str:
+    """Return the CSP connect sources.
+
+    The page reads the API with fetch. When the API runs on a different
+    origin, that origin must be a connect source. If it is not, the
+    browser blocks every request and the page stays empty.
+
+    The firmware release host is always present. Without it the config
+    checker cannot say whether a node is up to date, and it fails with
+    nothing the user can see.
+    """
+    sources = ["'self'", FIRMWARE_RELEASES_ORIGIN]
+    origin = _origin(api_base_url)
+    if origin is not None and origin not in sources:
+        sources.append(origin)
+    return " ".join(sources)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to every response."""
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
+        if request.scope["path"].startswith("/static") or request.scope["path"] == "/":
+            settings = request.app.state.settings
+            frame_source = _frame_source(settings.mesh_graph_base_url)
+            image_sources = _image_sources(settings.map_tile_url, settings.mesh_graph_base_url)
+            connect_sources = _connect_sources(settings.web_api_base_url)
+            response.headers["Content-Security-Policy"] = (
+                f"default-src 'self'; img-src {image_sources}; "
+                f"connect-src {connect_sources}; "
+                "style-src 'self' 'unsafe-inline'; "
+                # The coverage planner compiles a WebAssembly module. The
+                # browser refuses to do that without wasm-unsafe-eval and
+                # reports nothing the user can see. Terrain comes from
+                # this origin, so no extra connect source is needed.
+                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
+                "worker-src 'self' blob:; "
+                # Nothing may frame the dashboard, not even this origin.
+                "frame-ancestors 'none'; "
+                f"frame-src 'self' {frame_source}"
+            )
+        return response
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Application startup and shutdown."""
+    logger.info("Sonoran API starting, version=%s", __version__)
+    engine = make_engine(app.state.settings.database_url_api)
+    app.state.session_factory = make_session_factory(engine)
+    try:
+        yield
+    finally:
+        await engine.dispose()
+        logger.info("Sonoran API stopping")
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create the FastAPI application."""
+    if settings is None:
+        settings = get_settings()
+
+    app = FastAPI(
+        title="Sonoran",
+        version=__version__,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+        root_path=settings.web_base_path.rstrip("/"),
+    )
+    app.state.settings = settings
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.include_router(nodes_router)
+    app.include_router(chat_router)
+    app.include_router(graph_router)
+    app.include_router(map_router)
+    app.include_router(packets_router)
+    app.include_router(stats_router)
+    app.include_router(terrain_router)
+    app.include_router(traceroutes_router)
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok", "version": __version__}
+
+    @app.get("/api/version")
+    async def version() -> dict[str, str]:
+        return {"version": __version__, "schema": "none"}
+
+    @app.get("/", include_in_schema=False)
+    async def dashboard() -> HTMLResponse:
+        """Serve the no-build dashboard at the configured base path."""
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        config = {
+            "apiBase": settings.web_api_base_url,
+            "graphBaseUrl": settings.mesh_graph_base_url.rstrip("/"),
+            "timezone": settings.display_timezone,
+            "tileUrl": settings.map_tile_url,
+            "tileAttribution": settings.map_tile_attribution,
+            "mapCenter": [settings.map_default_lat, settings.map_default_lon],
+            "mapZoom": settings.map_default_zoom,
+        }
+        html = html.replace("__SONORAN_CONFIG__", json.dumps(config))
+        return HTMLResponse(html)
+
+    if STATIC_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    return app
+
+
+def run() -> None:
+    """Console script entry point."""
+    import uvicorn
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    uvicorn.run(
+        "sonoran.api.app:create_app",
+        factory=True,
+        host=settings.web_host,
+        port=settings.web_port,
+    )

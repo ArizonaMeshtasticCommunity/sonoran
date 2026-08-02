@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+FROM python:3.13-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy
+
+WORKDIR /app
+
+# Install uv for fast, locked dependency installs.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+COPY pyproject.toml ./
+COPY alembic.ini ./
+COPY docs ./docs
+COPY src ./src
+RUN uv pip install --system --no-cache .
+
+# Non-root user for security.
+RUN useradd --create-home --uid 10001 azmsh
+RUN chown -R azmsh:azmsh /app
+
+# The terrain cache for the coverage planner.
+#
+# This directory must exist in the image and must belong to the
+# application user. Docker gives a new named volume the owner of the
+# directory it covers, so without this the volume belongs to root and
+# the process cannot write a single page.
+RUN mkdir -p /var/lib/sonoran/terrain && chown -R azmsh:azmsh /var/lib/sonoran
+
+USER azmsh
+
+EXPOSE 8000
+
+# Default process: the API. The compose file overrides the command
+# for the ingest and jobs services.
+CMD ["sonoran-api"]

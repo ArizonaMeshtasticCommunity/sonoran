@@ -1,0 +1,539 @@
+/* Sonoran dashboard styles. There is no build step. */
+
+/*
+ * Sonoran desert palette. The background is a dark warm brown, not a
+ * grey. The accent is sunset orange. The "good" colour is saguaro
+ * green, which stays readable against the warm background.
+ *
+ * The chart and map code reads these values with getComputedStyle, so
+ * this block is the single source of colour for the whole interface.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #17100b;
+  --panel: #221811;
+  --panel-2: #2f2219;
+  --line: #422f23;
+  --text: #f6ece2;
+  --muted: #b59c88;
+  /*
+   * The logo orange is #e15f36. Interactive text uses a slightly
+   * brighter sibling of the same hue so it keeps contrast on the dark
+   * background. The logo image itself is untouched.
+   */
+  --brand: #e15f36;
+  --accent: #f4703f;
+  --accent-soft: #c9512a;
+  --good: #8cb369;
+  --warn: #edc04b;
+  --bad: #ef6f5c;
+  /* Node roles, shared by the map, the graph, and the legend. */
+  --role-gateway: #f4703f;
+  --role-router: #8cb369;
+  --role-client: #edc04b;
+  --role-stale: #7d6857;
+  /* The neighbour-link layer. Cool, so it does not compete with the
+     warm traffic and traceroute lines drawn over it. */
+  --map-link: #6ea9c9;
+  /*
+   * A relayed traffic line. Neutral and light, because it carries no
+   * signal reading: colouring it by SNR would suggest the two ends
+   * measured each other, and they did not.
+   */
+  --traffic-relayed: #ded2c6;
+  /*
+   * One colour for each Meshtastic device role. The mesh runs many more
+   * roles than "router" and "client" and they behave differently, so
+   * the map gives each its own colour. Routers and repeaters are the
+   * greens and teals. Clients are the yellows, blues, and purples. The
+   * TAK family is the pinks. An unknown role falls back to muted.
+   *
+   * Being a gateway is not a role. It is drawn as a bright ring around
+   * whatever colour the role already gives.
+   */
+  --role-ROUTER: #8cb369;
+  --role-ROUTER_LATE: #4fa3a5;
+  --role-ROUTER_CLIENT: #b6d94c;
+  --role-REPEATER: #2e8b7a;
+  --role-CLIENT: #edc04b;
+  --role-CLIENT_MUTE: #a48fd0;
+  --role-CLIENT_BASE: #6fa8dc;
+  --role-CLIENT_HIDDEN: #8d7a66;
+  --role-CLIENT_TAK: #e06c9f;
+  --role-TAK_TRACKER: #d94f70;
+  --role-TAK_PLUGIN: #b07cc6;
+  --role-ATAK_PLUGIN: #c98bdb;
+  --role-TRACKER: #f4a259;
+  --role-SENSOR: #46b3e6;
+  --role-LOST_AND_FOUND: #ef6f5c;
+  --font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: var(--font);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Layout */
+
+.shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 15rem;
+  flex: 0 0 15rem;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.brand { display: flex; align-items: baseline; gap: .5rem; }
+.brand h1 { font-size: 1.3rem; margin: 0; letter-spacing: .02em; }
+.brand-text { display: flex; align-items: baseline; gap: .5rem; }
+/* `display: flex` beats the browser rule for [hidden], so restate it. */
+.brand-text[hidden] { display: none; }
+.brand-text span { color: var(--muted); font-size: .75rem; }
+/* The script reveals the mark only after the file loads. */
+.brand-mark { display: none; width: 100%; max-width: 11rem; height: auto; }
+
+.sidebar nav { display: flex; flex-direction: column; gap: .15rem; }
+.sidebar nav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: .5rem .65rem;
+  border-radius: .4rem;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+.sidebar nav a:hover { background: var(--panel-2); color: var(--text); }
+.sidebar nav a.current { background: var(--panel-2); color: var(--accent); font-weight: 600; }
+/* Icons are an inline SVG sprite. `currentColor` makes them follow
+   the link colour, including the active and hover states. */
+.sprite { display: none; }
+.sidebar nav a .icon {
+  width: 1.15rem; height: 1.15rem; flex: 0 0 auto;
+  fill: currentColor; opacity: .85;
+}
+.sidebar nav a:hover .icon, .sidebar nav a.current .icon { opacity: 1; }
+
+.sidebar .status { margin-top: auto; font-size: .78rem; color: var(--muted); }
+.sidebar .status .dot {
+  display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
+  background: var(--good); margin-right: .4rem; vertical-align: baseline;
+}
+.sidebar .status .dot.stale { background: var(--warn); }
+.sidebar .status .dot.down { background: var(--bad); }
+
+.content { flex: 1 1 auto; padding: 1.5rem 2rem 4rem; min-width: 0; }
+
+.page { display: none; }
+.page.active { display: block; }
+
+.page-head {
+  display: flex; flex-wrap: wrap; gap: 1rem;
+  align-items: center; justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+.page-head h2 { margin: 0; font-size: 1.4rem; }
+.page-head .sub { color: var(--muted); font-size: .85rem; margin: .2rem 0 0; }
+
+/* Controls */
+
+.controls { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+
+input, select, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: .4rem;
+  padding: .4rem .6rem;
+}
+input::placeholder { color: var(--muted); }
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #06121e; font-weight: 600; }
+button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+.linky {
+  background: none; border: 0; padding: 0;
+  color: var(--accent); cursor: pointer; text-align: left; font: inherit;
+}
+.linky:hover { text-decoration: underline; }
+
+/* Panels */
+
+.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr)); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: .6rem;
+  padding: 1rem;
+  min-width: 0;
+}
+.panel > h3 {
+  margin: 0 0 .75rem;
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  display: flex; justify-content: space-between; align-items: center; gap: .5rem;
+}
+.panel.span-2 { grid-column: 1 / -1; }
+
+.stat { display: flex; flex-direction: column; gap: .2rem; }
+.stat .value { font-size: 1.9rem; font-weight: 650; line-height: 1.1; }
+.stat .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
+.stat .delta { font-size: .78rem; color: var(--muted); }
+
+/* Node identity */
+
+.node-name { display: flex; align-items: baseline; gap: .45rem; min-width: 0; }
+.node-name .long { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-name .short {
+  font: var(--mono);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: .25rem;
+  padding: 0 .3rem;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.node-name .id { font: var(--mono); color: var(--muted); flex: 0 0 auto; }
+
+/* Tables and lists */
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+tbody tr:hover { background: var(--panel-2); }
+td.wrap { white-space: normal; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1rem; margin: 0; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+.feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
+.feed li { border-left: 2px solid var(--line); padding: .1rem .6rem; }
+.map-overlay .feed { max-height: 12rem; }
+.map-overlay h4 { margin: 0; font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--muted); }
+.feed li .meta { color: var(--muted); font-size: .78rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+
+/* Signal quality */
+
+.snr { font-variant-numeric: tabular-nums; font-weight: 600; }
+.snr.good { color: var(--good); }
+.snr.ok { color: var(--warn); }
+.snr.bad { color: var(--bad); }
+
+.bar { background: var(--panel-2); border-radius: .2rem; height: .4rem; overflow: hidden; min-width: 4rem; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+
+.tag {
+  display: inline-block; font-size: .72rem; padding: .1rem .4rem;
+  border: 1px solid var(--line); border-radius: .25rem; color: var(--muted);
+}
+.tag.gateway { border-color: var(--accent); color: var(--accent); }
+.tag.router { border-color: var(--good); color: var(--good); }
+
+/* Map */
+
+.map-shell { position: relative; border: 1px solid var(--line); border-radius: .6rem; overflow: hidden; }
+#map { height: min(70vh, 40rem); background: var(--panel-2); }
+.map-overlay {
+  position: absolute; top: .6rem; right: .6rem; z-index: 500;
+  background: rgba(13, 18, 25, .92);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .6rem .7rem;
+  width: 18rem;
+  max-height: calc(100% - 1.2rem);
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: .4rem;
+}
+.map-overlay h4 { margin: 0; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.map-overlay .feed { max-height: 14rem; font-size: .8rem; }
+.leaflet-container { background: var(--panel-2); font: var(--font); }
+/*
+ * Make the light basemap fit the dark interface, then warm it with
+ * sepia so the map matches the desert palette. Markers sit in another
+ * pane, so the filter does not touch them.
+ */
+.leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.88) saturate(.6) sepia(.35);
+}
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
+.leaflet-popup-content { margin: .7rem .9rem; }
+.leaflet-bar a { background: var(--panel); color: var(--text); border-color: var(--line); }
+.leaflet-bar a:hover { background: var(--panel-2); color: var(--text); }
+
+.legend { display: flex; flex-wrap: wrap; gap: .75rem; font-size: .78rem; color: var(--muted); }
+.legend .swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: 50%; margin-right: .3rem; }
+.legend .swatch.gateway { background: var(--role-gateway); }
+.legend .swatch.router { background: var(--role-router); }
+.legend .swatch.client { background: var(--role-client); }
+.legend .swatch.stale { background: var(--role-stale); }
+.legend .swatch.reached { background: var(--good); }
+/* A gateway is drawn as a ring, not as a colour, so its role still shows. */
+.legend .swatch.ring { background: none; border: 2px solid var(--text); }
+.legend .swatch.faded { background: var(--muted); opacity: .3; }
+.legend .line {
+  display: inline-block; width: 1.6rem; height: 0; margin-right: .35rem;
+  vertical-align: middle; border-top: 2px solid var(--muted);
+}
+.legend .line.dashed { border-top-style: dashed; }
+.legend .line.dotted { border-top-style: dotted; border-color: var(--role-stale); }
+
+/* Tabs */
+
+.tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .75rem; }
+.tabs button {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: .4rem; padding: .4rem .75rem; color: var(--muted);
+  display: flex; align-items: baseline; gap: .4rem;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button[aria-selected="true"] {
+  border-color: var(--accent); color: var(--accent); background: var(--panel-2); font-weight: 600;
+}
+.tabs button .n { font-size: .75rem; opacity: .75; font-variant-numeric: tabular-nums; }
+.tabs button .group {
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; opacity: .6;
+}
+
+/* Charts */
+
+.chart { width: 100%; height: 15rem; }
+.chart.tall { height: min(82vh, 52rem); }
+
+/* Chat */
+
+.channel-group { margin-bottom: 1.75rem; }
+.channel-group > h3 {
+  font-size: .8rem; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); margin: 0 0 .75rem; padding-bottom: .4rem;
+  border-bottom: 1px solid var(--line);
+}
+.channel-head { display: flex; align-items: baseline; gap: .5rem; justify-content: space-between; }
+.channel-head .title { font-weight: 650; font-size: 1rem; color: var(--text); text-transform: none; letter-spacing: 0; }
+
+.messages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .6rem; max-height: 24rem; overflow-y: auto; }
+.messages li { display: flex; flex-direction: column; gap: .15rem; }
+.messages .who { display: flex; gap: .45rem; align-items: baseline; font-size: .8rem; }
+.messages .who .name { font-weight: 600; }
+.messages .who time { color: var(--muted); }
+.messages .body { overflow-wrap: anywhere; }
+.messages .body .hash { color: var(--accent); }
+.reactions { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .15rem; }
+.reaction {
+  display: inline-flex; align-items: center; gap: .2rem;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 1rem; padding: .05rem .45rem; font-size: .85rem;
+  cursor: default;
+}
+.reaction .who { display: inline-flex; align-items: baseline; gap: .2rem; font-size: .78rem; }
+.reaction .who .sep { color: var(--muted); }
+.reaction .who .packet { font-size: .7rem; opacity: .7; }
+.reaction .who .packet:hover { opacity: 1; }
+
+.reply-quote {
+  display: flex; gap: .4rem; align-items: baseline;
+  border-left: 2px solid var(--line); padding: 0 .5rem;
+  margin-bottom: .15rem; font-size: .78rem; color: var(--muted);
+}
+.reply-quote .who { font-weight: 600; flex: 0 0 auto; }
+.reply-quote .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.messages li.dm .who .name::after { content: " -> DM"; color: var(--muted); font-weight: 400; }
+
+.week { border: 1px solid var(--line); border-radius: .6rem; margin-bottom: 1rem; background: var(--panel); }
+.week > summary { cursor: pointer; padding: .75rem 1rem; display: flex; gap: 1rem; align-items: baseline; }
+.week > summary .range { font-weight: 650; }
+.week > summary .count { color: var(--muted); font-size: .85rem; }
+.week > div { padding: 0 1rem 1rem; }
+
+/* Feedback */
+
+.notice {
+  margin: 0 0 .75rem;
+  padding: .5rem .7rem;
+  border-left: 3px solid var(--warn);
+  background: var(--panel-2);
+  border-radius: .25rem;
+  color: var(--muted);
+  font-size: .82rem;
+}
+
+.muted { color: var(--muted); }
+.error { color: var(--bad); }
+.empty { color: var(--muted); font-style: italic; padding: .5rem 0; }
+.loading { color: var(--muted); }
+
+@media (max-width: 60rem) {
+  .shell { flex-direction: column; }
+  .sidebar { width: auto; flex: none; height: auto; position: static; }
+  .sidebar nav { flex-direction: row; flex-wrap: wrap; }
+  .content { padding: 1rem; }
+  .map-overlay { position: static; width: auto; margin-top: .6rem; }
+}
+
+/* Detail pages */
+
+.panel pre {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: .35rem;
+  padding: .6rem; overflow-x: auto; font: var(--mono); margin: 0; max-height: 24rem;
+}
+/* mesh-graph renders on a light background, so keep it on white. */
+.trace-drawing {
+  display: none; width: 100%; background: #fff;
+  border: 1px solid var(--line); border-radius: .35rem;
+}
+
+/* Traceroute path chain */
+
+.hops { list-style: none; margin: 0; padding: 0; }
+.hops .hop-node {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: .35rem; padding: .3rem .55rem;
+}
+.hops .hop-link {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .15rem 0 .15rem .75rem; font-size: .82rem;
+}
+.hops .hop-link .arrow { color: var(--muted); }
+
+.reply-link { text-decoration: none; display: block; }
+.reply-link:hover .reply-quote { border-left-color: var(--accent); color: var(--text); }
+[data-position-map] { border-radius: .35rem; overflow: hidden; }
+
+/* Coverage planner */
+
+/*
+ * The form sits beside the map on a wide screen and above it on a
+ * narrow one. The map keeps a usable height either way.
+ */
+.planner-layout {
+  display: grid; gap: 1rem; align-items: start;
+  grid-template-columns: minmax(0, 21rem) minmax(0, 1fr);
+}
+@media (max-width: 62rem) {
+  .planner-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+#planner-map { height: min(62vh, 34rem); background: var(--panel-2); }
+
+.planner-form h3 { margin: 1.1rem 0 .5rem; }
+.planner-form h3:first-child { margin-top: 0; }
+.planner-form label {
+  display: block; margin-bottom: .5rem;
+  color: var(--muted); font-size: .76rem;
+}
+.planner-form input,
+.planner-form select { display: block; width: 100%; margin-top: .2rem; }
+.planner-form .pair { display: grid; gap: .5rem; grid-template-columns: 1fr 1fr; }
+.planner-form details { margin-top: .5rem; }
+.planner-form summary { cursor: pointer; font-size: .78rem; padding: .3rem 0; }
+
+.notice.bad { border-color: var(--bad); color: var(--bad); }
+.notice.warn { border-color: var(--warn); color: var(--warn); }
+
+/* Two links side by side in a popup need space between them. */
+.popup-actions { display: flex; flex-wrap: wrap; gap: .9rem; margin-top: .35rem; }
+
+/* The map legend doubles as a role filter, so each key is a button. */
+.legend-filter { align-items: center; }
+.legend-key {
+  background: none; border: 1px solid transparent; border-radius: .3rem;
+  padding: .15rem .4rem; font: inherit; font-size: .78rem;
+  color: var(--muted); cursor: pointer;
+}
+.legend-key:hover { border-color: var(--line); color: var(--text); }
+.legend-key[aria-pressed="true"] {
+  border-color: var(--accent); color: var(--text); background: var(--panel-2);
+}
+.legend-key.clear { color: var(--accent); border-color: var(--line); }
+.legend-note { color: var(--muted); font-size: .78rem; }
+
+/* The summary sits beside the panel title and may wrap; the title must not. */
+.panel > h3 > span:first-child { white-space: nowrap; }
+.panel > h3 .head-note { text-align: right; text-transform: none; letter-spacing: 0; }
+
+/* The line kinds on the map legend. */
+.legend .line.direct { border-top: 2px solid var(--good); }
+.legend .line.relayed { border-top: 2px dashed var(--traffic-relayed); }
+.legend .line.neighbour { border-top: 2px dashed var(--map-link); }
+
+/* Tag rows in the statistics tables. */
+.tags { display: inline-flex; flex-wrap: wrap; gap: .3rem; align-items: baseline; }
+.tag.bad { border-color: var(--bad); color: var(--bad); }
+.tag.muted { opacity: .55; }
+
+/* Config check */
+
+.dropzone {
+  border: 2px dashed var(--line);
+  border-radius: .5rem;
+  padding: 1.75rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: .3rem;
+}
+.dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--panel-2); }
+.dropzone .muted { font-size: .8rem; }
+
+.checks { display: flex; flex-direction: column; gap: .35rem; }
+
+/* One check. A passing one is a plain row; the rest open for the why. */
+.check {
+  border: 1px solid var(--line);
+  border-radius: .4rem;
+  background: var(--panel-2);
+}
+.check summary,
+div.check {
+  display: flex; align-items: baseline; gap: .6rem;
+  padding: .5rem .65rem; cursor: pointer; font-size: .88rem;
+}
+div.check { cursor: default; }
+.check summary::-webkit-details-marker { display: none; }
+.check .title { font-weight: 600; flex: 0 0 auto; }
+.check .muted { font-size: .82rem; }
+.check-body { padding: 0 .65rem .65rem; display: flex; flex-direction: column; gap: .3rem; }
+.check-body .kv { display: flex; gap: .5rem; font-size: .84rem; }
+.check-body .kv .muted { min-width: 4rem; }
+.check-body .why { margin: .3rem 0 0; font-size: .82rem; }
+.check-body .fix {
+  margin: .3rem 0 0; padding: .5rem .6rem;
+  background: var(--bg); border: 1px solid var(--line); border-radius: .3rem;
+  font: var(--mono); overflow-x: auto; white-space: pre-wrap;
+}
+
+/* The verdict of one check. */
+.pill {
+  flex: 0 0 auto;
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  padding: .1rem .4rem; border-radius: .25rem; border: 1px solid var(--line);
+}
+.pill.pass { color: var(--good); border-color: var(--good); }
+.pill.fail { color: var(--bad); border-color: var(--bad); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+.pill.info { color: var(--muted); }
+
+.notice.good { border-color: var(--good); color: var(--good); }
