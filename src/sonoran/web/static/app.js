@@ -1132,18 +1132,48 @@ PAGES.map = async (page) => {
 
 /* --- Mesh graph ------------------------------------------------ */
 
-const ROLE_CATEGORIES = [
-  { name: 'Gateway', colour: PALETTE.gateway },
-  { name: 'Router', colour: PALETTE.router },
-  { name: 'Client', colour: PALETTE.client },
-  { name: 'Not heard', colour: PALETTE.stale },
-];
+/*
+ * The graph colours a node by its role, the same way the map does.
+ *
+ * It used to sort every node into router, client, gateway, or not
+ * heard. The mesh runs many more roles than that and they behave
+ * differently: a client mute never repeats anything, a router late
+ * repeats only after the others have had their turn. Four buckets put
+ * those under one colour and disagreed with the key on the map, so the
+ * same node was one thing on one page and another thing on the next.
+ *
+ * Only the roles this graph actually holds become categories, so the
+ * key stays as short as the mesh allows. They are clickable, which
+ * gives the graph a filter it did not have: a click on "client mute"
+ * takes all of them out of the picture.
+ *
+ * Being a gateway is not a role and does not take the colour over. It
+ * draws as a ring, as it does on the map. See `nodeStyle`.
+ */
+function graphCategories(nodes) {
+  const present = new Set(nodes.map((node) => node.role || ''));
+  const categories = ROLES.filter((role) => present.has(role.key)).map((role) => ({
+    name: role.label,
+    itemStyle: { color: roleColour(role.key) },
+  }));
+  // A role this build has never heard of still needs a place to sit,
+  // and so does a node that has never reported one.
+  const named = new Set(ROLES.map((role) => role.key));
+  const other = [...present].filter((role) => role && !named.has(role));
+  for (const role of other.sort()) {
+    categories.push({ name: roleLabel(role), itemStyle: { color: roleColour(role) } });
+  }
+  if (present.has('')) {
+    categories.push({ name: roleLabel(null), itemStyle: { color: PALETTE.muted } });
+  }
+  return categories;
+}
 
-function graphCategory(node) {
-  if (!node.known || ageHours(node.last_heard) > 72) return 3;
-  if (node.is_mqtt_gateway) return 0;
-  if (node.role && /ROUTER|REPEATER/i.test(node.role)) return 1;
-  return 2;
+/** Where one node sits in the key built above. */
+function graphCategory(node, categories) {
+  const name = roleLabel(node.role || null);
+  const index = categories.findIndex((category) => category.name === name);
+  return index < 0 ? 0 : index;
 }
 
 /* How many links each node keeps in the backbone view. */
@@ -1607,6 +1637,9 @@ PAGES.graph = async (page) => {
   const crowding = Math.min(1, Math.max(0, (data.nodes.length - 40) / 260));
   const lerp = (small, large) => small + (large - small) * crowding;
 
+  /* The key, built from the roles this graph actually holds. */
+  const categories = graphCategories(data.nodes);
+
   chart(target, {
     backgroundColor: 'transparent',
     tooltip: {
@@ -1623,14 +1656,26 @@ PAGES.graph = async (page) => {
         return [
           `<b>${node.display_name}</b>`,
           node.node_id,
-          node.role || 'role unknown',
+          // The same words the key uses, so the two agree.
+          roleLabel(node.role) + (node.is_mqtt_gateway ? ', gateway' : ''),
           node.hw_model || '',
           `${count(node.packet_count)} packets`,
           `heard ${ago(node.last_heard)} ago`,
         ].filter(Boolean).join('<br/>');
       },
     },
-    legend: [{ data: ROLE_CATEGORIES.map((category) => category.name), textStyle: { color: PALETTE.muted }, top: 0 }],
+    /*
+     * The key carries a role for every colour on the canvas. A mesh
+     * can run a dozen of them, so it wraps rather than running off the
+     * side, and the graph is given the room back below it.
+     */
+    legend: [{
+      data: categories.map((category) => category.name),
+      textStyle: { color: PALETTE.muted },
+      top: 0,
+      type: 'scroll',
+      width: '92%',
+    }],
     series: [{
       type: 'graph',
       // Real positions are a layout in themselves, so the solver is
@@ -1639,7 +1684,7 @@ PAGES.graph = async (page) => {
       layout: onGround ? 'none' : 'force',
       roam: true,
       draggable: true,
-      categories: ROLE_CATEGORIES.map((category) => ({ name: category.name, itemStyle: { color: category.colour } })),
+      categories,
       center: ['50%', '52%'],
       /*
        * Force settings scale down as the graph grows. Every node pushes
@@ -1697,7 +1742,7 @@ PAGES.graph = async (page) => {
           id: node.node_id,
           name: node.display_name,
           raw: node,
-          category: graphCategory(node),
+          category: graphCategory(node, categories),
           symbolSize: (data.nodes.length > 120 ? 3 : 6)
             + (data.nodes.length > 120 ? 9 : 18) * Math.sqrt((node.packet_count || 0) / busiest),
           x: seed ? seed[0] : undefined,
@@ -1706,14 +1751,31 @@ PAGES.graph = async (page) => {
           // solver is running. Real positions are not solved at all,
           // so there is nothing to hold it against.
           fixed: !onGround && graphPinned.has(node.node_id),
-          // A node placed from its neighbours rather than from its own
-          // report is drawn fainter, so the reader can tell where the
-          // picture is reporting and where it is inferring.
+          /*
+           * The role gives the colour. On top of it:
+           *
+           * A gateway wears a bright ring, because uploading to MQTT
+           * is not a role and must not take the role's colour over.
+           * The map draws it the same way.
+           *
+           * Opacity carries how sure the dot is. A node not heard in a
+           * day fades hard, which is what the old "not heard" colour
+           * said before the roles took the colours over, and the map
+           * fades it the same way. A node placed from its neighbours
+           * rather than from its own report fades a little, so a
+           * reader can tell where the picture is reporting and where
+           * it is inferring. A node that is both fades twice.
+           *
+           * A search match outranks all of it while it lasts.
+           */
           itemStyle: match
             ? { borderColor: PALETTE.text, borderWidth: 2 }
-            : onGround && !node.has_position
-              ? { opacity: 0.55 }
-              : undefined,
+            : {
+                borderColor: node.is_mqtt_gateway ? PALETTE.text : undefined,
+                borderWidth: node.is_mqtt_gateway ? 1.5 : 0,
+                opacity: (isStale(node) ? 0.35 : 1)
+                  * (onGround && !node.has_position ? 0.75 : 1),
+              },
           label: { show: Boolean(match || named.has(node.node_id)) },
         };
       }),
