@@ -338,6 +338,19 @@
                 </select>
               </label>
               <input data-graph-search placeholder="Find a node" />
+              <!--
+                The mesh is a geographic thing. Laying it out on real
+                positions puts the Phoenix and Tucson knots where they
+                belong and holds them there between redraws, instead of
+                solving a different ball of wire every time.
+              -->
+              <label class="muted">Layout
+                <select data-graph-layout>
+                  <option value="spread" selected>On the ground, spread</option>
+                  <option value="ground">On the ground, exact</option>
+                  <option value="free">Free force</option>
+                </select>
+              </label>
               <label class="muted">View
                 <select data-graph-view>
                   <option value="all" selected>Whole preset</option>
@@ -347,6 +360,7 @@
               </label>
               <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
               <button type="button" class="toggle" data-graph-oneway aria-pressed="true">Show one-way traceroutes</button>
+              <button type="button" data-graph-reset>Reset layout</button>
               <a class="linky" data-graph-external target="_blank" rel="noopener">Open mesh-graph</a>
             </div>
           </div>

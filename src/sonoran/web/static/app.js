@@ -1198,6 +1198,164 @@ function focusNode(data, query) {
   return best;
 }
 
+/*
+ * The mesh laid out over the ground it sits on.
+ *
+ * A force layout started from nowhere draws the same mesh a different
+ * way every time and reads as a ball of wire. The mesh is a geographic
+ * thing: the two knots a reader picks out are Phoenix and Tucson, and
+ * seeding the layout with real positions puts them where they belong
+ * and keeps them there between redraws.
+ *
+ * About six nodes in ten report a position. The rest are placed beside
+ * the neighbours that do, so the picture stays whole. Nothing is
+ * hidden and every node keeps its links.
+ */
+
+/* Layout units. The graph fits whatever bounds it is given, so this
+ * only sets the resolution the seed is worked out in. */
+const GRAPH_SPAN = 1000;
+
+/* Node positions the reader has dragged, so a redraw does not undo the
+ * poking. The search box re-renders on every keystroke, and the graph
+ * used to jump back under the hand. */
+const graphPinned = new Map();
+
+/* The picture those pins were placed on: channel, window, and layout. */
+let graphArrangement = '';
+
+/**
+ * Project the nodes that report a position onto flat layout units.
+ *
+ * Longitude is scaled by the cosine of the mean latitude, so a degree
+ * east covers the same ground as a degree north and the state is not
+ * stretched sideways. Latitude is negated because screen y grows down.
+ * One factor scales both axes, which keeps the real aspect ratio.
+ */
+function projectPositions(nodes) {
+  const placed = nodes.filter((node) => node.lat != null && node.lon != null);
+  const seeds = new Map();
+  // Two nodes cannot establish a shape to lay anything else out on.
+  if (placed.length < 3) return seeds;
+
+  const meanLat = placed.reduce((sum, node) => sum + node.lat, 0) / placed.length;
+  const squeeze = Math.cos((meanLat * Math.PI) / 180);
+  const points = placed.map((node) => ({
+    id: node.node_id,
+    x: node.lon * squeeze,
+    y: -node.lat,
+  }));
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const factor = GRAPH_SPAN / (Math.max(maxX - minX, maxY - minY) || 1);
+  for (const point of points) {
+    seeds.set(point.id, [(point.x - minX) * factor, (point.y - minY) * factor]);
+  }
+  return seeds;
+}
+
+/**
+ * Give every node a starting place.
+ *
+ * A node with no position of its own goes to the average of the
+ * neighbours that have one, over a few passes, so it lands beside what
+ * it actually talks to. Each pass is worked out before it is applied,
+ * or a node seeded early in a pass would drag the rest of that pass
+ * towards it and the result would depend on the order of the list.
+ *
+ * A node no pass can reach — nothing it links to knows where it is —
+ * goes on a ring around the outside. That reads as "not placed" rather
+ * than putting it somewhere it is not.
+ */
+function seedPositions(nodes, links) {
+  const seeds = projectPositions(nodes);
+  if (!seeds.size) return seeds;
+
+  const neighbours = new Map();
+  for (const link of links) {
+    if (!neighbours.has(link.source)) neighbours.set(link.source, []);
+    if (!neighbours.has(link.target)) neighbours.set(link.target, []);
+    neighbours.get(link.source).push(link.target);
+    neighbours.get(link.target).push(link.source);
+  }
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    const found = [];
+    for (const node of nodes) {
+      if (seeds.has(node.node_id)) continue;
+      const known = (neighbours.get(node.node_id) || [])
+        .map((id) => seeds.get(id))
+        .filter(Boolean);
+      if (!known.length) continue;
+      found.push([
+        node.node_id,
+        [
+          known.reduce((sum, point) => sum + point[0], 0) / known.length,
+          known.reduce((sum, point) => sum + point[1], 0) / known.length,
+        ],
+      ]);
+    }
+    if (!found.length) break;
+    for (const [id, point] of found) seeds.set(id, point);
+  }
+
+  const stranded = nodes.filter((node) => !seeds.has(node.node_id));
+  stranded.forEach((node, index) => {
+    const angle = (index / stranded.length) * Math.PI * 2;
+    seeds.set(node.node_id, [
+      GRAPH_SPAN / 2 + Math.cos(angle) * GRAPH_SPAN * 0.72,
+      GRAPH_SPAN / 2 + Math.sin(angle) * GRAPH_SPAN * 0.72,
+    ]);
+  });
+  return seeds;
+}
+
+/**
+ * Push overlapping nodes apart without moving them far.
+ *
+ * Nodes on one rooftop, and the many that report the same default
+ * position, land on the same point and bury their own links. A few
+ * passes of separation opens them enough to see, and because each push
+ * is small the geography survives it.
+ *
+ * The sweep is every pair against every other. That is fine for the
+ * few hundred nodes a preset holds, and it stops above that rather
+ * than locking the page up.
+ */
+function separatePositions(seeds, nodes) {
+  const ids = nodes.map((node) => node.node_id).filter((id) => seeds.has(id));
+  if (ids.length > 1500) return seeds;
+
+  const gap = GRAPH_SPAN / 90;
+  for (let pass = 0; pass < 6; pass += 1) {
+    for (let a = 0; a < ids.length; a += 1) {
+      for (let b = a + 1; b < ids.length; b += 1) {
+        const first = seeds.get(ids[a]);
+        const second = seeds.get(ids[b]);
+        let dx = second[0] - first[0];
+        let dy = second[1] - first[1];
+        let distance = Math.hypot(dx, dy);
+        if (distance >= gap) continue;
+        // Exactly on top of each other has no direction to push along,
+        // so the pair is nudged apart on a fixed diagonal first.
+        if (distance === 0) {
+          dx = gap * 0.5;
+          dy = gap * 0.5;
+          distance = Math.hypot(dx, dy);
+        }
+        const push = ((gap - distance) / distance) * 0.5;
+        first[0] -= dx * push;
+        first[1] -= dy * push;
+        second[0] += dx * push;
+        second[1] += dy * push;
+      }
+    }
+  }
+  return seeds;
+}
+
 /* The channel the graph page shows. Empty means "not chosen yet". */
 let graphChannel = '';
 
@@ -1381,6 +1539,44 @@ PAGES.graph = async (page) => {
   const busiest = Math.max(1, ...sizes);
 
   /*
+   * Where each node starts. "spread" and "ground" both lay the mesh
+   * out over real positions, so the two knots land where Phoenix and
+   * Tucson really are and stay there between redraws. "free" is the
+   * old force layout, for the shape of the mesh on its own terms.
+   */
+  const layout = $('[data-graph-layout]', page).value || 'spread';
+  /*
+   * A pin belongs to the picture it was made on. Another channel,
+   * window, or layout is a different picture, so the pins are dropped
+   * rather than carried onto a mesh they were never placed in.
+   */
+  const arrangement = `${graphChannel}|${hours}|${layout}`;
+  if (arrangement !== graphArrangement) {
+    graphPinned.clear();
+    graphArrangement = arrangement;
+  }
+  const geographic = layout !== 'free';
+  let seeds = geographic ? seedPositions(data.nodes, data.links) : new Map();
+  if (layout === 'spread') seeds = separatePositions(seeds, data.nodes);
+  // Nothing reported a position, so there is no ground to lay it on.
+  const onGround = geographic && seeds.size > 0;
+  for (const [id, point] of graphPinned) {
+    if (seeds.has(id)) seeds.set(id, point.slice());
+  }
+
+  /*
+   * A label for every one of four hundred nodes is a wall of text, and
+   * none at all leaves a field of anonymous dots with no way to tell
+   * where you are. The busiest few carry the names, which is enough to
+   * recognise a part of the mesh, and the rest answer on hover.
+   */
+  const byTraffic = data.nodes.slice().sort(
+    (a, b) => (b.packet_count || 0) - (a.packet_count || 0));
+  const named = new Set(
+    (data.nodes.length <= 90 ? byTraffic : byTraffic.slice(0, 30))
+      .map((node) => node.node_id));
+
+  /*
    * How crowded this graph is, from 0 for a handful of nodes to 1 for a
    * few hundred. `lerp` reads the setting for a small graph and the one
    * for a large graph, and gives the value in between. Every force
@@ -1416,7 +1612,10 @@ PAGES.graph = async (page) => {
     legend: [{ data: ROLE_CATEGORIES.map((category) => category.name), textStyle: { color: PALETTE.muted }, top: 0 }],
     series: [{
       type: 'graph',
-      layout: 'force',
+      // Real positions are a layout in themselves, so the solver is
+      // told to leave them alone. Dragging still works: ECharts moves
+      // the node and redraws its links whatever the layout.
+      layout: onGround ? 'none' : 'force',
       roam: true,
       draggable: true,
       categories: ROLE_CATEGORIES.map((category) => ({ name: category.name, itemStyle: { color: category.colour } })),
@@ -1455,7 +1654,8 @@ PAGES.graph = async (page) => {
       },
       emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
       label: {
-        show: data.nodes.length <= 90,
+        // Each node says whether it carries a name. See `named` above.
+        show: false,
         position: 'right',
         color: PALETTE.text,
         fontSize: 10,
@@ -1471,6 +1671,7 @@ PAGES.graph = async (page) => {
       lineStyle: { color: 'source', curveness: lerp(0.3, 0.16), opacity: 0.45 },
       data: data.nodes.map((node) => {
         const match = query && node.display_name.toLowerCase().includes(query);
+        const seed = seeds.get(node.node_id);
         return {
           id: node.node_id,
           name: node.display_name,
@@ -1478,8 +1679,21 @@ PAGES.graph = async (page) => {
           category: graphCategory(node),
           symbolSize: (data.nodes.length > 120 ? 3 : 6)
             + (data.nodes.length > 120 ? 9 : 18) * Math.sqrt((node.packet_count || 0) / busiest),
-          itemStyle: match ? { borderColor: PALETTE.text, borderWidth: 2 } : undefined,
-          label: match ? { show: true } : undefined,
+          x: seed ? seed[0] : undefined,
+          y: seed ? seed[1] : undefined,
+          // A dragged node stays where it was put while the layout
+          // solver is running. Real positions are not solved at all,
+          // so there is nothing to hold it against.
+          fixed: !onGround && graphPinned.has(node.node_id),
+          // A node placed from its neighbours rather than from its own
+          // report is drawn fainter, so the reader can tell where the
+          // picture is reporting and where it is inferring.
+          itemStyle: match
+            ? { borderColor: PALETTE.text, borderWidth: 2 }
+            : onGround && !node.has_position
+              ? { opacity: 0.55 }
+              : undefined,
+          label: { show: Boolean(match || named.has(node.node_id)) },
         };
       }),
       /*
@@ -1517,6 +1731,25 @@ PAGES.graph = async (page) => {
 
   const instance = charts.get(target);
   if (instance && !instance.__wired) {
+    /*
+     * Remember where a node was dragged to. Every redraw rebuilds the
+     * chart from scratch, and the search box redraws on each keystroke,
+     * so without this the mesh snapped back the moment the reader
+     * typed.
+     *
+     * This reads the position on mouse up rather than on drag end. The
+     * graph series moves the node itself and raises no event for it:
+     * `dragnode` belongs to sankey, and zrender's own dragend is not
+     * passed on. Mouse up lands after the drag either way, and a plain
+     * click through it only records where the node already was.
+     */
+    instance.on('mouseup', (item) => {
+      if (item.dataType !== 'node') return;
+      const series = instance.getModel().getSeriesByIndex(0);
+      const nodes = series && series.getData();
+      const point = nodes && nodes.getItemLayout(item.dataIndex);
+      if (point) graphPinned.set(nodes.getId(item.dataIndex), [point[0], point[1]]);
+    });
     instance.on('click', (item) => {
       if (item.dataType === 'node' && item.data.raw) {
         // In focus view a click recentres. Elsewhere it opens the node.
@@ -2504,9 +2737,14 @@ function wire() {
       render(currentPage);
     });
   }
-  for (const control of $$('select[data-traffic-minutes], select[data-graph-hours], select[data-chat-hours], select[data-node-hours], select[data-meshnet-weeks], select[data-node-active], select[data-node-role], select[data-graph-view]')) {
+  for (const control of $$('select[data-traffic-minutes], select[data-graph-hours], select[data-chat-hours], select[data-node-hours], select[data-meshnet-weeks], select[data-node-active], select[data-node-role], select[data-graph-view], select[data-graph-layout]')) {
     control.addEventListener('change', () => render(currentPage));
   }
+  // Put every node back where the layout wants it, undoing the dragging.
+  $('[data-graph-reset]').addEventListener('click', () => {
+    graphPinned.clear();
+    render('graph');
+  });
   $('[data-link-channel]').addEventListener('change', (event) => {
     linkChannel = event.target.value;
     render('map');

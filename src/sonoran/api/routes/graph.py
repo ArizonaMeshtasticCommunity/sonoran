@@ -30,6 +30,7 @@ from sonoran.api.traces import (
     is_reply,
 )
 from sonoran.db.models import NeighborMetrics, Node, Packet, PacketSeen, Traceroute
+from sonoran.positions import is_usable
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -216,7 +217,18 @@ def _node_json(
     name: str,
     packet_count: int,
 ) -> dict[str, object]:
-    """Return the public form of one graph node."""
+    """Return the public form of one graph node.
+
+    The position comes with it so the page can lay the graph out over
+    the ground it really sits on. A mesh is a geographic thing: the two
+    clusters a reader picks out of the web are Phoenix and Tucson, and
+    a layout that starts from nowhere hides that. Only about six nodes
+    in ten report a position, so a client has to seed the rest itself.
+    """
+    lat = None if node is None else node.last_lat
+    lon = None if node is None else node.last_lon
+    if not is_usable(lat, lon):
+        lat, lon = None, None
     return {
         "node_id": format_node_id(node_num),
         "node_num": node_num,
@@ -225,7 +237,9 @@ def _node_json(
         "role": None if node is None else node.role,
         "hw_model": None if node is None else node.hw_model,
         "is_mqtt_gateway": bool(node is not None and node.is_mqtt_gateway),
-        "has_position": bool(node is not None and node.last_lat is not None),
+        "lat": lat,
+        "lon": lon,
+        "has_position": lat is not None,
         "last_heard": None if node is None else node.last_heard,
         "packet_count": packet_count,
         "known": node is not None,
