@@ -758,3 +758,89 @@ def test_traffic_events_carry_the_hop_count(migrated_engine, timescale_url: str)
     # Nothing was burned, so this gateway heard the sender itself.
     assert straight["hops_taken"] == 0
     assert straight["direct"] is True
+
+
+def test_a_link_says_whether_a_reply_confirmed_it(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A hop known only from an unanswered request is marked one way.
+
+    The broker sees a request in flight, so the hops it has already made
+    are real and measured. Nothing came back to confirm the round trip,
+    so the evidence runs one way and the page may want to say so.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for node_num in (8701, 8702, 8703, 8704):
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, first_seen, updated_at, "
+                    "last_heard) VALUES (:n, :nid, :sn, :now, :now, :now) "
+                    "ON CONFLICT (node_num) DO NOTHING"
+                ),
+                {"n": node_num, "nid": f"!{node_num:08x}", "sn": f"C{node_num}", "now": now},
+            )
+        # An unanswered request. It reached 8702 and stopped there.
+        connection.execute(
+            text(
+                "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                "route, snr_towards, seen_at) "
+                "VALUES (8701, 8703, 'ShortSlow', 870001, CAST('[8702]' AS jsonb), "
+                "CAST('[12]' AS jsonb), :now)"
+            ),
+            {"now": now},
+        )
+        # A reply, which proves its whole path.
+        connection.execute(
+            text(
+                "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                "request_id, route, snr_towards, seen_at) "
+                "VALUES (8704, 8701, 'ShortSlow', 870003, 870002, CAST('[8702]' AS jsonb), "
+                "CAST('[12, 20]' AS jsonb), :now)"
+            ),
+            {"now": now},
+        )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        links = client.get("/api/graph?hours=24&channel=ShortSlow").json()["links"]
+    by_pair = {frozenset((link["source"], link["target"])): link for link in links}
+
+    # 8702 to 8703 is the hop the request never made, so it is absent.
+    assert frozenset(("!000021fe", "!000021ff")) not in by_pair
+
+    # 8701 to 8702 is evidenced by both, and one of them came back.
+    assert by_pair[frozenset(("!000021fd", "!000021fe"))]["confirmed"] is True
+
+    # 8702 to 8704 is the reply's own last hop, so it is confirmed too.
+    assert by_pair[frozenset(("!000021fe", "!00002200"))]["confirmed"] is True
+
+
+def test_a_request_only_link_is_marked_one_way(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Nothing answered, so the link carries one-way evidence only."""
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for node_num in (8801, 8802):
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, first_seen, updated_at, "
+                    "last_heard) VALUES (:n, :nid, :sn, :now, :now, :now) "
+                    "ON CONFLICT (node_num) DO NOTHING"
+                ),
+                {"n": node_num, "nid": f"!{node_num:08x}", "sn": f"O{node_num}", "now": now},
+            )
+        connection.execute(
+            text(
+                "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                "route, snr_towards, seen_at) "
+                "VALUES (8801, 8899, 'LongSlow', 880001, CAST('[8802]' AS jsonb), "
+                "CAST('[12]' AS jsonb), :now)"
+            ),
+            {"now": now},
+        )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        links = client.get("/api/graph?hours=24&channel=LongSlow").json()["links"]
+    by_pair = {frozenset((link["source"], link["target"])): link for link in links}
+    link = by_pair[frozenset(("!00002261", "!00002262"))]
+    assert link["confirmed"] is False, "no reply came back, so the evidence runs one way"
+    assert link["snr"] == 3.0, "the hop was still measured"

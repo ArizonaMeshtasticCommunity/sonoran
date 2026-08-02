@@ -22,7 +22,13 @@ from sqlalchemy.sql.elements import ColumnElement
 from sonoran.api.channels import CORE_TIER, UNKNOWN_CHANNEL, channel_filter, classify
 from sonoran.api.dependencies import get_session, parse_node_id
 from sonoran.api.names import BROADCAST_NODE_NUM, format_node_id, name_of, resolve_names
-from sonoran.api.traces import SNR_SCALE, UNKNOWN_SNR, evidenced_hops, forward_path
+from sonoran.api.traces import (
+    SNR_SCALE,
+    UNKNOWN_SNR,
+    evidenced_hops,
+    forward_path,
+    is_reply,
+)
 from sonoran.db.models import NeighborMetrics, Node, Packet, PacketSeen, Traceroute
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
@@ -43,6 +49,17 @@ class Edge:
     snr: float | None
     time: datetime
     count: int = 1
+    # Whether anything that completed evidences this link. A neighbor
+    # report always does: a node names a neighbour it hears itself. A
+    # traceroute does when it is a reply, because the request reached
+    # the far end and came back.
+    #
+    # A request that was never answered is the other case. The broker
+    # saw it in flight, so the hops it had already made are real and
+    # measured. Nothing confirmed the round trip, so the evidence runs
+    # one way. Such links are true but weaker, and a page may want to
+    # tell them apart.
+    confirmed: bool = True
 
     def as_json(self) -> dict[str, object]:
         """Return the public form of this link."""
@@ -52,6 +69,7 @@ class Edge:
             "kind": self.kind,
             "snr": self.snr,
             "count": self.count,
+            "confirmed": self.confirmed,
             "time": self.time,
         }
 
@@ -81,6 +99,10 @@ def _add(edges: EdgeMap, edge: Edge) -> None:
     the last hop, so keeping only the first report would leave a link
     unmeasured even when a later report measured it. Between two
     measured values the newer one wins.
+
+    Confirmation works the same way round. One report that completed is
+    enough, so a link seen first by an unanswered request and later by a
+    reply counts as confirmed.
     """
     if not (_is_node(edge.source) and _is_node(edge.target)):
         return
@@ -90,6 +112,7 @@ def _add(edges: EdgeMap, edge: Edge) -> None:
         edges[key] = edge
         return
     known.count += 1
+    known.confirmed = known.confirmed or edge.confirmed
     if edge.snr is not None and (known.snr is None or edge.time > known.time):
         known.snr = edge.snr
         known.time = max(known.time, edge.time)
@@ -161,6 +184,7 @@ async def _traceroute_edges(
     rows = (await session.scalars(statement)).all()
     edges: EdgeMap = {}
     for row in rows:
+        confirmed = is_reply(row)
         for source, target, snr, _position, _claimed in _trace_links(row):
             _add(
                 edges,
@@ -170,6 +194,7 @@ async def _traceroute_edges(
                     kind=TRACEROUTE_KIND,
                     snr=snr,
                     time=row.seen_at,
+                    confirmed=confirmed,
                 ),
             )
     return edges

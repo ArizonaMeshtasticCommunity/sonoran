@@ -300,6 +300,8 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 }
 .legend .line.dashed { border-top-style: dashed; }
 .legend .line.dotted { border-top-style: dotted; border-color: var(--role-stale); }
+/* A hop a traceroute really made, that no reply confirmed. */
+.legend .line.faint { border-top-style: dashed; opacity: .45; }
 
 /* Tabs */
 

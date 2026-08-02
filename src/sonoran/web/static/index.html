@@ -340,6 +340,7 @@
                 </select>
               </label>
               <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
+              <button type="button" class="toggle" data-graph-oneway aria-pressed="true">Show one-way traceroutes</button>
               <a class="linky" data-graph-external target="_blank" rel="noopener">Open mesh-graph</a>
             </div>
           </div>
@@ -350,7 +351,8 @@
             <div class="chart tall" data-graph-chart></div>
             <p class="legend" style="margin: .5rem 0 0">
               <span><span class="line solid"></span>Neighbour report, SNR measured</span>
-              <span><span class="line dashed"></span>Traceroute hop, SNR measured</span>
+              <span><span class="line dashed"></span>Traceroute hop, reply confirmed it</span>
+              <span data-legend-oneway hidden><span class="line faint"></span>Traceroute hop, request never answered</span>
               <span data-legend-unconfirmed hidden><span class="line dotted"></span>Path seen, no signal reading</span>
             </p>
           </div>

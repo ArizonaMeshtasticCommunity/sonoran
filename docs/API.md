@@ -460,7 +460,19 @@ Response: `window_hours`, `channel`, `node_count`, `link_count`,
 - Node item: `node_id`, `node_num`, `display_name`, `short_name`,
   `role`, `hw_model`, `is_mqtt_gateway`, `has_position`, `last_heard`,
   `packet_count`, `known`.
-- Link item: `source`, `target`, `kind`, `snr`, `count`, `time`.
+- Link item: `source`, `target`, `kind`, `snr`, `count`, `confirmed`,
+  `time`.
+
+`confirmed` says whether anything that completed evidences the link. A
+neighbor report always does: a node names a neighbour it hears itself.
+A traceroute does when it is a reply, because the request reached the
+far end and came back.
+
+`confirmed` is false when only an unanswered request evidences the
+link. The broker saw the request in flight, so the hops it had already
+made are real and were really measured. Nothing confirmed the round
+trip, so the evidence runs one way. Such links are true but weaker.
+The graph page draws them fainter and can hide them.
 
 ### 7.3 `GET /api/graph/link`
 

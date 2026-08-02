@@ -1256,19 +1256,31 @@ PAGES.graph = async (page) => {
   const selected = channels.find((item) => item.channel === graphChannel);
   const showUnconfirmed =
     $('[data-graph-unconfirmed]', page).getAttribute('aria-pressed') === 'true';
+  const showOneWay =
+    $('[data-graph-oneway]', page).getAttribute('aria-pressed') === 'true';
   const allLinks = data.links;
   const confirmed = allLinks.filter((link) => link.snr != null);
   const unconfirmed = allLinks.length - confirmed.length;
   /*
-   * A link is confirmed only when the mesh reported a signal reading
-   * for it. A traceroute hop with no reading is not proof of a working
-   * radio link, so it is hidden by default. The toggle brings those
-   * back for anyone who wants to see the raw path data.
+   * Two different weaknesses, two different toggles.
+   *
+   * A link is unconfirmed when the mesh reported no signal reading for
+   * it. A traceroute hop with no reading is not proof of a working
+   * radio link, so it is hidden by default.
+   *
+   * A link is one-way when only a traceroute request evidences it. The
+   * broker saw the request in flight, so the hop really happened and
+   * was really measured, but nothing came back to confirm the round
+   * trip. Those are shown by default, because they are true, and the
+   * toggle takes them away for anyone who wants the mesh that answered.
    *
    * Nodes left with no visible link are dropped too, so the graph does
    * not show a crowd of unconnected dots.
    */
-  data.links = showUnconfirmed ? allLinks : confirmed;
+  let visible = showUnconfirmed ? allLinks : confirmed;
+  const oneWay = visible.filter((link) => link.confirmed === false).length;
+  if (!showOneWay) visible = visible.filter((link) => link.confirmed !== false);
+  data.links = visible;
 
   /*
    * A dense mesh draws as a hairball. Three views make it readable:
@@ -1306,11 +1318,18 @@ PAGES.graph = async (page) => {
     + `last ${data.window_hours} h`
     + (view === 'focus' ? ' - one hop' : view === 'backbone' ? ` - strongest ${BACKBONE_LINKS_PER_NODE} per node` : '')
     + (hiddenByView ? `, ${count(hiddenByView)} more not drawn` : '')
-    + (showUnconfirmed ? '' : unconfirmed ? `, ${count(unconfirmed)} unconfirmed hidden` : '');
+    + (showUnconfirmed ? '' : unconfirmed ? `, ${count(unconfirmed)} unconfirmed hidden` : '')
+    + (oneWay
+      ? showOneWay
+        ? `, ${count(oneWay)} one-way`
+        : `, ${count(oneWay)} one-way hidden`
+      : '');
   // Links stored before channel tracking mix every preset together, so
   // this one graph does show links that cannot exist. Say so plainly.
   const dotted = $('[data-legend-unconfirmed]', page);
   if (dotted) dotted.hidden = !showUnconfirmed;
+  const faint = $('[data-legend-oneway]', page);
+  if (faint) faint.hidden = !(showOneWay && oneWay);
 
   const warning = $('[data-graph-warning]', page);
   if (warning) {
@@ -1342,7 +1361,10 @@ PAGES.graph = async (page) => {
       formatter: (item) => {
         if (item.dataType === 'edge') {
           const snr = item.data.snr == null ? 'no SNR' : `${round(item.data.snr, 1)} dB`;
-          return `${item.data.kind} link<br/>${snr}, seen ${item.data.count} times`;
+          return `${item.data.kind} link<br/>${snr}, seen ${item.data.count} times`
+            + (item.data.confirmed === false
+              ? '<br/>one way: the request was never answered'
+              : '');
         }
         const node = item.data.raw;
         return [
@@ -1424,24 +1446,35 @@ PAGES.graph = async (page) => {
           label: match ? { show: true } : undefined,
         };
       }),
-      // A link with no SNR is still a real link: a packet crossed it.
-      // The mesh just did not report a reading for that hop. Draw those
-      // faint and dotted so a measured link is never confused with one
-      // that was only inferred from a traceroute path.
+      /*
+       * Three strengths of evidence, three weights of line.
+       *
+       * A link with no SNR is still a real link: a packet crossed it.
+       * The mesh just did not report a reading for that hop. Those draw
+       * faint and dotted, so a measured link is never confused with one
+       * inferred from a traceroute path.
+       *
+       * A one-way link was measured, but only a request evidences it.
+       * Nothing came back to confirm the round trip, so it draws
+       * thinner and fainter than a hop a reply proved.
+       */
       links: data.links.map((link) => ({
         source: link.source,
         target: link.target,
         kind: link.kind,
         snr: link.snr,
         count: link.count,
+        confirmed: link.confirmed,
         lineStyle:
           link.snr == null
             ? { width: 0.7, type: 'dotted', opacity: 0.18, color: PALETTE.stale }
-            : {
-                width: link.kind === 'neighbor' ? 1.8 : 1.1,
-                type: link.kind === 'neighbor' ? 'solid' : 'dashed',
-                opacity: link.kind === 'neighbor' ? 0.6 : 0.42,
-              },
+            : link.confirmed === false
+              ? { width: 0.9, type: 'dashed', opacity: 0.26 }
+              : {
+                  width: link.kind === 'neighbor' ? 1.8 : 1.1,
+                  type: link.kind === 'neighbor' ? 'solid' : 'dashed',
+                  opacity: link.kind === 'neighbor' ? 0.6 : 0.42,
+                },
       })),
     }],
   });

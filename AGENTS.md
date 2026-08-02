@@ -426,6 +426,18 @@ Three rules apply, and each one drew a false link when it was missed:
    other directly, which is the one thing the trace failed to show.
    Half of all rows in live data are these.
 
+A request with a route is a fourth case, and it is not a fault. The
+broker saw the request in flight, so the hops it had already made are
+real and were really measured. Its readings stop one short of its
+intended path, which is rule 2 doing its job: the hop to the far end
+had not happened, which is why no reply came. Such links are true, and
+the evidence for them runs one way. `Edge.confirmed` marks them, and
+the graph page draws them fainter behind a toggle. In live data they
+were 141 of 982 traceroute links, about 14 percent.
+
+Note the two words are not the same. "Unconfirmed" on that page means
+no SNR reading. "One-way" means measured, but no reply came back.
+
 ### 9.19 A row limit must never decide what evidence exists
 
 `/api/graph` read 2000 traceroute rows and `/api/graph/link` read the
