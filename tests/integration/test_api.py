@@ -659,3 +659,59 @@ def test_an_unanswered_request_draws_no_link(migrated_engine, timescale_url: str
         graph = client.get("/api/graph?hours=24&channel=ShortTurbo").json()
     pairs = {frozenset((link["source"], link["target"])) for link in graph["links"]}
     assert frozenset(("!0000206d", "!0000206e")) not in pairs
+
+
+def test_a_sender_gatewaying_itself_is_not_a_direct_observation(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """A node that uploads its own packet heard nothing over the radio.
+
+    The sender is often its own MQTT gateway. Such a row always has
+    hop_start equal to hop_limit, so the hop rule alone calls it direct
+    and then offers its reading as the sender's own link. It measures
+    no link at all.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                "first_seen_at) VALUES (8501, 91, 1, 3, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"now": now},
+        )
+        for gateway in (8501, 8502):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, hop_limit, rx_snr, seen_at) "
+                    "VALUES (8501, 91, :g, 'msh/US/AZ/t', 3, 5.0, :now) ON CONFLICT DO NOTHING"
+                ),
+                {"g": gateway, "now": now},
+            )
+        # The same gateway uploads the packet a second time.
+        connection.execute(
+            text(
+                "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                "mqtt_topic, hop_limit, rx_snr, seen_at) "
+                "VALUES (8501, 91, 8502, 'msh/US/AZ/t', 3, 5.0, :later) ON CONFLICT DO NOTHING"
+            ),
+            {"later": now + timedelta(seconds=5)},
+        )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/packets/!00002135/91").json()
+
+    by_gateway = {row["gateway"]: row for row in body["observations"]}
+    own = by_gateway["!00002135"]
+    other = by_gateway["!00002136"]
+
+    assert own["self_reported"] is True
+    assert own["direct"] is False, "a node does not hear itself over the radio"
+    assert other["self_reported"] is False
+    assert other["direct"] is True, "a gateway that used no hop did hear the sender"
+
+    # Three uploads arrived, but only two gateways sent them.
+    assert len(body["observations"]) == 3
+    assert body["gateway_count"] == 2

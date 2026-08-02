@@ -215,6 +215,7 @@ async def get_packet(
             "rx_time": packet.rx_time,
             "raw_bytes_length": None if packet.raw_bytes is None else len(packet.raw_bytes),
         },
+        "gateway_count": len({item.gateway_node_num for item in observations}),
         "observations": [
             {
                 "gateway": _node_id(item.gateway_node_num),
@@ -231,7 +232,18 @@ async def get_packet(
                     if packet.hop_start is None or item.hop_limit is None
                     else packet.hop_start - item.hop_limit
                 ),
-                "direct": packet.hop_start is not None and packet.hop_start == item.hop_limit,
+                # The sender is often its own gateway, so it uploads the
+                # packet it just sent. That is a node reporting its own
+                # voice, not a radio link, and it must never count as a
+                # direct observation. Every such row has hop_start equal
+                # to hop_limit, so the hop rule alone calls it direct and
+                # then offers its reading as the sender's own link.
+                "self_reported": item.gateway_node_num == packet.from_node_num,
+                "direct": (
+                    packet.hop_start is not None
+                    and packet.hop_start == item.hop_limit
+                    and item.gateway_node_num != packet.from_node_num
+                ),
                 "seen_at": item.seen_at,
             }
             for item in observations

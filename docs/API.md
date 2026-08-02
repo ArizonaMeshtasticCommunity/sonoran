@@ -179,18 +179,44 @@ Response item:
 
 Returns one packet with its full observation list.
 
+An observation is one MQTT upload. It says which gateway uploaded a
+copy of the packet. It does not say which nodes could hear the sender:
+a node that is not a gateway hears plenty and reports none of it. Use
+`/api/nodes/{node_id}/neighbors` for the radio question.
+
+One gateway uploads the same packet more than once, so the number of
+observations is larger than the number of gateways. `gateway_count`
+holds the distinct count. A page must not present the list length as a
+number of gateways.
+
+`self_reported` is true when the gateway is the sender. A node that
+gateways its own traffic uploads the packet it has just transmitted,
+which measures no radio link. Such a row always carries `hop_start`
+equal to `hop_limit`, so it is excluded from `direct` by node as well
+as by hop count.
+
+`direct` is true only when no hop was used and the gateway is another
+node. Only then does the signal reading describe the sender's own link.
+See AGENTS.md 9.5.
+
 Response:
 
 ```json
 {
   "packet": { "...": "as in /api/packets, plus payload_json" },
+  "gateway_count": 2,
   "observations": [
     {
       "gateway": "!11223344",
+      "gateway_name": "Hilltop",
       "mqtt_topic": "msh/US/AZ/2/e/LongFast/!11223344",
+      "channel": "LongFast",
       "rx_rssi": -87,
       "rx_snr": 6.5,
       "hop_limit": 1,
+      "hops_taken": 2,
+      "self_reported": false,
+      "direct": false,
       "seen_at": "2026-08-01T12:00:01Z"
     }
   ]

@@ -225,6 +225,25 @@ Show a signal figure from direct observations only. For the signal of a
 real radio link, use `neighbor_metrics`, which is a node reporting the
 neighbours it hears itself.
 
+### 9.5.1 "Heard by" is a list of uploads, not of listeners
+
+`packet_seen` records MQTT uploads, so the only observers this database
+can ever hold are gateways. Every other node hears plenty and reports
+none of it. A page that names the list "heard by" promises a coverage
+answer and gives a plumbing one.
+
+Two things then read as facts and are not:
+
+- One gateway uploads the same packet many times, so the length of the
+  list is not a number of gateways. One live packet had 22 uploads from
+  15 gateways. Use `gateway_count`.
+- The sender is often its own gateway, and uploads what it just sent.
+  Those rows carry `hop_start` equal to `hop_limit`, so the hop rule
+  alone calls them direct and then offers the reading as the sender's
+  own link. On the same live packet all three "direct" rows were the
+  sender, and no other gateway had heard it directly at all. `direct`
+  now needs a different node as well as no hop.
+
 ### 9.6 Traceroute SNR needs care
 
 - Values are in quarter dB. Divide by four.

@@ -2270,12 +2270,21 @@ PAGES.packet = async (page) => {
   }
   const packet = data.packet;
   const direct = data.observations.filter((row) => row.direct).length;
+  /*
+   * One gateway uploads the same packet more than once, so the number
+   * of rows is not the number of gateways. The heading counted rows and
+   * called them gateways, which overstated the reach of every packet.
+   */
+  const gateways = data.gateway_count == null
+    ? new Set(data.observations.map((row) => row.gateway)).size
+    : data.gateway_count;
+  const uploads = data.observations.length;
 
   replace($('[data-packet-title]', page),
     el('h2', { text: `${packet.portnum} from ${packet.from_name}` }),
     el('p', { class: 'sub',
-      text: `Packet ${packetId}, heard by ${data.observations.length} gateways, `
-        + `${direct} of them direct` }));
+      text: `Packet ${packetId}, ${count(uploads)} uploads from ${count(gateways)} gateways, `
+        + (direct ? `${count(direct)} heard it direct` : 'none heard it direct') }));
 
   const panels = [
     el('div', { class: 'panel' },
@@ -2293,15 +2302,24 @@ PAGES.packet = async (page) => {
         el('dt', { text: 'Size' }), el('dd', { text: packet.raw_bytes_length == null ? 'unknown' : `${packet.raw_bytes_length} bytes` }),
         el('dt', { text: 'First seen' }), el('dd', { text: stamp(packet.first_seen_at) }))),
     el('div', { class: 'panel span-2' },
-      el('h3', {}, 'Heard by',
+      el('h3', {}, 'Uploaded by',
         el('span', { class: 'muted',
-          text: `${count(data.observations.length)} gateways, ${count(direct)} direct` })),
+          text: `${count(gateways)} gateways, ${count(uploads)} uploads, ${count(direct)} direct` })),
       el('p', { class: 'notice' },
-        'A gateway that used a hop received this packet from a relay, not from '
-        + 'the sender. Only a direct observation measures the sender\u2019s own link.'),
+        'This is which MQTT gateways uploaded a copy of this packet. It is not '
+        + 'which nodes could hear the sender: a node that is not a gateway hears '
+        + 'plenty and reports none of it. A gateway that used a hop received the '
+        + 'packet from a relay, so only a direct row measures the sender\u2019s own '
+        + 'link. A sender that gateways its own traffic uploads what it just sent, '
+        + 'which is not a radio link at all.'),
       el('div', { class: 'table-wrap' }, table([
         { label: 'Gateway', cell: (row) => nodeChip({ node_id: row.gateway, display_name: row.gateway_name }) },
-        { label: 'Path', cell: (row) => (row.direct ? 'direct' : row.hops_taken == null ? 'unknown' : `${row.hops_taken} hops`) },
+        {
+          label: 'Path',
+          cell: (row) => (row.self_reported
+            ? el('span', { class: 'muted', text: 'its own upload' })
+            : row.direct ? 'direct' : row.hops_taken == null ? 'unknown' : `${row.hops_taken} hops`),
+        },
         { label: 'SNR', num: true, cell: (row) => (row.direct ? snrCell(row.rx_snr) : el('span', { class: 'muted', text: '-' })) },
         { label: 'RSSI', num: true, cell: (row) => (row.direct && row.rx_rssi != null ? `${row.rx_rssi} dBm` : '-') },
         { label: 'When', cell: (row) => clock(row.seen_at) },
