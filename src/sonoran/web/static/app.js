@@ -68,9 +68,8 @@ const PALETTE = {
   bad: colour('bad', '#ef6f5c'),
   link: colour('map-link', '#6ea9c9'),
   relayed: colour('traffic-relayed', '#ded2c6'),
-  gateway: colour('role-gateway', '#ff8c42'),
-  router: colour('role-router', '#8cb369'),
-  client: colour('role-client', '#edc04b'),
+  // Roles have a colour each, read by `roleColour`. This one is for a
+  // node or a link with nothing to say for itself.
   stale: colour('role-stale', '#7d6857'),
 };
 

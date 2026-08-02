@@ -27,10 +27,9 @@
   --good: #8cb369;
   --warn: #edc04b;
   --bad: #ef6f5c;
-  /* Node roles, shared by the map, the graph, and the legend. */
-  --role-gateway: #f4703f;
-  --role-router: #8cb369;
-  --role-client: #edc04b;
+  /* A node with nothing to say for itself: not reached by a coverage
+     run, or a link the mesh reported no signal reading for. The roles
+     themselves are the per-role colours below. */
   --role-stale: #7d6857;
   /* The neighbour-link layer. Cool, so it does not compete with the
      warm traffic and traceroute lines drawn over it. */
@@ -286,9 +285,6 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 
 .legend { display: flex; flex-wrap: wrap; gap: .75rem; font-size: .78rem; color: var(--muted); }
 .legend .swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: 50%; margin-right: .3rem; }
-.legend .swatch.gateway { background: var(--role-gateway); }
-.legend .swatch.router { background: var(--role-router); }
-.legend .swatch.client { background: var(--role-client); }
 .legend .swatch.stale { background: var(--role-stale); }
 .legend .swatch.reached { background: var(--good); }
 /* A gateway is drawn as a ring, not as a colour, so its role still shows. */

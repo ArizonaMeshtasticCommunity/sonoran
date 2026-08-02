@@ -451,24 +451,23 @@ function markSite(latitude, longitude, name) {
   state.siteMarker.addTo(state.map);
 }
 
-function plannerNodeColour(node) {
-  if (node.is_mqtt_gateway) return PALETTE.gateway;
-  if (node.role && /ROUTER|REPEATER/i.test(node.role)) return PALETTE.router;
-  return PALETTE.client;
-}
-
 /**
  * Draw the nodes.
  *
  * When a run has finished, each node is coloured by whether the
  * prediction reaches it. Before that they keep their usual role colour.
+ *
+ * That colour is `nodeColour` from app.js, the one the map and the
+ * mesh graph draw with. This page used to sort every node into
+ * gateway, router, or client of its own, so a client mute and a client
+ * base were one colour here and two colours on every other page.
  */
 function drawNodes() {
   state.nodeLayer.clearLayers();
   const threshold = state.request ? Number(state.request.sensitivity) : null;
   for (const node of state.nodes) {
     if (node.lat == null || node.lon == null) continue;
-    let colour = plannerNodeColour(node);
+    let colour = nodeColour(node);
     let reached = null;
     let level = null;
     if (state.result && threshold != null) {
@@ -481,16 +480,32 @@ function drawNodes() {
       }
       colour = reached ? PALETTE.good : PALETTE.stale;
     }
+    /*
+     * A gateway wears a bright ring rather than a colour of its own,
+     * because uploading to MQTT is not a role and must not hide the
+     * one the node is actually running. The map draws it the same way.
+     *
+     * A node not heard in a day fades, again as on the map, but only
+     * until a run has answered. After that the fading belongs to what
+     * the prediction reaches, and two meanings on one channel would
+     * say neither clearly.
+     */
+    const faded = reached == null && isStale(node);
     const marker = L.circleMarker([node.lat, node.lon], {
       radius: node.is_mqtt_gateway ? 7 : 5,
-      color: colour,
-      weight: 2,
+      color: node.is_mqtt_gateway ? PALETTE.text : colour,
+      weight: node.is_mqtt_gateway ? 2.5 : 1.5,
       fillColor: colour,
-      fillOpacity: reached === false ? 0.2 : 0.6,
+      fillOpacity: reached === false ? 0.2 : faded ? 0.15 : 0.6,
+      opacity: faded ? 0.35 : 1,
     });
     const lines = [
       el('div', { style: 'font-weight:650' }, node.display_name || node.node_id),
       el('div', { class: 'muted', style: 'font-size:.8rem' }, node.node_id),
+      // The colour on the map means nothing without the word for it,
+      // and it is the same word the other pages use.
+      el('div', { class: 'muted', style: 'font-size:.8rem' },
+        roleLabel(node.role) + (node.is_mqtt_gateway ? ', gateway' : '')),
     ];
     if (reached != null) {
       lines.push(
