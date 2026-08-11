@@ -237,6 +237,18 @@ when that happens. Recent sampling resolved 30 of 30.
 Any reply whose packet row has aged out cannot be recovered. New
 replies capture the field during ingest.
 
+### 2.9 `/api/map/traffic` counts the window one row at a time
+
+**State:** Open.
+
+The window count reads the packet row behind each observation with a
+correlated subquery, so a wide window over a busy mesh runs one index
+probe per observation. The endpoint is public and the map refreshes it
+every fifteen seconds. A grouped join against the distinct packet keys
+of the window, with the duplicate rows removed first, would answer in
+one pass. This is finding 2.1 in `docs/REVIEW.md`, left open there for a
+benchmarked rewrite.
+
 ---
 
 ## 3. Wanted next

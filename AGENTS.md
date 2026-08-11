@@ -513,3 +513,4 @@ a line from it would be a guess.
 - `docs/API.md` — the API specification
 - `docs/QA.md` — the QA process
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
+- `docs/REVIEW.md` — code review findings, and which are still open
