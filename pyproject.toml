@@ -2,7 +2,7 @@
 name = "sonoran"
 version = "0.1.0"
 description = "Sonoran Meshtastic dashboard: MQTT ingest, TimescaleDB storage, read-only API, static UI"
-readme = "docs/PLAN.md"
+readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "aiomqtt>=2.3,<3",
