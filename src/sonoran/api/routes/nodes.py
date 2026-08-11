@@ -149,8 +149,16 @@ async def _heard_by(
     remaining hop limit still equals the starting hop limit. Signal
     figures come from those observations only. Everything else is
     counted as relayed and carries no signal figure.
+
+    A gateway that is the node itself uploads its own voice. Every such
+    row has the hop limits equal, so the hop rule alone calls it direct
+    and then offers the node's own reading as a radio link to itself. It
+    must not count as direct. See AGENTS.md 9.5.1.
     """
-    direct = Packet.hop_start == PacketSeen.hop_limit
+    direct = and_(
+        Packet.hop_start == PacketSeen.hop_limit,
+        PacketSeen.from_node_num != PacketSeen.gateway_node_num,
+    )
     statement = (
         select(
             PacketSeen.gateway_node_num,

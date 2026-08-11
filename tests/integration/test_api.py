@@ -717,6 +717,56 @@ def test_a_sender_gatewaying_itself_is_not_a_direct_observation(
     assert body["gateway_count"] == 2
 
 
+def test_heard_by_does_not_credit_a_self_upload_with_signal(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """The Heard by table gives a self upload no direct count and no SNR.
+
+    The table splits observations into direct and relayed and shows a
+    signal figure for the direct ones. A gateway that is the node itself
+    uploads its own voice, which the hop rule alone reads as direct. It
+    must carry neither a direct count nor an SNR. See AGENTS.md 9.5.1.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                "first_seen_at) VALUES (8531, 97, 1, 3, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"now": now},
+        )
+        # 8531 uploads its own packet; 8532 hears it with no hop. Both
+        # rows have the hop limits equal, so only the node tells them
+        # apart.
+        for gateway in (8531, 8532):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, channel, hop_limit, rx_snr, seen_at) "
+                    "VALUES (8531, 97, :g, 'msh/US/AZ/t', 'LongFast', 3, 5.0, :now) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"g": gateway, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        rows = client.get("/api/nodes/!00002153/heard-by").json()
+
+    by_gateway = {row["node_id"]: row for row in rows}
+    own = by_gateway["!00002153"]
+    other = by_gateway["!00002154"]
+
+    # The node's own upload is not a direct link to itself and has no
+    # signal figure, even though its hop numbers are equal.
+    assert own["direct_count"] == 0
+    assert own["avg_snr"] is None
+    # The other gateway used no hop, so it heard the sender directly.
+    assert other["direct_count"] == 1
+    assert other["avg_snr"] == 5.0
+
+
 def test_traffic_events_carry_the_hop_count(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
     """The live map says how far a relayed line is from the truth.
 
@@ -783,15 +833,19 @@ def test_traffic_counts_the_window_not_the_limit(migrated_engine, timescale_url:
                 text(
                     "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
                     "mqtt_topic, channel, hop_limit, seen_at) "
-                    "VALUES (8801, :p, 8802, 'msh/US/AZ/t', 'MediumFast', :h, :now) "
+                    "VALUES (8801, :p, 8802, 'msh/US/AZ/t', 'CountWindow', :h, :now) "
                     "ON CONFLICT DO NOTHING"
                 ),
                 {"p": 9400 + offset, "h": hop_limit, "now": now},
             )
 
+    # A channel name unique to this test, so the window counts see only
+    # its own rows. The database is shared across the session with no
+    # cleanup, so a count over a shared preset would move as other tests
+    # add rows to it.
     app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
     with TestClient(app) as client:
-        body = client.get("/api/map/traffic?minutes=60&limit=2&channel=MediumFast").json()
+        body = client.get("/api/map/traffic?minutes=60&limit=2&channel=CountWindow").json()
 
     # The limit holds back the events, and nothing else.
     assert body["returned_count"] == 2
@@ -799,6 +853,114 @@ def test_traffic_counts_the_window_not_the_limit(migrated_engine, timescale_url:
     assert body["truncated"] is True
     assert body["event_count"] == 6
     assert body["direct_count"] == 3
+
+
+def test_traffic_reads_the_packet_within_the_lookback(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The packet is looked for from a little before the window.
+
+    A packet is first heard slightly before the other gateways upload
+    it, so the packet read looks back before the window. A packet first
+    heard longer ago than that lookback reads with a null port number
+    and no hop count, and cannot be called direct. This pins the edge on
+    both sides of it.
+    """
+    now = datetime.now(UTC)
+    within = now - timedelta(minutes=5)
+    # Well past the ten minute lookback of a five minute window.
+    stale = now - timedelta(minutes=40)
+    with migrated_engine.begin() as connection:
+        for packet_id, first_seen in ((9500, within), (9501, stale)):
+            connection.execute(
+                text(
+                    "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                    "first_seen_at) VALUES (8811, :p, 1, 3, :seen) ON CONFLICT DO NOTHING"
+                ),
+                {"p": packet_id, "seen": first_seen},
+            )
+            # Both observations sit inside the window; only the packet
+            # row of one is old enough to fall out of the lookback.
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, channel, hop_limit, seen_at) "
+                    "VALUES (8811, :p, 8812, 'msh/US/AZ/t', 'Lookback', 3, :now) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"p": packet_id, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/map/traffic?minutes=5&limit=50&channel=Lookback").json()
+
+    events = {event["packet_id"]: event for event in body["events"]}
+    fresh = events[9500]
+    old = events[9501]
+
+    # The fresh packet is within the lookback, so it reads in full and
+    # its equal hop numbers make it direct.
+    assert fresh["hop_start"] == 3
+    assert fresh["portnum"] == "TEXT_MESSAGE_APP"
+    assert fresh["direct"] is True
+
+    # The old packet fell out of the lookback, so it has no hop start,
+    # no port number, and cannot be called direct.
+    assert old["hop_start"] is None
+    assert old["portnum"] is None
+    assert old["direct"] is False
+
+    # Both observations are in the window, so both are counted, but only
+    # the one the packet read could reach counts as direct.
+    assert body["event_count"] == 2
+    assert body["direct_count"] == 1
+
+
+def test_traffic_does_not_call_a_self_upload_direct(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A node uploading its own packet is not a direct radio link.
+
+    The sender is often its own gateway, so it uploads the packet it just
+    sent. Such a row carries hop_start equal to hop_limit, so the hop
+    rule alone calls it direct and then offers the reading as the
+    sender's own link. It must not count. See AGENTS.md 9.5.1.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                "first_seen_at) VALUES (8821, 96, 1, 3, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"now": now},
+        )
+        # 8821 uploads its own packet, and 8822 hears it with no hop. The
+        # hop numbers are equal on both rows, so only the node tells them
+        # apart: the self upload is not direct, the other gateway is.
+        for gateway in (8821, 8822):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, channel, hop_limit, seen_at) "
+                    "VALUES (8821, 96, :g, 'msh/US/AZ/t', 'SelfUpload', 3, :now) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"g": gateway, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/map/traffic?minutes=60&limit=50&channel=SelfUpload").json()
+
+    events = {event["gateway"]["node_id"]: event for event in body["events"]}
+    # The sender's own upload used no hop, but a node does not hear itself
+    # over the radio, so it is not direct.
+    assert events["!00002275"]["direct"] is False
+    # Another gateway that used no hop did hear the sender directly.
+    assert events["!00002276"]["direct"] is True
+
+    # Two observations, one direct, so the self upload is left out of the
+    # count as well as the flag.
+    assert body["event_count"] == 2
+    assert body["direct_count"] == 1
 
 
 def test_a_link_says_whether_a_reply_confirmed_it(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]

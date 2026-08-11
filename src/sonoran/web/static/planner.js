@@ -911,16 +911,20 @@ async function show() {
   wirePlanner();
   setTimeout(() => map.invalidateSize(), 0);
 
-  if (!state.nodes.length) {
-    const nodes = await get('api/map/nodes').catch(() => null);
-    state.nodes = nodes || [];
-    drawNodes();
-    if (!state.result && state.nodes.length) {
-      const points = state.nodes
-        .filter((node) => node.lat != null && node.lon != null)
-        .map((node) => [node.lat, node.lon]);
-      if (points.length) map.fitBounds(points, { padding: [30, 30], maxZoom: 11 });
-    }
+  // Read the node list on every visit, not only the first. A node
+  // fades once it has not been heard for a day, and that age is worked
+  // out from `last_heard`. Read once, the list would keep aging on the
+  // page and fade nodes the mesh is still hearing. A failed read keeps
+  // the list already held rather than blanking the map.
+  const first = !state.nodes.length;
+  const nodes = await get('api/map/nodes').catch(() => null);
+  if (nodes) state.nodes = nodes;
+  drawNodes();
+  if (first && !state.result && state.nodes.length) {
+    const points = state.nodes
+      .filter((node) => node.lat != null && node.lon != null)
+      .map((node) => [node.lat, node.lon]);
+    if (points.length) map.fitBounds(points, { padding: [30, 30], maxZoom: 11 });
   }
 }
 

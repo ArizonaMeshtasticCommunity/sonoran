@@ -20,7 +20,7 @@ from sonoran.db.models import (
     Traceroute,
 )
 from sonoran.meshtastic import portnums_pb2
-from sonoran.positions import is_usable
+from sonoran.positions import clean, is_usable
 
 router = APIRouter(prefix="/api/map", tags=["map"])
 
@@ -194,6 +194,12 @@ async def traffic(
     # observation, so "direct" needs a look across at the packet row. A
     # correlated read keeps this one row per observation: a join could
     # multiply an observation whose packet id came round again.
+    # Duplicate packet rows survive from before the dedup fix (ISSUES.md
+    # 1.1), so (from_node_num, packet_id) can return more than one row.
+    # The earliest is the canonical one the dedup keeps, so both this
+    # count and the per-event read below order by first_seen_at and take
+    # it. Without the order the two picked different rows and the summary
+    # could disagree with the flags on the events under it.
     hop_start_of = (
         select(Packet.hop_start)
         .where(
@@ -201,6 +207,7 @@ async def traffic(
             Packet.packet_id == PacketSeen.packet_id,
             Packet.first_seen_at >= since - PACKET_LOOKBACK,
         )
+        .order_by(Packet.first_seen_at)
         .limit(1)
         .scalar_subquery()
     )
@@ -210,8 +217,13 @@ async def traffic(
                 func.count(),
                 # An unknown hop count on either side compares as null
                 # and so is not counted, which is the rule the events
-                # below follow too.
-                func.count().filter(hop_start_of == PacketSeen.hop_limit),
+                # below follow too. A gateway that is the sender uploads
+                # its own voice, which is never a radio link and must not
+                # count as direct. See AGENTS.md 9.5.1.
+                func.count().filter(
+                    hop_start_of == PacketSeen.hop_limit,
+                    PacketSeen.from_node_num != PacketSeen.gateway_node_num,
+                ),
             )
             .select_from(PacketSeen)
             .where(PacketSeen.seen_at >= since, channel_filter(PacketSeen.channel, channel))
@@ -225,14 +237,22 @@ async def traffic(
     keys = {(row.from_node_num, row.packet_id) for row in rows}
     if keys:
         packet_rows = await session.execute(
-            select(Packet.from_node_num, Packet.packet_id, Packet.hop_start, Packet.portnum).where(
+            select(Packet.from_node_num, Packet.packet_id, Packet.hop_start, Packet.portnum)
+            .where(
                 tuple_(Packet.from_node_num, Packet.packet_id).in_(keys),
                 Packet.first_seen_at >= since - PACKET_LOOKBACK,
             )
+            .order_by(Packet.first_seen_at)
         )
+        # Keep the earliest row for each key, the same one the count
+        # subquery above takes, so a duplicated packet reads one way in
+        # both places.
         for from_node_num, packet_id, hop_start, portnum in packet_rows.all():
-            hop_starts[(from_node_num, packet_id)] = hop_start
-            portnums[(from_node_num, packet_id)] = portnum_name(portnum)
+            key = (from_node_num, packet_id)
+            if key in hop_starts:
+                continue
+            hop_starts[key] = hop_start
+            portnums[key] = portnum_name(portnum)
 
     node_nums = {num for row in rows for num in (row.from_node_num, row.gateway_node_num)}
     known = {
@@ -244,10 +264,10 @@ async def traffic(
     def endpoint(num: int) -> dict[str, object]:
         """Return one end of a traffic line."""
         node = known.get(num)
-        lat = None if node is None else node.last_lat
-        lon = None if node is None else node.last_lon
-        if not is_usable(lat, lon):
-            lat, lon = None, None
+        lat, lon = clean(
+            None if node is None else node.last_lat,
+            None if node is None else node.last_lon,
+        )
         return {
             "node_id": format_node_id(num),
             "display_name": name_of(names, num),
@@ -260,8 +280,16 @@ async def traffic(
         source = endpoint(row.from_node_num)
         gateway = endpoint(row.gateway_node_num)
         hop_start = hop_starts.get((row.from_node_num, row.packet_id))
-        # Unknown on either side means it cannot be called direct.
-        direct = hop_start is not None and row.hop_limit is not None and hop_start == row.hop_limit
+        # Unknown on either side means it cannot be called direct. A
+        # gateway that is the sender uploads its own voice, which is
+        # never a radio link, so it is not direct however the hops read.
+        # See AGENTS.md 9.5.1 and the packet page, which does the same.
+        direct = (
+            hop_start is not None
+            and row.hop_limit is not None
+            and hop_start == row.hop_limit
+            and row.from_node_num != row.gateway_node_num
+        )
         events.append(
             {
                 "time": row.seen_at,
@@ -428,10 +456,10 @@ async def traceroute_paths(
     def point(num: int) -> dict[str, object]:
         """Return one node on a path."""
         node = known.get(num)
-        lat = None if node is None else node.last_lat
-        lon = None if node is None else node.last_lon
-        if not is_usable(lat, lon):
-            lat, lon = None, None
+        lat, lon = clean(
+            None if node is None else node.last_lat,
+            None if node is None else node.last_lon,
+        )
         return {
             "node_id": format_node_id(num),
             "display_name": name_of(names, num),

@@ -355,10 +355,15 @@ more than that. The events are the newest ones, so a client that draws
 observations as they arrive needs only enough to cover a refresh.
 
 `direct` is true only when the packet used no hop
-(`packet.hop_start = packet_seen.hop_limit`). It is false when either
-value is unknown. A line for a relayed observation is a path, not a
-radio link: the packet reached the gateway through other nodes, so the
-straight line crosses ground the signal never took. See AGENTS.md 9.5.
+(`packet.hop_start = packet_seen.hop_limit`) and the gateway is not the
+sender. It is false when either value is unknown. A gateway that is the
+sender uploads its own voice, which every hop rule alone reads as
+direct, so it is excluded by node as well; the packet page does the
+same. See AGENTS.md 9.5 and 9.5.1. `direct_count` follows the same rule,
+so a mesh whose senders are their own gateways does not report every
+one of them as a direct link. A line for a relayed observation is a
+path, not a radio link: the packet reached the gateway through other
+nodes, so the straight line crosses ground the signal never took.
 
 `hops_taken` is how many hops the packet burned to reach this gateway.
 It is the whole of what is known about a relayed route. Which nodes the
@@ -368,6 +373,16 @@ carries no route. Only a traceroute holds its own path, which is what
 
 `portnum` is the readable name, or the number as text when this build of
 the protobufs does not know it.
+
+`portnum`, `hop_start`, `hops_taken`, and `direct` all read from the
+packet row behind the observation. The read looks back ten minutes
+before the window, because a packet is first heard a little before the
+other gateways upload it. Uploads arrive within seconds, so this covers
+live traffic. An observation whose packet was first heard longer ago
+than that reads with a null `portnum` and `hop_start`, and `direct`
+false. This affects a late upload, from a gateway that reconnected or
+held a backlog, and the historical rows that carry a gateway clock and
+not ours (AGENTS.md 9.4). Those rows age out with retention.
 
 ### 6.4 `GET /api/map/traceroute-paths`
 
@@ -485,10 +500,17 @@ Response: `window_hours`, `channel`, `node_count`, `link_count`,
 `nodes`, `links`.
 
 - Node item: `node_id`, `node_num`, `display_name`, `short_name`,
-  `role`, `hw_model`, `is_mqtt_gateway`, `has_position`, `last_heard`,
-  `packet_count`, `known`.
+  `role`, `hw_model`, `is_mqtt_gateway`, `lat`, `lon`, `has_position`,
+  `last_heard`, `packet_count`, `known`.
 - Link item: `source`, `target`, `kind`, `snr`, `count`, `confirmed`,
   `time`.
+
+`lat` and `lon` are the node's last known position, or null. They come
+with the node so the page can lay the graph out over the ground it sits
+on. A position that is not a real place is dropped, by the same rule the
+map uses (`sonoran.positions`). `has_position` is true only when both
+values survive that rule, so a node with a Null Island fix reports
+false.
 
 `confirmed` says whether anything that completed evidences the link. A
 neighbor report always does: a node names a neighbour it hears itself.

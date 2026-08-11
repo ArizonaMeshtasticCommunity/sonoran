@@ -140,7 +140,21 @@ The whole-preset view draws around 250 nodes and 550 links. Force
 settings scale with node count, and the Backbone and One node views
 exist, but the whole view is still busy.
 
-Ideas: cluster by geography, or fade links below a signal threshold.
+**Done since:** the graph now lays out on the ground. Nodes that report
+a position are projected onto the canvas, and the rest are seeded beside
+the neighbours that do, so the Phoenix and Tucson knots land where they
+belong and hold between redraws. A spacing sweep then opens crowded
+points apart: on the busiest preset the gap between neighbouring nodes
+runs about three times what it was, while the mesh as a whole grows by
+under a fifth. Nodes are coloured by role, the same as the map, and the
+busiest few carry a label. The layout picker offers "On the ground,
+spread", "On the ground, exact", and "Free force". A reader can drag a
+node and it stays put across a redraw, and "Reset layout" undoes it.
+
+**Still open:** the "spread" sweep is every pair against every other, so
+it is capped at 1500 nodes and skipped above that. Fading links below a
+signal threshold is not done. Geographic clustering, as opposed to
+geographic layout, is not done.
 
 ### 2.3 The live traffic layer draws lines that are not radio links
 

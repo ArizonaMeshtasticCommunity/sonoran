@@ -30,7 +30,7 @@ from sonoran.api.traces import (
     is_reply,
 )
 from sonoran.db.models import NeighborMetrics, Node, Packet, PacketSeen, Traceroute
-from sonoran.positions import is_usable
+from sonoran.positions import clean
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -225,10 +225,10 @@ def _node_json(
     a layout that starts from nowhere hides that. Only about six nodes
     in ten report a position, so a client has to seed the rest itself.
     """
-    lat = None if node is None else node.last_lat
-    lon = None if node is None else node.last_lon
-    if not is_usable(lat, lon):
-        lat, lon = None, None
+    lat, lon = clean(
+        None if node is None else node.last_lat,
+        None if node is None else node.last_lon,
+    )
     return {
         "node_id": format_node_id(node_num),
         "node_num": node_num,

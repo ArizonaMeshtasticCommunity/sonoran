@@ -676,7 +676,11 @@ const TRAFFIC_FADE_MS = 2500;
 const DIRECT_OPACITY = 0.95;
 const RELAYED_OPACITY = 0.7;
 
-const trafficSeen = new Set();
+// Each observation this tab has already flashed, mapped to its own
+// time in ms. The time is what the pruning reads: an observation older
+// than the window can never come back, so its key is safe to forget,
+// and nothing still inside the window is ever dropped.
+const trafficSeen = new Map();
 
 /**
  * Build an arrow head partway along a line, pointing at its end.
@@ -774,19 +778,25 @@ function flashTraffic(event) {
  * The first pass only records what is already in the window, so opening
  * the page does not fire fifteen minutes of traffic at once.
  */
-function flashNewTraffic(events, firstPass) {
+function flashNewTraffic(events, firstPass, cutoffMs) {
   let started = 0;
   for (const event of events) {
     const key = `${event.packet_id}-${event.gateway.node_id}-${event.time}`;
     const known = trafficSeen.has(key);
-    trafficSeen.add(key);
+    trafficSeen.set(key, Date.parse(event.time) || Date.now());
     if (known || !event.has_line || firstPass) continue;
     flashTraffic(event);
     started += 1;
   }
-  // The set would otherwise grow for as long as the tab is open.
-  if (trafficSeen.size > 4000) {
-    for (const key of [...trafficSeen].slice(0, 2000)) trafficSeen.delete(key);
+  // Forget every observation older than the window. It cannot come back
+  // from the endpoint, so its key is dead weight, and dropping it by
+  // time never touches a key that could still arrive again. The old
+  // trim dropped by insertion order, which deleted the newest keys of
+  // the first pass and made the map re-flash traffic already drawn.
+  if (cutoffMs != null) {
+    for (const [key, seenAt] of trafficSeen) {
+      if (seenAt < cutoffMs) trafficSeen.delete(key);
+    }
   }
   return started;
 }
@@ -1052,7 +1062,10 @@ PAGES.map = async (page) => {
 
   if (showTraffic && traffic) {
     if (!map.hasLayer(mapState.traffic)) map.addLayer(mapState.traffic);
-    const flashed = flashNewTraffic(traffic.events, !mapState.trafficPrimed);
+    // A refresh of slack past the window covers any late upload, so a
+    // key is only forgotten once nothing can bring it back.
+    const cutoff = Date.now() - (Number(minutes) * 60000 + LIVE_INTERVAL_MS);
+    const flashed = flashNewTraffic(traffic.events, !mapState.trafficPrimed, cutoff);
     mapState.trafficPrimed = true;
     const direct = traffic.direct_count || 0;
     $('[data-traffic-summary]', page).textContent =
@@ -1156,9 +1169,9 @@ function graphCategories(nodes) {
     itemStyle: { color: roleColour(role.key) },
   }));
   // A role this build has never heard of still needs a place to sit,
-  // and so does a node that has never reported one.
-  const named = new Set(ROLES.map((role) => role.key));
-  const other = [...present].filter((role) => role && !named.has(role));
+  // and so does a node that has never reported one. `ROLE_LABELS` is
+  // already keyed by the roles this build knows.
+  const other = [...present].filter((role) => role && !ROLE_LABELS.has(role));
   for (const role of other.sort()) {
     categories.push({ name: roleLabel(role), itemStyle: { color: roleColour(role) } });
   }
@@ -1367,12 +1380,17 @@ function separatePositions(seeds, nodes) {
   const ids = nodes.map((node) => node.node_id).filter((id) => seeds.has(id));
   if (ids.length > 1500) return seeds;
 
+  // The seed arrays are held by reference, so moving one here moves the
+  // same array in `seeds`. Reading them into a plain list once keeps
+  // every Map lookup out of the pair sweep, which runs tens of millions
+  // of times on a large mesh.
+  const points = ids.map((id) => seeds.get(id));
   const gap = GRAPH_SPAN / 24;
   for (let pass = 0; pass < 28; pass += 1) {
-    for (let a = 0; a < ids.length; a += 1) {
-      for (let b = a + 1; b < ids.length; b += 1) {
-        const first = seeds.get(ids[a]);
-        const second = seeds.get(ids[b]);
+    for (let a = 0; a < points.length; a += 1) {
+      const first = points[a];
+      for (let b = a + 1; b < points.length; b += 1) {
+        const second = points[b];
         let dx = second[0] - first[0];
         let dy = second[1] - first[1];
         let distance = Math.hypot(dx, dy);
@@ -1611,7 +1629,13 @@ PAGES.graph = async (page) => {
   const onGround = graphSeeds.size > 0;
   const seeds = new Map(graphSeeds);
   for (const [id, point] of graphPinned) {
-    if (seeds.has(id)) seeds.set(id, point.slice());
+    // On the ground the seed is already there and the pin moves it. In
+    // free force there is no seed, so the pin has to become the node's
+    // whole position. Without it a pinned node is marked fixed but
+    // given no x or y, and the force solver drops it at a random point
+    // and holds it there.
+    if (onGround && !seeds.has(id)) continue;
+    seeds.set(id, point.slice());
   }
 
   /*
@@ -1664,9 +1688,10 @@ PAGES.graph = async (page) => {
       },
     },
     /*
-     * The key carries a role for every colour on the canvas. A mesh
-     * can run a dozen of them, so it wraps rather than running off the
-     * side, and the graph is given the room back below it.
+     * The key carries a role for every colour on the canvas. A mesh can
+     * run a dozen of them, which is more than fit on one line, so the
+     * legend scrolls: it stays one row with paging arrows rather than
+     * wrapping down over the canvas, and the graph keeps the room below.
      */
     legend: [{
       data: categories.map((category) => category.name),
