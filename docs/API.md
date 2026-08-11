@@ -86,6 +86,20 @@ Query parameters: `portnum`, `before`, `limit`.
 Returns the gateways that heard this node, with counts and last heard time.
 This is the data for the reliability report.
 
+Each row has `node_id`, `display_name`, `count`, `direct_count`,
+`relayed_count`, `last_heard`, `avg_snr`, `best_snr`, and `avg_rssi`.
+
+`count` is every observation. `direct_count` is the observations that
+arrived with no hop, and the signal figures are from those only. The
+rest are relayed and carry no signal figure, because the reading on a
+relayed observation belongs to the last hop, not to the link from this
+node. See AGENTS.md 9.5.
+
+A gateway that is the node itself uploads the node's own voice. That is
+not a radio link, so it is never counted as direct and carries no
+signal figure, even though its hop numbers are equal. See AGENTS.md
+9.5.1.
+
 ### 3.5 `GET /api/nodes/{node_id}/telemetry`
 
 Returns telemetry series for charts.
@@ -111,8 +125,9 @@ replaces many. Fields:
   `last_channel`, `last_mqtt_topic`, and `position`.
 - `neighbors` — the newest report for each neighbor, strongest SNR
   first. Each has `node_id`, `display_name`, `snr`, `last_rx_time`.
-- `heard_by` — the gateways that heard this node. Each has `count`,
-  `avg_snr`, `best_snr`, `avg_rssi`, `best_rssi`, `last_heard`.
+- `heard_by` — the gateways that heard this node, as in section 3.4.
+  Each has `count`, `direct_count`, `relayed_count`, `avg_snr`,
+  `best_snr`, `avg_rssi`, `last_heard`.
 - `weather` — the newest environment telemetry. Empty when the node
   sends none. `weather_time` gives its time.
 - `device`, `air_quality`, `power` — the newest telemetry of each family.

@@ -294,6 +294,22 @@ blocks the feature with no visible error:
   the page renders empty.
 - `frame-src` needs the mesh-graph origin.
 
+### 9.9.1 The OpenStreetMap tiles need a Referer
+
+The map showed OpenStreetMap's "blocked" placeholder tile, not the map,
+and nothing in the console said why. The cause was our own security
+header: `Referrer-Policy` was `no-referrer`, so the browser sent no
+`Referer` to the tile host. The OSM tile server answers a request with
+no `Referer` with the placeholder tile, because its usage policy asks a
+site to identify itself and the `Referer` is how a browser does that.
+Confirmed on this deployment: the real tile came back with a `Referer`,
+the placeholder without one.
+
+The fix is not to leave OSM. It is `strict-origin-when-cross-origin` in
+`api/app.py`, which sends the origin, never a path. The dashboard keeps
+its state in the URL fragment, which a `Referer` never carries, so this
+leaks nothing a path would. Keep the attribution. See `docs/API.md`.
+
 ### 9.10 Channel keys come from settings, not from `.env`
 
 `CHANNEL_KEYS` is usually absent from `.env`, so the built-in default

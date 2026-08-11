@@ -31,7 +31,10 @@ def test_version() -> None:
 def test_security_headers() -> None:
     response = _client().get("/health")
     assert response.headers["X-Content-Type-Options"] == "nosniff"
-    assert response.headers["Referrer-Policy"] == "no-referrer"
+    # The origin, not nothing, so the OpenStreetMap tile server sees a
+    # Referer and serves the map instead of its "blocked" tile. Only the
+    # origin travels cross-origin, never a path. See AGENTS.md 9.9.1.
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
 
 def test_dashboard_csp_allows_only_the_configured_graph_frame() -> None:
