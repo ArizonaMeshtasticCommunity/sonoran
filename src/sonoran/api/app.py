@@ -124,7 +124,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # Send the origin, not the full URL, on a cross-origin request.
+        # `no-referrer` sent nothing, and the OpenStreetMap tile server
+        # answers a request with no Referer with a "blocked" placeholder
+        # tile instead of the map: its usage policy asks a website to
+        # identify itself, and the Referer is how a browser does that.
+        # This leaks only the origin, never a path, and the dashboard
+        # keeps its state in the URL fragment, which a Referer never
+        # carries anyway. The full URL still goes to same-origin requests.
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
         if request.scope["path"].startswith("/static") or request.scope["path"] == "/":

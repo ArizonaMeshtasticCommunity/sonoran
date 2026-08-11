@@ -76,6 +76,15 @@ class Settings(BaseSettings):
 
     # Map basemap. The tile host is added to the image sources of the CSP.
     # Set this to an empty value to hide the basemap and show nodes only.
+    #
+    # The OpenStreetMap tile server is fine for a mesh-sized dashboard,
+    # but its usage policy asks for two things. Keep the attribution, and
+    # let the browser send a Referer so the site identifies itself: a
+    # request with no Referer is answered with a "blocked" placeholder
+    # tile, not the map. The `Referrer-Policy` header in api/app.py is set
+    # so this happens. Use one host with no `{s}` placeholder, or the CSP
+    # origin cannot match it. Point this at your own tiles, or a provider
+    # such as CARTO, to lean on OpenStreetMap's servers less.
     map_tile_url: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     map_tile_attribution: str = "(c) OpenStreetMap contributors"
     map_default_lat: float = 34.0
