@@ -7,7 +7,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
-      - tsdb_data:/var/lib/postgresql/data
+      # The timescaledb-ha image keeps PGDATA at /home/postgres/pgdata,
+      # not /var/lib/postgresql/data. Mounting the volume on the wrong
+      # path leaves the data in the container's writable layer, where it
+      # is lost the moment the container is recreated. Mount the real
+      # data home so it survives. See tools/db_backup.sh.
+      - tsdb_data:/home/postgres/pgdata
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d azmsh"]
       interval: 5s

@@ -283,3 +283,24 @@ These are optional. Add them after phase 8 if query speed needs help.
 - Daily gateway activity.
 
 Use TimescaleDB continuous aggregates with refresh policies.
+
+## 9. Backup and restore
+
+Two scripts move the data between boxes:
+
+- `tools/db_backup.sh` takes a logical dump of the running database, plus
+  the cluster roles, into `~/sonoran-backups`. It is safe to run while the
+  stack is up. Pass `--no-text` to leave message bodies out.
+- `tools/db_restore.sh` loads that dump into a fresh instance, following
+  the TimescaleDB restore procedure (`timescaledb_pre_restore`, then
+  `pg_restore`, then `timescaledb_post_restore`). It drops and recreates
+  the target database, so it asks first.
+
+Prefer a logical dump over a raw copy of the data volume. A raw copy only
+works when both ends run the exact same image, and it carries none of the
+safety a dump has.
+
+The data volume mounts at `/home/postgres/pgdata`, which is where the
+`timescaledb-ha` image keeps `PGDATA`. Mounting it anywhere else leaves
+the data in the container's writable layer, where a container rebuild
+loses it.
