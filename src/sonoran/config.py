@@ -147,6 +147,19 @@ class Settings(BaseSettings):
     coverage_min_zoom: int = 6
     coverage_max_zoom: int = 11
 
+    # The public coverage embed. It is off until somebody turns it on,
+    # which is the same default STORE_TEXT_MESSAGES takes: the private
+    # value is the safe one.
+    embed_enabled: bool = False
+    # The sites that may put the embed in a frame. Anything that is not
+    # an origin is dropped, and an empty list means nothing may frame
+    # it. It never becomes a wildcard.
+    embed_frame_ancestors: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # How far to snap a public marker, in degrees. About 0.01 degrees is
+    # a kilometre, which names a hill and not a building. Zero gives the
+    # exact position.
+    embed_position_step: float = 0.01
+
     # Calibration. The job asks the mesh how far the prediction is out,
     # node by node, from the neighbour reports the nodes publish.
     calibration_enabled: bool = True
@@ -166,7 +179,13 @@ class Settings(BaseSettings):
     # Logging.
     log_level: str = "INFO"
 
-    @field_validator("mqtt_topics", "channel_keys", "core_channels", mode="before")
+    @field_validator(
+        "mqtt_topics",
+        "channel_keys",
+        "core_channels",
+        "embed_frame_ancestors",
+        mode="before",
+    )
     @classmethod
     def split_csv(cls, value: object) -> object:
         """Accept comma-separated strings for list settings."""

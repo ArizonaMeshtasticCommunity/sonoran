@@ -408,6 +408,35 @@ and a test asserts the three stay whole numbers. Read the signature out
 of the binary rather than the loader if a fourth is ever added: the
 loader shows none of this.
 
+### 9.16.2 A coverage level does not fit a signed byte
+
+The engine reports a field strength as a byte with a 200 dB offset. It
+is tempting to take the offset off and keep a signed byte, because a
+level looks like a small negative number.
+
+It does not fit. A signed byte reaches -128 and the sensitivity of Long
+fast is -139 dBm. Every level clipped to -127, every level then sat
+above every threshold, and the usable filter passed the whole map
+without failing anything.
+
+`sonoran/coverage/grid.py` keeps the engine's own encoding: an unsigned
+byte, zero meaning no run reached the cell. `to_level` and `to_dbm` are
+the only places that convert, and a threshold goes through `to_level`
+before it meets a grid.
+
+### 9.16.3 A route that must refuse cannot check inside the handler
+
+A FastAPI handler body runs after every parameter is resolved. A check
+at the top of the body has already opened a database session.
+
+The embed must answer 404 while it is off, and it must do that without
+touching the database. So the check is a dependency of the whole
+router:
+
+    router = APIRouter(dependencies=[Depends(_require_enabled)])
+
+`tests/unit/test_embed.py` pins it.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

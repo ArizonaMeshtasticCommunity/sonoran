@@ -26,6 +26,8 @@ JSON API and a static web UI. It replaces two older tools:
 - 🗺️ **Live map** — nodes, neighbour links, and live traffic, one modem preset at a time.
 - 🕸️ **Mesh graph** — the network laid out over the ground it sits on, coloured by role.
 - 🔭 **Coverage planner** — SPLAT!-based signal prediction from a vendored WebAssembly engine.
+- 📡 **Coverage map** — where the whole mesh reaches, predicted from every node, per preset,
+  corrected against what the mesh measures, and embeddable on your own site.
 - 📟 **Per-node pages** — telemetry, the gateways that heard it, and its links.
 - 💬 **Chat, firehose, and statistics** — every packet family, deduplicated.
 - 🔗 **Traceroute graphs** — offloaded to a linked `mesh-graph` instance.
@@ -82,6 +84,9 @@ them all with a comment on each. The ones you are most likely to change:
 | `CORE_CHANNELS` | The channels this mesh claims as its own |
 | `MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION` | The basemap |
 | `STORE_TEXT_MESSAGES` | Set true to keep text message bodies (a privacy decision) |
+| `RADIO_OVERRIDES_PATH` | The file naming each node's antenna, mast, and power |
+| `COVERAGE_*` | The coverage job: how often, how far, how many workers |
+| `EMBED_ENABLED`, `EMBED_FRAME_ANCESTORS` | The public coverage embed, off by default |
 
 > [!NOTE]
 > If you use `tile.openstreetmap.org` as the basemap, the browser must send a

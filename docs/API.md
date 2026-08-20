@@ -250,6 +250,45 @@ Tiles of one run never change, so they carry a long `Cache-Control` and
 an `ETag` that holds the run stamp. A new run makes every tile fresh
 again.
 
+## 3B. The public embed
+
+These serve a page for somebody else's website. They are all 404 until
+`EMBED_ENABLED` is true.
+
+`sonoran/embed/sanitise.py` is the only place that decides what a
+public viewer sees. `/api/map/nodes` is untouched: it serves the
+dashboard, which is a different audience.
+
+### 3B.1 `GET /embed/coverage`
+
+The embed document. Its own page, not the dashboard: the dashboard
+carries `serial=(self)` for the config checker, and framing it would
+take Web Serial onto a third party site.
+
+This path alone sends no `X-Frame-Options` and sets `frame-ancestors`
+from `EMBED_FRAME_ANCESTORS`. Every other path keeps `DENY` and
+`'none'`. A value that is not an origin is dropped, and an empty list
+gives `'none'`. It never becomes a wildcard.
+
+### 3B.2 `GET /api/embed/coverage`
+
+A cut down coverage manifest: the bounds, the zooms, the presets, and
+the receiver the map assumes. The sites a run used, the terrain it was
+missing, and how long it took are operational detail and are not here.
+
+### 3B.3 `GET /api/embed/nodes`
+
+The infrastructure sites a public page may show.
+
+Routers, repeaters, and MQTT gateways only. A client node is usually a
+person, often at home, and never appears. Each entry carries the short
+name, the role, whether it is a gateway, and a position snapped to
+`EMBED_POSITION_STEP` degrees. The long name, the hardware model, the
+node ID, and the last heard time are all left out.
+
+The position is snapped in this process, before it is sent. Rounding it
+in the browser would mean the exact value had already left.
+
 ## 4. Packet endpoints
 
 ### 4.1 `GET /api/packets`

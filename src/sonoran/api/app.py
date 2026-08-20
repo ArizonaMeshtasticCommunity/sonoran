@@ -19,6 +19,7 @@ from starlette.responses import HTMLResponse, Response
 from sonoran import __version__
 from sonoran.api.routes.chat import router as chat_router
 from sonoran.api.routes.coverage import router as coverage_router
+from sonoran.api.routes.embed import router as embed_router
 from sonoran.api.routes.graph import router as graph_router
 from sonoran.api.routes.map import router as map_router
 from sonoran.api.routes.nodes import router as nodes_router
@@ -28,6 +29,7 @@ from sonoran.api.routes.terrain import router as terrain_router
 from sonoran.api.routes.traceroutes import router as traceroutes_router
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
+from sonoran.embed.sanitise import frame_ancestors
 from sonoran.logging import configure_logging, get_logger
 from sonoran.radio.overrides import load_overrides
 
@@ -102,6 +104,16 @@ PERMISSIONS_POLICY = ", ".join(
 )
 
 
+# What the embed is allowed to use: nothing.
+#
+# The dashboard grants `serial=(self)` so the config checker can read a
+# node over USB. An embed sits on somebody else's page and must never
+# carry that.
+EMBED_PERMISSIONS_POLICY = ", ".join(
+    ["serial=()"] + [item for item in PERMISSIONS_POLICY.split(", ") if item != "serial=(self)"]
+)
+
+
 def _connect_sources(api_base_url: str) -> str:
     """Return the CSP connect sources.
 
@@ -135,10 +147,32 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # keeps its state in the URL fragment, which a Referer never
         # carries anyway. The full URL still goes to same-origin requests.
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
-        if request.scope["path"].startswith("/static") or request.scope["path"] == "/":
-            settings = request.app.state.settings
+        settings = request.app.state.settings
+        embed = settings.embed_enabled and _is_embed(request.scope["path"])
+        if embed:
+            # `X-Frame-Options` has no allow list a modern browser reads
+            # beyond SAMEORIGIN, so a third party frame needs the header
+            # gone and the policy said in `frame-ancestors` instead.
+            #
+            # The embed is its own document. The dashboard carries
+            # `serial=(self)` for the config checker, and framing that
+            # would take Web Serial onto somebody else's page.
+            response.headers["Permissions-Policy"] = EMBED_PERMISSIONS_POLICY
+        else:
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
+        if embed:
+            image_sources = _image_sources(settings.map_tile_url, "")
+            response.headers["Content-Security-Policy"] = (
+                f"default-src 'self'; img-src {image_sources}; "
+                "connect-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "worker-src 'none'; "
+                "frame-src 'none'; "
+                f"frame-ancestors {frame_ancestors(settings.embed_frame_ancestors)}"
+            )
+        elif request.scope["path"].startswith("/static") or request.scope["path"] == "/":
             frame_source = _frame_source(settings.mesh_graph_base_url)
             image_sources = _image_sources(settings.map_tile_url, settings.mesh_graph_base_url)
             connect_sources = _connect_sources(settings.web_api_base_url)
@@ -157,6 +191,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 f"frame-src 'self' {frame_source}"
             )
         return response
+
+
+def _is_embed(path: str) -> bool:
+    """Return true for a path that a third party may frame.
+
+    Only the embed document and the data it reads. Everything else on
+    this origin keeps the policy the dashboard has.
+    """
+    return path == "/embed/coverage" or path.startswith("/embed/") or path.startswith("/api/embed/")
 
 
 @asynccontextmanager
@@ -194,6 +237,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(nodes_router)
     app.include_router(chat_router)
     app.include_router(coverage_router)
+    app.include_router(embed_router)
     app.include_router(graph_router)
     app.include_router(map_router)
     app.include_router(packets_router)

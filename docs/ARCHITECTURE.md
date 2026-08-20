@@ -196,6 +196,20 @@ channel, Data message metadata, and receive time.
   `AGENTS.md` 7.1.
 - This package must never touch the database.
 
+### 3.6.3 `embed`
+
+- Job: decide what a public viewer of the coverage map may see.
+- `sanitise.py` is the only place that decides it. Infrastructure roles
+  and MQTT gateways only, positions snapped to a grid, short names
+  only.
+- It is the same arrangement as `positions.py` and `api/traces.py`: one
+  module holds the rule, so two pages cannot disagree.
+- `frame_ancestors` checks every origin the settings name through the
+  same test the other security headers use. It never returns a
+  wildcard.
+- The embed is off until `EMBED_ENABLED` is true.
+- This package must never touch the database.
+
 ### 3.7 `api`
 
 - Job: serve read-only JSON and static files.
