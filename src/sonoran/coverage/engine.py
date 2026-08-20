@@ -215,8 +215,7 @@ class SplatModule:
     """The compiled engine, read once.
 
     Reading and compiling the file costs more than a prediction does, so
-    a process that makes many predictions must hold one of these and
-    call `instance` for each run.
+    a process that makes many predictions must hold one of these.
     """
 
     def __init__(self, wasm_path: Path = WASM_PATH) -> None:
@@ -225,7 +224,13 @@ class SplatModule:
         logger.debug("compiled the coverage engine from %s", wasm_path)
 
     def instance(self) -> "SplatInstance":
-        """Return a new instance with its own memory."""
+        """Return a new instance with its own memory.
+
+        One instance serves any number of predictions. `run` creates
+        and destroys the prediction inside it, so a process that makes
+        many of them wants one instance and not one for each. See
+        `AGENTS.md` 9.16.4.
+        """
         return SplatInstance(self._engine, self._module)
 
 
@@ -233,7 +238,16 @@ class SplatInstance:
     """One instance of the engine, with its own linear memory.
 
     An instance is not safe to share between threads. Give each worker
-    its own.
+    its own, and give it only one: an instance is made for a process
+    and not for a prediction. See `AGENTS.md` 9.16.4.
+
+    The linear memory grows to the largest run the instance has made
+    and never shrinks, which is the point of holding one: the second
+    run on it costs no more memory.
+
+    A new instance for each prediction grows a new heap each time, and
+    the old ones are never given back. `close` is the only way to give
+    one back. See `AGENTS.md` 9.16.4.
     """
 
     def __init__(self, engine: wasmtime.Engine, module: wasmtime.Module) -> None:
@@ -270,6 +284,28 @@ class SplatInstance:
 
         # C++ static constructors. Nothing works before this runs.
         self._functions["__wasm_call_ctors"](self._store)
+
+    def close(self) -> None:
+        """Give the linear memory back now.
+
+        The store holds the three host functions, which are bound
+        methods of this object, so the store and this object hold each
+        other. Dropping the name does not free the heap, and neither
+        does the cyclic collector: it counts objects, and a heap of
+        several hundred megabytes is not one. Clearing the references
+        here breaks the cycle and gives the memory back at once.
+
+        The instance cannot be used afterwards.
+        """
+        self._functions = {}
+        self._memory = None
+        del self._store
+
+    def __enter__(self) -> "SplatInstance":
+        return self
+
+    def __exit__(self, *_exception: object) -> None:
+        self.close()
 
     # --- the three imports ---------------------------------------------
 

@@ -505,3 +505,125 @@ def test_every_layer_has_a_label() -> None:
 
     assert set(LAYERS) == set(LAYER_LABELS)
     assert LAYERS[0] == "usable", "the honest layer must be the first one a page shows"
+
+
+def test_a_run_stamp_that_is_not_a_stamp_is_refused(tmp_path: Path) -> None:
+    """The stamp is read from a file and becomes part of a path.
+
+    Nothing else writes that file, so this is not a hole today. It is
+    checked anyway, because a path built from a value read off disk is
+    the shape of one.
+    """
+    from sonoran.coverage import store
+
+    settings = _settings(tmp_path)
+    path = store.index_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    for bad in ("../../etc", "/etc/passwd", "20260820T000000Z/../..", "", "not-a-stamp"):
+        path.write_text(json.dumps({"current": bad}), encoding="utf-8")
+        assert store.current_stamp(settings) is None, bad
+        assert store.current_root(settings) is None
+        assert store.read_tile(settings, "LongFast", "usable", 6, 12, 25) is None
+
+    path.write_text(json.dumps({"current": "20260820T000000Z"}), encoding="utf-8")
+    assert store.current_stamp(settings) == "20260820T000000Z"
+
+
+# --- what a run holds in memory ----------------------------------------
+#
+# A three hundred node run over Arizona wants about forty terrain pages.
+# The first build sent the whole set to every worker process through the
+# pool, which is 110 MB in the parent and another copy in each worker,
+# and the pool died on a machine that could not carry it. The pages are
+# now read from the disk cache by whichever process needs them.
+
+
+def test_a_worker_reads_terrain_from_the_disk_cache(tmp_path: Path) -> None:
+    """Nothing sends a terrain page through the process pool."""
+    from sonoran.jobs import coverage
+
+    assert not hasattr(coverage, "_WORKER_PAGES")
+    assert coverage._worker_start.__code__.co_argcount == 0
+
+
+def test_the_page_hold_is_bounded(tmp_path: Path) -> None:
+    """A page is 2.7 MB. The hold must not grow with the region."""
+    from sonoran.jobs import coverage
+    from sonoran.terrain.srtm import PAGE_BYTES
+
+    settings = _settings(tmp_path, terrain_cache_dir=str(tmp_path / "terrain"))
+    (tmp_path / "terrain").mkdir(parents=True)
+    names = [f"N3{index // 10}W1{10 + index % 10:02d}" for index in range(40)]
+    for name in names:
+        (tmp_path / "terrain" / f"{name}.page.i16").write_bytes(b"\x00" * PAGE_BYTES)
+
+    coverage._page_cache.clear()
+    try:
+        for name in names:
+            assert coverage.read_page(settings, name) is not None
+        assert len(coverage._page_cache) == coverage.PAGE_CACHE_SIZE
+        # The names still in the hold are the ones asked for last.
+        assert list(coverage._page_cache) == names[-coverage.PAGE_CACHE_SIZE :]
+    finally:
+        coverage._page_cache.clear()
+
+
+def test_a_page_that_is_absent_is_held_as_absent(tmp_path: Path) -> None:
+    """Asking again must not read the disk again for every site."""
+    from sonoran.jobs import coverage
+
+    settings = _settings(tmp_path, terrain_cache_dir=str(tmp_path / "terrain"))
+    coverage._page_cache.clear()
+    try:
+        assert coverage.read_page(settings, "N34W112") is None
+        assert "N34W112" in coverage._page_cache
+    finally:
+        coverage._page_cache.clear()
+
+
+def test_the_run_keeps_tile_names_and_not_tile_bytes(tmp_path: Path) -> None:
+    """`ensure_terrain` answers with names. Bytes would be the bug."""
+    import asyncio
+
+    from sonoran.jobs import coverage
+    from sonoran.terrain.srtm import PAGE_BYTES
+
+    settings = _settings(
+        tmp_path, terrain_cache_dir=str(tmp_path / "terrain"), terrain_allow_download=False
+    )
+    (tmp_path / "terrain").mkdir(parents=True)
+    (tmp_path / "terrain" / "N34W112.page.i16").write_bytes(b"\x00" * PAGE_BYTES)
+
+    held = asyncio.run(coverage.ensure_terrain(settings, ["N34W112", "N34W113"]))
+    assert held == {"N34W112"}
+
+
+def test_a_dead_worker_pool_costs_time_and_not_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pool that dies must fall back, not lose every preset.
+
+    The retry must also start from empty grids. A retry that carried
+    the half finished accumulators would blit every site that already
+    landed a second time.
+    """
+    from concurrent.futures.process import BrokenProcessPool
+
+    from sonoran.jobs import coverage
+
+    settings = _settings(tmp_path)
+    grid = region_grid(33, 33, -112, -112)
+    calls: list[int] = []
+
+    def fake_predict(
+        _settings: Settings, _grid: Grid, _sites: object, workers: int
+    ) -> tuple[object, object, list[dict[str, object]], set[str]]:
+        calls.append(workers)
+        if workers > 1:
+            raise BrokenProcessPool("out of memory")
+        return _grid.empty(), _grid.empty(), [], set()
+
+    monkeypatch.setattr(coverage, "_predict", fake_predict)
+    coverage.predict_preset(settings, grid, [], 4)
+    assert calls == [4, 1]

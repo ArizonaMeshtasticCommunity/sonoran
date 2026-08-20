@@ -25,10 +25,10 @@ RUN chown -R azmsh:azmsh /app
 
 # The caches for the coverage planner and the coverage map.
 #
-# This directory must exist in the image and must belong to the
+# Each directory must exist in the image and must belong to the
 # application user. Docker gives a new named volume the owner of the
 # directory it covers, so without this the volume belongs to root and
-# the process cannot write a single page.
+# the process cannot write a single page or a single tile.
 RUN mkdir -p /var/lib/sonoran/terrain /var/lib/sonoran/landcover /var/lib/sonoran/coverage \
     && chown -R azmsh:azmsh /var/lib/sonoran
 

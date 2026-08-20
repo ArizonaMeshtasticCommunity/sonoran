@@ -12,17 +12,19 @@ Each node gives one engine run and two layers. See
 `sonoran/coverage/sites.py` for why one run is enough for both
 directions.
 
-The work is held to one process and run in a worker thread, because the
-engine is a tight loop of floating point and holds the processor for a
-second or so at a time. Running it on the event loop would stop the
-whole jobs process.
+The engine is a tight loop of floating point and holds the processor
+for a second or so at a time, so the whole build runs in a worker
+thread. Running it on the event loop would stop the jobs process. The
+sites themselves are divided over worker processes.
 """
 
 import asyncio
 import os
 import time
+from collections import OrderedDict
 from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -70,7 +72,7 @@ from sonoran.positions import is_usable
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
-from sonoran.terrain.store import load_page
+from sonoran.terrain.store import load_page, read_cached_page
 
 logger = get_logger(__name__)
 
@@ -175,30 +177,67 @@ def tiles_around(site: Site, radius_km: float) -> set[str]:
     }
 
 
-async def read_terrain(settings: Settings, names: Sequence[str]) -> dict[str, bytes | None]:
-    """Return the terrain pages for a set of tile names.
+async def ensure_terrain(settings: Settings, names: Sequence[str]) -> set[str]:
+    """Put every terrain page on the disk cache. Return the names held.
 
-    A tile the service does not hold gives None. The engine reads a page
-    it never got as sea level, so the run draws coverage over flat
-    ground there. The manifest names those tiles, so a page can say so.
+    The bytes are not kept. A page is 2.7 MB and a run over Arizona
+    wants about forty of them, so holding the set costs more than a
+    hundred megabytes, and every worker process would take a copy of it.
+    The workers read the pages they need from the disk cache instead.
+    See `docs/COVERAGE.md` 9.2.
+
+    A tile the service does not hold is absent from the answer. The
+    engine reads a page it never got as sea level, so the run draws
+    coverage over flat ground there. The manifest names those tiles, so
+    a page can say so.
     """
-    pages: dict[str, bytes | None] = {}
-    for name in names:
-        if name in pages:
-            continue
+    held: set[str] = set()
+    for name in dict.fromkeys(names):
         try:
-            pages[name] = await load_page(settings, name)
+            page = await load_page(settings, name)
         except Exception as error:  # a bad tile must not stop the run
             logger.warning("terrain page %s could not be read: %s", name, error)
-            pages[name] = None
-    return pages
+            continue
+        if page is not None:
+            held.add(name)
+    return held
+
+
+# How many terrain pages one process holds in memory.
+#
+# One engine run at a 60 km radius reads about nine pages, and the sites
+# of a preset are predicted one after another over ground that mostly
+# repeats, so a small hold serves nearly every read. This bounds the
+# terrain a worker costs at about 43 MB whatever the size of the region.
+PAGE_CACHE_SIZE = 16
+
+_page_cache: OrderedDict[str, bytes | None] = OrderedDict()
+
+
+def read_page(settings: Settings, name: str) -> bytes | None:
+    """Return one terrain page from the disk cache.
+
+    A page that is absent or damaged gives None, which the caller
+    reports as a missing tile.
+    """
+    if name in _page_cache:
+        _page_cache.move_to_end(name)
+        return _page_cache[name]
+    try:
+        page = read_cached_page(settings, name)
+    except Exception as error:  # a bad tile must not stop the run
+        logger.warning("terrain page %s could not be read: %s", name, error)
+        page = None
+    _page_cache[name] = page
+    while len(_page_cache) > PAGE_CACHE_SIZE:
+        _page_cache.popitem(last=False)
+    return page
 
 
 def _site_levels(
     instance: SplatInstance,
     settings: Settings,
     site: Site,
-    pages: dict[str, bytes | None],
 ) -> tuple[Levels, Grid, list[str]] | None:
     """Return the field one site puts on the ground.
 
@@ -211,7 +250,7 @@ def _site_levels(
         with instance.run(params) as run:
             refs = run.pages()
             for index, ref in enumerate(refs):
-                page = pages.get(ref.tile_name)
+                page = read_page(settings, ref.tile_name)
                 if page is None:
                     missing.append(ref.tile_name)
                     continue
@@ -246,9 +285,14 @@ def _shift(levels: Levels, offset_db: float) -> Levels:
 # One engine instance for each worker process.
 #
 # Compiling the module costs more than a prediction does, so a worker
-# does it once when it starts and holds it for every site it takes.
+# does it once when it starts. The instance is held too, and this is
+# the part that matters: an instance owns a linear memory that grows to
+# the largest run it has made, and a new one for each site grows a new
+# heap of several hundred megabytes that is never given back. That is
+# what the memory killer ended a three hundred node run on. See
+# `AGENTS.md` 9.16.4.
 _WORKER_MODULE: SplatModule | None = None
-_WORKER_PAGES: dict[str, bytes | None] = {}
+_WORKER_INSTANCE: SplatInstance | None = None
 
 # What one site sends back from a worker.
 #
@@ -257,12 +301,17 @@ _WORKER_PAGES: dict[str, bytes | None] = {}
 SiteResult = tuple[bytes, int, int, float, float, list[str]]
 
 
-def _worker_start(pages: dict[str, bytes | None]) -> None:
-    """Set up one worker process."""
-    global _WORKER_MODULE
+def _worker_start() -> None:
+    """Set up one worker process.
+
+    Only the engine is made here. The terrain a worker needs is read
+    from the disk cache as the work asks for it, because sending the
+    pages through the pool would copy the whole region into every
+    process.
+    """
+    global _WORKER_MODULE, _WORKER_INSTANCE
     _WORKER_MODULE = SplatModule()
-    _WORKER_PAGES.clear()
-    _WORKER_PAGES.update(pages)
+    _WORKER_INSTANCE = _WORKER_MODULE.instance()
 
 
 def _to_plain(computed: tuple[Levels, Grid, list[str]] | None) -> SiteResult | None:
@@ -275,15 +324,14 @@ def _to_plain(computed: tuple[Levels, Grid, list[str]] | None) -> SiteResult | N
 
 def _worker_site(settings: Settings, site: Site) -> SiteResult | None:
     """Predict one site in a worker process."""
-    assert _WORKER_MODULE is not None
-    return _to_plain(_site_levels(_WORKER_MODULE.instance(), settings, site, _WORKER_PAGES))
+    assert _WORKER_INSTANCE is not None
+    return _to_plain(_site_levels(_WORKER_INSTANCE, settings, site))
 
 
 def predict_preset(
     settings: Settings,
     grid: Grid,
     sites: Sequence[Site],
-    pages: dict[str, bytes | None],
     workers: int,
 ) -> tuple[Levels, Levels, list[dict[str, object]], set[str]]:
     """Predict one preset from every site on it.
@@ -296,6 +344,31 @@ def predict_preset(
     better part of an hour on one core. The work divides cleanly,
     because each site is its own prediction and none of them reads
     another.
+
+    A worker that dies takes the whole pool with it, and the usual cause
+    is memory on a small machine. That must cost time, not the run, so
+    the preset is then predicted again in this process alone. The
+    accumulators are made inside `_predict`, so the retry starts from
+    empty ground and never counts a site twice.
+    """
+    if workers > 1:
+        try:
+            return _predict(settings, grid, sites, workers)
+        except BrokenProcessPool:
+            logger.warning(
+                "a worker process died, so this preset is predicted in one "
+                "process instead. The usual cause is memory."
+            )
+    return _predict(settings, grid, sites, 1)
+
+
+def _predict(
+    settings: Settings,
+    grid: Grid,
+    sites: Sequence[Site],
+    workers: int,
+) -> tuple[Levels, Levels, list[dict[str, object]], set[str]]:
+    """Predict one preset with a given number of processes.
 
     The results are put on the region grid here, in the order the sites
     were given, so the answer never depends on which worker finished
@@ -337,14 +410,12 @@ def predict_preset(
             logger.info("  %s of %s sites", index + 1, len(sites))
 
     if workers <= 1:
-        module = SplatModule()
-        for index, site in enumerate(sites):
-            take(index, site, _to_plain(_site_levels(module.instance(), settings, site, pages)))
+        with SplatModule().instance() as instance:
+            for index, site in enumerate(sites):
+                take(index, site, _to_plain(_site_levels(instance, settings, site)))
         return downlink, uplink, notes, missing
 
-    with ProcessPoolExecutor(
-        max_workers=workers, initializer=_worker_start, initargs=(pages,)
-    ) as pool:
+    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_start) as pool:
         computed = pool.map(partial(_worker_site, settings), sites, chunksize=1)
         for index, (site, result) in enumerate(zip(sites, computed, strict=True)):
             take(index, site, result)
@@ -383,7 +454,7 @@ def render_layer(
 def _build(
     settings: Settings,
     groups: dict[str, list[Site]],
-    pages: dict[str, bytes | None],
+    held_terrain: set[str],
     stamp: str,
     workers: int,
 ) -> store.Manifest:
@@ -406,7 +477,7 @@ def _build(
         chosen = sites[: settings.coverage_max_nodes]
         logger.info("preset %s: %s sites", preset.name, len(chosen))
 
-        downlink, uplink, notes, missing = predict_preset(settings, grid, chosen, pages, workers)
+        downlink, uplink, notes, missing = predict_preset(settings, grid, chosen, workers)
         missing_all.update(missing)
         usable = combine_min(downlink, uplink)
         threshold = preset.sensitivity_dbm
@@ -434,6 +505,10 @@ def _build(
                 nodes=notes[:MANIFEST_NODE_LIMIT],
             )
         )
+        # A region grid of Arizona is 88 MB. Letting three of them stay
+        # named while the next preset makes two more is most of a
+        # gigabyte for nothing.
+        del downlink, uplink, usable
 
     return store.Manifest(
         stamp=stamp,
@@ -446,7 +521,7 @@ def _build(
         rx_height_m=settings.coverage_rx_height_m,
         rx_gain_dbi=settings.coverage_rx_gain_dbi,
         handheld_tx_power_dbm=HANDHELD_TX_POWER_DBM,
-        has_terrain=any(page is not None for page in pages.values()),
+        has_terrain=bool(held_terrain),
         has_landcover=have_pages(settings),
         calibrated_nodes=sum(
             1 for sites in groups.values() for site in sites if site.profile.is_measured
@@ -477,22 +552,22 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
         logger.info("no positioned nodes on a modem preset, so no coverage run")
         return None
 
-    # Terrain is read before the engine starts, because reading it is
-    # network work and the engine is processor work. Mixing them would
-    # leave the processor idle while a tile downloads.
+    # Terrain is fetched before the engine starts, because fetching it
+    # is network work and the engine is processor work. Mixing them
+    # would leave the processor idle while a tile downloads. Only the
+    # names are kept: the workers read the pages themselves.
     wanted: set[str] = set()
     for sites in groups.values():
         for site in sites[: settings.coverage_max_nodes]:
             wanted.update(tiles_around(site, settings.coverage_radius_km))
 
-    pages = await read_terrain(settings, sorted(wanted))
-    held = sum(1 for page in pages.values() if page is not None)
-    logger.info("read %s of %s terrain tiles", held, len(pages))
+    held = await ensure_terrain(settings, sorted(wanted))
+    logger.info("%s of %s terrain tiles are held", len(held), len(wanted))
 
     stamp = store.new_stamp()
     workers = worker_count(settings)
     logger.info("predicting with %s worker processes", workers)
-    manifest = await asyncio.to_thread(_build, settings, groups, pages, stamp, workers)
+    manifest = await asyncio.to_thread(_build, settings, groups, held, stamp, workers)
     store.publish(settings, stamp, manifest)
     return manifest
 

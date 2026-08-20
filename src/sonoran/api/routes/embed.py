@@ -14,6 +14,7 @@ public viewer sees. Nothing here reaches around it.
 """
 
 import json
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -44,6 +45,16 @@ def _require_enabled(request: Request) -> Settings:
 
 
 router = APIRouter(tags=["embed"], dependencies=[Depends(_require_enabled)])
+
+# How long a public answer is held before the database is asked again.
+#
+# The embed sits on a page anybody may load, and the node list is the
+# only part of it that touches the database. The tiles are files and a
+# browser caches them; this must not be the one endpoint a busy page
+# hammers. The sites of a mesh change over hours, not seconds.
+NODE_CACHE_SECONDS = 300.0
+
+_node_cache: tuple[float, list[dict[str, object]]] | None = None
 
 STATIC_DIR = Path(__file__).parent.parent.parent / "web" / "static"
 
@@ -109,7 +120,16 @@ async def embed_nodes(
 
     Routers, repeaters, and MQTT gateways only. Positions are snapped
     to a grid before they leave this process, not in the browser.
+
+    The answer is held for a few minutes. This is the only part of the
+    embed that reads the database, and the sites of a mesh change over
+    hours.
     """
+    global _node_cache
+    now = time.monotonic()
+    if _node_cache is not None and now - _node_cache[0] < NODE_CACHE_SECONDS:
+        return _node_cache[1]
+
     rows = await session.scalars(select(Node))
     nodes = public_nodes(
         (
@@ -125,7 +145,7 @@ async def embed_nodes(
         ),
         settings.embed_position_step,
     )
-    return [
+    answer: list[dict[str, object]] = [
         {
             "short_name": node.short_name,
             "lat": node.latitude,
@@ -135,3 +155,5 @@ async def embed_nodes(
         }
         for node in nodes
     ]
+    _node_cache = (now, answer)
+    return answer

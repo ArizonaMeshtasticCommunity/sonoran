@@ -21,6 +21,7 @@ nothing a reader can find.
 """
 
 import json
+import re
 import shutil
 import time
 from dataclasses import asdict, dataclass, field
@@ -45,6 +46,14 @@ logger = get_logger(__name__)
 # to look at what changed. Tiles are large, so more would cost disk for
 # nothing.
 KEEP_RUNS = 2
+
+# What a run stamp looks like.
+#
+# The value is read from a file and becomes part of a path. Nothing
+# else writes that file, so this is not a hole today. It is checked
+# anyway, because a path built from a value read off disk is the shape
+# of a hole, and the check costs nothing.
+STAMP_PATTERN = re.compile(r"^\d{8}T\d{6}Z$")
 
 INDEX_NAME = "index.json"
 MANIFEST_NAME = "manifest.json"
@@ -183,7 +192,9 @@ def current_stamp(settings: Settings) -> str | None:
     except (OSError, ValueError):
         return None
     stamp = document.get("current")
-    return stamp if isinstance(stamp, str) else None
+    if not isinstance(stamp, str) or not STAMP_PATTERN.fullmatch(stamp):
+        return None
+    return stamp
 
 
 def current_root(settings: Settings) -> Path | None:

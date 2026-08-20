@@ -168,3 +168,15 @@ def test_a_very_long_short_name_is_cut() -> None:
 
     rows = [("X" * 200, "y", 33.0, -112.0, "ROUTER", False)]
     assert len(public_nodes(rows, 0.01)[0].short_name) <= 8
+
+
+def test_the_public_node_list_is_held_for_a_while() -> None:
+    """The embed sits on a page anybody may load.
+
+    The tiles are files a browser caches. This is the only part that
+    reads the database, so it must not be the endpoint a busy page
+    hammers.
+    """
+    from sonoran.api.routes import embed
+
+    assert embed.NODE_CACHE_SECONDS >= 60.0

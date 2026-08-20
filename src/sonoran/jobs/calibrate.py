@@ -40,11 +40,11 @@ from sonoran.coverage.calibrate import (
     fit_offsets,
     residual_summary,
 )
-from sonoran.coverage.engine import EngineError, SplatModule
+from sonoran.coverage.engine import EngineError, SplatInstance, SplatModule
 from sonoran.coverage.params import EngineParams, erp_watts
 from sonoran.db.models import NeighborMetrics, Node
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.jobs.coverage import read_terrain, tiles_around
+from sonoran.jobs.coverage import ensure_terrain, read_page, tiles_around
 from sonoran.logging import get_logger
 from sonoran.positions import is_usable
 from sonoran.radio.overrides import Overrides, load_overrides
@@ -156,13 +156,34 @@ def build_observations(
     settings: Settings,
     peers: dict[int, Peer],
     reports: dict[int, dict[int, float]],
-    pages: dict[str, bytes | None],
 ) -> list[LinkObservation]:
-    """Return every measurement the mesh offers, reported and silent."""
-    module = SplatModule()
-    instance = module.instance()
+    """Return every measurement the mesh offers, reported and silent.
+
+    Terrain is read page by page from the disk cache. Holding the whole
+    region would cost more than a hundred megabytes in a process that
+    also runs the engine. See `docs/COVERAGE.md` 9.2.
+    """
     observations: list[LinkObservation] = []
 
+    with SplatModule().instance() as instance:
+        _fill(settings, peers, reports, instance, observations)
+    return observations
+
+
+def _fill(
+    settings: Settings,
+    peers: dict[int, Peer],
+    reports: dict[int, dict[int, float]],
+    instance: SplatInstance,
+    observations: list[LinkObservation],
+) -> None:
+    """Add every measurement one engine instance can make.
+
+    One instance serves every listener. An instance owns a linear
+    memory that grows to the largest run it has made, so making a new
+    one for each listener would grow a new heap each time. See
+    `AGENTS.md` 9.16.4.
+    """
     for listener_num, heard in sorted(reports.items()):
         listener = peers.get(listener_num)
         if listener is None:
@@ -193,7 +214,7 @@ def build_observations(
         try:
             with instance.run(_params(settings, listener)) as run:
                 for index, ref in enumerate(run.pages()):
-                    page = pages.get(ref.tile_name)
+                    page = read_page(settings, ref.tile_name)
                     if page is not None:
                         run.load_page(index, page)
 
@@ -239,8 +260,6 @@ def build_observations(
         except EngineError as error:
             logger.warning("the engine refused a run at %s: %s", listener.node_id, error)
 
-    return observations
-
 
 async def run_once(session: AsyncSession, settings: Settings) -> Calibration | None:
     """Fit the calibration and write it. Return None with no evidence."""
@@ -256,9 +275,10 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
         peer = peers.get(num)
         if peer is not None:
             wanted.update(_tiles_for(peer))
-    pages = await read_terrain(settings, sorted(wanted))
+    held = await ensure_terrain(settings, sorted(wanted))
+    logger.info("%s of %s terrain tiles are held", len(held), len(wanted))
 
-    observations = await asyncio.to_thread(build_observations, settings, peers, reports, pages)
+    observations = await asyncio.to_thread(build_observations, settings, peers, reports)
     summary = residual_summary(observations)
     logger.info(
         "calibration read %s links, %s of them silent, model out by %.1f dB",

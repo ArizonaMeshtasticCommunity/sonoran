@@ -5,6 +5,7 @@ check the guards first: a bad name, and a tile outside the region this
 service covers.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -182,6 +183,10 @@ class TestAnUnwritableCache:
     is a problem to fix rather than a reason to serve nothing.
     """
 
+    @pytest.mark.skipif(
+        os.geteuid() == 0,
+        reason="root writes a read-only directory, so the case cannot be made",
+    )
     def test_write_page_reports_failure_instead_of_raising(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path / "read-only" / "terrain")
         (tmp_path / "read-only").mkdir()

@@ -437,6 +437,30 @@ router:
 
 `tests/unit/test_embed.py` pins it.
 
+### 9.16.4 An engine instance is made for a process, not for a run
+
+`SplatInstance` owns a WebAssembly linear memory. The memory grows to
+the largest run the instance has made and never shrinks, which is why
+one instance is held and reused: the second run costs no new memory.
+
+Making a new instance for each prediction grows a new heap of several
+hundred megabytes each time, and the old ones are never given back. The
+store holds the three host functions, which are bound methods of the
+instance, so the instance and its store hold each other. The cyclic
+collector does not help: it counts objects, and the heap is memory no
+Python object accounts for. `close` is the only way to give one back.
+
+`test_an_instance_that_is_dropped_and_not_closed_keeps_its_heap`
+measures it. Twenty megabytes for each dropped instance at a 20 km
+radius, and it does not come back.
+
+A three hundred node run was ended by the memory killer for this, with
+each worker at 4.7 GB. `web/static/planner.worker.js` never had the
+problem: it instantiates the module once and memoises the promise.
+
+So one instance for each process, held for every site. Use `close`, or
+the instance as a context manager, for a caller that must let one go.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

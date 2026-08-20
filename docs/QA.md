@@ -77,6 +77,21 @@ A pull request can merge only when all jobs pass.
 - Check the response shape against the pydantic models.
 - Check that no endpoint accepts POST, PUT, PATCH, or DELETE.
 
+### 4.3.1 The coverage map
+
+1. The engine must answer the same in Python and in the browser.
+   `tests/unit/test_coverage_engine.py` pins a fixed scenario by hash,
+   and `tools/dev/engine_parity.js` makes that hash again. If it fails,
+   the engine changed. Do not paste the new value in. Find out what
+   changed.
+2. Every state a new deployment starts in is a working state: no
+   nodes, no positions, no preset, no terrain, no land cover, no
+   calibration. `tests/integration/test_coverage_job.py` runs each one
+   against a real database.
+3. A change to the colour ramp must change `web/static/app.css` and
+   `coverage/render.py` together. A test asserts the two agree, because
+   the legend on the page is a CSS gradient and the tiles are not.
+
 ### 4.4 Fixtures
 
 - Record real MQTT payloads from the azmsh.net broker.
@@ -142,6 +157,13 @@ Check these items on every pull request:
 3. No secrets in the repository.
 4. Security headers still apply to static files.
 5. New dependencies come from trusted sources. Pin versions.
+6. The dashboard still refuses to be framed. `X-Frame-Options` is
+   `DENY` and `frame-ancestors` is `'none'` on every path but the
+   embed. See `tests/unit/test_embed.py`.
+7. Nothing new leaves the server to a public viewer without going
+   through `sonoran/embed/sanitise.py`.
+8. A value read off disk that becomes part of a path is checked for
+   shape first.
 
 ## 10. Release policy
 

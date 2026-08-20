@@ -14,7 +14,9 @@ make it pass. Find out what changed. `AGENTS.md` 9.13 says the same
 about the terrain transform, for the same reason.
 """
 
+import gc
 import hashlib
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -23,6 +25,7 @@ from sonoran.coverage.engine import (
     MASK_COVERED,
     PAGE_SIZE,
     EngineError,
+    SplatInstance,
     SplatModule,
     predict,
 )
@@ -259,3 +262,105 @@ def test_erp_adds_the_gain_and_takes_off_the_cable() -> None:
 def test_the_receiver_gain_is_added_to_the_field() -> None:
     assert received_dbm(-120.0, 2.15, 0.0) == pytest.approx(-117.85)
     assert received_dbm(-120.0, 2.15, 1.15) == pytest.approx(-119.0)
+
+
+# --- what an instance costs --------------------------------------------
+
+
+needs_proc = pytest.mark.skipif(
+    not Path("/proc/self/statm").exists(), reason="the measurement reads /proc"
+)
+
+
+def _resident_mb() -> int:
+    """Return how much memory this process holds, in megabytes."""
+    with open("/proc/self/statm", encoding="ascii") as handle:
+        return int(handle.read().split()[1]) * 4096 // 1024 // 1024
+
+
+def _reference_raster(instance: SplatInstance) -> bytes:
+    """Run the reference scenario and return a hash of the rasters."""
+    with instance.run(REFERENCE) as run:
+        for index in range(len(run.pages())):
+            run.load_page(index, _made_up_page(index))
+        run.run_all_radials()
+        run.rasterize()
+        raster = run.raster()
+    return hashlib.sha256(raster.signal + raster.mask).digest()
+
+
+def test_one_instance_answers_many_runs_the_same(module: SplatModule) -> None:
+    """An instance is made for a process, not for a prediction.
+
+    A new instance for each site grows a new linear memory of several
+    hundred megabytes, and the memory killer ended a three hundred node
+    run on exactly that. See `AGENTS.md` 9.16.4. Reuse is only safe if
+    the second run on one instance answers the same as the first, which
+    is what this asserts.
+    """
+    with module.instance() as shared:
+        first = _reference_raster(shared)
+        second = _reference_raster(shared)
+    assert first == second
+
+    with module.instance() as fresh:
+        assert _reference_raster(fresh) == first
+
+
+@needs_proc
+def test_an_instance_that_is_dropped_and_not_closed_keeps_its_heap(
+    module: SplatModule,
+) -> None:
+    """The measurement that names the bug, in the units that matter.
+
+    A dropped instance is never given back. The store holds the three
+    host functions, which are bound methods of the instance, so the two
+    hold each other, and the cyclic collector does not take them: it
+    counts objects, and the heap is memory that no Python object
+    accounts for.
+
+    A worker doing this once for each site grew until the memory killer
+    ended the run. See `AGENTS.md` 9.16.4.
+    """
+    _reference_raster(module.instance())  # warm the allocator
+    before = _resident_mb()
+    for _ in range(4):
+        _reference_raster(module.instance())
+    gc.collect()
+    dropped = _resident_mb() - before
+
+    before = _resident_mb()
+    for _ in range(4):
+        with module.instance() as instance:
+            _reference_raster(instance)
+    closed = _resident_mb() - before
+
+    assert dropped > 40, "the leak must be visible, or this test proves nothing"
+    assert closed < 10, "a closed instance must give its heap back"
+
+
+@needs_proc
+def test_reusing_one_instance_costs_no_more_memory(module: SplatModule) -> None:
+    """Which is why a worker holds one and not one for each site."""
+    with module.instance() as instance:
+        _reference_raster(instance)
+        before = _resident_mb()
+        for _ in range(4):
+            _reference_raster(instance)
+        assert _resident_mb() - before < 10
+
+
+def test_the_coverage_job_holds_one_instance_for_each_worker() -> None:
+    """The rule above must hold where the memory killer found it."""
+    from sonoran.jobs import coverage
+
+    coverage._worker_start()
+    try:
+        assert coverage._WORKER_INSTANCE is not None
+        # The worker uses the instance it was given and makes none.
+        assert "instance" not in coverage._worker_site.__code__.co_names
+    finally:
+        if coverage._WORKER_INSTANCE is not None:
+            coverage._WORKER_INSTANCE.close()
+        coverage._WORKER_INSTANCE = None
+        coverage._WORKER_MODULE = None

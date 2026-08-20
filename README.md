@@ -158,6 +158,7 @@ The coverage planner reads terrain tiles. Fill the local cache once with
 | [docs/DATABASE.md](docs/DATABASE.md) | The full database schema |
 | [docs/API.md](docs/API.md) | The API specification |
 | [docs/PLANNER.md](docs/PLANNER.md) | The coverage planner and its licence |
+| [docs/COVERAGE.md](docs/COVERAGE.md) | The coverage map, its calibration, and the embed |
 | [docs/QA.md](docs/QA.md) | The QA process |
 | [docs/ISSUES.md](docs/ISSUES.md) | Open issues and what is wanted next |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | Research on the source tools and the protocol |
