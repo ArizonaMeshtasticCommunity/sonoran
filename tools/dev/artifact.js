@@ -50,7 +50,63 @@ markup = markup.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
 
 // ------------------------------------------------------------ scripts
 
-const recorded = JSON.parse(fs.readFileSync(RECORDING, 'utf8'));
+const recording = JSON.parse(fs.readFileSync(RECORDING, 'utf8'));
+const recorded = recording.responses || recording;
+
+// Coverage tiles are images. Leaflet asks for them with an <img>, so
+// the fetch shim never sees them, and a browser only asks for the ones
+// it happened to look at.
+//
+// They are read straight out of the coverage cache instead. That is
+// deterministic, and it takes every tile of the zooms below rather than
+// whatever a screenshot wandered past.
+const COVERAGE_CACHE = process.env.COVERAGE_CACHE_DIR || '/var/lib/sonoran/coverage';
+
+// The deepest zoom to put in the file.
+//
+// A preview is looked at, not surveyed. Past this Leaflet stretches the
+// last real tile, which is what the live page does past its own
+// deepest zoom anyway.
+const MAX_TILE_ZOOM = 9;
+
+function readTiles() {
+  const out = {};
+  let index;
+  try {
+    index = JSON.parse(fs.readFileSync(path.join(COVERAGE_CACHE, 'index.json'), 'utf8'));
+  } catch {
+    console.warn(`no coverage run at ${COVERAGE_CACHE}, so the map will be empty`);
+    return out;
+  }
+  const root = path.join(COVERAGE_CACHE, 'runs', index.current);
+
+  const walk = (dir, parts) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const next = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(next, parts.concat(entry.name));
+        continue;
+      }
+      if (!entry.name.endsWith('.png')) continue;
+      // parts is preset, layer, zoom, x. The file is y.png.
+      if (parts.length !== 4) continue;
+      if (Number(parts[2]) > MAX_TILE_ZOOM) continue;
+      const key = `/api/coverage/tiles/${parts.join('/')}/${entry.name}`;
+      out[key] = `data:image/png;base64,${fs.readFileSync(next).toString('base64')}`;
+    }
+  };
+
+  walk(root, []);
+  return out;
+}
+
+const tiles = readTiles();
 
 // The traceroute pages put a drawing from the mesh-graph service on
 // the page, and they link to it. That service is another host, and
@@ -152,6 +208,37 @@ const shim = `
     }));
   };
 
+  // Coverage tiles are images. Leaflet asks for them with an <img>, so
+  // the fetch shim above never sees them. Patch the one method that
+  // builds a tile URL and answer from the recording instead.
+  //
+  // A tile that was not recorded is ground the preview never looked at,
+  // and a clear pixel is the right answer for it.
+  var TILES = window.__SONORAN_TILES__ || {};
+  var CLEAR =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk' +
+    'YAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  //
+  // The patch must be in place before the first tile is built, and
+  // app.js runs the router as its last act, while the document is
+  // still parsing. Waiting for DOMContentLoaded is too late: the first
+  // tiles are built, they ask for a file that is not there, and
+  // Leaflet swaps in its error tile and never asks again.
+  //
+  // So this is published and the script right after Leaflet calls it.
+  window.__sonoranPatchLeaflet = function () {
+    if (typeof L === 'undefined' || !L.TileLayer) return false;
+    var original = L.TileLayer.prototype.getTileUrl;
+    L.TileLayer.prototype.getTileUrl = function (coords) {
+      var url = original.call(this, coords);
+      if (url.indexOf('data:') === 0) return url;
+      var key = normalise(new URL(url, location.href).pathname);
+      return TILES[key] || CLEAR;
+    };
+    return true;
+  };
+
   // Two pages need hardware or a WebAssembly engine, so their code is
   // not in this file. Give the router something that does not fail,
   // and say why the page is empty.
@@ -251,6 +338,13 @@ const previewCss = `
 const note = '<div class="sonoran-preview-note">Recorded data</div>';
 
 const parts = [
+  // The character set, first and inside the first bytes of the file.
+  //
+  // The Artifact host writes its own <head>, and index.html's own
+  // <meta charset> is in the head this file does not carry. Without
+  // this a browser guesses, and it guesses wrong: "km²" arrives as
+  // "kmÂ²". A meta this early is hoisted into the head by the parser.
+  '<meta charset="utf-8" />',
   '<title>Sonoran Dashboard</title>',
   `<style>${leafletCss}</style>`,
   `<style>${appCss}</style>`,
@@ -259,12 +353,20 @@ const parts = [
   note,
   `<script>window.SONORAN = ${JSON.stringify(config)};</script>`,
   `<script>window.__SONORAN_RECORDED__ = ${JSON.stringify(recorded)};</script>`,
+  `<script>window.__SONORAN_TILES__ = ${JSON.stringify(tiles)};</script>`,
   `<script>${shim}</script>`,
   `<script>${read('vendor/leaflet.js')}</script>`,
+  // Leaflet is loaded, so the tile lookup can go in now, before
+  // app.js runs the router and the first tile is built.
+  '<script>window.__sonoranPatchLeaflet();</script>',
   `<script>${read('vendor/echarts.min.js')}</script>`,
+  `<script>${read('coverage.js')}</script>`,
   `<script>${read('app.js')}</script>`,
 ];
 
 fs.writeFileSync(OUT, parts.join('\n'));
 const mb = (fs.statSync(OUT).size / 1024 / 1024).toFixed(2);
-console.log(`wrote ${OUT} (${mb} MB, ${Object.keys(recorded).length} recorded responses)`);
+console.log(
+  `wrote ${OUT} (${mb} MB, ${Object.keys(recorded).length} responses, `
+  + `${Object.keys(tiles).length} tiles)`,
+);

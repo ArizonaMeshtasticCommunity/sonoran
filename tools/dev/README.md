@@ -90,11 +90,26 @@ and it asks nothing of the network.
 JSON response. It walks each page, changes each filter, and opens the
 page of each node and of each traceroute.
 
-`artifact.js` puts the markup, the styles, Leaflet, ECharts, and
-`app.js` into one file, with the recording next to them. It replaces
-`window.fetch` with a lookup in the recording. A request that was
-never recorded falls back to the recording for the same path, so a
-filter that was not walked still shows data.
+`artifact.js` puts the markup, the styles, Leaflet, ECharts,
+`coverage.js`, and `app.js` into one file, with the recording next to
+them. It replaces `window.fetch` with a lookup in the recording. A
+request that was never recorded falls back to the recording for the
+same path, so a filter that was not walked still shows data.
+
+The coverage tiles are images, so the fetch shim never sees them.
+`artifact.js` reads them out of the coverage cache instead, which is
+why it wants `COVERAGE_CACHE_DIR`:
+
+```bash
+COVERAGE_CACHE_DIR=/var/lib/sonoran/coverage \
+  node tools/dev/artifact.js /tmp/recording.json /tmp/preview.html
+```
+
+It then patches `L.TileLayer.prototype.getTileUrl` to answer from that
+map. The patch goes in straight after Leaflet loads, not on
+`DOMContentLoaded`: `app.js` runs the router while the document is
+still parsing, so a later patch misses the first tiles, and Leaflet
+swaps in its error tile and never asks again.
 
 The file has page content only. It has no `<html>`, `<head>`, or
 `<body>` tag, so it can be published as a static artifact as it is.

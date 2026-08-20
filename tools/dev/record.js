@@ -90,6 +90,26 @@ async function main() {
     console.log(`  ${name.padEnd(12)} ${hits} responses after the selects`);
   }
 
+  // The coverage map, at each zoom the preview will open at, so its
+  // tiles are asked for and kept. Panning is not needed: the page fits
+  // the coverage when it opens.
+  await visit('coverage');
+  for (const level of [0, 1, 2]) {
+    await page.evaluate((step) => {
+      const state = window.SonoranCoverageState;
+      if (state && state.map) state.map.setZoom(state.map.getZoom() + step);
+    }, level);
+    await page.waitForTimeout(1500);
+  }
+  // And each layer, so the buttons work in the built file.
+  for (const layer of ['downlink', 'uplink', 'usable']) {
+    await page.evaluate((name) => {
+      const buttons = [...document.querySelectorAll('[data-coverage-layers] button')];
+      const wanted = { usable: 0, downlink: 1, uplink: 2 }[name];
+      if (buttons[wanted]) buttons[wanted].click();
+    }, layer);
+    await page.waitForTimeout(1800);
+  }
   // The detail page of every node.
   const nodes = await page.evaluate(async (base) => {
     const r = await fetch(`${base}/api/nodes?limit=100`);
@@ -117,7 +137,7 @@ async function main() {
   console.log(`  traceroutes  ${hits} responses after ${traces.length} trace pages`);
 
   await browser.close();
-  fs.writeFileSync(OUT, JSON.stringify(recorded));
+  fs.writeFileSync(OUT, JSON.stringify({ responses: recorded }));
   const size = (fs.statSync(OUT).size / 1024 / 1024).toFixed(2);
   console.log(`\nsaved ${Object.keys(recorded).length} responses to ${OUT} (${size} MB)`);
 }
