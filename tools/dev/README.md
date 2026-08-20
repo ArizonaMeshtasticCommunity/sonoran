@@ -116,6 +116,27 @@ traceroute pages, the filters, the map, and the graphs. What does not:
 
 Rebuild the file after a change to see the change in it.
 
+## Checking the engine against the browser
+
+The coverage engine is one WebAssembly file. The planner page runs it in
+a browser worker. The coverage job runs it in Python. The two must give
+the same rasters, or a published map and an interactive plan stop
+agreeing and neither page says so.
+
+`tests/unit/test_coverage_engine.py` asserts a hash for a fixed
+scenario. That hash came from the browser. To make it again:
+
+```bash
+./tools/dev/preview.sh              # in one terminal
+node tools/dev/engine_parity.js     # in another
+```
+
+The tool prints the region, the covered cell count, and the hash.
+
+If the test fails, the engine changed. Do not paste the new hash into
+the test to make it pass. Find out what changed. `AGENTS.md` 9.13 says
+the same about the terrain transform.
+
 ## What is not in the preview
 
 - **Ingest.** There is no MQTT broker, so no new packets arrive. The

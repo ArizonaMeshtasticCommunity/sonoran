@@ -39,8 +39,21 @@ form -> engine parameters
 ```
 
 The model runs in the browser. The server only supplies terrain and the
-node list. No prediction is ever computed on the server, and no site
-plan is ever sent to it.
+node list. **No plan made on this page is ever computed on the server,
+and no site plan is ever sent to it.** A person may try a mast anywhere
+without telling anybody where they are thinking of putting it.
+
+That rule is about this page. It is not a rule about the engine.
+
+The coverage map is a different feature and runs the same engine in the
+jobs process, because a map of the whole mesh cannot be recomputed by
+every reader and a public embed must be cacheable. It predicts from the
+nodes the mesh already reports, so it holds no private plan. See
+`sonoran/coverage/` and `docs/ARCHITECTURE.md` 3.6.2.
+
+One WebAssembly file serves both. `tools/dev/engine_parity.js` and
+`tests/unit/test_coverage_engine.py` pin the two to the same rasters, so
+this page and the published map cannot predict different things.
 
 The radials are split between up to four workers. SPLAT! computes each
 point at the first radial that reaches it, so merging the workers in

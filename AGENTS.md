@@ -385,6 +385,29 @@ before the growth points at a buffer that has been thrown away, and
 reads rubbish without raising anything. Every `_splat_malloc` also needs
 a `_splat_free` in a `finally`: the module has no garbage collector.
 
+### 9.16.1 The engine declares integers where JavaScript hides them
+
+`splat_create` takes sixteen values. Three of them are `i32` and the
+rest are `f64`:
+
+    (f64 f64 f64 f64 f64 f64 f64 f64 f64 i32 i32 f64 f64 f64 f64 i32)
+
+The three are the radio climate, the polarization, and the resolution.
+
+JavaScript has one number type and the Emscripten loader converts, so
+`planner.worker.js` can pass `4` or `4.0` and never notice. Python does
+not, and `wasmtime` refuses a float where the module declared an
+integer. Passing `float(climate)` there raises
+
+    TypeError: don't know how to convert 4.0 to i32
+
+and no run starts at all.
+
+`EngineParams.to_arguments` returns the right type for each position,
+and a test asserts the three stay whole numbers. Read the signature out
+of the binary rather than the loader if a fourth is ever added: the
+loader shows none of this.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

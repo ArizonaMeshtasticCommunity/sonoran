@@ -164,6 +164,22 @@ channel, Data message metadata, and receive time.
 - This package must never touch the database. It has the same rule as
   `decode` and `crypto`.
 
+### 3.6.2 `coverage`
+
+- Job: predict where a radio is heard.
+- `units.py` holds the one conversion from metres to feet. SPLAT! reads
+  feet and nothing else here does.
+- `params.py` holds the values the engine takes. It is the Python side
+  of `web/static/planner-params.js`.
+- `engine.py` runs the vendored SPLAT! WebAssembly file with `wasmtime`.
+  The module imports three functions and asks for no files, no clock,
+  and no network.
+- The planner page runs the same file in a browser worker. A hash test
+  pins the two to the same rasters.
+- The engine is under the GNU General Public License, version 3. See
+  `AGENTS.md` 7.1.
+- This package must never touch the database.
+
 ### 3.7 `api`
 
 - Job: serve read-only JSON and static files.
