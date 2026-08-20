@@ -147,6 +147,15 @@ class Settings(BaseSettings):
     coverage_min_zoom: int = 6
     coverage_max_zoom: int = 11
 
+    # Calibration. The job asks the mesh how far the prediction is out,
+    # node by node, from the neighbour reports the nodes publish.
+    calibration_enabled: bool = True
+    calibration_interval_hours: int = 24
+    # How far back to read neighbour reports. `neighbor_metrics` is kept
+    # for RETENTION_DAYS_METRIC days, so a window past that reads
+    # nothing.
+    calibration_window_hours: int = 336
+
     # Radio overrides. The file names the antenna, the mast height, and
     # the power of a node, which the mesh itself never reports. It is
     # kept in the repository, so every change to it has an author and a

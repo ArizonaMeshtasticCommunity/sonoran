@@ -107,7 +107,10 @@ async def select_nodes(session: AsyncSession, settings: Settings) -> Sequence[No
 
 
 def group_by_preset(
-    settings: Settings, nodes: Sequence[Node], overrides: Overrides
+    settings: Settings,
+    nodes: Sequence[Node],
+    overrides: Overrides,
+    offsets: dict[str, float] | None = None,
 ) -> dict[str, list[Site]]:
     """Return the sites of each preset, strongest first.
 
@@ -122,7 +125,9 @@ def group_by_preset(
         if preset is None:
             continue
         identifier = f"!{node.node_num:08x}"
-        profile = resolve_profile(identifier, node.hw_model, overrides)
+        profile = resolve_profile(
+            identifier, node.hw_model, overrides, (offsets or {}).get(identifier)
+        )
         latitude = node.last_lat
         longitude = node.last_lon
         if latitude is None or longitude is None:
@@ -443,6 +448,9 @@ def _build(
         handheld_tx_power_dbm=HANDHELD_TX_POWER_DBM,
         has_terrain=any(page is not None for page in pages.values()),
         has_landcover=have_pages(settings),
+        calibrated_nodes=sum(
+            1 for sites in groups.values() for site in sites if site.profile.is_measured
+        ),
         missing_terrain_tiles=sorted(missing_all),
         seconds=round(time.monotonic() - started, 1),
         data_bounds=union_bounds([item.data_bounds or [] for item in summaries]),
@@ -458,7 +466,13 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     """
     overrides = load_overrides(settings.radio_overrides_path)
     nodes = await select_nodes(session, settings)
-    groups = group_by_preset(settings, nodes, overrides)
+    # What the mesh measured, where there is enough of it. A node
+    # with thin evidence is absent rather than zero, so it keeps its
+    # nameplate figures.
+    offsets = store.calibration_offsets(settings)
+    if offsets:
+        logger.info("%s nodes carry a measured correction", len(offsets))
+    groups = group_by_preset(settings, nodes, overrides, offsets)
     if not groups:
         logger.info("no positioned nodes on a modem preset, so no coverage run")
         return None

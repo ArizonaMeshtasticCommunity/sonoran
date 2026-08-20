@@ -21,7 +21,7 @@ from datetime import UTC, datetime, time, timedelta
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.jobs import coverage, snapshots
+from sonoran.jobs import calibrate, coverage, snapshots
 from sonoran.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -84,6 +84,25 @@ def build_tasks(settings: Settings) -> list[Task]:
             next_delay=_delay_to_next_utc_day,
         )
     ]
+
+    if settings.calibration_enabled:
+
+        async def calibration_run() -> None:
+            engine = make_engine(settings.database_url_jobs)
+            factory = make_session_factory(engine)
+            try:
+                async with factory() as session:
+                    await calibrate.run_once(session, settings)
+            finally:
+                await engine.dispose()
+
+        tasks.append(
+            Task(
+                name="calibration",
+                run=calibration_run,
+                next_delay=lambda: max(settings.calibration_interval_hours, 1) * 3600.0,
+            )
+        )
 
     if settings.coverage_enabled:
 

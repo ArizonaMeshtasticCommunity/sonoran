@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.api.dependencies import get_session, parse_node_id
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
 from sonoran.api.schemas import NodeSummary
+from sonoran.coverage.store import calibration_offsets
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
@@ -460,8 +461,10 @@ async def node_radio(
         raise HTTPException(status_code=404, detail="node not found")
 
     identifier = format_node_id(node_num)
+    settings = request.app.state.settings
     overrides = request.app.state.radio_overrides
-    profile = resolve_profile(identifier, node.hw_model, overrides)
+    offsets = calibration_offsets(settings)
+    profile = resolve_profile(identifier, node.hw_model, overrides, offsets.get(identifier))
 
     return {
         "node_id": identifier,

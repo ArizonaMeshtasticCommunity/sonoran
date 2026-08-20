@@ -24,9 +24,17 @@ import json
 import shutil
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sonoran.config import Settings
+from sonoran.coverage.calibrate import (
+    MAX_TRUSTED_SPREAD_DB,
+    MIN_COUNTERPARTIES,
+    MIN_OBSERVATIONS,
+    MIN_REPORTED,
+    Calibration,
+)
 from sonoran.logging import get_logger
 
 logger = get_logger(__name__)
@@ -40,6 +48,7 @@ KEEP_RUNS = 2
 
 INDEX_NAME = "index.json"
 MANIFEST_NAME = "manifest.json"
+CALIBRATION_NAME = "calibration.json"
 
 # The layers a run writes.
 #
@@ -90,6 +99,7 @@ class Manifest:
     handheld_tx_power_dbm: float
     has_terrain: bool
     has_landcover: bool
+    calibrated_nodes: int
     missing_terrain_tiles: list[str]
     seconds: float
     data_bounds: list[float] | None = None
@@ -218,3 +228,89 @@ def read_tile(
         return path.read_bytes()
     except (OSError, ValueError):
         return None
+
+
+# --- the calibration ---------------------------------------------------
+#
+# The calibration lives beside the runs rather than in a database table.
+# It is a computed thing, like the tiles: a run of the job replaces it
+# whole, nothing else writes it, and the API only reads it. A table
+# would need a fourth database role and a migration to hold a file that
+# one process writes and one process reads.
+
+
+def calibration_path(settings: Settings) -> Path:
+    """Return where the calibration is kept."""
+    return Path(settings.coverage_cache_dir) / CALIBRATION_NAME
+
+
+def write_calibration(
+    settings: Settings, calibration: Calibration, summary: dict[str, float]
+) -> None:
+    """Write the calibration, in one step.
+
+    The file is written beside itself and moved into place, so a reader
+    never sees half of it.
+    """
+    document = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "summary": summary,
+        **asdict(calibration),
+    }
+    path = calibration_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(document, indent=1), encoding="utf-8")
+    temporary.replace(path)
+    logger.info("wrote the calibration for %s nodes", len(calibration.nodes))
+
+
+def read_calibration(settings: Settings) -> dict[str, object] | None:
+    """Return the calibration, or None when there is none.
+
+    A deployment that has never run the job has none, and a deployment
+    whose file is broken must still draw a map. Both give None, and the
+    prediction then uses the nameplate figures.
+    """
+    try:
+        document = json.loads(calibration_path(settings).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def calibration_offsets(settings: Settings) -> dict[str, float]:
+    """Return the offsets that have enough evidence, by node ID.
+
+    This is what a prediction reads. A node with thin evidence is absent
+    rather than present with a zero, so a caller can tell "measured and
+    found to be right" from "never measured".
+    """
+    document = read_calibration(settings)
+    if document is None:
+        return {}
+    # A fit whose measurements disagree this widely is not describing
+    # the mesh. Correcting on it would move the map on noise.
+    raw_spread = document.get("residual_spread_db")
+    spread = float(raw_spread) if isinstance(raw_spread, int | float) else 0.0
+    if spread > MAX_TRUSTED_SPREAD_DB:
+        logger.warning(
+            "the calibration scatter is %.1f dB, so the nameplate figures are used", spread
+        )
+        return {}
+    offsets: dict[str, float] = {}
+    nodes = document.get("nodes")
+    if not isinstance(nodes, list):
+        return {}
+    for item in nodes:
+        if not isinstance(item, dict):
+            continue
+        usable = (
+            int(item.get("observations") or 0) >= MIN_OBSERVATIONS
+            and int(item.get("counterparties") or 0) >= MIN_COUNTERPARTIES
+            and int(item.get("reported") or 0) >= MIN_REPORTED
+        )
+        node_id = item.get("node_id")
+        if usable and isinstance(node_id, str):
+            offsets[node_id] = float(item.get("offset_db") or 0.0)
+    return offsets

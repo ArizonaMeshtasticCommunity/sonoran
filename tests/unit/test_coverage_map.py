@@ -423,6 +423,7 @@ def _manifest(stamp: str) -> Manifest:
         handheld_tx_power_dbm=22.0,
         has_terrain=True,
         has_landcover=False,
+        calibrated_nodes=0,
         missing_terrain_tiles=[],
         seconds=1.0,
         presets=[
