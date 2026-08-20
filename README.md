@@ -107,6 +107,20 @@ The integration tests start a real TimescaleDB in a throwaway container with
 [testcontainers](https://testcontainers.com/). They need Docker, and they skip
 when Docker is not available.
 
+### Preview a change
+
+To see a change in a browser while you make it, start the local preview:
+
+```bash
+./tools/dev/preview.sh
+```
+
+It starts a TimescaleDB container, runs the migrations, fills the database
+with made-up data, and serves the dashboard at <http://127.0.0.1:8000> with
+hot reload. The web UI has no build step, so a change to the HTML, the CSS,
+or the JavaScript needs only a refresh. See
+[tools/dev/README.md](tools/dev/README.md).
+
 Run one service outside Compose by pointing the database URLs at a reachable
 TimescaleDB and running its entry point:
 
