@@ -71,6 +71,51 @@ node tools/dev/shot.js "/#stats" /tmp/stats.png 1920 1080
 The arguments are the path, the output file, the width, and the
 height. Only the path and the output file are necessary.
 
+## A preview you can share
+
+`preview.sh` needs Docker and a checkout. To show a change to someone
+who has neither, build a single HTML file that holds the whole
+dashboard and a recording of the API:
+
+```bash
+./tools/dev/preview.sh                              # in one terminal
+node tools/dev/record.js /tmp/recording.json        # in another
+node tools/dev/artifact.js /tmp/recording.json /tmp/preview.html
+```
+
+The file is about 1.8 MB. It opens in any browser, from a file:// URL,
+and it asks nothing of the network.
+
+`record.js` drives the dashboard with a real browser and keeps every
+JSON response. It walks each page, changes each filter, and opens the
+page of each node and of each traceroute.
+
+`artifact.js` puts the markup, the styles, Leaflet, ECharts, and
+`app.js` into one file, with the recording next to them. It replaces
+`window.fetch` with a lookup in the recording. A request that was
+never recorded falls back to the recording for the same path, so a
+filter that was not walked still shows data.
+
+The file has page content only. It has no `<html>`, `<head>`, or
+`<body>` tag, so it can be published as a static artifact as it is.
+
+What works in the file: every page in the sidebar, the node pages, the
+traceroute pages, the filters, the map, and the graphs. What does not:
+
+- **The clock.** The data is from the moment of the recording. A panel
+  that counts the last 15 minutes shows nothing, because that window
+  has passed.
+- **The coverage planner and the config check.** Both need something
+  the file cannot hold. Each says so on its own page.
+- **The mesh-graph drawings.** The build removes the links to that
+  service, because the file must not ask another host for anything.
+- **The map tiles.** The nodes and the links draw on an empty
+  background.
+- **Save as image.** ECharts offers it, but a published artifact
+  cannot hand a file to the viewer.
+
+Rebuild the file after a change to see the change in it.
+
 ## What is not in the preview
 
 - **Ingest.** There is no MQTT broker, so no new packets arrive. The
