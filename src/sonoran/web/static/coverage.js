@@ -284,6 +284,116 @@
     );
   }
 
+  async function drawCalibration(page) {
+    const host = $('[data-coverage-calibration]', page);
+    if (!host) return;
+
+    let report = null;
+    try {
+      const response = await fetch(api('api/coverage/calibration'));
+      if (response.ok) report = await response.json();
+    } catch (error) {
+      console.warn('calibration unavailable', error);
+    }
+
+    if (!report || !report.available) {
+      replace(
+        host,
+        el('p', {
+          class: 'muted',
+          text: 'The mesh has not been measured against the model yet. The job runs daily '
+            + 'and reads the neighbour reports that nodes publish.',
+        }),
+      );
+      return;
+    }
+
+    const summary = report.summary || {};
+    const trusted = report.applied_count > 0;
+    const head = el(
+      'p',
+      { style: 'display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:0 0 .7rem' },
+      flag(trusted, trusted
+        ? `${report.applied_count} nodes corrected`
+        : 'No node corrected'),
+      el('span', {
+        class: 'coverage-flag',
+        text: `${Math.round(summary.count || 0)} links, ${Math.round(summary.censored || 0)} silent`,
+      }),
+      el('span', {
+        class: 'coverage-flag',
+        text: `scatter ${report.residual_spread_db} dB`,
+      }),
+    );
+
+    const rows = (report.nodes || [])
+      .slice()
+      .sort((a, b) => Math.abs(b.offset_db) - Math.abs(a.offset_db))
+      .slice(0, 40)
+      .map((node) =>
+        el(
+          'tr',
+          {},
+          el(
+            'td',
+            {},
+            el('button', {
+              class: 'linky',
+              type: 'button',
+              text: node.node_id,
+              onclick: () => {
+                location.hash = `node/${node.node_id}`;
+              },
+            }),
+          ),
+          el('td', {
+            class: 'num',
+            text: `${node.offset_db > 0 ? '+' : ''}${node.offset_db} dB`,
+          }),
+          el('td', { class: 'num', text: String(node.reported) }),
+          el('td', { class: 'num', text: String(node.censored) }),
+          el('td', { class: 'num', text: String(node.counterparties) }),
+          el('td', { class: 'num', text: `${node.residual_spread_db} dB` }),
+          el('td', { text: node.applied ? 'applied' : 'not enough' }),
+        ),
+      );
+
+    replace(
+      host,
+      head,
+      el(
+        'p',
+        { class: 'muted', style: 'font-size:.82rem;margin:0 0 .7rem' },
+        'A silent link is one the model expected and no node reported. Counting only the '
+          + 'links that worked would say every node is better than it is.',
+      ),
+      el(
+        'div',
+        { class: 'table-wrap' },
+        el(
+          'table',
+          {},
+          el(
+            'thead',
+            {},
+            el(
+              'tr',
+              {},
+              el('th', { text: 'Node' }),
+              el('th', { class: 'num', text: 'Measured' }),
+              el('th', { class: 'num', text: 'Heard' }),
+              el('th', { class: 'num', text: 'Silent' }),
+              el('th', { class: 'num', text: 'Peers' }),
+              el('th', { class: 'num', text: 'Scatter' }),
+              el('th', { text: 'State' }),
+            ),
+          ),
+          el('tbody', {}, rows),
+        ),
+      ),
+    );
+  }
+
   function drawSites(page) {
     const host = $('[data-coverage-sites]', page);
     if (!host) return;
@@ -355,6 +465,7 @@
     drawAssumes(page);
     drawSites(page);
     drawTiles();
+    drawCalibration(page);
   }
 
   /* ------------------------------------------------------------ show */

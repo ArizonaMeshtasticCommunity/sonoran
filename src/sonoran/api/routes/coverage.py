@@ -51,6 +51,40 @@ async def coverage_summary(request: Request) -> dict[str, object]:
     }
 
 
+@router.get("/calibration")
+async def coverage_calibration(request: Request) -> dict[str, object]:
+    """Return what the mesh measured against what the model predicted.
+
+    This is where a node that is not what its nameplate says becomes
+    visible. `offset_db` is how far the mesh puts it from that
+    nameplate. A node with thin evidence is listed with its counts and
+    is not applied.
+
+    `applied` says whether the fit as a whole is trusted. A fit whose
+    measurements still disagree widely describes nothing, and the map
+    keeps its nameplate figures instead of moving on noise.
+    """
+    settings = request.app.state.settings
+    document = store.read_calibration(settings)
+    if document is None:
+        return {"available": False, "nodes": []}
+    applied = store.calibration_offsets(settings)
+    nodes = document.get("nodes")
+    return {
+        "available": True,
+        "generated_at": document.get("generated_at"),
+        "summary": document.get("summary"),
+        "model_bias_db": document.get("model_bias_db"),
+        "residual_spread_db": document.get("residual_spread_db"),
+        "applied_count": len(applied),
+        "nodes": [
+            {**item, "applied": item.get("node_id") in applied}
+            for item in (nodes if isinstance(nodes, list) else [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
 @router.get("/tiles/{preset}/{layer}/{zoom}/{x}/{y}.png")
 async def coverage_tile(
     request: Request,
