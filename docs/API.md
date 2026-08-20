@@ -160,6 +160,50 @@ Response:
 }
 ```
 
+### 3.10 `GET /api/nodes/{node_id}/radio`
+
+Returns the radio characteristics a coverage prediction would use.
+
+The mesh reports the hardware model and nothing else about the radio.
+The other values come from the overrides file named by
+`RADIO_OVERRIDES_PATH`, and from the calibration job.
+
+`sources` names where each value came from. It is the reason this
+endpoint exists: a reader must be able to tell a measurement from a
+guess. Its values are `default`, `hardware`, `override`, and
+`calibrated`.
+
+`eirp_dbm` is the nameplate power leaving the antenna.
+`effective_eirp_dbm` is the figure the coverage map predicts with. They
+differ when the calibration job has moved the node.
+
+`hardware_inferred` is true when the hardware model was not in the
+table and its figures were worked out from the name.
+
+Response:
+
+```json
+{
+  "node_id": "!a1b2c3d4",
+  "display_name": "Example Node",
+  "hw_model": "RAK4631",
+  "chipset": "SX1262",
+  "hardware_inferred": false,
+  "tx_power_dbm": 22.0,
+  "antenna_gain_dbi": 5.8,
+  "antenna_height_m": 12.0,
+  "cable_loss_db": 1.5,
+  "above_clutter": true,
+  "eirp_dbm": 26.3,
+  "effective_eirp_dbm": 26.3,
+  "calibration_offset_db": 0.0,
+  "is_measured": false,
+  "locked": false,
+  "note": "Rooftop omni on the water tank.",
+  "sources": { "antenna_gain_dbi": "override", "tx_power_dbm": "hardware" }
+}
+```
+
 ## 4. Packet endpoints
 
 ### 4.1 `GET /api/packets`

@@ -107,6 +107,13 @@ class Settings(BaseSettings):
     terrain_lon_min: int = -116
     terrain_lon_max: int = -109
 
+    # Radio overrides. The file names the antenna, the mast height, and
+    # the power of a node, which the mesh itself never reports. It is
+    # kept in the repository, so every change to it has an author and a
+    # review. A file that is not there gives no overrides, which is a
+    # working state.
+    radio_overrides_path: str = "config/nodes.yaml"
+
     # Logging.
     log_level: str = "INFO"
 

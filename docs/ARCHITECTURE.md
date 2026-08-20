@@ -147,6 +147,23 @@ channel, Data message metadata, and receive time.
 - `migrations/` has the Alembic environment and revisions.
 - No business logic lives here.
 
+### 3.6.1 `radio`
+
+- Job: say what radio a node has.
+- `presets.py` is the one modem preset table. It holds the spreading
+  factor, the bandwidth, and the sensitivity of each preset, and the
+  noise floor that turns a reported SNR into a received power.
+- `hardware.py` maps a hardware model to the radio in it. The transmit
+  power and the antenna gain in it are assumptions, not facts.
+- `overrides.py` reads the operator file named by
+  `RADIO_OVERRIDES_PATH`.
+- `resolve.py` puts the three together. It is the only place that
+  decides the radio characteristics of a node, so the coverage job, the
+  calibration job, and the API cannot disagree.
+- Every resolved value carries the name of its source.
+- This package must never touch the database. It has the same rule as
+  `decode` and `crypto`.
+
 ### 3.7 `api`
 
 - Job: serve read-only JSON and static files.

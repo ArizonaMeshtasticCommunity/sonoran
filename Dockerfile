@@ -13,6 +13,9 @@ COPY pyproject.toml ./
 COPY README.md ./
 COPY alembic.ini ./
 COPY docs ./docs
+# The radio overrides name the antenna and the mast of a node. The
+# coverage prediction reads them, so they must be in the image.
+COPY config ./config
 COPY src ./src
 RUN uv pip install --system --no-cache .
 

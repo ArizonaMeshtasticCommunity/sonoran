@@ -28,6 +28,7 @@ from sonoran.api.routes.traceroutes import router as traceroutes_router
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.logging import configure_logging, get_logger
+from sonoran.radio.overrides import load_overrides
 
 logger = get_logger(__name__)
 
@@ -185,6 +186,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         root_path=settings.web_base_path.rstrip("/"),
     )
     app.state.settings = settings
+    # The radio overrides are read once. The file is in the repository
+    # and ships with the image, so a change to it arrives with a deploy.
+    app.state.radio_overrides = load_overrides(settings.radio_overrides_path)
     app.add_middleware(SecurityHeadersMiddleware)
     app.include_router(nodes_router)
     app.include_router(chat_router)

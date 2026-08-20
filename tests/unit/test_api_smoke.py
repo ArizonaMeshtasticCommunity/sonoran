@@ -199,6 +199,22 @@ def test_registered_api_routes_are_read_only() -> None:
             assert methods <= {"GET"}
 
 
+def test_the_radio_route_is_registered() -> None:
+    """The coverage work reads a node's radio through the API."""
+    paths = {route.path for route in nodes.router.routes}
+    assert "/api/nodes/{node_id}/radio" in paths
+
+
+def test_the_radio_overrides_are_read_once_at_startup() -> None:
+    """Reading the file for each request would be waste.
+
+    The file ships with the image, so a change to it arrives with a
+    deploy and never during the life of a process.
+    """
+    app = create_app(Settings(_env_file=None, radio_overrides_path="does-not-exist.yaml"))
+    assert app.state.radio_overrides.nodes == {}
+
+
 def test_core_documented_routes_are_registered() -> None:
     """The primary documented route groups are present."""
     routers = (

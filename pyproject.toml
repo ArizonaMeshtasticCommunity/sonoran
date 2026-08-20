@@ -18,6 +18,9 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    # pyyaml reads the radio overrides file, which names the antenna and
+    # the mast of a node. The mesh cannot report either.
+    "pyyaml>=6.0",
     "sqlalchemy[asyncio]>=2.0.36",
     "uvicorn[standard]>=0.32",
 ]
