@@ -23,13 +23,14 @@ RUN uv pip install --system --no-cache .
 RUN useradd --create-home --uid 10001 azmsh
 RUN chown -R azmsh:azmsh /app
 
-# The terrain cache for the coverage planner.
+# The caches for the coverage planner and the coverage map.
 #
 # This directory must exist in the image and must belong to the
 # application user. Docker gives a new named volume the owner of the
 # directory it covers, so without this the volume belongs to root and
 # the process cannot write a single page.
-RUN mkdir -p /var/lib/sonoran/terrain && chown -R azmsh:azmsh /var/lib/sonoran
+RUN mkdir -p /var/lib/sonoran/terrain /var/lib/sonoran/landcover /var/lib/sonoran/coverage \
+    && chown -R azmsh:azmsh /var/lib/sonoran
 
 USER azmsh
 

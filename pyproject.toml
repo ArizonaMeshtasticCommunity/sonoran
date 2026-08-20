@@ -42,7 +42,7 @@ dev = [
 [project.scripts]
 sonoran-api = "sonoran.api.app:run"
 sonoran-ingest = "sonoran.ingest.pipeline:run"
-sonoran-jobs = "sonoran.jobs.snapshots:run"
+sonoran-jobs = "sonoran.jobs.scheduler:run"
 
 [build-system]
 requires = ["hatchling"]

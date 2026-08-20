@@ -22,7 +22,15 @@ Three processes share one Python package:
 |---------|-------------------|---------------|
 | ingest | `sonoran.ingest.pipeline:main` | INSERT and UPDATE only |
 | api | `sonoran.api.app:create_app` | SELECT only |
-| jobs | `sonoran.jobs.*:main` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
+| jobs | `sonoran.jobs.scheduler:run` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
+
+The jobs process runs each task on its own clock. The daily snapshot
+takes a moment. The coverage run takes minutes and runs several times a
+day. One loop would make the snapshot wait for the coverage run.
+
+The coverage job writes no database row. It writes tiles and a manifest
+to disk, because the tiles are the run, and holding the two apart lets
+them disagree.
 
 The database roles are enforced by PostgreSQL grants.
 The grants are part of the first migration.
@@ -174,6 +182,14 @@ channel, Data message metadata, and receive time.
 - `engine.py` runs the vendored SPLAT! WebAssembly file with `wasmtime`.
   The module imports three functions and asks for no files, no clock,
   and no network.
+- `grid.py` is the only place that decides how a raster maps to the
+  ground. Every engine raster shares one lattice, so a raster is placed
+  on the region grid rather than resampled onto it.
+- `sites.py` turns a node into a prediction, and one prediction into
+  both directions of a link.
+- `render.py` colours a grid and writes map tiles.
+- `store.py` keeps a run on disk. A run is one directory and becomes
+  visible in one step, so a reader never sees half of one.
 - The planner page runs the same file in a browser worker. A hash test
   pins the two to the same rasters.
 - The engine is under the GNU General Public License, version 3. See

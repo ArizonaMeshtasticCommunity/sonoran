@@ -204,6 +204,52 @@ Response:
 }
 ```
 
+## 3A. Coverage map endpoints
+
+The coverage job predicts from every node the mesh reports and writes
+map tiles. These endpoints serve what it wrote. They compute nothing.
+
+### 3A.1 `GET /api/coverage`
+
+Returns the current coverage run.
+
+`available` is false when the job has never run. That is a working
+state for a new deployment, not a fault.
+
+The response carries the manifest of the run: `generated_at`, `bounds`
+of the whole region, `data_bounds` of the coverage itself, `min_zoom`
+and `max_zoom`, the receiver the map assumes, `has_terrain`,
+`has_landcover`, `missing_terrain_tiles`, and one entry for each modem
+preset with its node counts, its covered area, and the sites it used.
+
+A page must open on `data_bounds`, not on `bounds`. The region covers
+every degree the terrain service serves, which is far more ground than
+any mesh reaches.
+
+### 3A.2 `GET /api/coverage/tiles/{preset}/{layer}/{z}/{x}/{y}.png`
+
+Returns one coverage tile, 256 pixels square, in the usual web map
+scheme.
+
+`preset` is a modem preset name, such as `LongFast`. A preset is a
+radio configuration, not a filter: a node on one preset cannot hear a
+node on another, so each has its own coverage. See `AGENTS.md` 9.7.
+
+`layer` is one of:
+
+| Layer | Meaning |
+|---|---|
+| `usable` | The weaker of the two directions. The honest answer, and what a page shows first |
+| `downlink` | A node is heard here |
+| `uplink` | Here is heard by a node |
+
+A tile that was never written is ground no node reaches, and returns
+404. A map library already knows how to draw that.
+
+Tiles of one run never change, so they carry a long `Cache-Control` and
+an `ETag` that holds the run stamp. A new run makes every tile fresh
+again.
+
 ## 4. Packet endpoints
 
 ### 4.1 `GET /api/packets`

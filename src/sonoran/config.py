@@ -107,6 +107,46 @@ class Settings(BaseSettings):
     terrain_lon_min: int = -116
     terrain_lon_max: int = -109
 
+    # Land cover. The pages say what stands on the ground, so a
+    # prediction can charge the clutter loss that ITM leaves out. Make
+    # them once with tools/prefetch_landcover.py. A deployment with no
+    # pages predicts with no clutter, which is what the planner has
+    # always done.
+    landcover_cache_dir: str = "/var/lib/sonoran/landcover"
+
+    # Coverage map. The job predicts from every node the mesh reports
+    # and writes the result here, as tiles a browser can cache.
+    coverage_cache_dir: str = "/var/lib/sonoran/coverage"
+    coverage_enabled: bool = True
+    # How often the job runs. A run costs about a second for each node,
+    # so a large mesh takes minutes. It must not hold up the daily
+    # snapshot, which is why the jobs process schedules them apart.
+    coverage_interval_hours: int = 6
+    # A node the mesh has not heard from in this long is left out. A
+    # node that is gone must not hold coverage open.
+    coverage_active_hours: int = 168
+    # How far each node is predicted to reach, in kilometres. Past this
+    # the prediction is cut, so a figure below the real reach of a tall
+    # router understates the mesh.
+    coverage_radius_km: float = 60.0
+    # The largest number of nodes one run predicts from. The strongest
+    # sites are taken first. It is a guard against a run that never
+    # ends, not a limit anybody should want to reach.
+    coverage_max_nodes: int = 600
+    # The receiver the map assumes: a handheld with a stock antenna,
+    # held about a metre and a half above the ground.
+    coverage_rx_height_m: float = 1.5
+    coverage_rx_gain_dbi: float = 2.15
+    # How many worker processes predict at once. Zero means as many
+    # as the machine has, less one, so the jobs process keeps a core
+    # for everything else it does.
+    coverage_workers: int = 0
+    # The zoom levels of tile that the job writes. Level 11 is about
+    # 76 m for each pixel, which is finer than the 90 m terrain, so
+    # there is nothing to gain past it.
+    coverage_min_zoom: int = 6
+    coverage_max_zoom: int = 11
+
     # Radio overrides. The file names the antenna, the mast height, and
     # the power of a node, which the mesh itself never reports. It is
     # kept in the repository, so every change to it has an author and a

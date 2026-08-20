@@ -33,6 +33,11 @@ services:
       # Terrain pages for the coverage planner. They are made once and
       # never change, so they must survive a rebuild of the image.
       - terrain_cache:/var/lib/sonoran/terrain
+      # Land cover pages, made once by tools/prefetch_landcover.py.
+      - landcover_cache:/var/lib/sonoran/landcover
+      # The coverage tiles. The jobs service writes them and this one
+      # serves them.
+      - coverage_cache:/var/lib/sonoran/coverage
     ports:
       - "8000:8000"
 
@@ -62,6 +67,13 @@ services:
     restart: unless-stopped
     command: ["sonoran-jobs"]
     env_file: .env
+    volumes:
+      # The coverage job reads terrain and land cover, and writes the
+      # coverage tiles the API serves. All three are shared with the
+      # api service, which only reads them.
+      - terrain_cache:/var/lib/sonoran/terrain
+      - landcover_cache:/var/lib/sonoran/landcover
+      - coverage_cache:/var/lib/sonoran/coverage
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -84,3 +96,5 @@ volumes:
   tsdb_data:
   meshgraph_data:
   terrain_cache:
+  landcover_cache:
+  coverage_cache:

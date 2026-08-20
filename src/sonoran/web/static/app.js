@@ -1459,6 +1459,15 @@ function graphTabs(page, all) {
  * file. It has its own map, its own workers and a vendored WebAssembly
  * engine, so it is kept out of this file.
  */
+/*
+ * The coverage map lives in coverage.js, which loads before this file.
+ * It draws what the coverage job already computed and predicts nothing
+ * itself, so it needs no workers and no engine.
+ */
+PAGES.coverage = async (page) => {
+  await window.SonoranCoverage.show(page);
+};
+
 PAGES.planner = async () => {
   await window.SonoranPlanner.show();
 };

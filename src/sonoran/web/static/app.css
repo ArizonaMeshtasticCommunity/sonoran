@@ -535,3 +535,91 @@ div.check { cursor: default; }
 .pill.info { color: var(--muted); }
 
 .notice.good { border-color: var(--good); color: var(--good); }
+
+/* Coverage map */
+
+#coverage-map { height: min(70vh, 40rem); width: 100%; }
+
+.coverage-pick { display: flex; align-items: center; gap: .45rem; font-size: .85rem; color: var(--muted); }
+
+.coverage-layers { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .85rem; }
+
+/*
+ * The layer buttons read as one control, so they sit in a row and the
+ * chosen one is filled rather than outlined. A reader must be able to
+ * tell at a glance which question the map is answering.
+ */
+.coverage-layers button {
+  font: inherit;
+  font-size: .82rem;
+  padding: .38rem .8rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+.coverage-layers button:hover { border-color: var(--accent-soft); color: var(--text); }
+.coverage-layers button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1b1109;
+  font-weight: 600;
+}
+.coverage-layers button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.coverage-legend {
+  position: absolute;
+  right: .75rem;
+  bottom: .75rem;
+  z-index: 500;
+  background: rgba(34, 24, 17, .92);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .55rem .7rem;
+  min-width: 12rem;
+  pointer-events: none;
+}
+.coverage-legend-title {
+  display: block;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  margin-bottom: .4rem;
+}
+/* The stops are the ramp in coverage/render.py. Keep the two the same. */
+.coverage-ramp {
+  height: .5rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #7d6857 0%, #c9512a 25%, #f4703f 50%, #edc04b 75%, #8cb369 100%
+  );
+}
+.coverage-scale {
+  display: flex;
+  justify-content: space-between;
+  font: var(--mono);
+  font-size: .68rem;
+  color: var(--muted);
+  margin-top: .3rem;
+}
+
+.coverage-assumes p { margin: 0 0 .5rem; color: var(--muted); font-size: .87rem; line-height: 1.55; }
+.coverage-assumes p:last-child { margin-bottom: 0; }
+.coverage-assumes strong { color: var(--text); font-weight: 600; }
+
+.coverage-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .75rem;
+  border-radius: 999px;
+  padding: .12rem .5rem;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.coverage-flag.warn { border-color: var(--warn); color: var(--warn); }
+.coverage-flag.good { border-color: var(--good); color: var(--good); }
