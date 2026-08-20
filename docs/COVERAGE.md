@@ -205,6 +205,30 @@ square of `COVERAGE_RADIUS_KM`. A radius below the real reach of a tall
 router understates the mesh, and one far above it costs time for
 coverage nobody has.
 
+A measured run, on four cores with three workers, at the default 60 km
+radius and zoom 6 to 11:
+
+| | |
+|---|---|
+| Sites | 284, over two presets |
+| Time | 1931 s, which is 32 minutes |
+| Rate | 25 sites every 165 s, and it did not slow down |
+| Tiles written | 3309 |
+| Memory | About 1 GB for the whole run, flat |
+
+The rate held from the first quarter to the last, which is what a
+bounded working set looks like. See 9.2.
+
+That is well inside `COVERAGE_INTERVAL_HOURS`, which is 6 by default.
+The scheduler waits for a task to finish and only then counts the
+delay, so a run that took longer than its interval would push the next
+one out rather than start beside it. At the `COVERAGE_MAX_NODES` cap of
+600 the same machine would take about 70 minutes, which still fits.
+
+The machine this was measured on held 24 of the 64 terrain tiles the
+run wanted, so part of it predicted over flat ground. A deployment with
+the whole cache is slower than this, not faster.
+
 ### 9.2 What a run holds in memory
 
 Memory, not time, is what stops a large run. A three hundred node run

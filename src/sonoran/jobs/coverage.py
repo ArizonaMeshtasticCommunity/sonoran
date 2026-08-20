@@ -19,6 +19,7 @@ sites themselves are divided over worker processes.
 """
 
 import asyncio
+import multiprocessing
 import os
 import time
 from collections import OrderedDict
@@ -301,6 +302,27 @@ _WORKER_INSTANCE: SplatInstance | None = None
 SiteResult = tuple[bytes, int, int, float, float, list[str]]
 
 
+def _pool_context() -> multiprocessing.context.BaseContext:
+    """Return the way to start a worker process.
+
+    Spawn, and never fork. `_build` runs in a worker thread, because
+    the engine would otherwise hold the event loop of the whole jobs
+    process. Fork copies only the thread that calls it, so a lock any
+    other thread held at that moment is held for ever in the child. The
+    logging lock is the one that does it here, and this job logs from
+    the main thread while it works.
+
+    A forked worker then blocks before it runs a single instruction of
+    `_worker_start`. There is no error and no timeout: the run simply
+    never finishes, and the scheduler waits on a task that never
+    returns. Spawn starts a new interpreter and inherits no locks.
+
+    `test_a_run_over_worker_processes_answers_the_same` found this. See
+    `AGENTS.md` 9.16.5.
+    """
+    return multiprocessing.get_context("spawn")
+
+
 def _worker_start() -> None:
     """Set up one worker process.
 
@@ -415,7 +437,9 @@ def _predict(
                 take(index, site, _to_plain(_site_levels(instance, settings, site)))
         return downlink, uplink, notes, missing
 
-    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_start) as pool:
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=_worker_start, mp_context=_pool_context()
+    ) as pool:
         computed = pool.map(partial(_worker_site, settings), sites, chunksize=1)
         for index, (site, result) in enumerate(zip(sites, computed, strict=True)):
             take(index, site, result)

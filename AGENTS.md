@@ -461,6 +461,32 @@ problem: it instantiates the module once and memoises the promise.
 So one instance for each process, held for every site. Use `close`, or
 the instance as a context manager, for a caller that must let one go.
 
+### 9.16.5 A worker process is started by spawn, never by fork
+
+`jobs/coverage.py` builds in a worker thread, because the engine holds
+the processor and would otherwise stop the event loop of the whole jobs
+process. It starts worker processes from inside that thread.
+
+Fork copies only the thread that calls it. A lock that any other thread
+held at that moment is held for ever in the child, and the logging lock
+is the one that does it: this job logs from the main thread while it
+works. The child then blocks before it runs a single instruction of the
+initialiser.
+
+There is no error and no timeout. The pool waits for a result that
+never comes, the run never finishes, and the scheduler waits on a task
+that never returns. It was found with two workers sitting in
+`futex_wait` with no processor time at all, twenty minutes after they
+were made.
+
+It does not fail every time, which is worse. A run whose main thread
+happens to hold no lock at the moment of the fork works.
+
+    ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn"))
+
+Spawn starts a new interpreter and inherits no locks. It costs about a
+second for each worker, once, against a run of half an hour.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

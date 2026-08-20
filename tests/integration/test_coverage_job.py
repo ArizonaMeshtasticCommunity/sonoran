@@ -33,6 +33,10 @@ def _jobs_url(timescale_url: str) -> str:
 
 
 def _settings(timescale_url: str, tmp_path: Path, **extra: object) -> Settings:
+    # One process unless a test asks otherwise, so a test is about the
+    # pipeline. `test_a_run_over_worker_processes_answers_the_same` is
+    # the one that asks otherwise.
+    extra.setdefault("coverage_workers", 1)
     return Settings(
         _env_file=None,
         database_url_jobs=_jobs_url(timescale_url),
@@ -45,7 +49,6 @@ def _settings(timescale_url: str, tmp_path: Path, **extra: object) -> Settings:
         coverage_radius_km=8.0,
         coverage_min_zoom=7,
         coverage_max_zoom=8,
-        coverage_workers=1,
         **extra,
     )
 
@@ -386,3 +389,50 @@ def test_the_jobs_role_never_writes_a_table_for_this(
     assert after == before
 
     assert json.loads(store.index_path(settings).read_text(encoding="utf-8"))["current"]
+
+
+def test_a_run_over_worker_processes_answers_the_same(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The path production takes, which one process does not exercise.
+
+    `COVERAGE_WORKERS` is zero by default, which means as many as the
+    machine has less one, so a deployment nearly always predicts over a
+    pool. Everything a site needs is pickled to get there. A `Settings`
+    or a `Site` that stopped pickling would leave every other test in
+    this file green and break every real run.
+
+    The answer must also be the same either way. The pool returns in
+    the order the sites were given, not the order they finished.
+    """
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900070, 33.45, -112.07)
+        _add_node(connection, 900071, 33.50, -112.02)
+        _add_node(connection, 900072, 33.40, -112.12)
+
+    alone = _run(_settings(timescale_url, tmp_path / "alone"), coverage.run_once)
+    pooled = _run(
+        _settings(timescale_url, tmp_path / "pooled", coverage_workers=2), coverage.run_once
+    )
+    assert alone is not None and pooled is not None
+
+    assert pooled.presets[0].node_count == 3
+    assert pooled.presets[0].tile_count == alone.presets[0].tile_count
+    assert pooled.presets[0].usable_area_km2 == alone.presets[0].usable_area_km2
+    assert pooled.presets[0].data_bounds == alone.presets[0].data_bounds
+
+    # Every site must be named, in the order the sites were given.
+    assert [note["node_id"] for note in pooled.presets[0].nodes] == [
+        note["node_id"] for note in alone.presets[0].nodes
+    ]
+
+    # And the tiles themselves, byte for byte.
+    alone_root = store.current_root(_settings(timescale_url, tmp_path / "alone"))
+    pooled_root = store.current_root(_settings(timescale_url, tmp_path / "pooled"))
+    assert alone_root is not None and pooled_root is not None
+    written = sorted(path.relative_to(pooled_root) for path in pooled_root.glob("**/*.png"))
+    assert written, "the run must write tiles for this to prove anything"
+    for relative in written:
+        assert (pooled_root / relative).read_bytes() == (alone_root / relative).read_bytes(), (
+            relative
+        )
