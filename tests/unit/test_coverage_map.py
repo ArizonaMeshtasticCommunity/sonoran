@@ -477,6 +477,32 @@ def test_old_runs_are_removed(tmp_path: Path) -> None:
     assert kept == ["20260820T000002Z", "20260820T000003Z"]
 
 
+def test_a_stamped_tile_never_moves_to_a_new_run(tmp_path: Path) -> None:
+    """A cache key must always identify the same bytes."""
+    from sonoran.coverage import store
+
+    settings = _settings(tmp_path)
+    for stamp, content in (
+        ("20260820T000001Z", b"first"),
+        ("20260820T000002Z", b"second"),
+    ):
+        pending = store.pending_dir(settings, stamp)
+        tile = pending / "LongFast" / "usable" / "6" / "12" / "25.png"
+        tile.parent.mkdir(parents=True)
+        tile.write_bytes(content)
+        publish(settings, stamp, _manifest(stamp))
+
+    assert (
+        store.read_run_tile(settings, "20260820T000001Z", "LongFast", "usable", 6, 12, 25)
+        == b"first"
+    )
+    assert (
+        store.read_run_tile(settings, "20260820T000002Z", "LongFast", "usable", 6, 12, 25)
+        == b"second"
+    )
+    assert store.read_tile(settings, "LongFast", "usable", 6, 12, 25) == b"second"
+
+
 def test_a_broken_index_reads_as_no_run(tmp_path: Path) -> None:
     """A half written file must not stop the page loading."""
     from sonoran.coverage import store
@@ -525,6 +551,7 @@ def test_a_run_stamp_that_is_not_a_stamp_is_refused(tmp_path: Path) -> None:
         assert store.current_stamp(settings) is None, bad
         assert store.current_root(settings) is None
         assert store.read_tile(settings, "LongFast", "usable", 6, 12, 25) is None
+        assert store.read_run_tile(settings, bad, "LongFast", "usable", 6, 12, 25) is None
 
     path.write_text(json.dumps({"current": "20260820T000000Z"}), encoding="utf-8")
     assert store.current_stamp(settings) == "20260820T000000Z"

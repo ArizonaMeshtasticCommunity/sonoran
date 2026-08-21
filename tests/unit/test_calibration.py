@@ -24,6 +24,51 @@ from sonoran.coverage.calibrate import (
     residual_summary,
     truncated_mean,
 )
+from sonoran.db.models import NeighborMetrics
+from sonoran.jobs.calibrate import Peer, _matches_current_preset
+from sonoran.radio.overrides import Overrides
+from sonoran.radio.presets import preset_by_key
+from sonoran.radio.resolve import resolve_profile
+
+
+def _peer(node_num: int, preset_key: str) -> Peer:
+    preset = preset_by_key(preset_key)
+    assert preset is not None
+    node_id = f"!{node_num:08x}"
+    return Peer(
+        node_id=node_id,
+        node_num=node_num,
+        latitude=33.4,
+        longitude=-112.0,
+        profile=resolve_profile(node_id, "RAK4631", Overrides({})),
+        preset=preset,
+    )
+
+
+def test_a_report_cannot_cross_a_modem_preset() -> None:
+    """The row records the preset used when the link was measured.
+
+    A node can change preset during the calibration window. Its old
+    report must not correct the new radio configuration.
+    """
+    peers = {1: _peer(1, "LONG_FAST"), 2: _peer(2, "LONG_FAST")}
+    report = NeighborMetrics(
+        node_num=1,
+        neighbor_node_num=2,
+        channel="LongFast",
+        snr=-5.0,
+    )
+    assert _matches_current_preset(report, peers)
+
+    report.channel = "MediumSlow"
+    assert not _matches_current_preset(report, peers)
+
+    report.channel = "Weather"
+    assert not _matches_current_preset(report, peers)
+
+    report.channel = "LongFast"
+    peers[2] = _peer(2, "MEDIUM_SLOW")
+    assert not _matches_current_preset(report, peers)
 
 
 def _links(

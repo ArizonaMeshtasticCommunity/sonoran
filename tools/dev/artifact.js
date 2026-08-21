@@ -97,7 +97,7 @@ function readTiles() {
       // parts is preset, layer, zoom, x. The file is y.png.
       if (parts.length !== 4) continue;
       if (Number(parts[2]) > MAX_TILE_ZOOM) continue;
-      const key = `/api/coverage/tiles/${parts.join('/')}/${entry.name}`;
+      const key = `/api/coverage/tiles/${index.current}/${parts.join('/')}/${entry.name}`;
       out[key] = `data:image/png;base64,${fs.readFileSync(next).toString('base64')}`;
     }
   };

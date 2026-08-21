@@ -85,9 +85,10 @@ async def coverage_calibration(request: Request) -> dict[str, object]:
     }
 
 
-@router.get("/tiles/{preset}/{layer}/{zoom}/{x}/{y}.png")
+@router.get("/tiles/{stamp}/{preset}/{layer}/{zoom}/{x}/{y}.png")
 async def coverage_tile(
     request: Request,
+    stamp: str = Path(pattern=r"^\d{8}T\d{6}Z$"),
     preset: str = Path(pattern=r"^[A-Za-z]{1,32}$"),
     layer: str = Path(pattern=r"^[a-z]{1,16}$"),
     zoom: int = Path(ge=0, le=MAX_ZOOM),
@@ -109,11 +110,7 @@ async def coverage_tile(
         raise HTTPException(status_code=422, detail="the tile is outside the zoom level")
 
     settings = request.app.state.settings
-    stamp = store.current_stamp(settings)
-    if stamp is None:
-        raise HTTPException(status_code=404, detail="no coverage run has been made")
-
-    png = store.read_tile(settings, preset, layer, zoom, x, y)
+    png = store.read_run_tile(settings, stamp, preset, layer, zoom, x, y)
     if png is None:
         raise HTTPException(status_code=404, detail="no coverage here")
 
@@ -121,9 +118,9 @@ async def coverage_tile(
         content=png,
         media_type="image/png",
         headers={
-            # A tile of one run never changes. The run stamp is part of
-            # the ETag, so a new run makes every tile fresh again.
-            "Cache-Control": "public, max-age=86400",
+            # The run stamp is part of the URL. These bytes can never
+            # change, so a browser can keep them permanently.
+            "Cache-Control": "public, max-age=31536000, immutable",
             "ETag": f'"{stamp}-{preset}-{layer}-{zoom}-{x}-{y}"',
         },
     )

@@ -116,7 +116,29 @@ async def read_peers(
     return peers
 
 
-async def read_reports(session: AsyncSession, settings: Settings) -> dict[int, dict[int, float]]:
+def _matches_current_preset(row: NeighborMetrics, peers: dict[int, Peer]) -> bool:
+    """Return true when a report and both nodes name one preset.
+
+    A report keeps the channel it arrived on. A node can change preset
+    during the calibration window, so its current channel alone cannot
+    identify an old measurement. Unknown channel names ride on top of a
+    preset and cannot be used without a guess.
+    """
+    reported = preset_for_channel(row.channel)
+    listener = peers.get(row.node_num)
+    neighbour = peers.get(row.neighbor_node_num)
+    return bool(
+        reported is not None
+        and listener is not None
+        and neighbour is not None
+        and listener.preset.key == reported.key
+        and neighbour.preset.key == reported.key
+    )
+
+
+async def read_reports(
+    session: AsyncSession, settings: Settings, peers: dict[int, Peer]
+) -> dict[int, dict[int, float]]:
     """Return the best SNR each node reported for each neighbour.
 
     A node reports the same neighbour many times. The best reading is
@@ -130,7 +152,7 @@ async def read_reports(session: AsyncSession, settings: Settings) -> dict[int, d
     )
     reports: dict[int, dict[int, float]] = {}
     for row in rows.all():
-        if row.snr is None:
+        if row.snr is None or not _matches_current_preset(row, peers):
             continue
         heard = reports.setdefault(row.node_num, {})
         best = heard.get(row.neighbor_node_num)
@@ -265,7 +287,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
     """Fit the calibration and write it. Return None with no evidence."""
     overrides = load_overrides(settings.radio_overrides_path)
     peers = await read_peers(session, settings, overrides)
-    reports = await read_reports(session, settings)
+    reports = await read_reports(session, settings, peers)
     if not reports:
         logger.info("no neighbour reports in the window, so no calibration")
         return None

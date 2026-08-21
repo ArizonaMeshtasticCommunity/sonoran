@@ -226,10 +226,14 @@ A page must open on `data_bounds`, not on `bounds`. The region covers
 every degree the terrain service serves, which is far more ground than
 any mesh reaches.
 
-### 3A.2 `GET /api/coverage/tiles/{preset}/{layer}/{z}/{x}/{y}.png`
+### 3A.2 `GET /api/coverage/tiles/{stamp}/{preset}/{layer}/{z}/{x}/{y}.png`
 
 Returns one coverage tile, 256 pixels square, in the usual web map
 scheme.
+
+`stamp` identifies one coverage run. It comes from `GET /api/coverage`.
+The URL always returns bytes from that run. It never moves to a newer
+run.
 
 `preset` is a modem preset name, such as `LongFast`. A preset is a
 radio configuration, not a filter: a node on one preset cannot hear a
@@ -246,9 +250,9 @@ node on another, so each has its own coverage. See `AGENTS.md` 9.7.
 A tile that was never written is ground no node reaches, and returns
 404. A map library already knows how to draw that.
 
-Tiles of one run never change, so they carry a long `Cache-Control` and
-an `ETag` that holds the run stamp. A new run makes every tile fresh
-again.
+The run stamp is part of the URL. Tiles of one run never change, so
+they carry an immutable `Cache-Control` and an `ETag`. A new run has
+new URLs and cannot reuse a browser's old tiles.
 
 ## 3B. The public embed
 

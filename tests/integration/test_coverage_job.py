@@ -24,6 +24,7 @@ from sonoran.config import Settings
 from sonoran.coverage import store
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.jobs import calibrate, coverage
+from sonoran.radio.overrides import load_overrides
 
 
 def _jobs_url(timescale_url: str) -> str:
@@ -207,18 +208,17 @@ def test_a_run_makes_tiles_the_api_serves(
     summary = client.get("/api/coverage").json()
     assert summary["available"] is True
     assert [item["preset"] for item in summary["presets"]] == ["LongFast"]
+    stamp = summary["stamp"]
 
     root = store.current_root(settings)
     assert root is not None
     tile = next(root.glob("LongFast/usable/*/*/*.png"))
     zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
-    response = client.get(f"/api/coverage/tiles/LongFast/usable/{zoom}/{x}/{y}.png")
+    response = client.get(f"/api/coverage/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
-    assert "immutable" in response.headers.get(
-        "Cache-Control", ""
-    ) or "max-age" in response.headers.get("Cache-Control", "")
+    assert "immutable" in response.headers.get("Cache-Control", "")
 
 
 def test_two_presets_are_predicted_apart(
@@ -348,6 +348,35 @@ def test_calibration_reads_the_neighbour_reports(
     report = client.get("/api/coverage/calibration").json()
     assert report["available"] is True
     assert len(report["nodes"]) == len(result.nodes)
+
+
+def test_calibration_rejects_a_report_from_another_preset(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """An old report must not correct a node's current preset."""
+    settings = _settings(timescale_url, tmp_path)
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(text("DELETE FROM neighbor_metrics"))
+        _add_node(connection, 900070, 33.40, -112.07, channel="LongFast")
+        _add_node(connection, 900071, 33.41, -112.07, channel="LongFast")
+        connection.execute(
+            text(
+                "INSERT INTO neighbor_metrics "
+                "(node_num, neighbor_node_num, snr, channel, time) VALUES "
+                "(900070, 900071, -9.0, 'LongFast', :now), "
+                "(900070, 900071, 20.0, 'MediumSlow', :now)"
+            ),
+            {"now": now},
+        )
+
+    async def reports(session, given: Settings) -> dict[int, dict[int, float]]:
+        peers = await calibrate.read_peers(
+            session, given, load_overrides(given.radio_overrides_path)
+        )
+        return await calibrate.read_reports(session, given, peers)
+
+    assert _run(settings, reports) == {900070: {900071: -9.0}}
 
 
 def test_a_broken_calibration_file_does_not_stop_a_run(

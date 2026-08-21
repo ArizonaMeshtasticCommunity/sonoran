@@ -100,6 +100,7 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
     ]
     return {
         "available": True,
+        "stamp": manifest.get("stamp"),
         "generated_at": manifest.get("generated_at"),
         "bounds": manifest.get("bounds"),
         "data_bounds": manifest.get("data_bounds"),

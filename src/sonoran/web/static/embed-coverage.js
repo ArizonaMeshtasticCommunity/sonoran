@@ -14,7 +14,9 @@
 
 (function () {
   const CONFIG = window.SONORAN_EMBED || {};
-  const API = (path) => (CONFIG.apiBase || '') + path;
+  const DOCUMENT_BASE = new URL('../', document.baseURI);
+  const API = (path) =>
+    new URL(String(path).replace(/^\//, ''), CONFIG.apiBase || DOCUMENT_BASE).toString();
 
   // The layer a visitor sees. Not a choice: the other two need
   // explaining and this one does not.
@@ -63,7 +65,9 @@
 
     // The placeholders must not go through `new URL`, which percent
     // encodes the braces and asks for a tile named `%7Bz%7D`.
-    const base = API(`/api/coverage/tiles/${state.preset}/${LAYER}/`);
+    const base = API(
+      `/api/coverage/tiles/${summary.stamp}/${state.preset}/${LAYER}/`,
+    );
     state.tiles = L.tileLayer(`${base}{z}/{x}/{y}.png`, {
       minNativeZoom: summary.min_zoom,
       maxNativeZoom: summary.max_zoom,

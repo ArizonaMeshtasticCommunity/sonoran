@@ -16,7 +16,7 @@ feature through stops protecting the old one.
 import pytest
 from fastapi.testclient import TestClient
 
-from sonoran.api.app import create_app
+from sonoran.api.app import STATIC_DIR, create_app
 from sonoran.config import Settings
 from sonoran.embed.sanitise import PUBLIC_ROLES, coarse, frame_ancestors, is_public_node
 
@@ -98,6 +98,19 @@ def test_the_embed_routes_are_read_only() -> None:
         methods = getattr(route, "methods", None)
         if methods and (path.startswith("/api/embed") or path.startswith("/embed")):
             assert methods <= {"GET"}
+
+
+def test_the_embed_uses_paths_below_the_configured_base() -> None:
+    """A deployment below /mesh must not ask the origin root."""
+    response = _client(embed_enabled=True, web_base_path="/mesh").get("/embed/coverage")
+    assert response.status_code == 200
+    assert 'href="../static/vendor/leaflet.css"' in response.text
+    assert 'src="../static/vendor/leaflet.js"' in response.text
+    assert 'src="../static/embed-coverage.js"' in response.text
+
+    script = (STATIC_DIR / "embed-coverage.js").read_text(encoding="utf-8")
+    assert "document.baseURI" in script
+    assert "CONFIG.apiBase || DOCUMENT_BASE" in script
 
 
 # --- what a public viewer may see --------------------------------------

@@ -144,6 +144,11 @@ The fit gives one offset for each node, appearing at both ends of every
 link it is in, because a wrong antenna helps the same amount whichever
 end transmits.
 
+Each neighbour report keeps the channel it arrived on. The calibration
+uses it only when that channel and both current nodes name the same
+modem preset. A node can change preset during the calibration window.
+An old report must not correct its new radio configuration.
+
 ### 8.1 The part that is easy to get wrong
 
 The mesh only reports links that worked. Fitting those alone says every

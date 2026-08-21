@@ -132,7 +132,9 @@
      * encodes the braces, and Leaflet then asks for a tile literally
      * named `%7Bz%7D`. Resolve the part before them, then append.
      */
-    const base = api(`api/coverage/tiles/${state.preset}/${state.layer}/`);
+    const base = api(
+      `api/coverage/tiles/${summary.stamp}/${state.preset}/${state.layer}/`,
+    );
     state.tiles = L.tileLayer(
       `${base}{z}/{x}/{y}.png`,
       {

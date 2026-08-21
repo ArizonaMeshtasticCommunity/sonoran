@@ -202,6 +202,17 @@ def current_root(settings: Settings) -> Path | None:
     stamp = current_stamp(settings)
     if stamp is None:
         return None
+    return run_root(settings, stamp)
+
+
+def run_root(settings: Settings, stamp: str) -> Path | None:
+    """Return one named run directory, or None.
+
+    The stamp comes from a URL for tile reads. Check it before it
+    becomes part of a path.
+    """
+    if not STAMP_PATTERN.fullmatch(stamp):
+        return None
     root = runs_dir(settings) / stamp
     return root if root.is_dir() else None
 
@@ -231,7 +242,27 @@ def read_tile(
     A tile that was never written is ground no node reaches. The API
     answers those with a 404 and the map draws nothing there.
     """
-    root = current_root(settings)
+    stamp = current_stamp(settings)
+    if stamp is None:
+        return None
+    return read_run_tile(settings, stamp, preset, layer, zoom, x, y)
+
+
+def read_run_tile(
+    settings: Settings,
+    stamp: str,
+    preset: str,
+    layer: str,
+    zoom: int,
+    x: int,
+    y: int,
+) -> bytes | None:
+    """Return one tile from one named run, or None.
+
+    A stamped URL must always identify the same bytes. It must not move
+    to the current run when a new run is published.
+    """
+    root = run_root(settings, stamp)
     if root is None:
         return None
     path = tile_path(root, preset, layer, zoom, x, y)
