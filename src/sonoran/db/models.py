@@ -59,6 +59,11 @@ class Node(Base):
     last_lat: Mapped[float | None] = mapped_column(Double)
     last_lon: Mapped[float | None] = mapped_column(Double)
     last_altitude: Mapped[int | None] = mapped_column(Integer)
+    # How many bits of precision the last position carried. NULL means
+    # the node did not say, which is the common case for a node heard
+    # over the radio and means full precision. See
+    # `sonoran/positions.py`.
+    last_position_precision_bits: Mapped[int | None] = mapped_column(Integer)
     position_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_heard: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     is_mqtt_gateway: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

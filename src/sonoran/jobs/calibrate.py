@@ -46,7 +46,7 @@ from sonoran.db.models import NeighborMetrics, Node
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.jobs.coverage import ensure_terrain, read_page, tiles_around
 from sonoran.logging import get_logger
-from sonoran.positions import is_usable
+from sonoran.positions import is_precise_enough, is_usable
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, noise_floor_dbm, preset_for_channel
 from sonoran.radio.resolve import RadioProfile, resolve_profile
@@ -92,7 +92,25 @@ def _distance_km(first: Peer, second: Peer) -> float:
 async def read_peers(
     session: AsyncSession, settings: Settings, overrides: Overrides
 ) -> dict[int, Peer]:
-    """Return every node the calibration may reason about, by number."""
+    """Return every node the calibration may reason about, by number.
+
+    A node whose position is known to be coarse is left out entirely.
+    This is not the same filter the coverage job applies, and it is the
+    more important of the two.
+
+    A censored observation says: the model expected this link to be
+    heard, and the node did not report it. That is read as evidence the
+    model is optimistic. If the peer is up to 23 km from where the
+    position says, the model predicted a link to a place with no radio
+    in it, and the silence means nothing at all. Most links in a
+    calibration window are silent, so a handful of fuzzed positions
+    move the whole fit.
+
+    Roles are **not** filtered here. Calibration needs both ends of a
+    link and most links have a client at one end. A client is poor
+    evidence of where the mesh reaches and good evidence of what a
+    radio heard.
+    """
     since = datetime.now(UTC) - timedelta(hours=settings.coverage_active_hours)
     rows = await session.scalars(
         select(Node).where(Node.last_heard.is_not(None), Node.last_heard >= since)
@@ -106,6 +124,8 @@ async def read_peers(
         if latitude is None or longitude is None:
             continue
         if not coordinates_in_region(settings, latitude, longitude):
+            continue
+        if not is_precise_enough(node.last_position_precision_bits):
             continue
         identifier = f"!{node.node_num:08x}"
         peers[node.node_num] = Peer(

@@ -86,3 +86,56 @@ class TestClean:
         """Half a position is worse than none: it still draws a marker."""
         assert clean(0.0262144, 0.0262144) == (None, None)
         assert clean(33.45, None) == (None, None)
+
+
+# --- how precise a position must be to anchor a prediction -------------
+
+
+def test_an_unknown_precision_is_treated_as_exact() -> None:
+    """The decision this whole rule turns on.
+
+    `ingest/handlers/position.py` writes
+
+        "precision_bits": position.precision_bits or None,
+
+    so a node that sent no precision field and a node that sent zero
+    both arrive as NULL. The first is the ordinary case for a node
+    heard directly over the radio, and it is full precision. Reading
+    NULL as coarse would delete every such node from the map.
+    """
+    from sonoran.positions import is_precise_enough
+
+    assert is_precise_enough(None)
+    assert is_precise_enough(0)
+
+
+def test_a_position_the_public_broker_fuzzed_cannot_anchor_a_site() -> None:
+    """Map reporting defaults to 14 bits, about 1459 m."""
+    from sonoran.positions import is_precise_enough
+
+    assert not is_precise_enough(14)
+    assert not is_precise_enough(10)
+
+
+def test_the_finest_the_public_broker_sends_is_the_limit() -> None:
+    """Sixteen bits is about 365 m, which is four terrain cells."""
+    from sonoran.positions import MIN_SITE_PRECISION_BITS, is_precise_enough
+
+    assert MIN_SITE_PRECISION_BITS == 16
+    assert is_precise_enough(16)
+    assert is_precise_enough(32)
+
+
+def test_the_deviation_grows_as_the_precision_falls() -> None:
+    """Each bit doubles the doubt."""
+    from sonoran.positions import precision_deviation_m
+
+    assert precision_deviation_m(None) is None
+    coarse = precision_deviation_m(10)
+    fine = precision_deviation_m(16)
+    assert coarse is not None and fine is not None
+    assert coarse > fine > 0.0
+    assert precision_deviation_m(32) == 0.0
+    # The two figures the Meshtastic documentation names.
+    assert precision_deviation_m(14) == 1459.0
+    assert precision_deviation_m(16) == 364.7

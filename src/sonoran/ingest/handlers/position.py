@@ -51,6 +51,7 @@ async def store_position(session: AsyncSession, message: Message, context: Handl
             last_lat=latitude,
             last_lon=longitude,
             last_altitude=values["altitude"],
+            last_position_precision_bits=values["precision_bits"],
             position_time=time,
             updated_at=context.seen_at,
         )
