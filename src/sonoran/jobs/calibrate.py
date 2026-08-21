@@ -50,6 +50,7 @@ from sonoran.positions import is_usable
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, noise_floor_dbm, preset_for_channel
 from sonoran.radio.resolve import RadioProfile, resolve_profile
+from sonoran.terrain.store import coordinates_in_region
 
 logger = get_logger(__name__)
 
@@ -103,6 +104,8 @@ async def read_peers(
             continue
         latitude, longitude = node.last_lat, node.last_lon
         if latitude is None or longitude is None:
+            continue
+        if not coordinates_in_region(settings, latitude, longitude):
             continue
         identifier = f"!{node.node_num:08x}"
         peers[node.node_num] = Peer(
@@ -290,6 +293,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
     reports = await read_reports(session, settings, peers)
     if not reports:
         logger.info("no neighbour reports in the window, so no calibration")
+        store.clear_calibration(settings)
         return None
 
     wanted: set[str] = set()
@@ -309,6 +313,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
         summary["mean_db"],
     )
     if not observations:
+        store.clear_calibration(settings)
         return None
 
     calibration = fit_offsets(observations)

@@ -84,7 +84,7 @@ def test_brand_mark_is_optional() -> None:
     missing file never shows a broken image.
     """
     text = _client().get("/").text
-    assert 'src="static/logo.png"' in text
+    assert 'src="static/logo.png?v=' in text
     assert "data-brand-text" in text
     script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert "data-brand-mark" in script
@@ -156,7 +156,9 @@ def test_dashboard_uses_base_relative_api_paths() -> None:
     assert app.root_path == "/mesh"
     response = TestClient(app).get("/")
     assert response.status_code == 200
-    assert 'src="static/app.js"' in response.text
+    assert 'src="static/app.js?v=' in response.text
+    assert "__SONORAN_ASSET_VERSION__" not in response.text
+    assert response.headers["Cache-Control"] == "no-cache"
     assert "document.baseURI" in (STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
 

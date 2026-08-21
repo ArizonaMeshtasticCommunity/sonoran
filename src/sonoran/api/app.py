@@ -7,6 +7,7 @@ It connects to the database with the SELECT-only role.
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -36,6 +37,15 @@ from sonoran.radio.overrides import load_overrides
 logger = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).parent.parent / "web" / "static"
+
+
+def _asset_version() -> str:
+    """Return a content version for the files used by the dashboard."""
+    digest = sha256()
+    for path in sorted(item for item in STATIC_DIR.rglob("*") if item.is_file()):
+        digest.update(path.relative_to(STATIC_DIR).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
 
 
 def _origin(url: str) -> str | None:
@@ -230,6 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         root_path=settings.web_base_path.rstrip("/"),
     )
     app.state.settings = settings
+    app.state.asset_version = _asset_version()
     # The radio overrides are read once. The file is in the repository
     # and ships with the image, so a change to it arrives with a deploy.
     app.state.radio_overrides = load_overrides(settings.radio_overrides_path)
@@ -267,7 +278,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "mapZoom": settings.map_default_zoom,
         }
         html = html.replace("__SONORAN_CONFIG__", json.dumps(config))
-        return HTMLResponse(html)
+        html = html.replace("__SONORAN_ASSET_VERSION__", app.state.asset_version)
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

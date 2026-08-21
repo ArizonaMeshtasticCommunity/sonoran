@@ -73,7 +73,7 @@ from sonoran.positions import is_usable
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
-from sonoran.terrain.store import load_page, read_cached_page
+from sonoran.terrain.store import coordinates_in_region, load_page, read_cached_page
 
 logger = get_logger(__name__)
 
@@ -106,7 +106,15 @@ async def select_nodes(session: AsyncSession, settings: Settings) -> Sequence[No
     rows = await session.scalars(
         select(Node).where(Node.last_heard.is_not(None), Node.last_heard >= since)
     )
-    return [node for node in rows.all() if is_usable(node.last_lat, node.last_lon)]
+
+    def is_in_region(node: Node) -> bool:
+        latitude = node.last_lat
+        longitude = node.last_lon
+        if latitude is None or longitude is None or not is_usable(latitude, longitude):
+            return False
+        return coordinates_in_region(settings, latitude, longitude)
+
+    return [node for node in rows.all() if is_in_region(node)]
 
 
 def group_by_preset(

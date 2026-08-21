@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from sonoran.coverage.calibrate import (
+    MAX_TRUSTED_BIAS_DB,
     MAX_TRUSTED_SPREAD_DB,
     MIN_COUNTERPARTIES,
     MIN_OBSERVATIONS,
@@ -28,7 +29,7 @@ from sonoran.db.models import NeighborMetrics
 from sonoran.jobs.calibrate import Peer, _matches_current_preset
 from sonoran.radio.overrides import Overrides
 from sonoran.radio.presets import preset_by_key
-from sonoran.radio.resolve import resolve_profile
+from sonoran.radio.resolve import MAX_CALIBRATION_DB, resolve_profile
 
 
 def _peer(node_num: int, preset_key: str) -> Peer:
@@ -77,6 +78,7 @@ def _links(
     per_pair: int = 6,
     noise_db: float = 2.0,
     cut_db: float | None = None,
+    bias_db: float = 0.0,
 ) -> list[LinkObservation]:
     """Return made-up links between every pair of nodes.
 
@@ -89,7 +91,7 @@ def _links(
         for second in range(first + 1, len(names)):
             a, b = names[first], names[second]
             for _ in range(per_pair):
-                truth = planted[a] + planted[b] + float(rng.normal(0.0, noise_db))
+                truth = planted[a] + planted[b] + bias_db + float(rng.normal(0.0, noise_db))
                 if cut_db is not None and truth < cut_db:
                     observations.append(LinkObservation(a, b, cut_db, censored=True))
                 else:
@@ -146,6 +148,27 @@ def test_the_fit_recovers_planted_offsets_through_censoring() -> None:
     assert censored_error < 2.5
 
 
+def test_censoring_keeps_a_network_wide_error_in_the_model_bias() -> None:
+    """A global mismatch must not be invented as bad individual nodes."""
+    rng = np.random.default_rng(812)
+    planted = {"!a": 6.0, "!b": 0.0, "!c": -6.0, "!d": -3.0, "!e": 3.0}
+    links = _links(
+        planted,
+        rng,
+        per_pair=60,
+        noise_db=NOISE_SIGMA_DB,
+        cut_db=-10.0,
+        bias_db=-8.0,
+    )
+
+    result = fit_offsets(links)
+
+    assert any(item.censored for item in links)
+    assert result.model_bias_db == pytest.approx(-8.0, abs=1.5)
+    found = {fit.node_id: fit.offset_db for fit in result.nodes}
+    assert max(abs(found[node_id] - offset) for node_id, offset in planted.items()) < 2.0
+
+
 def test_ignoring_the_failures_is_optimistic_about_the_weakest_node() -> None:
     """Name the direction of the bias, not only its size.
 
@@ -193,6 +216,22 @@ def test_a_node_with_enough_evidence_is_used() -> None:
     assert set(usable) == {"!a", "!b", "!c", "!d"}
 
 
+def test_a_network_wide_model_error_rejects_every_node() -> None:
+    rng = np.random.default_rng(51)
+    result = fit_offsets(
+        _links(
+            {"!a": 3.0, "!b": 0.0, "!c": -3.0, "!d": 0.0},
+            rng,
+            per_pair=8,
+            bias_db=MAX_TRUSTED_BIAS_DB + 5.0,
+        )
+    )
+
+    assert abs(result.model_bias_db) > MAX_TRUSTED_BIAS_DB
+    assert not result.is_trusted
+    assert result.usable() == {}
+
+
 def test_a_node_the_offset_does_not_explain_says_so() -> None:
     """A large spread means the one number is not the whole story."""
     rng = np.random.default_rng(3)
@@ -201,6 +240,19 @@ def test_a_node_the_offset_does_not_explain_says_so() -> None:
     assert max(fit.residual_spread_db for fit in tidy.nodes) < max(
         fit.residual_spread_db for fit in messy.nodes
     )
+
+
+def test_a_node_with_wide_scatter_is_not_used() -> None:
+    """A global fit must not hide one node whose links disagree."""
+    fit = fit_offsets(
+        [LinkObservation("!a", "!b", value) for value in (-40.0, -30.0, 20.0, 30.0)]
+        + [LinkObservation("!a", "!c", value) for value in (-35.0, -25.0, 25.0, 35.0)]
+        + [LinkObservation("!b", "!c", 0.0) for _ in range(8)]
+    )
+
+    node = next(item for item in fit.nodes if item.node_id == "!a")
+    assert node.residual_spread_db > MAX_TRUSTED_SPREAD_DB
+    assert not node.is_usable
 
 
 def test_no_measurements_is_a_working_state() -> None:
@@ -216,6 +268,25 @@ def test_only_censored_measurements_do_not_raise() -> None:
     summary = residual_summary(links)
     assert summary["censored"] == 4
     fit_offsets(links)
+
+
+def test_the_fit_is_bounded_while_silent_links_are_filled() -> None:
+    """Silence must not produce an impossible radio correction.
+
+    The censored regression used to drive a sparse node below -1800 dB.
+    The value was not a measurement. It was an unconstrained estimate.
+    """
+    links = [LinkObservation("!quiet", f"!peer{index}", -80.0, censored=True) for index in range(7)]
+    links.extend(
+        LinkObservation(f"!peer{first}", f"!peer{second}", 60.0)
+        for first in range(7)
+        for second in range(first + 1, 7)
+    )
+
+    result = fit_offsets(links)
+
+    assert all(abs(fit.offset_db) <= MAX_CALIBRATION_DB for fit in result.nodes)
+    assert sum(fit.offset_db for fit in result.nodes) == pytest.approx(0.0, abs=0.1)
 
 
 def test_the_summary_says_how_far_the_model_is_out() -> None:

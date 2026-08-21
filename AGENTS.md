@@ -605,6 +605,31 @@ the worst, and only 5.4 percent of relay observations resolving to a
 single node. It also names the last hop alone, never the path. Drawing
 a line from it would be a guess.
 
+### 9.21 A calibration estimate is not a radio reading
+
+`neighbor_metrics.snr` is measured. `NodeFit.offset_db` is inferred.
+Never present the second value as if a node reported it.
+
+The censored regression once had no bound and did not fit its global
+model bias during each expectation round. A node with seven silent
+links and no reported link reached -1830.35 dB. Some usable raw offsets
+also passed 50 dB. The radio-profile resolver held the value to 15 dB,
+but the report still showed the impossible estimate and the bad node
+could pull the rest of the fit.
+
+Keep all of these guards:
+
+1. Fit the global bias in every censored-data round.
+2. Bound and anchor node offsets in every round.
+3. Check the bound again when a stored file is read.
+4. Give no offset to a node with too little evidence or wide scatter.
+5. Reject the whole fit when its bias or scatter is outside 20 dB.
+6. Run a due calibration before coverage, never beside it.
+
+The live fit on 2026-08-21 had a bias near -41 dB and was rejected. Do
+not increase the guard to make live data pass. First prove that absence
+from an aggregated neighbour list means the radio link was silent.
+
 ## 10. Reference documents
 
 - `docs/PLAN.md` — the purpose, decisions, and requirements

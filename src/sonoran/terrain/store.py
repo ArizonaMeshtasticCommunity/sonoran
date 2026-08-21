@@ -65,6 +65,14 @@ def in_region(settings: Settings, name: str) -> bool:
     )
 
 
+def coordinates_in_region(settings: Settings, latitude: float, longitude: float) -> bool:
+    """Return true when a point has terrain in the configured region."""
+    return (
+        settings.terrain_lat_min <= latitude < settings.terrain_lat_max + 1
+        and settings.terrain_lon_min <= longitude < settings.terrain_lon_max + 1
+    )
+
+
 def page_path(settings: Settings, name: str) -> Path:
     """Return the cache path of a tile page."""
     return Path(settings.terrain_cache_dir) / f"{name}.page.i16"

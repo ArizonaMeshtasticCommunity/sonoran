@@ -33,29 +33,23 @@ TILE_SIZE = 256
 
 # The colour ramp, weakest first.
 #
-# These are the Sonoran palette from `web/static/app.css`. The weak end
-# is the edge of the usable area and is kept bright enough to read over
-# a dark basemap, which is the same decision `planner.js` made.
-#
-#   --role-stale  #7d6857   at the limit, barely usable
-#   --accent-soft #c9512a
-#   --accent      #f4703f
-#   --warn        #edc04b
-#   --good        #8cb369   strong
+# These colours do not occur in the dark terrain map as one natural
+# ramp. The weak end starts hot. The strong end finishes cool. A reader
+# can therefore see both the edge and the direction of improvement.
+# The map can be turned off when the ground detail is more important.
 RAMP: tuple[tuple[int, int, int], ...] = (
-    (0x7D, 0x68, 0x57),
-    (0xC9, 0x51, 0x2A),
-    (0xF4, 0x70, 0x3F),
-    (0xED, 0xC0, 0x4B),
-    (0x8C, 0xB3, 0x69),
+    (0xFF, 0x2D, 0x55),
+    (0xFF, 0x7A, 0x00),
+    (0xFF, 0xE6, 0x00),
+    (0x00, 0xD9, 0x8B),
+    (0x00, 0xA8, 0xFF),
 )
 
 # How opaque a covered cell is drawn, from 0 to 255.
 #
-# The basemap must stay readable under the coverage. Full opacity hides
-# the roads and the towns, and then a reader cannot tell where the
-# coverage is.
-COVER_ALPHA = 205
+# The strength layer must remain distinct from the terrain map. The
+# reader can turn it off to read roads and place names without it.
+COVER_ALPHA = 235
 
 # The range the ramp spans above the threshold, in dB.
 #

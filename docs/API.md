@@ -218,9 +218,13 @@ state for a new deployment, not a fault.
 
 The response carries the manifest of the run: `generated_at`, `bounds`
 of the whole region, `data_bounds` of the coverage itself, `min_zoom`
-and `max_zoom`, the receiver the map assumes, `has_terrain`,
+and `max_zoom`, `active_hours`, the receiver the map assumes, `has_terrain`,
 `has_landcover`, `missing_terrain_tiles`, and one entry for each modem
 preset with its node counts, its covered area, and the sites it used.
+
+`active_hours` is the position and traffic window for the nodes in the
+run. A page uses the same value when it asks `/api/map/nodes` for the
+optional node layer.
 
 A page must open on `data_bounds`, not on `bounds`. The region covers
 every degree the terrain service serves, which is far more ground than
@@ -253,6 +257,21 @@ A tile that was never written is ground no node reaches, and returns
 The run stamp is part of the URL. Tiles of one run never change, so
 they carry an immutable `Cache-Control` and an `ETag`. A new run has
 new URLs and cannot reuse a browser's old tiles.
+
+### 3A.3 `GET /api/coverage/calibration`
+
+Returns the current comparison between neighbour reports and the radio
+model. `available` is false when the current calibration window has no
+evidence.
+
+Each node carries its evidence counts, its residual scatter, and an
+`applied` flag. `offset_db` is the bounded correction used by coverage
+when `applied` is true. It is null when the node does not have enough
+evidence or when its measurements disagree by more than 20 dB. The
+value is never outside -15 to +15 dB.
+
+No node is applied when `model_bias_db` or `residual_spread_db` is
+outside the trusted 20 dB range.
 
 ## 3B. The public embed
 

@@ -61,6 +61,8 @@ from sonoran.radio.presets import preset_by_key
 from sonoran.radio.resolve import resolve_profile
 
 APP_CSS = Path("src/sonoran/web/static/app.css")
+COVERAGE_JS = Path("src/sonoran/web/static/coverage.js")
+INDEX_HTML = Path("src/sonoran/web/static/index.html")
 
 
 def _settings(tmp_path: Path, **extra: object) -> Settings:
@@ -366,6 +368,18 @@ def test_the_ramp_runs_from_the_limit_to_the_span_above_it() -> None:
     assert tuple(colour_levels(strong, -139)[0, 0, :3]) == RAMP[-1]
 
 
+def test_the_ramp_is_distinct_from_the_terrain_map() -> None:
+    """The coverage edge and strength must remain visible over terrain."""
+    assert RAMP == (
+        (0xFF, 0x2D, 0x55),
+        (0xFF, 0x7A, 0x00),
+        (0xFF, 0xE6, 0x00),
+        (0x00, 0xD9, 0x8B),
+        (0x00, 0xA8, 0xFF),
+    )
+    assert COVER_ALPHA >= 230
+
+
 def test_the_ramp_colours_are_the_ones_the_stylesheet_draws() -> None:
     """Python cannot read a stylesheet, so the values exist twice.
 
@@ -376,6 +390,17 @@ def test_the_ramp_colours_are_the_ones_the_stylesheet_draws() -> None:
     css = APP_CSS.read_text(encoding="utf-8")
     for red, green, blue in RAMP:
         assert f"#{red:02x}{green:02x}{blue:02x}" in css
+
+
+def test_the_map_layers_can_be_switched_independently() -> None:
+    """Map, node, and signal controls must not depend on each other."""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    script = COVERAGE_JS.read_text(encoding="utf-8")
+
+    assert "data-coverage-views" in html
+    for state_name in ("showMap", "showNodes", "showSignal"):
+        assert state_name in script
+    assert "api/map/nodes?channel=" in script
 
 
 def test_a_written_tile_is_a_png_a_browser_can_read() -> None:
@@ -531,6 +556,42 @@ def test_every_layer_has_a_label() -> None:
 
     assert set(LAYERS) == set(LAYER_LABELS)
     assert LAYERS[0] == "usable", "the honest layer must be the first one a page shows"
+
+
+def test_a_stored_calibration_is_bounded_before_it_is_used(tmp_path: Path) -> None:
+    """An old report must not bypass the calibration safety bound."""
+    from sonoran.coverage import store
+
+    settings = _settings(tmp_path)
+    path = store.calibration_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "model_bias_db": 0.0,
+                "residual_spread_db": 5.0,
+                "nodes": [
+                    {
+                        "node_id": "!low",
+                        "offset_db": -1830.35,
+                        "observations": 7,
+                        "counterparties": 7,
+                        "reported": 2,
+                    },
+                    {
+                        "node_id": "!bad",
+                        "offset_db": "not-a-number",
+                        "observations": 7,
+                        "counterparties": 7,
+                        "reported": 2,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert store.calibration_offsets(settings) == {"!low": -15.0}
 
 
 def test_a_run_stamp_that_is_not_a_stamp_is_refused(tmp_path: Path) -> None:

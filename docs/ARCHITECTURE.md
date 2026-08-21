@@ -24,9 +24,10 @@ Three processes share one Python package:
 | api | `sonoran.api.app:create_app` | SELECT only |
 | jobs | `sonoran.jobs.scheduler:run` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
 
-The jobs process runs each task on its own clock. The daily snapshot
-takes a moment. The coverage run takes minutes and runs several times a
-day. One loop would make the snapshot wait for the coverage run.
+The daily snapshot has its own clock. Calibration and coverage share a
+clock because coverage consumes the calibration file. A due calibration
+finishes before coverage starts. A failed calibration leaves the last
+published coverage run in place.
 
 The coverage job writes no database row. It writes tiles and a manifest
 to disk, because the tiles are the run, and holding the two apart lets
@@ -190,6 +191,8 @@ channel, Data message metadata, and receive time.
 - `render.py` colours a grid and writes map tiles.
 - `store.py` keeps a run on disk. A run is one directory and becomes
   visible in one step, so a reader never sees half of one.
+- `calibrate.py` fits bounded node corrections and a network-wide model
+  bias. A fit outside its trust guards gives no correction.
 - The planner page runs the same file in a browser worker. A hash test
   pins the two to the same rasters.
 - The engine is under the GNU General Public License, version 3. See
@@ -272,7 +275,12 @@ general proxy for the tile source.
 - Job: run scheduled maintenance.
 - `retention.py` checks that TimescaleDB retention policies exist and work.
 - `snapshots.py` writes one `daily_snapshot` row per day.
-- Each job is a small async `main` that runs once, or on a simple loop with a sleep.
+- `calibrate.py` reads current neighbour reports and writes one computed
+  calibration file.
+- `coverage.py` reads that file and publishes one complete static tile
+  run.
+- `scheduler.py` runs a due calibration before coverage. The snapshot
+  remains independent.
 
 ### 3.10 `web/static`
 

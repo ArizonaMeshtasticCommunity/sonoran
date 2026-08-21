@@ -1,13 +1,12 @@
 """The scheduled work of the jobs process.
 
-The process held one task for a long time, and one task needs no
-scheduler. It now holds two, and they run on very different clocks: the
-daily snapshot takes a moment once a day, and the coverage run takes
-minutes and wants to run several times a day.
+The process holds work that runs on different clocks. The daily
+snapshot takes a moment once a day. The coverage run takes minutes and
+wants to run several times a day.
 
-Running them in one loop would make the snapshot wait for the coverage
-run. So each task keeps its own clock, and a task that is slow or that
-fails holds up nothing but itself.
+The snapshot keeps its own clock. Calibration and coverage share one
+clock because coverage depends on calibration. A due calibration runs
+first. Coverage then reads the file it just wrote.
 
 A task that raises is logged and tried again at its next turn. One bad
 run must never stop the process: a jobs container that exits stops
@@ -18,6 +17,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
@@ -55,6 +56,13 @@ def _delay_to_next_utc_day() -> float:
     return max((tomorrow - now).total_seconds() + 5, 1.0)
 
 
+async def _coverage_cycle(session: AsyncSession, settings: Settings, run_calibration: bool) -> None:
+    """Run a due calibration before the coverage that consumes it."""
+    if run_calibration:
+        await calibrate.run_once(session, settings)
+    await coverage.run_once(session, settings)
+
+
 async def _run_forever(task: Task) -> None:
     """Run one task on its own clock, for as long as the process lives."""
     if not task.at_start:
@@ -85,33 +93,23 @@ def build_tasks(settings: Settings) -> list[Task]:
         )
     ]
 
-    if settings.calibration_enabled:
-
-        async def calibration_run() -> None:
-            engine = make_engine(settings.database_url_jobs)
-            factory = make_session_factory(engine)
-            try:
-                async with factory() as session:
-                    await calibrate.run_once(session, settings)
-            finally:
-                await engine.dispose()
-
-        tasks.append(
-            Task(
-                name="calibration",
-                run=calibration_run,
-                next_delay=lambda: max(settings.calibration_interval_hours, 1) * 3600.0,
-            )
-        )
-
     if settings.coverage_enabled:
+        last_calibration: float | None = None
 
         async def coverage_run() -> None:
+            nonlocal last_calibration
             engine = make_engine(settings.database_url_jobs)
             factory = make_session_factory(engine)
             try:
                 async with factory() as session:
-                    await coverage.run_once(session, settings)
+                    now = asyncio.get_running_loop().time()
+                    interval = max(settings.calibration_interval_hours, 1) * 3600.0
+                    calibration_due = settings.calibration_enabled and (
+                        last_calibration is None or now - last_calibration >= interval
+                    )
+                    await _coverage_cycle(session, settings, calibration_due)
+                    if calibration_due:
+                        last_calibration = asyncio.get_running_loop().time()
             finally:
                 await engine.dispose()
 
@@ -124,6 +122,24 @@ def build_tasks(settings: Settings) -> list[Task]:
         )
     else:
         logger.info("the coverage job is turned off")
+        if settings.calibration_enabled:
+
+            async def calibration_run() -> None:
+                engine = make_engine(settings.database_url_jobs)
+                factory = make_session_factory(engine)
+                try:
+                    async with factory() as session:
+                        await calibrate.run_once(session, settings)
+                finally:
+                    await engine.dispose()
+
+            tasks.append(
+                Task(
+                    name="calibration",
+                    run=calibration_run,
+                    next_delay=lambda: max(settings.calibration_interval_hours, 1) * 3600.0,
+                )
+            )
 
     return tasks
 

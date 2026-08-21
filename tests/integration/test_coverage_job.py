@@ -25,6 +25,7 @@ from sonoran.coverage import store
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.jobs import calibrate, coverage
 from sonoran.radio.overrides import load_overrides
+from sonoran.radio.resolve import MAX_CALIBRATION_DB
 
 
 def _jobs_url(timescale_url: str) -> str:
@@ -173,6 +174,28 @@ def test_a_node_the_mesh_has_not_heard_in_a_long_time_is_left_out(
     assert _run(settings, coverage.run_once) is None
 
 
+def test_a_position_outside_the_terrain_region_is_left_out(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """A regional map must not predict from a site outside its terrain."""
+    settings = _settings(
+        timescale_url,
+        tmp_path,
+        terrain_lat_min=33,
+        terrain_lat_max=33,
+        terrain_lon_min=-113,
+        terrain_lon_max=-112,
+    )
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900006, 33.45, -112.07)
+        _add_node(connection, 900007, 34.45, -112.07)
+
+    manifest = _run(settings, coverage.run_once)
+
+    assert manifest is not None
+    assert manifest.presets[0].node_count == 1
+
+
 # --- a real run --------------------------------------------------------
 
 
@@ -297,12 +320,16 @@ def test_calibration_with_no_reports_writes_nothing(
 ):  # type: ignore[no-untyped-def]
     """A new deployment has heard no neighbour lists yet."""
     settings = _settings(timescale_url, tmp_path)
+    path = store.calibration_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"old": true}', encoding="utf-8")
     with migrated_engine.begin() as connection:
         connection.execute(text("DELETE FROM neighbor_metrics"))
         _add_node(connection, 900050, 33.45, -112.07)
 
     assert _run(settings, calibrate.run_once) is None
     assert store.calibration_offsets(settings) == {}
+    assert not path.exists(), "a stale fit must not survive an empty current window"
 
 
 def test_calibration_reads_the_neighbour_reports(
@@ -348,6 +375,10 @@ def test_calibration_reads_the_neighbour_reports(
     report = client.get("/api/coverage/calibration").json()
     assert report["available"] is True
     assert len(report["nodes"]) == len(result.nodes)
+    assert all(
+        item["offset_db"] is None or abs(item["offset_db"]) <= MAX_CALIBRATION_DB
+        for item in report["nodes"]
+    )
 
 
 def test_calibration_rejects_a_report_from_another_preset(
@@ -377,6 +408,31 @@ def test_calibration_rejects_a_report_from_another_preset(
         return await calibrate.read_reports(session, given, peers)
 
     assert _run(settings, reports) == {900070: {900071: -9.0}}
+
+
+def test_calibration_rejects_a_node_outside_the_terrain_region(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The fit must not use flat ground for a node outside the region."""
+    settings = _settings(
+        timescale_url,
+        tmp_path,
+        terrain_lat_min=33,
+        terrain_lat_max=33,
+        terrain_lon_min=-113,
+        terrain_lon_max=-112,
+    )
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900072, 33.45, -112.07)
+        _add_node(connection, 900073, 34.45, -112.07)
+
+    async def peers(session, given: Settings):  # type: ignore[no-untyped-def]
+        return await calibrate.read_peers(
+            session, given, load_overrides(given.radio_overrides_path)
+        )
+
+    found = _run(settings, peers)
+    assert set(found) == {900072}
 
 
 def test_a_broken_calibration_file_does_not_stop_a_run(

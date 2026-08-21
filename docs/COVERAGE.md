@@ -105,6 +105,18 @@ Levels are held the way the engine reports them: one unsigned byte,
 byte reaches only -128 and the sensitivity of Long fast is -139 dBm.
 See `AGENTS.md` 9.16.2.
 
+### 6.1 What the page draws
+
+The page has three independent display layers: the map, the nodes, and
+the signal strength. A reader can leave only the ground, compare node
+positions with the prediction, or remove the ground and inspect the
+prediction by itself.
+
+No coverage is transparent. Usable coverage is nearly opaque and runs
+from hot pink at the receiver limit to bright blue at 30 dB of margin.
+The terrain map does not use that ramp. The edge and the direction of
+improvement therefore remain visible over roads, desert, and forest.
+
 ## 7. Clutter
 
 ITM has no clutter model. It treats both ends of a path as if they
@@ -168,12 +180,24 @@ hidden ones beats ignoring them.
 
 | Guard | Value |
 |---|---|
+| The fit as a whole is ignored above this model bias | 20 dB |
 | The fit as a whole is ignored above this scatter | 20 dB |
+| A node is ignored above this scatter | 20 dB |
 | A node needs this many links | 6 |
 | A node needs this many counterparties | 3 |
 | A node needs this many links that really worked | 2 |
 | An offset is clamped at | 15 dB |
 | A node may be pinned entirely | `lock_calibration` |
+
+The solver enforces the 15 dB bound during each fit round. This stops a
+node with mostly silent links from pulling the other offsets away. The
+stored-value reader and the radio-profile resolver enforce the same
+bound again. The API shows no offset for a node that does not have
+enough evidence.
+
+A model bias is one error over the whole mesh. A value past 20 dB says
+the propagation model or the silent-link assumption does not describe
+the current evidence. Sonoran then uses no per-node correction.
 
 The scatter is measured on the reported links only. A filled in link
 was invented from the fit, so counting it would flatter the fit with
@@ -181,7 +205,11 @@ its own guesses.
 
 ## 9. Running it
 
-The job runs on a timer in the jobs process. To run one by hand:
+The job runs on a timer in the jobs process. When calibration is due,
+it finishes before coverage starts. The coverage run then reads the
+new calibration file.
+
+To run one by hand:
 
 ```bash
 uv run python -c "import asyncio; from sonoran.jobs.coverage import main; asyncio.run(main())"

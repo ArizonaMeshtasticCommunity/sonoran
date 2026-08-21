@@ -35,10 +35,17 @@
 
   const state = {
     map: null,
+    baseTiles: null,
     tiles: null,
+    nodes: null,
+    nodeRows: new Map(),
+    nodeRequest: 0,
     summary: null,
     preset: null,
     layer: DEFAULT_LAYER,
+    showMap: true,
+    showNodes: true,
+    showSignal: true,
     loaded: false,
   };
 
@@ -103,13 +110,21 @@
       CONFIG.mapZoom || 7,
     );
     if (CONFIG.tileUrl) {
-      L.tileLayer(CONFIG.tileUrl, {
+      state.baseTiles = L.tileLayer(CONFIG.tileUrl, {
         attribution: CONFIG.tileAttribution || '',
         maxZoom: 19,
       }).addTo(map);
     }
+    state.nodes = L.layerGroup().addTo(map);
     state.map = map;
     return map;
+  }
+
+  function drawBaseMap() {
+    const map = ensureMap();
+    if (!state.baseTiles) return;
+    if (state.showMap && !map.hasLayer(state.baseTiles)) state.baseTiles.addTo(map);
+    if (!state.showMap && map.hasLayer(state.baseTiles)) map.removeLayer(state.baseTiles);
   }
 
   function drawTiles() {
@@ -118,7 +133,7 @@
       map.removeLayer(state.tiles);
       state.tiles = null;
     }
-    if (!state.summary || !state.summary.available || !state.preset) return;
+    if (!state.showSignal || !state.summary || !state.summary.available || !state.preset) return;
 
     const summary = state.summary;
     /*
@@ -156,6 +171,81 @@
     ).addTo(map);
   }
 
+  function cssColour(name, fallback) {
+    return getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim()
+      || fallback;
+  }
+
+  function nodeColour(node) {
+    return node.role ? cssColour(`role-${node.role}`, '#f6ece2') : cssColour('muted', '#b59c88');
+  }
+
+  function nodeStyle(node) {
+    const fill = nodeColour(node);
+    const heard = Date.parse(node.last_heard || '');
+    const stale = Number.isFinite(heard) && Date.now() - heard > 24 * 60 * 60 * 1000;
+    return {
+      radius: node.is_mqtt_gateway ? 7 : 5,
+      color: node.is_mqtt_gateway ? cssColour('text', '#f6ece2') : '#17100b',
+      weight: node.is_mqtt_gateway ? 3 : 2,
+      fillColor: fill,
+      fillOpacity: stale ? 0.45 : 0.95,
+      opacity: stale ? 0.65 : 1,
+    };
+  }
+
+  function nodePopup(node) {
+    const role = node.role ? node.role.replace(/_/g, ' ').toLowerCase() : 'no role reported';
+    return el(
+      'div',
+      {},
+      el('div', { style: 'font-weight:650', text: node.display_name || node.node_id }),
+      el('div', { class: 'muted', style: 'font-size:.8rem', text: node.node_id }),
+      el('div', { style: `font-size:.8rem;color:${nodeColour(node)}`, text: role }),
+      el('button', {
+        class: 'linky',
+        type: 'button',
+        text: 'Open node detail',
+        onclick: () => {
+          location.hash = `node/${node.node_id}`;
+        },
+      }),
+    );
+  }
+
+  async function drawNodes() {
+    const map = ensureMap();
+    state.nodes.clearLayers();
+    if (!state.showNodes || !state.summary || !state.preset) return;
+
+    const preset = state.preset;
+    const request = ++state.nodeRequest;
+    let rows = state.nodeRows.get(preset);
+    if (!rows) {
+      const hours = Number(state.summary.active_hours) || 168;
+      try {
+        const response = await fetch(
+          api(`api/map/nodes?channel=${encodeURIComponent(preset)}&hours=${hours}&active_hours=${hours}`),
+        );
+        if (!response.ok) throw new Error(`Request failed (${response.status})`);
+        rows = await response.json();
+        state.nodeRows.set(preset, rows);
+      } catch (error) {
+        console.warn('coverage nodes unavailable', error);
+        return;
+      }
+    }
+    if (request !== state.nodeRequest || preset !== state.preset || !state.showNodes) return;
+
+    for (const node of rows) {
+      if (node.lat == null || node.lon == null) continue;
+      L.circleMarker([node.lat, node.lon], nodeStyle(node))
+        .bindPopup(nodePopup(node))
+        .addTo(state.nodes);
+    }
+    if (!map.hasLayer(state.nodes)) state.nodes.addTo(map);
+  }
+
   /* ---------------------------------------------------------- panels */
 
   function drawLayers(page) {
@@ -180,6 +270,36 @@
     );
   }
 
+  function drawViews(page) {
+    const host = $('[data-coverage-views]', page);
+    if (!host) return;
+    const choices = [
+      ['showMap', 'Map'],
+      ['showNodes', 'Nodes'],
+      ['showSignal', 'Signal strength'],
+    ];
+    replace(
+      host,
+      choices.map(([key, label]) =>
+        el('button', {
+          type: 'button',
+          'aria-pressed': String(state[key]),
+          text: label,
+          onclick: () => {
+            state[key] = !state[key];
+            drawViews(page);
+            if (key === 'showMap') drawBaseMap();
+            if (key === 'showNodes') drawNodes();
+            if (key === 'showSignal') {
+              drawTiles();
+              drawLegend(page);
+            }
+          },
+        }),
+      ),
+    );
+  }
+
   function drawPresets(page) {
     const picker = $('[data-coverage-preset]', page);
     if (!picker || !state.summary) return;
@@ -197,7 +317,7 @@
     const legend = $('[data-coverage-legend]', page);
     if (!legend) return;
     const preset = state.summary && presetOf(state.summary, state.preset);
-    if (!preset) {
+    if (!preset || !state.showSignal) {
       legend.hidden = true;
       return;
     }
@@ -326,11 +446,16 @@
         class: 'coverage-flag',
         text: `scatter ${report.residual_spread_db} dB`,
       }),
+      el('span', {
+        class: 'coverage-flag',
+        text: `model bias ${report.model_bias_db} dB`,
+      }),
     );
 
     const rows = (report.nodes || [])
       .slice()
-      .sort((a, b) => Math.abs(b.offset_db) - Math.abs(a.offset_db))
+      .sort((a, b) => Number(b.applied) - Number(a.applied)
+        || Math.abs(b.offset_db || 0) - Math.abs(a.offset_db || 0))
       .slice(0, 40)
       .map((node) =>
         el(
@@ -350,7 +475,9 @@
           ),
           el('td', {
             class: 'num',
-            text: `${node.offset_db > 0 ? '+' : ''}${node.offset_db} dB`,
+            text: node.applied
+              ? `${node.offset_db > 0 ? '+' : ''}${node.offset_db} dB`
+              : '—',
           }),
           el('td', { class: 'num', text: String(node.reported) }),
           el('td', { class: 'num', text: String(node.censored) }),
@@ -462,11 +589,14 @@
   function drawAll(page) {
     drawPresets(page);
     drawLayers(page);
+    drawViews(page);
     drawLegend(page);
     drawStats(page);
     drawAssumes(page);
     drawSites(page);
+    drawBaseMap();
     drawTiles();
+    drawNodes();
     drawCalibration(page);
   }
 
@@ -475,6 +605,9 @@
   async function show(page) {
     const map = ensureMap();
     setTimeout(() => map.invalidateSize(), 0);
+    // Read current positions each time this page opens. A node list
+    // kept for the whole browser session becomes stale.
+    state.nodeRows.clear();
 
     let summary = null;
     try {

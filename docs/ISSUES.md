@@ -227,6 +227,14 @@ package. Moving that reading into a module both can import is the work
 to do first. See `AGENTS.md` 9.6 and 9.18 for why the reading is not
 something to write a second time.
 
+The live fit on 2026-08-21 found a network-wide model bias near -41 dB.
+That is outside the 20 dB trust guard, so Sonoran applies no per-node
+correction. The coverage map currently uses nameplate radio profiles.
+The large bias can mean that the propagation assumptions are wrong, or
+that absence from an aggregated neighbour list is not reliable evidence
+that a link was silent. Do not raise the guard to make the fit apply.
+Validate that evidence first.
+
 ### 2.5 The planner draws 90 m terrain only
 
 **State:** Open.

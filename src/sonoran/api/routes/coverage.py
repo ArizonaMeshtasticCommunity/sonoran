@@ -46,6 +46,7 @@ async def coverage_summary(request: Request) -> dict[str, object]:
     return {
         "available": True,
         "layers": [{"key": key, "label": LAYER_LABELS[key]} for key in LAYERS],
+        "active_hours": settings.coverage_active_hours,
         "tile_size": TILE_SIZE,
         **manifest,
     }
@@ -56,9 +57,8 @@ async def coverage_calibration(request: Request) -> dict[str, object]:
     """Return what the mesh measured against what the model predicted.
 
     This is where a node that is not what its nameplate says becomes
-    visible. `offset_db` is how far the mesh puts it from that
-    nameplate. A node with thin evidence is listed with its counts and
-    is not applied.
+    visible. `offset_db` is the bounded correction the map uses. A node
+    with thin evidence is listed with its counts and a null offset.
 
     `applied` says whether the fit as a whole is trusted. A fit whose
     measurements still disagree widely describes nothing, and the map
@@ -70,6 +70,19 @@ async def coverage_calibration(request: Request) -> dict[str, object]:
         return {"available": False, "nodes": []}
     applied = store.calibration_offsets(settings)
     nodes = document.get("nodes")
+    reported_nodes: list[dict[object, object]] = []
+    for item in nodes if isinstance(nodes, list) else []:
+        if not isinstance(item, dict):
+            continue
+        node_id = item.get("node_id")
+        offset = applied.get(node_id) if isinstance(node_id, str) else None
+        reported_nodes.append(
+            {
+                **item,
+                "offset_db": offset,
+                "applied": isinstance(node_id, str) and node_id in applied,
+            }
+        )
     return {
         "available": True,
         "generated_at": document.get("generated_at"),
@@ -77,11 +90,7 @@ async def coverage_calibration(request: Request) -> dict[str, object]:
         "model_bias_db": document.get("model_bias_db"),
         "residual_spread_db": document.get("residual_spread_db"),
         "applied_count": len(applied),
-        "nodes": [
-            {**item, "applied": item.get("node_id") in applied}
-            for item in (nodes if isinstance(nodes, list) else [])
-            if isinstance(item, dict)
-        ],
+        "nodes": reported_nodes,
     }
 
 

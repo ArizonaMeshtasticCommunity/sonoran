@@ -21,6 +21,7 @@ nothing a reader can find.
 """
 
 import json
+import math
 import re
 import shutil
 import time
@@ -30,6 +31,7 @@ from pathlib import Path
 
 from sonoran.config import Settings
 from sonoran.coverage.calibrate import (
+    MAX_TRUSTED_BIAS_DB,
     MAX_TRUSTED_SPREAD_DB,
     MIN_COUNTERPARTIES,
     MIN_OBSERVATIONS,
@@ -37,6 +39,7 @@ from sonoran.coverage.calibrate import (
     Calibration,
 )
 from sonoran.logging import get_logger
+from sonoran.radio.resolve import clamp_calibration
 
 logger = get_logger(__name__)
 
@@ -307,6 +310,16 @@ def write_calibration(
     logger.info("wrote the calibration for %s nodes", len(calibration.nodes))
 
 
+def clear_calibration(settings: Settings) -> None:
+    """Remove a stale calibration when the current window has none."""
+    try:
+        calibration_path(settings).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        logger.warning("cannot remove the stale calibration: %s", error)
+
+
 def read_calibration(settings: Settings) -> dict[str, object] | None:
     """Return the calibration, or None when there is none.
 
@@ -331,13 +344,23 @@ def calibration_offsets(settings: Settings) -> dict[str, float]:
     document = read_calibration(settings)
     if document is None:
         return {}
+    raw_bias = document.get("model_bias_db")
+    bias = float(raw_bias) if isinstance(raw_bias, int | float) else math.nan
     # A fit whose measurements disagree this widely is not describing
     # the mesh. Correcting on it would move the map on noise.
     raw_spread = document.get("residual_spread_db")
-    spread = float(raw_spread) if isinstance(raw_spread, int | float) else 0.0
-    if spread > MAX_TRUSTED_SPREAD_DB:
+    spread = float(raw_spread) if isinstance(raw_spread, int | float) else math.nan
+    if (
+        not math.isfinite(bias)
+        or abs(bias) > MAX_TRUSTED_BIAS_DB
+        or not math.isfinite(spread)
+        or spread > MAX_TRUSTED_SPREAD_DB
+    ):
         logger.warning(
-            "the calibration scatter is %.1f dB, so the nameplate figures are used", spread
+            "the calibration bias is %.1f dB and scatter is %.1f dB, "
+            "so the nameplate figures are used",
+            bias,
+            spread,
         )
         return {}
     offsets: dict[str, float] = {}
@@ -347,12 +370,26 @@ def calibration_offsets(settings: Settings) -> dict[str, float]:
     for item in nodes:
         if not isinstance(item, dict):
             continue
+        try:
+            observations = int(item.get("observations") or 0)
+            counterparties = int(item.get("counterparties") or 0)
+            reported = int(item.get("reported") or 0)
+            node_spread = float(item.get("residual_spread_db") or 0.0)
+        except (TypeError, ValueError):
+            continue
         usable = (
-            int(item.get("observations") or 0) >= MIN_OBSERVATIONS
-            and int(item.get("counterparties") or 0) >= MIN_COUNTERPARTIES
-            and int(item.get("reported") or 0) >= MIN_REPORTED
+            observations >= MIN_OBSERVATIONS
+            and counterparties >= MIN_COUNTERPARTIES
+            and reported >= MIN_REPORTED
+            and math.isfinite(node_spread)
+            and node_spread <= MAX_TRUSTED_SPREAD_DB
         )
         node_id = item.get("node_id")
         if usable and isinstance(node_id, str):
-            offsets[node_id] = float(item.get("offset_db") or 0.0)
+            try:
+                offset = float(item["offset_db"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(offset):
+                offsets[node_id] = clamp_calibration(offset)
     return offsets

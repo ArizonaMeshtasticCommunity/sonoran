@@ -10,11 +10,11 @@
       dark browser chrome. iOS ignores transparency and composites onto
       black, so the touch icon carries a solid tile of the page colour.
     -->
-    <link rel="icon" type="image/png" sizes="256x256" href="static/favicon.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="static/apple-touch-icon.png" />
-    <link rel="manifest" href="static/manifest.webmanifest" />
-    <link rel="stylesheet" href="static/vendor/leaflet.css" />
-    <link rel="stylesheet" href="static/app.css" />
+    <link rel="icon" type="image/png" sizes="256x256" href="static/favicon.png?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="apple-touch-icon" sizes="180x180" href="static/apple-touch-icon.png?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="manifest" href="static/manifest.webmanifest?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="stylesheet" href="static/vendor/leaflet.css?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="stylesheet" href="static/app.css?v=__SONORAN_ASSET_VERSION__" />
   </head>
   <body>
     <!--
@@ -45,7 +45,7 @@
           text stays, so the page never shows a broken image.
         -->
         <div class="brand">
-          <img class="brand-mark" data-brand-mark src="static/logo.png" alt="Sonoran" />
+          <img class="brand-mark" data-brand-mark src="static/logo.png?v=__SONORAN_ASSET_VERSION__" alt="Sonoran" />
           <div class="brand-text" data-brand-text>
             <h1>Sonoran</h1>
             <span>azmsh.net</span>
@@ -182,14 +182,16 @@
 
           <div class="coverage-layers" role="group" aria-label="Coverage layer" data-coverage-layers></div>
 
+          <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
+
           <div class="map-shell">
             <div id="coverage-map"></div>
             <div class="coverage-legend" data-coverage-legend hidden>
               <span class="coverage-legend-title" data-coverage-legend-title></span>
               <div class="coverage-ramp" aria-hidden="true"></div>
               <div class="coverage-scale">
-                <span data-coverage-floor></span>
-                <span data-coverage-ceiling></span>
+                <span><strong>Weak</strong><small data-coverage-floor></small></span>
+                <span><strong>Strong</strong><small data-coverage-ceiling></small></span>
               </div>
             </div>
           </div>
@@ -614,8 +616,8 @@
 
 
     <script>window.SONORAN = __SONORAN_CONFIG__;</script>
-    <script src="static/vendor/leaflet.js"></script>
-    <script src="static/vendor/echarts.min.js"></script>
+    <script src="static/vendor/leaflet.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/vendor/echarts.min.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The planner loads before app.js on purpose. app.js runs the router
       as its last act, and the router needs window.SonoranPlanner to
@@ -623,16 +625,16 @@
       dashboard. The planner uses helpers from app.js only inside
       functions, which run long after both files are loaded.
     -->
-    <script src="static/planner-params.js"></script>
-    <script src="static/planner.js"></script>
+    <script src="static/planner-params.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/planner.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The coverage map has its own file for the same reason the
       planner does: its own Leaflet map, its own state, and no need
       to make app.js larger. It loads before app.js so the router
       finds it on a reload straight to #coverage.
     -->
-    <script src="static/coverage.js"></script>
-    <script src="static/app.js"></script>
+    <script src="static/coverage.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/app.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The config checker's logic expects three globals, which its own
       page loads the same way: the protobuf runtime, the YAML parser,
@@ -642,14 +644,14 @@
       "jsyaml is not defined", and only the build-from-scratch path
       works. The integrity hashes are upstream's, unchanged.
     -->
-    <script src="static/vendor/config-checker/js/vendor/protobuf.min.js" integrity="sha384-BGZSJW0orEarb+6hjaZkIh5GqTIGkZc86kh+9qAZpJPniwsiGHRi0vJ02S+rTztc" crossorigin="anonymous"></script>
-    <script src="static/vendor/config-checker/js/vendor/js-yaml.min.js" integrity="sha384-hyhT0yrWXjngXhDa5wpJTU0pt/Djmlx4KtZECqqS6ZHf3ah4fWkFeW/2eWX9cX5J" crossorigin="anonymous"></script>
-    <script src="static/vendor/config-checker/js/protobuf/meshtastic-proto.js"></script>
+    <script src="static/vendor/config-checker/js/vendor/protobuf.min.js?v=__SONORAN_ASSET_VERSION__" integrity="sha384-BGZSJW0orEarb+6hjaZkIh5GqTIGkZc86kh+9qAZpJPniwsiGHRi0vJ02S+rTztc" crossorigin="anonymous"></script>
+    <script src="static/vendor/config-checker/js/vendor/js-yaml.min.js?v=__SONORAN_ASSET_VERSION__" integrity="sha384-hyhT0yrWXjngXhDa5wpJTU0pt/Djmlx4KtZECqqS6ZHf3ah4fWkFeW/2eWX9cX5J" crossorigin="anonymous"></script>
+    <script src="static/vendor/config-checker/js/protobuf/meshtastic-proto.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The config check page imports the checker's logic from
       vendor/config-checker/. That code is ES modules, so this file is
       one too, which means it runs after app.js. app.js waits for it.
     -->
-    <script type="module" src="static/config-check.js"></script>
+    <script type="module" src="static/config-check.js?v=__SONORAN_ASSET_VERSION__"></script>
   </body>
 </html>
