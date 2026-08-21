@@ -21,11 +21,17 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from sonoran.roles import INFRASTRUCTURE_ROLES
+
 # The roles a public map may show.
 #
 # These are deliberately sited community assets. The mesh depends on
 # them and their operators put them where everybody could see them.
-PUBLIC_ROLES = frozenset({"ROUTER", "ROUTER_LATE", "REPEATER"})
+#
+# It is the same table the coverage job predicts from, held in one
+# place. The two rules are still different, and the difference is the
+# gateway below: "what a stranger may see" is not "what may transmit".
+PUBLIC_ROLES = INFRASTRUCTURE_ROLES
 
 
 @dataclass(frozen=True)

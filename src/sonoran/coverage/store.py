@@ -83,9 +83,18 @@ class PresetSummary:
     preset: str
     label: str
     sensitivity_dbm: float
+    # How many sites the run predicted from.
     node_count: int
-    positioned_count: int
+    # Every positioned node on this preset, before the role test.
+    candidate_count: int
+    # The sites the run used, after the cap.
+    site_count: int
+    # Sites dropped by `coverage_max_nodes`, and nothing else.
     skipped_count: int
+    # How many nodes each role lost. A node with no role is counted
+    # under `NULL`. See `sonoran/roles.py`: that is a client, not an
+    # unknown, and the page must be able to say how many there were.
+    excluded_by_role: dict[str, int]
     usable_area_km2: float
     downlink_area_km2: float
     tile_count: int
