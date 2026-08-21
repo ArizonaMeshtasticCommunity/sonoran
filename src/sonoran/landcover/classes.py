@@ -30,20 +30,27 @@ class LandCover:
     name: str
     # The nominal height of what stands on the ground, in metres.
     clutter_height_m: float
+    # Whether a signal bends over this clutter or past it.
+    #
+    # ITU-R P.2108 section 3.1 gives two forms. Buildings and trees are
+    # obstacles a signal diffracts over, equation (2a). Open country is
+    # a height gain against the ground itself, equation (2b). See
+    # `coverage/clutter.py`.
+    diffracting: bool = False
 
 
 # The ESA WorldCover classes, by their own code.
 CLASSES: dict[int, LandCover] = {
-    10: LandCover(10, "Tree cover", 15.0),
+    10: LandCover(10, "Tree cover", 15.0, diffracting=True),
     20: LandCover(20, "Shrubland", 2.0),
     30: LandCover(30, "Grassland", 0.5),
     40: LandCover(40, "Cropland", 1.0),
-    50: LandCover(50, "Built-up", 9.0),
+    50: LandCover(50, "Built-up", 9.0, diffracting=True),
     60: LandCover(60, "Bare or sparse vegetation", 0.0),
     70: LandCover(70, "Snow and ice", 0.0),
     80: LandCover(80, "Permanent water", 0.0),
     90: LandCover(90, "Herbaceous wetland", 0.5),
-    95: LandCover(95, "Mangroves", 10.0),
+    95: LandCover(95, "Mangroves", 10.0, diffracting=True),
     100: LandCover(100, "Moss and lichen", 0.0),
 }
 
@@ -64,3 +71,12 @@ def land_cover(code: int) -> LandCover:
 def clutter_height_m(code: int) -> float:
     """Return the nominal clutter height of a class, in metres."""
     return land_cover(code).clutter_height_m
+
+
+def is_diffracting(code: int) -> bool:
+    """Return true when a signal bends over this clutter.
+
+    Buildings and trees are obstacles. Scrub and grass are ground. See
+    `coverage/clutter.py` and P.2108 Table 3.
+    """
+    return land_cover(code).diffracting

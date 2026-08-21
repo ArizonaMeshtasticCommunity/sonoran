@@ -43,10 +43,12 @@ approximation.
 from dataclasses import dataclass
 
 from sonoran.config import Settings
-from sonoran.coverage.params import EngineParams, erp_watts
-from sonoran.landcover.store import clutter_at
+from sonoran.coverage.clutter import terminal_loss_db
+from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ, EngineParams, erp_watts
+from sonoran.landcover.classes import is_diffracting
+from sonoran.landcover.store import class_at, clutter_at
 from sonoran.radio.presets import ModemPreset
-from sonoran.radio.resolve import RadioProfile, clutter_height_m
+from sonoran.radio.resolve import RadioProfile
 
 # The transmit power of the handheld the map assumes, in dBm.
 #
@@ -66,7 +68,14 @@ class Site:
     longitude: float
     profile: RadioProfile
     preset: ModemPreset
+    # The representative height of what stands around the node, in
+    # metres, and whether a signal bends over it.
     clutter_height_m: float
+    clutter_diffracting: bool = False
+    # What that clutter costs this node's own antenna, in dB. It is a
+    # loss at this end of every path, so it is charged once here
+    # rather than inside the engine. See `coverage/clutter.py`.
+    clutter_loss_db: float = 0.0
 
     @property
     def sort_key(self) -> float:
@@ -96,6 +105,9 @@ def make_site(
 ) -> Site:
     """Return a site, with the clutter around it worked out."""
     around = clutter_at(settings, latitude, longitude)
+    diffracting = is_diffracting(class_at(settings, latitude, longitude))
+    # An operator who says the node is above the roofs is believed.
+    height = 1e9 if profile.above_clutter else profile.antenna_height_m
     return Site(
         node_id=node_id,
         node_num=node_num,
@@ -104,7 +116,9 @@ def make_site(
         longitude=longitude,
         profile=profile,
         preset=preset,
-        clutter_height_m=clutter_height_m(profile, around),
+        clutter_height_m=around,
+        clutter_diffracting=diffracting,
+        clutter_loss_db=terminal_loss_db(around, height, DEFAULT_FREQUENCY_MHZ, diffracting),
     )
 
 
@@ -129,7 +143,14 @@ def engine_params(settings: Settings, site: Site) -> EngineParams:
             profile.cable_loss_db,
         ),
         radius_m=settings.coverage_radius_km * 1000.0,
-        clutter_height_m=site.clutter_height_m,
+        # The engine is given no clutter on purpose.
+        #
+        # It uses the value by raising the ground, which costs nothing
+        # while the antenna clears the clutter and forty to seventy dB
+        # once it does not, and never charges the receiver at all. That
+        # is a cliff, not a model. The loss is charged at each terminal
+        # instead. See `coverage/clutter.py`.
+        clutter_height_m=0.0,
     )
 
 
@@ -138,6 +159,10 @@ def downlink_offset_db(settings: Settings) -> float:
 
     The engine reports the field that arrives. The handheld's antenna
     then adds its gain.
+
+    The clutter at each end is charged separately: the node's own by
+    `Site.clutter_loss_db`, and the handheld's by the receiver raster
+    the job builds for the whole region.
     """
     return settings.coverage_rx_gain_dbi
 

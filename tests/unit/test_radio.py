@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from sonoran.coverage.clutter import terminal_loss_db
+from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ as FREQUENCY
 from sonoran.radio.hardware import (
     INTERNAL_ANTENNA_GAIN_DBI,
     STOCK_ANTENNA_GAIN_DBI,
@@ -36,7 +38,6 @@ from sonoran.radio.resolve import (
     DEFAULT_ANTENNA_HEIGHT_M,
     MAX_CALIBRATION_DB,
     Source,
-    clutter_height_m,
     resolve_profile,
 )
 
@@ -356,18 +357,24 @@ def test_the_profile_can_be_written_as_json() -> None:
 
 
 # --- clutter -----------------------------------------------------------
+#
+# The rule used to live in `radio/resolve.py` and answered with a
+# height for the engine to raise the ground by. It now answers with a
+# loss in dB, from ITU-R P.2108. The three things it must still get
+# right are the same, so the tests stayed and their subject moved.
 
 
-def test_a_node_in_the_clutter_takes_the_clutter_height() -> None:
+def test_a_node_in_the_clutter_is_charged_for_it() -> None:
     profile = resolve_profile("!a", "RAK4631")
     assert profile.antenna_height_m == 3.0
-    assert clutter_height_m(profile, 10.0) == 10.0
+    assert terminal_loss_db(10.0, profile.antenna_height_m, FREQUENCY, True) > 0.0
 
 
 def test_a_node_marked_above_the_clutter_takes_none() -> None:
+    """An operator who says the antenna is above the roofs is believed."""
     overrides = Overrides({"!a": NodeOverride(above_clutter=True)})
     profile = resolve_profile("!a", "RAK4631", overrides)
-    assert clutter_height_m(profile, 10.0) == 0.0
+    assert profile.above_clutter is True
 
 
 def test_a_mast_taller_than_the_clutter_is_above_it_whatever_the_file_says() -> None:
@@ -375,4 +382,4 @@ def test_a_mast_taller_than_the_clutter_is_above_it_whatever_the_file_says() -> 
     overrides = Overrides({"!a": NodeOverride(antenna_height_m=30.0)})
     profile = resolve_profile("!a", "RAK4631", overrides)
     assert profile.above_clutter is False
-    assert clutter_height_m(profile, 10.0) == 0.0
+    assert terminal_loss_db(10.0, profile.antenna_height_m, FREQUENCY, True) == 0.0

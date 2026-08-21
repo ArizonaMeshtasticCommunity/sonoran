@@ -205,21 +205,3 @@ def _pick[T](
         return override
     sources[name] = fallback_source
     return fallback
-
-
-def clutter_height_m(profile: RadioProfile, land_cover_height_m: float) -> float:
-    """Return the clutter height to predict this node with, in metres.
-
-    A node above the clutter takes no clutter loss. Its antenna sees
-    over the roofs and the trees, so the height around it does not block
-    the path.
-
-    A node whose antenna is taller than the clutter around it is also
-    above it, whatever the overrides file says. A 30 m mast in a street
-    of 10 m houses is not in the clutter.
-    """
-    if profile.above_clutter:
-        return 0.0
-    if profile.antenna_height_m >= land_cover_height_m:
-        return 0.0
-    return land_cover_height_m

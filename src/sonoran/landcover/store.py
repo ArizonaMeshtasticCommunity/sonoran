@@ -19,6 +19,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 
 from sonoran.config import Settings
 from sonoran.landcover.classes import UNKNOWN_CLASS, clutter_height_m
@@ -120,3 +121,15 @@ def have_pages(settings: Settings) -> bool:
         return any(directory.glob("*.class.u8"))
     except OSError:
         return False
+
+
+def class_page(settings: Settings, name: str) -> npt.NDArray[np.uint8] | None:
+    """Return one land cover page as a square of class codes.
+
+    Row 0 is the north edge of the degree, which is the order a terrain
+    page and a coverage grid both use. None when there is no page.
+    """
+    page = read_page(settings, name)
+    if page is None:
+        return None
+    return np.frombuffer(page, dtype=np.uint8).reshape(PAGE_SIZE, PAGE_SIZE)

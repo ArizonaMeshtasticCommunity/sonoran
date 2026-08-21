@@ -22,7 +22,7 @@ import asyncio
 import multiprocessing
 import os
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.coverage import store
+from sonoran.coverage.clutter import loss_by_class
 from sonoran.coverage.engine import MASK_COVERED, EngineError, SplatInstance, SplatModule
 from sonoran.coverage.grid import (
     MAX_LEVEL,
@@ -51,6 +52,7 @@ from sonoran.coverage.grid import (
     region_grid,
     union_bounds,
 )
+from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ
 from sonoran.coverage.render import (
     colour_levels,
     sample_tile,
@@ -67,12 +69,14 @@ from sonoran.coverage.sites import (
 )
 from sonoran.db.models import Node
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.landcover.store import have_pages
+from sonoran.landcover.store import PAGE_SIZE, class_page, have_pages
+from sonoran.landcover.store import tile_name as landcover_tile_name
 from sonoran.logging import get_logger
-from sonoran.positions import is_usable
+from sonoran.positions import is_precise_enough, is_usable
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
+from sonoran.roles import is_infrastructure, role_name
 from sonoran.terrain.store import coordinates_in_region, load_page, read_cached_page
 
 logger = get_logger(__name__)
@@ -82,6 +86,12 @@ logger = get_logger(__name__)
 # The page lists the sites a run used. A mesh of several hundred does
 # not need every one of them in a document the browser downloads.
 MANIFEST_NODE_LIMIT = 250
+
+# What a node left out for a fuzzed position is counted under.
+#
+# It sits beside the role names in the same report. A role can never
+# take this value, so the two cannot collide.
+COARSE_POSITION = "coarse-position"
 
 
 def worker_count(settings: Settings) -> int:
@@ -122,18 +132,42 @@ def group_by_preset(
     nodes: Sequence[Node],
     overrides: Overrides,
     offsets: dict[str, float] | None = None,
-) -> dict[str, list[Site]]:
-    """Return the sites of each preset, strongest first.
+) -> tuple[dict[str, list[Site]], dict[str, Counter[str]]]:
+    """Return the sites of each preset, strongest first, and what was
+    left out of each.
 
     A node whose channel is not a preset name rides on top of a preset
     and does not name one. Weather and PKI are the examples this mesh
     has. Such a node is left out rather than guessed at, because putting
     it on the wrong preset draws a link that cannot exist.
+
+    A node that is not infrastructure is left out as well. Only a node
+    that stays where it is can hold coverage open. See `sonoran/roles.py`
+    for why a missing role is a client and not an unknown.
+
+    So is a node whose position is known to be coarse. The public
+    Meshtastic broker fuzzes a position by up to 23 km, and the terrain
+    under a prediction is 90 m across.
+
+    The counts come back beside the groups, and not as a log line,
+    because the manifest has to report them. A run that quietly drops
+    nine nodes in ten must say so on the page.
     """
     groups: dict[str, list[Site]] = {}
+    left_out: dict[str, Counter[str]] = {}
     for node in nodes:
         preset = preset_for_channel(node.last_channel)
         if preset is None:
+            continue
+        rejected = left_out.setdefault(preset.key, Counter())
+        if not is_infrastructure(node.role):
+            rejected[role_name(node.role)] += 1
+            continue
+        if not is_precise_enough(node.last_position_precision_bits):
+            # The node said where it is, and said the answer is coarse.
+            # A footprint drawn around it would describe ground that
+            # may have no radio on it. See `sonoran/positions.py`.
+            rejected[COARSE_POSITION] += 1
             continue
         identifier = f"!{node.node_num:08x}"
         profile = resolve_profile(
@@ -157,7 +191,7 @@ def group_by_preset(
 
     for sites in groups.values():
         sites.sort(key=lambda site: site.sort_key, reverse=True)
-    return groups
+    return groups, left_out
 
 
 def _tile_name(latitude: int, longitude: int) -> str:
@@ -419,9 +453,12 @@ def _predict(
         site_grid = Grid(north=north, west=west, width=width, height=height)
         missing.update(site_missing)
 
-        added_down = blit_max(downlink, grid, _shift(levels, down_offset), site_grid)
+        # The clutter around the node costs the same at both ends,
+        # because it is a loss on this end of every path.
+        here = site.clutter_loss_db
+        added_down = blit_max(downlink, grid, _shift(levels, down_offset - here), site_grid)
         added_up = blit_max(
-            uplink, grid, _shift(levels, uplink_offset_db(settings, site)), site_grid
+            uplink, grid, _shift(levels, uplink_offset_db(settings, site) - here), site_grid
         )
         notes.append(
             {
@@ -431,6 +468,7 @@ def _predict(
                 "eirp_dbm": round(site.profile.effective_eirp_dbm, 1),
                 "antenna_height_m": site.profile.antenna_height_m,
                 "clutter_height_m": site.clutter_height_m,
+                "clutter_loss_db": round(site.clutter_loss_db, 1),
                 "calibrated": site.profile.is_measured,
                 "cells_set": added_down,
                 "cells_set_uplink": added_up,
@@ -483,9 +521,64 @@ def render_layer(
     return written
 
 
+def receiver_loss(settings: Settings, grid: Grid) -> Levels | None:
+    """Return the clutter loss at the receiving end, cell by cell.
+
+    The map is drawn for a handheld at `COVERAGE_RX_HEIGHT_M`, which is
+    below every clutter class except bare ground and water. Until now
+    that end was charged nothing anywhere, and it is the end the whole
+    map is about.
+
+    The land cover pages sit on the same lattice as the region grid,
+    1200 cells to the degree, so a page is placed at a whole cell offset
+    and no value is resampled. See `coverage/grid.py` 6.
+
+    None when the deployment holds no land cover page. The manifest
+    already says so, and a guess at clutter that is not there would move
+    every prediction for no reason.
+    """
+    if not have_pages(settings):
+        return None
+
+    table = loss_by_class(settings.coverage_rx_height_m, DEFAULT_FREQUENCY_MHZ)
+    loss = np.zeros((grid.height, grid.width), dtype=np.uint8)
+    north = int(np.floor(grid.north))
+    west = int(np.floor(grid.west))
+    per_degree = grid.cells_per_degree
+
+    for latitude in range(int(np.floor(grid.south)), north + 1):
+        for longitude in range(west, int(np.floor(grid.east)) + 1):
+            page = class_page(settings, landcover_tile_name(latitude, longitude))
+            if page is None:
+                continue
+            row = round((grid.north - (latitude + 1)) * per_degree)
+            column = round((longitude - grid.west) * per_degree)
+            top, left = max(row, 0), max(column, 0)
+            bottom = min(row + PAGE_SIZE, grid.height)
+            right = min(column + PAGE_SIZE, grid.width)
+            if bottom <= top or right <= left:
+                continue
+            patch = page[top - row : bottom - row, left - column : right - column]
+            loss[top:bottom, left:right] = table[patch]
+    return loss
+
+
+def _charge_receiver(levels: Levels, loss: Levels | None) -> Levels:
+    """Take the receiving end's clutter off a layer.
+
+    A cell nothing reached stays unreached, as in `_shift`. Turning a
+    hole into a very weak signal would draw coverage that is not there.
+    """
+    if loss is None:
+        return levels
+    moved = np.clip(levels.astype(np.int16) - loss.astype(np.int16), MIN_LEVEL, MAX_LEVEL)
+    return np.where(levels == NO_COVERAGE, NO_COVERAGE, moved).astype(np.uint8)
+
+
 def _build(
     settings: Settings,
     groups: dict[str, list[Site]],
+    left_out: dict[str, Counter[str]],
     held_terrain: set[str],
     stamp: str,
     workers: int,
@@ -503,14 +596,25 @@ def _build(
 
     summaries: list[store.PresetSummary] = []
     missing_all: set[str] = set()
+    # The receiving end does not change with the preset, so it is built
+    # once for the whole run.
+    rx_loss = receiver_loss(settings, grid)
 
-    for _key, sites in sorted(groups.items()):
+    for key, sites in sorted(groups.items()):
         preset: ModemPreset = sites[0].preset
         chosen = sites[: settings.coverage_max_nodes]
-        logger.info("preset %s: %s sites", preset.name, len(chosen))
+        rejected = left_out.get(key, Counter())
+        logger.info(
+            "preset %s: %s sites, %s nodes left out by role",
+            preset.name,
+            len(chosen),
+            sum(rejected.values()),
+        )
 
         downlink, uplink, notes, missing = predict_preset(settings, grid, chosen, workers)
         missing_all.update(missing)
+        downlink = _charge_receiver(downlink, rx_loss)
+        uplink = _charge_receiver(uplink, rx_loss)
         usable = combine_min(downlink, uplink)
         threshold = preset.sensitivity_dbm
 
@@ -528,8 +632,10 @@ def _build(
                 label=preset.label,
                 sensitivity_dbm=threshold,
                 node_count=len(sites),
-                positioned_count=len(chosen),
+                candidate_count=len(sites) + sum(rejected.values()),
+                site_count=len(chosen),
                 skipped_count=len(sites) - len(chosen),
+                excluded_by_role=dict(sorted(rejected.items())),
                 usable_area_km2=round(covered_area_km2(usable, grid, threshold), 1),
                 downlink_area_km2=round(covered_area_km2(downlink, grid, threshold), 1),
                 tile_count=tiles,
@@ -579,9 +685,14 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     offsets = store.calibration_offsets(settings)
     if offsets:
         logger.info("%s nodes carry a measured correction", len(offsets))
-    groups = group_by_preset(settings, nodes, overrides, offsets)
+    groups, left_out = group_by_preset(settings, nodes, overrides, offsets)
     if not groups:
-        logger.info("no positioned nodes on a modem preset, so no coverage run")
+        dropped = sum(sum(counts.values()) for counts in left_out.values())
+        logger.info(
+            "no infrastructure node on a modem preset, so no coverage run. "
+            "%s positioned nodes were left out by role",
+            dropped,
+        )
         return None
 
     # Terrain is fetched before the engine starts, because fetching it
@@ -599,7 +710,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     stamp = store.new_stamp()
     workers = worker_count(settings)
     logger.info("predicting with %s worker processes", workers)
-    manifest = await asyncio.to_thread(_build, settings, groups, held, stamp, workers)
+    manifest = await asyncio.to_thread(_build, settings, groups, left_out, held, stamp, workers)
     store.publish(settings, stamp, manifest)
     return manifest
 

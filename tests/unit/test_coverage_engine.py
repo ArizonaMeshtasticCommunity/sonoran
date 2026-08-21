@@ -364,3 +364,51 @@ def test_the_coverage_job_holds_one_instance_for_each_worker() -> None:
             coverage._WORKER_INSTANCE.close()
         coverage._WORKER_INSTANCE = None
         coverage._WORKER_MODULE = None
+
+
+def test_the_engine_clutter_is_a_cliff(module: SplatModule) -> None:
+    """Why the clutter is charged outside the engine.
+
+    `splat_create` takes a clutter height and uses it by raising the
+    ground. That is not a clutter model: it costs nothing at all while
+    the antenna clears the clutter, and tens of dB once it does not.
+    And the receiving end is never charged anything, at any height,
+    though the whole map is drawn for a handheld at 1.5 m.
+
+    This test is the measurement behind `coverage/clutter.py`. If a
+    future engine gives the value a different meaning, this is what
+    says so.
+    """
+    flat = np.full(PAGE_SIZE * PAGE_SIZE, 300, dtype="<i2").tobytes()
+
+    def field(clutter: float, tx_height_m: float, rx_height_m: float = 1.5) -> float:
+        params = EngineParams(
+            latitude=34.0,
+            longitude=-111.5,
+            tx_height_m=tx_height_m,
+            rx_height_m=rx_height_m,
+            erp_watts=erp_watts(30.0, 5.8, 0.0),
+            radius_m=20_000.0,
+            clutter_height_m=clutter,
+        )
+        with module.instance() as instance, instance.run(params) as run:
+            for index in range(len(run.pages())):
+                run.load_page(index, flat)
+            run.run_all_radials()
+            run.rasterize()
+            raster = run.raster()
+        signal = np.frombuffer(raster.signal, dtype=np.uint8).astype(np.int16)
+        covered = (np.frombuffer(raster.mask, dtype=np.uint8) & MASK_COVERED) > 0
+        return float(signal[covered].mean()) - 200.0
+
+    # An antenna well above the clutter is charged nothing at all.
+    assert field(9.0, 30.0) == pytest.approx(field(0.0, 30.0), abs=0.01)
+
+    # The same clutter, with the antenna under it, is a catastrophe.
+    assert field(9.0, 3.0) - field(0.0, 3.0) < -40.0
+
+    # And the receiving end is never charged, whatever its height.
+    for rx_height_m in (1.5, 10.0, 20.0):
+        assert field(9.0, 30.0, rx_height_m) == pytest.approx(
+            field(0.0, 30.0, rx_height_m), abs=0.01
+        )

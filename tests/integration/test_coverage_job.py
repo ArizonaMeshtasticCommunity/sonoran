@@ -71,20 +71,34 @@ def _add_node(
     latitude: float | None,
     longitude: float | None,
     channel: str | None = "LongFast",
-    role: str = "ROUTER",
+    *,
+    role: str | None,
     hours_ago: float = 1.0,
+    precision_bits: int | None = None,
 ) -> None:
-    """Insert one node the way ingest would have."""
+    """Insert one node the way ingest would have.
+
+    `role` has no default on purpose. It used to default to `ROUTER`,
+    and that is why no test in this file ever caught the coverage job
+    predicting from client nodes: every test asserted about routers
+    while its author believed it asserted about nodes. Naming the role
+    at each call is what keeps that from happening again.
+
+    A default of None would be worse than `ROUTER` was. It would move
+    every existing test to the excluded side at once and hide the very
+    thing these tests are for.
+    """
     heard = datetime.now(UTC) - timedelta(hours=hours_ago)
     connection.execute(
         text(
             "INSERT INTO node (node_num, node_id, short_name, long_name, hw_model, role, "
             "last_lat, last_lon, last_channel, last_heard, first_seen, updated_at, "
-            "is_mqtt_gateway) "
+            "is_mqtt_gateway, last_position_precision_bits) "
             "VALUES (:num, :ident, :short, :long, 'RAK4631', :role, :lat, :lon, :channel, "
-            ":heard, :heard, :heard, false) "
+            ":heard, :heard, :heard, false, :bits) "
             "ON CONFLICT (node_num) DO UPDATE SET last_lat = :lat, last_lon = :lon, "
-            "last_channel = :channel, last_heard = :heard"
+            "last_channel = :channel, last_heard = :heard, "
+            "last_position_precision_bits = :bits"
         ),
         {
             "num": node_num,
@@ -96,6 +110,7 @@ def _add_node(
             "lon": longitude,
             "channel": channel,
             "heard": heard,
+            "bits": precision_bits,
         },
     )
 
@@ -139,10 +154,10 @@ def test_nodes_with_no_position_make_no_run(
     """A node that has never had a fix cannot be a transmitter."""
     settings = _settings(timescale_url, tmp_path)
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900001, None, None)
+        _add_node(connection, 900001, None, None, role="ROUTER")
         # And one on Null Island, which is what an unset position looks
         # like. See sonoran/positions.py.
-        _add_node(connection, 900002, 0.0, 0.0)
+        _add_node(connection, 900002, 0.0, 0.0, role="ROUTER")
 
     assert _run(settings, coverage.run_once) is None
 
@@ -157,8 +172,8 @@ def test_a_node_on_a_channel_that_is_not_a_preset_is_left_out(
     """
     settings = _settings(timescale_url, tmp_path)
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900003, 33.45, -112.07, channel="Weather")
-        _add_node(connection, 900004, 33.46, -112.08, channel="PKI")
+        _add_node(connection, 900003, 33.45, -112.07, channel="Weather", role="ROUTER")
+        _add_node(connection, 900004, 33.46, -112.08, channel="PKI", role="ROUTER")
 
     assert _run(settings, coverage.run_once) is None
 
@@ -169,7 +184,7 @@ def test_a_node_the_mesh_has_not_heard_in_a_long_time_is_left_out(
     """A node that is gone must not hold coverage open on the map."""
     settings = _settings(timescale_url, tmp_path, coverage_active_hours=24)
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900005, 33.45, -112.07, hours_ago=200.0)
+        _add_node(connection, 900005, 33.45, -112.07, hours_ago=200.0, role="ROUTER")
 
     assert _run(settings, coverage.run_once) is None
 
@@ -187,8 +202,8 @@ def test_a_position_outside_the_terrain_region_is_left_out(
         terrain_lon_max=-112,
     )
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900006, 33.45, -112.07)
-        _add_node(connection, 900007, 34.45, -112.07)
+        _add_node(connection, 900006, 33.45, -112.07, role="ROUTER")
+        _add_node(connection, 900007, 34.45, -112.07, role="ROUTER")
 
     manifest = _run(settings, coverage.run_once)
 
@@ -205,8 +220,8 @@ def test_a_run_makes_tiles_the_api_serves(
     """The whole pipeline, from a row to a tile in a browser."""
     settings = _settings(timescale_url, tmp_path)
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900010, 33.45, -112.07)
-        _add_node(connection, 900011, 33.50, -112.02)
+        _add_node(connection, 900010, 33.45, -112.07, role="ROUTER")
+        _add_node(connection, 900011, 33.50, -112.02, role="ROUTER")
 
     manifest = _run(settings, coverage.run_once)
     assert manifest is not None
@@ -254,8 +269,8 @@ def test_two_presets_are_predicted_apart(
     """
     settings = _settings(timescale_url, tmp_path)
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900020, 33.45, -112.07, channel="LongFast")
-        _add_node(connection, 900021, 33.46, -112.08, channel="MediumSlow")
+        _add_node(connection, 900020, 33.45, -112.07, channel="LongFast", role="ROUTER")
+        _add_node(connection, 900021, 33.46, -112.08, channel="MediumSlow", role="ROUTER")
 
     manifest = _run(settings, coverage.run_once)
     assert manifest is not None
@@ -278,13 +293,13 @@ def test_the_cap_on_nodes_keeps_the_strongest(
     settings = _settings(timescale_url, tmp_path, coverage_max_nodes=2)
     with migrated_engine.begin() as connection:
         for offset in range(5):
-            _add_node(connection, 900030 + offset, 33.40 + offset / 100, -112.07)
+            _add_node(connection, 900030 + offset, 33.40 + offset / 100, -112.07, role="ROUTER")
 
     manifest = _run(settings, coverage.run_once)
     assert manifest is not None
     preset = manifest.presets[0]
     assert preset.node_count == 5
-    assert preset.positioned_count == 2
+    assert preset.site_count == 2
     assert preset.skipped_count == 3
 
 
@@ -294,7 +309,7 @@ def test_a_second_run_replaces_the_first_in_one_step(
     """A reader must never see half a run."""
     settings = _settings(timescale_url, tmp_path)
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900040, 33.45, -112.07)
+        _add_node(connection, 900040, 33.45, -112.07, role="ROUTER")
 
     first = _run(settings, coverage.run_once)
     assert first is not None
@@ -325,7 +340,7 @@ def test_calibration_with_no_reports_writes_nothing(
     path.write_text('{"old": true}', encoding="utf-8")
     with migrated_engine.begin() as connection:
         connection.execute(text("DELETE FROM neighbor_metrics"))
-        _add_node(connection, 900050, 33.45, -112.07)
+        _add_node(connection, 900050, 33.45, -112.07, role="ROUTER")
 
     assert _run(settings, calibrate.run_once) is None
     assert store.calibration_offsets(settings) == {}
@@ -341,7 +356,7 @@ def test_calibration_reads_the_neighbour_reports(
     with migrated_engine.begin() as connection:
         connection.execute(text("DELETE FROM neighbor_metrics"))
         for offset in range(4):
-            _add_node(connection, 900060 + offset, 33.40 + offset / 200, -112.07)
+            _add_node(connection, 900060 + offset, 33.40 + offset / 200, -112.07, role="ROUTER")
         for reporter in range(4):
             for heard in range(4):
                 if reporter == heard:
@@ -389,8 +404,8 @@ def test_calibration_rejects_a_report_from_another_preset(
     now = datetime.now(UTC)
     with migrated_engine.begin() as connection:
         connection.execute(text("DELETE FROM neighbor_metrics"))
-        _add_node(connection, 900070, 33.40, -112.07, channel="LongFast")
-        _add_node(connection, 900071, 33.41, -112.07, channel="LongFast")
+        _add_node(connection, 900070, 33.40, -112.07, channel="LongFast", role="ROUTER")
+        _add_node(connection, 900071, 33.41, -112.07, channel="LongFast", role="ROUTER")
         connection.execute(
             text(
                 "INSERT INTO neighbor_metrics "
@@ -423,8 +438,8 @@ def test_calibration_rejects_a_node_outside_the_terrain_region(
         terrain_lon_max=-112,
     )
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900072, 33.45, -112.07)
-        _add_node(connection, 900073, 34.45, -112.07)
+        _add_node(connection, 900072, 33.45, -112.07, role="ROUTER")
+        _add_node(connection, 900073, 34.45, -112.07, role="ROUTER")
 
     async def peers(session, given: Settings):  # type: ignore[no-untyped-def]
         return await calibrate.read_peers(
@@ -446,7 +461,7 @@ def test_a_broken_calibration_file_does_not_stop_a_run(
     path.write_text("{not json", encoding="utf-8")
 
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900070, 33.45, -112.07)
+        _add_node(connection, 900070, 33.45, -112.07, role="ROUTER")
 
     assert store.calibration_offsets(settings) == {}
     manifest = _run(settings, coverage.run_once)
@@ -464,7 +479,7 @@ def test_the_jobs_role_never_writes_a_table_for_this(
     """
     settings = _settings(timescale_url, tmp_path)
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900080, 33.45, -112.07)
+        _add_node(connection, 900080, 33.45, -112.07, role="ROUTER")
         before = connection.execute(text("SELECT count(*) FROM daily_snapshot")).scalar_one()
 
     _run(settings, coverage.run_once)
@@ -491,9 +506,9 @@ def test_a_run_over_worker_processes_answers_the_same(
     the order the sites were given, not the order they finished.
     """
     with migrated_engine.begin() as connection:
-        _add_node(connection, 900070, 33.45, -112.07)
-        _add_node(connection, 900071, 33.50, -112.02)
-        _add_node(connection, 900072, 33.40, -112.12)
+        _add_node(connection, 900070, 33.45, -112.07, role="ROUTER")
+        _add_node(connection, 900071, 33.50, -112.02, role="ROUTER")
+        _add_node(connection, 900072, 33.40, -112.12, role="ROUTER")
 
     alone = _run(_settings(timescale_url, tmp_path / "alone"), coverage.run_once)
     pooled = _run(
@@ -521,3 +536,176 @@ def test_a_run_over_worker_processes_answers_the_same(
         assert (pooled_root / relative).read_bytes() == (alone_root / relative).read_bytes(), (
             relative
         )
+
+
+# --- who may be a site -------------------------------------------------
+#
+# Against a live 689-node mesh the job predicted from all of them. Only
+# 20 were ROUTER and 30 ROUTER_LATE; the rest were clients, and most of
+# those arrived with no role at all. The map that came out covered most
+# of Arizona. See `sonoran/roles.py` and `docs/COVERAGE.md` 11.
+
+
+def test_a_client_node_is_never_a_site(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """A node with no role must not hold coverage open.
+
+    The assertion is about the ground, not only the count. A bare count
+    passes if the client is included and its footprint happens to sit
+    inside the router's.
+    """
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900080, 33.45, -112.07, role="ROUTER")
+        # Far enough away that its own footprint cannot overlap.
+        _add_node(connection, 900081, 34.20, -111.20, role=None)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    preset = manifest.presets[0]
+    assert preset.site_count == 1
+    assert preset.candidate_count == 2
+    assert preset.excluded_by_role == {"NULL": 1}
+
+    # And the client's own position is not covered.
+    bounds = preset.data_bounds
+    assert bounds is not None
+    assert not (bounds[0] <= 34.20 <= bounds[2] and bounds[1] <= -111.20 <= bounds[3])
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        None,
+        "CLIENT",
+        "CLIENT_MUTE",
+        "CLIENT_BASE",
+        "CLIENT_HIDDEN",
+        "ROUTER_CLIENT",
+        "TRACKER",
+        "SENSOR",
+    ],
+)
+def test_every_client_role_is_excluded_by_name(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None, role: str | None
+):  # type: ignore[no-untyped-def]
+    """`ROUTER_CLIENT` is in this list on purpose. It reads like
+    infrastructure and moves like a person."""
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900082, 33.45, -112.07, role=role)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is None, f"{role} must not be a coverage site"
+
+
+def test_the_manifest_says_which_roles_were_left_out(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The number the page shows is the number the job computed.
+
+    A run that drops nine nodes in ten and says nothing is how the live
+    map came to be trusted.
+    """
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900083, 33.45, -112.07, role="ROUTER")
+        _add_node(connection, 900084, 33.46, -112.08, role="REPEATER")
+        _add_node(connection, 900085, 33.47, -112.09, role=None)
+        _add_node(connection, 900086, 33.48, -112.10, role=None)
+        _add_node(connection, 900087, 33.49, -112.11, role="CLIENT_MUTE")
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    preset = manifest.presets[0]
+    assert preset.site_count == 2
+    assert preset.candidate_count == 5
+    assert preset.excluded_by_role == {"NULL": 2, "CLIENT_MUTE": 1}
+    assert sum(preset.excluded_by_role.values()) == preset.candidate_count - preset.node_count
+
+
+def test_a_mesh_of_only_clients_makes_no_run(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """A working state, and it must not be an empty map with no reason.
+
+    A deployment whose routers have not set a role lands here. The log
+    line says how many were left out, which is the signal to use the
+    overrides file rather than to widen the role set.
+    """
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900088, 33.45, -112.07, role=None)
+        _add_node(connection, 900089, 33.46, -112.08, role="CLIENT")
+
+    assert _run(settings, coverage.run_once) is None
+
+
+# --- a position the broker fuzzed --------------------------------------
+
+
+def test_a_fuzzed_position_is_never_a_site(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The public broker sends 14 bits by default, about 1459 m.
+
+    The terrain under a prediction is 90 m across, so the node could be
+    on the far side of a ridge from where the map draws it.
+    """
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900090, 33.45, -112.07, role="ROUTER", precision_bits=14)
+
+    assert _run(settings, coverage.run_once) is None
+
+
+def test_the_same_node_at_full_precision_is_a_site(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The other half of the pair, so the test above cannot pass for
+    the wrong reason."""
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900091, 33.45, -112.07, role="ROUTER", precision_bits=32)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    assert manifest.presets[0].site_count == 1
+
+
+def test_a_node_that_never_said_its_precision_is_a_site(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """NULL is the common case for a node heard over the radio.
+
+    Ingest writes `precision_bits or None`, so "did not say" and "said
+    zero" are the same row. Treating that as coarse would empty the map.
+    """
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900092, 33.45, -112.07, role="ROUTER", precision_bits=None)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    assert manifest.presets[0].site_count == 1
+
+
+def test_the_manifest_counts_a_fuzzed_position_apart_from_a_role(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """Two different reasons to leave a node out, counted separately.
+
+    A deployment has to be able to tell "our routers have no role set"
+    from "our routers come through the public broker".
+    """
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900093, 33.45, -112.07, role="ROUTER")
+        _add_node(connection, 900094, 33.46, -112.08, role="ROUTER", precision_bits=12)
+        _add_node(connection, 900095, 33.47, -112.09, role=None)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    excluded = manifest.presets[0].excluded_by_role
+    assert excluded == {"NULL": 1, "coarse-position": 1}
