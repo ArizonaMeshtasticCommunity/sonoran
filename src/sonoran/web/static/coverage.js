@@ -111,6 +111,7 @@
     );
     if (CONFIG.tileUrl) {
       state.baseTiles = L.tileLayer(CONFIG.tileUrl, {
+        className: 'basemap-tiles',
         attribution: CONFIG.tileAttribution || '',
         maxZoom: 19,
       }).addTo(map);

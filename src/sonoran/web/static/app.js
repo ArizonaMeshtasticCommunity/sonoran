@@ -601,6 +601,7 @@ function ensureMap() {
     .setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
   if (CONFIG.tileUrl) {
     L.tileLayer(CONFIG.tileUrl, {
+      className: 'basemap-tiles',
       attribution: CONFIG.tileAttribution || '',
       maxZoom: 19,
     }).addTo(map);
@@ -2651,7 +2652,11 @@ function positionMap(target, rows) {
   map = L.map(target, { attributionControl: true }).setView(points[0], 13);
   packetMaps.set(target, map);
   if (CONFIG.tileUrl) {
-    L.tileLayer(CONFIG.tileUrl, { attribution: CONFIG.tileAttribution || '', maxZoom: 19 })
+    L.tileLayer(CONFIG.tileUrl, {
+      className: 'basemap-tiles',
+      attribution: CONFIG.tileAttribution || '',
+      maxZoom: 19,
+    })
       .addTo(map);
   }
   for (const point of points) {

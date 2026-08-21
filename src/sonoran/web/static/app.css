@@ -272,10 +272,19 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .leaflet-container { background: var(--panel-2); font: var(--font); }
 /*
  * Make the light basemap fit the dark interface, then warm it with
- * sepia so the map matches the desert palette. Markers sit in another
- * pane, so the filter does not touch them.
+ * sepia so the map matches the desert palette.
+ *
+ * The selector names the basemap layer, not the pane. Every tile layer
+ * shares the pane, and the coverage overlay is a tile layer, so the
+ * pane rule inverted the signal colours as well: the map drew the
+ * ramp backwards while the legend beside it drew it correctly. The
+ * planner escaped only because it happens to use an image overlay,
+ * which sits in a different pane.
+ *
+ * Cancelling the filter on the overlay instead would fix one layer and
+ * leave the next one to find the bug again.
  */
-.leaflet-tile-pane {
+.leaflet-tile-pane .basemap-tiles {
   filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.88) saturate(.6) sepia(.35);
 }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }

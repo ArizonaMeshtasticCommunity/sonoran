@@ -47,7 +47,11 @@
       CONFIG.mapZoom || 7,
     );
     if (CONFIG.tileUrl) {
-      L.tileLayer(CONFIG.tileUrl, { attribution: '', maxZoom: 19 }).addTo(map);
+      L.tileLayer(CONFIG.tileUrl, {
+        className: 'basemap-tiles',
+        attribution: '',
+        maxZoom: 19,
+      }).addTo(map);
     }
     L.control.zoom({ position: 'topright' }).addTo(map);
     state.map = map;
