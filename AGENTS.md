@@ -507,6 +507,32 @@ takes its role as a required keyword argument. It defaulted to `ROUTER`,
 so every coverage test asserted about routers while its author believed
 it asserted about nodes. Do not give it a default again.
 
+### 9.23 The engine's clutter scalar is passed as zero on purpose
+
+`coverage/params.py` sets `clutter_height_m=0.0` for every prediction.
+That looks like a value somebody forgot to fill in. It is not.
+
+The scalar was measured on flat ground at 906 MHz. A 9 m clutter
+height costs a 30 m antenna 0.00 dB and a 3 m antenna 66 dB, so it is
+a step at the antenna height and not a loss. The receiving end is
+charged 0.00 dB at any height, and the receiving end is the 1.5 m
+handheld the whole map is drawn for.
+
+The correction is `coverage/clutter.py`, which is ITU-R P.2108-1 3.1
+charged at both terminals. Turning the scalar back on double-charges
+the transmitter and still charges the receiver nothing.
+
+### 9.24 `usable` is the weaker direction of one node, then the best node
+
+Not the weaker of the two combined layers. Taking the best of each
+direction across every site first, and the minimum afterwards, lets one
+node answer for the downlink and another for the uplink, and paints
+ground as usable both ways where no single radio closes both.
+
+`jobs/coverage.py::_predict` builds it beside the two directions, for
+each site, before anything is combined. Do not derive it from the
+finished layers.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

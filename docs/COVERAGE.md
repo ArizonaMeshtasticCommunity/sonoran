@@ -79,6 +79,17 @@ the same amount either way, and what is left is
 A node that shouts at 30 dBm is heard 8 dB further than it hears a
 handheld that shouts at 22. See `coverage/sites.py`.
 
+**The weaker of the two for one node, and only then the best node.**
+The order matters and it is easy to get wrong. Taking the best of each
+direction across every site first, and the weaker of the two
+afterwards, lets one node answer for the downlink and a different node
+answer for the uplink, and paints a place as usable both ways where no
+single radio closes both. A tall router a handheld cannot answer,
+beside a solar node the handheld can reach but which cannot be heard,
+is exactly that place, and the mesh does not work there. `usable` is
+therefore built in `_predict`, beside the two directions, and is not
+derived from them afterwards.
+
 ## 5. One preset at a time
 
 A node on Long fast cannot hear a node on Medium fast. Merging their
