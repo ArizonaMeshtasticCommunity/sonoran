@@ -320,7 +320,8 @@ new calibration file.
 To run one by hand, now, instead of waiting for the timer:
 
 ```bash
-sonoran-coverage-once
+sonoran-coverage-once                      # on the host
+docker compose exec jobs sonoran-coverage-once   # in the image
 ```
 
 It writes into the same cache and publishes the same way, so the
