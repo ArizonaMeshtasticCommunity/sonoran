@@ -313,6 +313,20 @@ The machine this was measured on held 24 of the 64 terrain tiles the
 run wanted, so part of it predicted over flat ground. A deployment with
 the whole cache is slower than this, not faster.
 
+The figure that matters for a deployment is the whole Arizona mesh at
+the defaults. Fifty sites, a 60 km radius, zoom 6 to 11, on four cores
+with three workers:
+
+| | |
+|---|---|
+| Time | 307 s |
+| Peak memory | 441 MB |
+| Duty cycle against `COVERAGE_INTERVAL_HOURS` of 6 | 1.4% |
+
+The role test is what made that possible. The same machine took 1931 s
+over 284 sites before it, and a run of every positioned node was ended
+by the memory killer at 4.7 GB in each worker.
+
 ### 9.1.1 What the accuracy rules cost in area
 
 Measured on the development mesh, which is 17 nodes of which 4 are
