@@ -487,6 +487,26 @@ happens to hold no lock at the moment of the fork works.
 Spawn starts a new interpreter and inherits no locks. It costs about a
 second for each worker, once, against a run of half an hour.
 
+### 9.22 A role of NULL is a client, not an unknown
+
+`ingest/handlers/nodeinfo.py` reads an enum with
+
+    if not value:
+        return None
+
+and Meshtastic numbers `CLIENT` as zero. So the most common node on a
+mesh is stored with `role IS NULL`, exactly like a node that has never
+sent a NodeInfo at all.
+
+Never read NULL as "unknown, so include it". The coverage map did, and
+predicted from 689 nodes where 50 were infrastructure. `sonoran/roles.py`
+holds the test and `tests/unit/test_roles.py` pins it.
+
+The same trap is why `tests/integration/test_coverage_job.py::_add_node`
+takes its role as a required keyword argument. It defaulted to `ROUTER`,
+so every coverage test asserted about routers while its author believed
+it asserted about nodes. Do not give it a default again.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

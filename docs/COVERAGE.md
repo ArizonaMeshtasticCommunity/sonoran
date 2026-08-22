@@ -33,7 +33,7 @@ The planner page keeps its own rule. Nothing a person plans on that
 page is ever sent to the server. The coverage map predicts only from
 the nodes the mesh already reports, so it holds no private plan.
 
-## 3. Three modules hold three rules
+## 3. One module holds each rule
 
 Each is the only place that decides one thing, which is the
 arrangement `sonoran/positions.py` and `sonoran/api/traces.py` already
@@ -41,7 +41,10 @@ use.
 
 | Module | Decides |
 |---|---|
+| `roles.py` | Whether a node may be a site at all |
+| `positions.py` | Whether a position is precise enough to predict from |
 | `radio/resolve.py` | The effective power, antenna, and height of a node |
+| `coverage/clutter.py` | What the last few metres at each end cost |
 | `coverage/grid.py` | How a raster maps to the ground |
 | `embed/sanitise.py` | What a public viewer may see |
 
@@ -119,9 +122,52 @@ improvement therefore remain visible over roads, desert, and forest.
 
 ## 7. Clutter
 
-ITM has no clutter model. It treats both ends of a path as if they
-stood in open country. ITU-R P.2108 is the correction, and it needs to
-know how tall the clutter is.
+ITM treats both ends of a path as if they stood in open country. The
+last few metres at each end are what a real link loses, and this is
+where they are charged.
+
+### 7.1 Not the clutter the engine takes
+
+`splat_create` takes a clutter height, and SPLAT uses it by raising the
+ground. Measured on flat ground at 906 MHz over a 20 km radius:
+
+| clutter | tx 3 m | tx 9 m | tx 30 m |
+|---|---|---|---|
+| 0 m | -118.6 dB | -107.9 dB | -95.2 dB |
+| 5 m | -158.8 | -109.0 | -95.2 |
+| 9 m | -185.1 | -108.6 | -95.2 |
+| 15 m | -189.6 | -172.5 | -95.2 |
+
+That is a cliff. Nothing at all while the antenna clears the clutter,
+then forty to seventy dB once it does not. The receiving end is charged
+0.00 dB at any height, and the map is drawn for a handheld at 1.5 m.
+
+`test_the_engine_clutter_is_a_cliff` keeps that measurement, so a
+future engine that gives the value another meaning says so.
+
+### 7.2 What is charged instead
+
+ITU-R P.2108-1 section 3.1, the height gain terminal correction. It is
+valid from 0.03 to 3 GHz and the US band sits inside it. The engine is
+given no clutter at all, and the loss is taken off the field at each
+end. A 1.5 m handheld pays:
+
+| Land cover | Nominal height | Loss |
+|---|---|---|
+| Tree cover | 15 m | 23 dB |
+| Mangroves | 10 m | 19 dB |
+| Built-up | 9 m | 18 dB |
+| Shrubland | 2 m | 3 dB |
+| Grassland, cropland, bare, water | 1 m or less | 0 dB |
+
+A terminal at or above the clutter pays nothing, which is the
+recommendation's own boundary and the sense of it: an antenna above the
+roofs sees over them. Below it the loss is a curve, so a node a metre
+shorter than its neighbour does not lose its whole footprint.
+
+The recommendation gives two forms and they are not interchangeable.
+Buildings and trees are obstacles a signal bends over. Scrub and grass
+are a height gain against the ground. See P.2108 Table 3.
 
 `tools/prefetch_landcover.py` reduces the ESA WorldCover 10 m product
 to the same page grid the terrain uses, one byte for each cell, holding
@@ -129,14 +175,19 @@ the most common class in it. The most common and not the average: a
 class is a name, not a number, and the average of water and built-up is
 not a meadow.
 
-Over Arizona the product is 56 percent shrubland, 12 percent grassland,
-11 percent built-up, and 10 percent bare ground. That is why a
-prediction with no clutter has worked tolerably here, and it names what
-it gets wrong: Phoenix and Tucson.
+### 7.3 What this replaced, and why it was worse than nothing
 
-A node above the roofs takes no clutter loss. Set `above_clutter` in
-the overrides file, or give it a mast taller than the clutter around
-it and `resolve.py` works it out.
+The old rule returned a height for the engine, and returned zero when
+the antenna was at least as tall as the nominal class height. The
+default antenna is 3 m. Arizona is 56 percent shrubland at 2 m, 12
+percent grassland and 10 percent bare ground, so over about 78 percent
+of the state the answer was zero and nothing was charged. In a town it
+passed 9 m to the engine and took the node off the map altogether.
+
+The page said "buildings and trees accounted for" in both cases.
+
+A node above the roofs still takes nothing. Set `above_clutter` in the
+overrides file, or give it a mast taller than the clutter around it.
 
 A deployment with no land cover pages predicts with no clutter, which
 is what the planner has always done. The page says so rather than let a
@@ -323,7 +374,18 @@ person, often at home, and never appears.
    tall building between two nodes is not in it.
 4. The calibration reads neighbour reports only. See
    `docs/ISSUES.md` 2.4.1.
-5. A node with no position cannot be a transmitter, and most client
-   nodes report none.
-6. `coverage_max_nodes` caps a run. The strongest sites are kept, and
+5. Only a router, a router late, or a repeater is a site. A client
+   node moves, and a footprint drawn around it promises reach that
+   nobody can use tomorrow. A node with no role is a client: the
+   firmware numbers `CLIENT` as zero and the ingest stores a zero enum
+   as NULL, so the two cannot be told apart. See `sonoran/roles.py`.
+6. A position the public broker fuzzed cannot anchor a prediction. The
+   broker sends between 10 and 16 bits, which is 23 km to 365 m, and
+   the terrain under a prediction is 90 m across. A node that never
+   said its precision counts as exact, because that is the ordinary
+   case for a node heard over the radio.
+7. `coverage_max_nodes` caps a run. The strongest sites are kept, and
    the manifest says how many were left out.
+8. The manifest counts every node left out, by role and by the
+   coarseness of its position, and the page shows both. A map that
+   drops nine nodes in ten must say so.

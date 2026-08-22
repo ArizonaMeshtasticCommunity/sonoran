@@ -352,8 +352,8 @@
     }
     replace(
       host,
-      statTile(number(preset.node_count), 'Nodes on this preset',
-        preset.skipped_count ? `${preset.skipped_count} left out of the run` : null),
+      statTile(number(preset.site_count), 'Sites predicted from',
+        preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
       statTile(number(preset.usable_area_km2), 'Usable km²', 'Both directions'),
       statTile(number(preset.downlink_area_km2), 'Heard km²', 'One direction only'),
       statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
@@ -362,6 +362,38 @@
 
   function flag(good, text) {
     return el('span', { class: `coverage-flag ${good ? 'good' : 'warn'}`, text });
+  }
+
+  /*
+   * What the run left out, and why.
+   *
+   * A coverage map is only about nodes that stay where they are, so
+   * most of a mesh is not on it. A page that shows a site count and
+   * nothing else invites a reader to think it drew everything.
+   */
+  function excluded() {
+    const preset = state.summary && presetOf(state.summary, state.preset);
+    const counts = (preset && preset.excluded_by_role) || {};
+    const names = Object.keys(counts);
+    if (!names.length) return null;
+    const total = names.reduce((sum, name) => sum + counts[name], 0);
+    const label = (name) =>
+      name === 'NULL'
+        ? 'no role reported'
+        : name === 'coarse-position'
+          ? 'position too coarse'
+          : name.replace(/_/g, ' ').toLowerCase();
+    return el(
+      'p',
+      { class: 'muted', style: 'font-size:.84rem' },
+      `${total} of ${number(preset.candidate_count)} positioned nodes were left out: `,
+      names
+        .sort((a, b) => counts[b] - counts[a])
+        .map((name) => `${counts[name]} ${label(name)}`)
+        .join(', '),
+      '. Only a router or a repeater holds coverage open, because only a node that '
+        + 'stays where it is can.',
+    );
   }
 
   function drawAssumes(page) {
@@ -404,6 +436,7 @@
         ),
         missing ? flag(false, `${missing} terrain tiles missing`) : null,
       ),
+      excluded(),
     );
   }
 

@@ -14,6 +14,7 @@ finished map:
 """
 
 import json
+import re
 import struct
 import zlib
 from pathlib import Path
@@ -60,6 +61,7 @@ from sonoran.coverage.store import LAYERS, Manifest, PresetSummary, publish, rea
 from sonoran.radio.presets import preset_by_key
 from sonoran.radio.resolve import resolve_profile
 
+STATIC = Path("src/sonoran/web/static")
 APP_CSS = Path("src/sonoran/web/static/app.css")
 COVERAGE_JS = Path("src/sonoran/web/static/coverage.js")
 INDEX_HTML = Path("src/sonoran/web/static/index.html")
@@ -380,16 +382,60 @@ def test_the_ramp_is_distinct_from_the_terrain_map() -> None:
     assert COVER_ALPHA >= 230
 
 
-def test_the_ramp_colours_are_the_ones_the_stylesheet_draws() -> None:
-    """Python cannot read a stylesheet, so the values exist twice.
+def _gradient_stops(text: str, selector: str) -> list[tuple[int, int, int]]:
+    """Return the colours of the `linear-gradient` in one CSS rule."""
+    rule = re.search(re.escape(selector) + r"\s*\{(.*?)\}", text, re.S)
+    assert rule, f"no rule for {selector}"
+    gradient = re.search(r"linear-gradient\((.*?)\)", rule.group(1), re.S)
+    assert gradient, f"no gradient in {selector}"
+    return [
+        (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+        for value in re.findall(r"#([0-9a-fA-F]{6})", gradient.group(1))
+    ]
 
-    The legend on the page is a CSS gradient and the tiles come from
-    this table. Two palettes would put a legend on the page that does
-    not describe the map beside it.
+
+@pytest.mark.parametrize(
+    ("path", "selector"),
+    [
+        (STATIC / "app.css", ".coverage-ramp"),
+        (STATIC / "embed-coverage.html", ".ramp"),
+    ],
+)
+def test_every_legend_draws_the_ramp_the_tiles_use(path: Path, selector: str) -> None:
+    """Python cannot write a stylesheet, so the values exist twice.
+
+    This asserts the stops in order, not that each colour appears
+    somewhere. The test it replaced did the second, and every colour in
+    the old ramp was also a palette variable, so it would have passed
+    with the gradient deleted outright. It did not notice when the tile
+    ramp changed and the embed's legend did not.
+    """
+    assert _gradient_stops(path.read_text(encoding="utf-8"), selector) == list(RAMP)
+
+
+def test_no_stylesheet_filter_reaches_a_coverage_tile() -> None:
+    """The coverage overlay is the one thing whose colour means
+    something, and a pane-wide filter inverted it.
+
+    A rule that filters `.leaflet-tile-pane` itself catches every tile
+    layer in it, the overlay included. The filter must name the basemap.
     """
     css = APP_CSS.read_text(encoding="utf-8")
-    for red, green, blue in RAMP:
-        assert f"#{red:02x}{green:02x}{blue:02x}" in css
+    for rule in re.finditer(r"([^{}]+)\{([^}]*)\}", css):
+        if "filter:" not in rule.group(2):
+            continue
+        assert rule.group(1).strip() != ".leaflet-tile-pane", (
+            "this filter also inverts the coverage overlay"
+        )
+
+
+def test_every_base_layer_is_named_for_the_filter() -> None:
+    """A map that forgets the class loses its dark basemap, and one
+    that is added later inherits the bug invisibly."""
+    for name in ("app.js", "coverage.js", "planner.js", "embed-coverage.js"):
+        text = (STATIC / name).read_text(encoding="utf-8")
+        assert text.count("basemap-tiles") == text.count("L.tileLayer(CONFIG.tileUrl"), name
+    assert ".basemap-tiles" in APP_CSS.read_text(encoding="utf-8")
 
 
 def test_the_map_layers_can_be_switched_independently() -> None:
