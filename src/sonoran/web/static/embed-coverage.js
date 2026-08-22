@@ -91,7 +91,7 @@
     legend.hidden = false;
     $('[data-floor]').textContent = `${preset.sensitivity_dbm} dBm`;
     // The span comes from the run. See coverage/render.py.
-    const span = Number(summary.ramp_span_db) || 0;
+    const span = Number(state.summary.ramp_span_db) || 0;
     $('[data-ceiling]').textContent = `${preset.sensitivity_dbm + span} dBm`;
   }
 

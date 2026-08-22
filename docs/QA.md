@@ -93,7 +93,12 @@ A pull request can merge only when all jobs pass.
    A test reads the gradient stops out of each stylesheet and compares
    them in order. The span itself travels in the manifest, so a page
    cannot hold its own copy.
-4. A change to what may be a site, or to the propagation, must be
+4. Run `node tools/dev/check_pages.js` against a preview. There is no
+   JavaScript test runner here, so a name that does not exist is caught
+   by nothing until somebody opens the page, and it does not look like
+   a fault: the function stops and the part of the page it was drawing
+   stays empty. The embed legend lost its upper figure that way.
+5. A change to what may be a site, or to the propagation, must be
    measured against a real mesh before it is believed. Run
    `tools/validate_coverage.py` against a MeshMonitor instance and
    compare the figures with `docs/COVERAGE.md` 9.1.3. A number that
