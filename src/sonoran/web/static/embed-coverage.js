@@ -23,7 +23,6 @@
   const LAYER = 'usable';
 
   // The ramp in coverage/render.py spans this above the limit.
-  const RAMP_SPAN_DB = 30;
 
   const state = { map: null, tiles: null, summary: null, preset: null };
 
@@ -91,7 +90,9 @@
     if (!legend || !preset) return;
     legend.hidden = false;
     $('[data-floor]').textContent = `${preset.sensitivity_dbm} dBm`;
-    $('[data-ceiling]').textContent = `${preset.sensitivity_dbm + RAMP_SPAN_DB} dBm`;
+    // The span comes from the run. See coverage/render.py.
+    const span = Number(summary.ramp_span_db) || 0;
+    $('[data-ceiling]').textContent = `${preset.sensitivity_dbm + span} dBm`;
   }
 
   async function drawSites() {

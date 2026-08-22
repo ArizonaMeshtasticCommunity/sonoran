@@ -38,6 +38,7 @@ from sonoran.coverage.calibrate import (
     MIN_REPORTED,
     Calibration,
 )
+from sonoran.coverage.render import RAMP_SPAN_DB
 from sonoran.logging import get_logger
 from sonoran.radio.resolve import clamp_calibration
 
@@ -123,6 +124,13 @@ class Manifest:
     calibrated_nodes: int
     missing_terrain_tiles: list[str]
     seconds: float
+    # The dB above the sensitivity that the colour ramp spans.
+    #
+    # Python writes the tiles, so Python owns this. The pages read it
+    # from here rather than each holding a copy, because two copies
+    # drift and a legend that disagrees with its map is worse than no
+    # legend. See `coverage/render.py`.
+    ramp_span_db: float = RAMP_SPAN_DB
     data_bounds: list[float] | None = None
     presets: list[PresetSummary] = field(default_factory=list)
 

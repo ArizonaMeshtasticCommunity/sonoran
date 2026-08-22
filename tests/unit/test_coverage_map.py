@@ -763,3 +763,39 @@ def test_a_dead_worker_pool_costs_time_and_not_the_run(
     monkeypatch.setattr(coverage, "_predict", fake_predict)
     coverage.predict_preset(settings, grid, [], 4)
     assert calls == [4, 1]
+
+
+def test_the_ramp_span_is_served_and_not_copied() -> None:
+    """Python writes the tiles, so Python owns the span.
+
+    It used to be a literal 30 in three places. `render.py` moved to 60
+    and a page holding its own copy would have drawn a legend that
+    disagreed with the map beside it, which is worse than no legend.
+    """
+    from sonoran.coverage.store import Manifest
+
+    assert "ramp_span_db" in Manifest.__dataclass_fields__
+    assert Manifest.__dataclass_fields__["ramp_span_db"].default == RAMP_SPAN_DB
+
+    for name in ("coverage.js", "embed-coverage.js"):
+        text = (STATIC / name).read_text(encoding="utf-8")
+        assert "ramp_span_db" in text, f"{name} must read the span from the run"
+        assert "RAMP_SPAN_DB = 30" not in text
+        assert "floor + 30" not in text
+
+
+def test_the_span_is_wide_enough_to_say_something() -> None:
+    """Measured on the live Arizona mesh: 16 sites, 1.5 million covered
+    cells, median margin 35 dB and p95 55 dB.
+
+    At the old 30 dB span, 60 percent of the map sat at the top stop
+    and every cell there was the same blue. A colour that covers most
+    of the map is not a measurement. See `coverage/render.py`.
+    """
+    live_percentiles = {5: 3, 25: 20, 50: 35, 75: 46, 95: 55}
+    assert RAMP_SPAN_DB >= live_percentiles[95], (
+        "the ramp must reach past the 95th percentile of a real map"
+    )
+    # And the median must land where the colours are furthest apart.
+    middle = live_percentiles[50] / RAMP_SPAN_DB
+    assert 0.4 < middle < 0.75, f"the median sits at {middle:.2f} of the ramp"

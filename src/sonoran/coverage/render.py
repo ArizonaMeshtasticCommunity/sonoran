@@ -57,19 +57,28 @@ COVER_ALPHA = 235
 # sensitivity of the preset, so a cell at the weak end of the ramp is
 # one the mesh only just reaches.
 #
-# Thirty dB is chosen from what the model actually produces. Over real
-# Arizona terrain the levels of one site fall out like this, as dB above
-# the floor:
+# Sixty dB is measured, not chosen. Over the live Arizona mesh, 16
+# sites and 1.5 million covered cells, the margin of the published
+# `usable` layer falls out like this:
 #
-#     p25  14      p75  15      p95  43      p99  52
+#     p5   3      p25  20      p50  35      p75  46      p95  55
 #
-# Most of a footprint sits near 14 dB of margin, and a linear scale of
-# 30 dB puts that mid ramp, where the colours are furthest apart. A
-# wider scale pushes the whole footprint into one flat colour and hides
-# the difference between ground that just works and ground that works
-# well. Past 30 dB of margin the link is as good as it gets, and the
-# colour stops changing, which is honest.
-RAMP_SPAN_DB = 30.0
+# The figure that matters is how much of the map sits at the top of the
+# ramp, where every cell is the same colour and the map stops saying
+# anything:
+#
+#     span 30 dB -> 60% of the map saturated
+#     span 40 dB -> 41%
+#     span 50 dB -> 13%
+#     span 60 dB ->  2%
+#
+# Thirty dB was taken from the levels of a single site. The published
+# map is the strongest of every site over the same ground, so its
+# margins are far higher, and two thirds of it came out one flat blue.
+# Sixty puts the median at the middle of the ramp, where the colours
+# are furthest apart, and it is what `planner.js` has always used, so
+# the two pages finally agree.
+RAMP_SPAN_DB = 60.0
 
 
 @dataclass(frozen=True)

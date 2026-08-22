@@ -107,6 +107,7 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
         "min_zoom": manifest.get("min_zoom"),
         "max_zoom": manifest.get("max_zoom"),
         "rx_height_m": manifest.get("rx_height_m"),
+        "ramp_span_db": manifest.get("ramp_span_db"),
         "has_landcover": manifest.get("has_landcover"),
         "presets": presets,
     }
