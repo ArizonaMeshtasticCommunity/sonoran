@@ -14,6 +14,7 @@ from sonoran.roles import (
     EVERY_ROLE,
     INFRASTRUCTURE_ROLES,
     NO_ROLE,
+    is_diagnostic_role_set,
     is_infrastructure,
     is_site_role,
     parse_site_roles,
@@ -124,6 +125,18 @@ def test_a_named_set_is_taken_as_written() -> None:
     assert is_site_role("CLIENT_BASE", allowed)
     assert not is_site_role("CLIENT", allowed)
     assert not is_site_role(None, allowed)
+
+
+def test_an_infrastructure_subset_is_safe_to_publish() -> None:
+    """A router-only map cannot expose a personal node."""
+    assert not is_diagnostic_role_set(frozenset({"ROUTER"}))
+    assert not is_diagnostic_role_set(INFRASTRUCTURE_ROLES)
+
+
+def test_a_wider_role_set_is_diagnostic() -> None:
+    """Every role and a named client role can expose a personal node."""
+    assert is_diagnostic_role_set(None)
+    assert is_diagnostic_role_set(frozenset({"ROUTER", "CLIENT_BASE"}))
 
 
 def test_a_diagnostic_run_can_never_widen_the_public_map() -> None:

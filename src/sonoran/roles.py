@@ -143,3 +143,13 @@ def is_site_role(role: str | None, allowed: frozenset[str] | None) -> bool:
     if allowed is None:
         return True
     return (role or "").upper() in allowed
+
+
+def is_diagnostic_role_set(allowed: frozenset[str] | None) -> bool:
+    """Return true when a role set can include a personal node.
+
+    A subset of the infrastructure roles is still safe to publish. It
+    is non-standard, but it cannot add a handheld or an unknown node.
+    `None` means every role and is always diagnostic.
+    """
+    return allowed is None or not allowed.issubset(INFRASTRUCTURE_ROLES)

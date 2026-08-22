@@ -393,11 +393,7 @@
         .sort((a, b) => counts[b] - counts[a])
         .map((name) => `${counts[name]} ${label(name)}`)
         .join(', '),
-        state.summary.is_diagnostic
-        ? '. This run predicted from every role it was given, so what is left out '
-          + 'here is only what had no position or no preset.'
-        : '. Only a router or a repeater holds coverage open, because only a node '
-          + 'that stays where it is can.',
+        `. This run selected ${(state.summary.site_roles || []).join(', ') || 'no roles'}.`,
       counts['coarse-position']
         ? el(
             'span',
@@ -440,11 +436,11 @@
     return el(
       'p',
       { class: 'notice warn', style: 'font-weight:600' },
-      'This is a diagnostic run. It predicted from every node it was given, '
-        + 'including handhelds and nodes that never said what they are, so it '
-        + 'shows where a radio could reach on the day and not where the mesh '
-        + 'reaches. Set COVERAGE_SITE_ROLES back to its default for a map to '
-        + 'publish.',
+      `This is a diagnostic run. It selected ${
+        (state.summary.site_roles || []).join(', ') || 'roles outside the infrastructure set'
+      }. It can include personal or mobile nodes, so it shows where a radio could `
+        + 'reach on the day and not where the mesh reaches. Set COVERAGE_SITE_ROLES '
+        + 'back to infrastructure roles for a map to publish.',
     );
   }
 

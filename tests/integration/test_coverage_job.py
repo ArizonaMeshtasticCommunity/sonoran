@@ -450,6 +450,45 @@ def test_calibration_rejects_a_node_outside_the_terrain_region(
     assert set(found) == {900072}
 
 
+def test_calibration_uses_an_operator_position_for_a_coarse_node(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """Coverage and calibration must reason about the same place."""
+    overrides = tmp_path / "nodes.yaml"
+    overrides.write_text(
+        'nodes:\n  "!000dbc16":\n    latitude: 33.6000\n    longitude: -112.2000\n',
+        encoding="utf-8",
+    )
+    settings = _settings(timescale_url, tmp_path, radio_overrides_path=str(overrides))
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900118, 33.45, -112.07, role="ROUTER", precision_bits=13)
+
+    async def peers(session, given: Settings):  # type: ignore[no-untyped-def]
+        return await calibrate.read_peers(
+            session, given, load_overrides(given.radio_overrides_path)
+        )
+
+    found = _run(settings, peers)
+    assert found[900118].latitude == 33.6
+    assert found[900118].longitude == -112.2
+
+
+def test_calibration_uses_the_configured_position_precision(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """A private broker setting applies to both coverage jobs."""
+    settings = _settings(timescale_url, tmp_path, coverage_min_precision_bits=0)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900119, 33.45, -112.07, role="ROUTER", precision_bits=13)
+
+    async def peers(session, given: Settings):  # type: ignore[no-untyped-def]
+        return await calibrate.read_peers(
+            session, given, load_overrides(given.radio_overrides_path)
+        )
+
+    assert 900119 in _run(settings, peers)
+
+
 def test_a_broken_calibration_file_does_not_stop_a_run(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
@@ -623,6 +662,20 @@ def test_the_manifest_says_which_roles_were_left_out(
     assert preset.candidate_count == 5
     assert preset.excluded_by_role == {"NULL": 2, "CLIENT_MUTE": 1}
     assert sum(preset.excluded_by_role.values()) == preset.candidate_count - preset.node_count
+
+
+def test_an_infrastructure_subset_is_not_a_diagnostic_run(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """A router-only run is narrower than the public role set."""
+    settings = _settings(timescale_url, tmp_path, coverage_site_roles="ROUTER")
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900120, 33.45, -112.07, role="ROUTER")
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    assert manifest.site_roles == ["ROUTER"]
+    assert manifest.is_diagnostic is False
 
 
 def test_a_mesh_of_only_clients_makes_no_run(
