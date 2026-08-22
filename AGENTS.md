@@ -533,6 +533,21 @@ ground as usable both ways where no single radio closes both.
 each site, before anything is combined. Do not derive it from the
 finished layers.
 
+### 9.26 The calibration fit reads every role. The map does not.
+
+These are opposite questions and the answer is opposite.
+
+The coverage map predicts from infrastructure, because only a node that
+stays where it is can hold coverage open. The fit measures what a radio
+heard, and it needs both ends of a link. On the Arizona mesh 50 of 931
+positioned nodes are infrastructure, so a role-filtered fit would throw
+away almost every measurement there is.
+
+A client is poor evidence of where the mesh reaches and good evidence
+of what a radio heard. `jobs/calibrate.py::read_peers` reads the role
+only to pick an antenna height. Do not add a role test to it.
+`test_the_fit_reads_every_role_and_the_map_does_not` pins it.
+
 ### 9.25 A diagnostic coverage run never reaches the public embed
 
 `COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is

@@ -357,3 +357,35 @@ def test_a_node_whose_whole_case_is_silence_is_not_corrected() -> None:
 
     assert fits["!loud"].reported == 9
     assert fits["!loud"].is_usable
+
+
+# --- what the fit is allowed to read -----------------------------------
+
+
+def test_the_fit_reads_every_role_and_the_map_does_not() -> None:
+    """Logan asked this on the pull request, in these words: "client
+    mute data etc validates router data, need to see if that's in the
+    mix". It is, and it must stay in.
+
+    The coverage map predicts from infrastructure only, because only a
+    node that stays where it is can hold coverage open. The fit is the
+    opposite question. It needs both ends of a link, and most links on
+    a real mesh have a client at one end: on the Arizona mesh, 50 of
+    931 positioned nodes are infrastructure, so a role-filtered fit
+    would throw away almost every measurement there is.
+
+    A client is poor evidence of where the mesh reaches and good
+    evidence of what a radio heard. `read_peers` therefore reads the
+    role only to pick an antenna height, and never to decide whether a
+    node is in.
+    """
+    import inspect
+
+    from sonoran.jobs import calibrate
+
+    source = inspect.getsource(calibrate.read_peers)
+    for barred in ("is_infrastructure", "is_site_role", "parse_site_roles"):
+        assert barred not in source, barred
+    # The one place the role is read, and what it is read for.
+    assert "role=node.role" in source
+    assert "resolve_profile" in source
