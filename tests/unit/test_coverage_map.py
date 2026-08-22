@@ -1082,3 +1082,21 @@ def test_the_named_list_is_bounded_and_the_count_is_not() -> None:
     # The counter is incremented before the cap is tested, so the cap
     # cannot reach it.
     assert source.index("rejected[COARSE_POSITION] += 1") < source.index("COARSE_REPORT_LIMIT")
+
+
+def test_the_one_shot_command_sets_its_logging_up() -> None:
+    """A command made to be watched must say something.
+
+    `sonoran-coverage-once` exists so an operator bringing a box up can
+    see the first run happen. Nothing else in that process configures
+    logging, so without this it runs for five minutes and prints not
+    one line: no site count, no progress, no completion. It looked
+    exactly like a hang.
+
+    `jobs/scheduler.py::run` does the same thing for the same reason.
+    """
+    from sonoran.jobs import coverage
+
+    source = inspect.getsource(coverage.run)
+    assert "configure_logging" in source
+    assert source.index("configure_logging") < source.index("asyncio.run")

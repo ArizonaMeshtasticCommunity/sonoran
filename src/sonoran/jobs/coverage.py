@@ -71,7 +71,7 @@ from sonoran.db.models import Node
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.landcover.store import PAGE_SIZE, class_page, have_pages
 from sonoran.landcover.store import tile_name as landcover_tile_name
-from sonoran.logging import get_logger
+from sonoran.logging import configure_logging, get_logger
 from sonoran.positions import is_precise_enough, is_usable, precision_deviation_m
 from sonoran.radio.overrides import EMPTY as EMPTY_OVERRIDES
 from sonoran.radio.overrides import Overrides, load_overrides
@@ -928,5 +928,12 @@ def run() -> None:
     same way, so the schedule picks up from where this left off.
 
         sonoran-coverage-once
+
+    The logging is set up here, as `jobs/scheduler.py` does it. Nothing
+    else in the process does, so without this the command runs for five
+    minutes and prints not one line — no site count, no progress, no
+    completion. For a command whose whole purpose is to be watched,
+    that is the same as being broken.
     """
+    configure_logging(get_settings().log_level)
     asyncio.run(main())
