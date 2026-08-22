@@ -386,6 +386,42 @@ page names the count and says so.
 `COVERAGE_MIN_PRECISION_BITS` may be set to zero by a deployment that
 reads its own broker, where every position arrives at full precision.
 
+### 9.1.3 Is the map right?
+
+A prediction can be self consistent and still be wrong. The one test
+that means anything is whether the map contains the nodes the mesh
+demonstrably reaches.
+
+`tools/validate_coverage.py` does it. It reads a node list from a
+MeshMonitor instance, samples the tiles of the current run at each
+node, and reports how many agree:
+
+```bash
+uv run python tools/validate_coverage.py https://mesh.example.org
+```
+
+Against the live Arizona mesh, 16 sites, the `usable` layer:
+
+| | Inside the map |
+|---|---|
+| All 826 nodes reached over the radio | 88.9% |
+| Heard directly, no hops | 92.3% |
+| One hop away | 94.8% |
+| Two hops or more | 88.0% |
+
+A hundred percent is neither expected nor wanted. A node reached over
+four hops can sit well outside any one site and still work, which is
+what the mesh is for. The figure to watch is the one for nodes heard
+directly: those are inside one site's footprint by definition, so the
+map should contain them.
+
+A number that falls is a warning. A number near a hundred across every
+hop count means the map has stopped saying no to anything.
+
+The test says nothing about the ground between the nodes, because
+nothing has ever stood there with a radio. It bounds the map from one
+side only.
+
 ### 9.2 What a run holds in memory
 
 Memory, not time, is what stops a large run. A three hundred node run

@@ -88,9 +88,17 @@ A pull request can merge only when all jobs pass.
    nodes, no positions, no preset, no terrain, no land cover, no
    calibration. `tests/integration/test_coverage_job.py` runs each one
    against a real database.
-3. A change to the colour ramp must change `web/static/app.css` and
-   `coverage/render.py` together. A test asserts the two agree, because
-   the legend on the page is a CSS gradient and the tiles are not.
+3. A change to the colour ramp must change `web/static/app.css`,
+   `web/static/embed-coverage.html` and `coverage/render.py` together.
+   A test reads the gradient stops out of each stylesheet and compares
+   them in order. The span itself travels in the manifest, so a page
+   cannot hold its own copy.
+4. A change to what may be a site, or to the propagation, must be
+   measured against a real mesh before it is believed. Run
+   `tools/validate_coverage.py` against a MeshMonitor instance and
+   compare the figures with `docs/COVERAGE.md` 9.1.3. A number that
+   falls means the map lost ground the mesh really covers. A number
+   near a hundred everywhere means it has stopped saying no.
 
 ### 4.4 Fixtures
 
