@@ -128,16 +128,20 @@ async def read_peers(
     peers: dict[int, Peer] = {}
     for node in rows.all():
         preset = preset_for_channel(node.last_channel)
-        if preset is None or not is_usable(node.last_lat, node.last_lon):
-            continue
-        latitude, longitude = node.last_lat, node.last_lon
-        if latitude is None or longitude is None:
-            continue
-        if not coordinates_in_region(settings, latitude, longitude):
-            continue
-        if not is_precise_enough(node.last_position_precision_bits):
+        if preset is None:
             continue
         identifier = f"!{node.node_num:08x}"
+        given = overrides.position_of(identifier)
+        latitude, longitude = given if given else (node.last_lat, node.last_lon)
+        if not is_usable(latitude, longitude):
+            continue
+        assert latitude is not None and longitude is not None
+        if not coordinates_in_region(settings, latitude, longitude):
+            continue
+        if given is None and not is_precise_enough(
+            node.last_position_precision_bits, settings.coverage_min_precision_bits
+        ):
+            continue
         profile = resolve_profile(identifier, node.hw_model, overrides, role=node.role)
         around = clutter_at(settings, latitude, longitude)
         height = 1e9 if profile.above_clutter else profile.antenna_height_m

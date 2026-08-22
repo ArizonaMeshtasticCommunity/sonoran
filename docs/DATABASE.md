@@ -54,6 +54,7 @@ One row per node. Latest known state.
 | `last_lat` | double precision | nullable |
 | `last_lon` | double precision | nullable |
 | `last_altitude` | integer | nullable |
+| `last_position_precision_bits` | integer | nullable; precision of the latest position |
 | `position_time` | timestamptz | nullable |
 | `last_heard` | timestamptz | nullable |
 | `is_mqtt_gateway` | boolean | default false |

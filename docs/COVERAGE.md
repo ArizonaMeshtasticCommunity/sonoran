@@ -75,8 +75,9 @@ five minutes, and see 9.1 for keeping the machine usable while it
 happens.
 
 It is also not a coverage map, and its tiles look exactly like one.
-So a run that is not the infrastructure set carries `is_diagnostic` in
-its manifest, and three things read it:
+So a run that can include a role outside the infrastructure set carries
+`is_diagnostic` in its manifest. A subset such as `ROUTER` stays safe to
+publish. Three things read the flag:
 
 - The coverage page replaces its heading with the roles that were used,
   and puts a notice above the assumptions panel.

@@ -79,7 +79,7 @@ from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
 from sonoran.roles import (
     EVERY_ROLE,
-    INFRASTRUCTURE_ROLES,
+    is_diagnostic_role_set,
     is_site_role,
     parse_site_roles,
     role_name,
@@ -834,7 +834,7 @@ def _build(
         # who opens the page later cannot otherwise tell a coverage map
         # from a diagnostic one.
         site_roles=sorted(allowed) if allowed is not None else [EVERY_ROLE],
-        is_diagnostic=allowed != INFRASTRUCTURE_ROLES,
+        is_diagnostic=is_diagnostic_role_set(allowed),
         coarse_sites=coarse,
         calibrated_nodes=sum(
             1 for sites in groups.values() for site in sites if site.profile.is_measured

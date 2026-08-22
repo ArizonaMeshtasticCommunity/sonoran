@@ -114,8 +114,8 @@ class Settings(BaseSettings):
     # always done.
     landcover_cache_dir: str = "/var/lib/sonoran/landcover"
 
-    # Coverage map. The job predicts from every node the mesh reports
-    # and writes the result here, as tiles a browser can cache.
+    # Coverage map. The job predicts from the selected fixed sites and
+    # writes the result here, as tiles a browser can cache.
     coverage_cache_dir: str = "/var/lib/sonoran/coverage"
     coverage_enabled: bool = True
     # How often the job runs. A run costs about a second for each node,
