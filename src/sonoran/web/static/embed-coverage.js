@@ -173,8 +173,9 @@
     }
 
     note(
-      'Predicted from the nodes the mesh hears, over terrain. It assumes a handheld radio at '
-        + `${summary.rx_height_m} m above the ground. A real radio does worse.`,
+      'Predicted from the routers and repeaters that carry the mesh, over terrain. '
+        + `It assumes a handheld radio at ${summary.rx_height_m} m above the ground. `
+        + 'A real radio does worse.',
     );
     const credit = $('[data-credit]');
     if (credit) {

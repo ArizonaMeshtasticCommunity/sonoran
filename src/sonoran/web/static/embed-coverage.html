@@ -64,8 +64,14 @@
           to right, #ff2d55 0%, #ff7a00 25%, #ffe600 50%, #00d98b 75%, #00a8ff 100%
         );
       }
-      .scale { display: flex; justify-content: space-between; font: var(--mono); color: var(--muted); margin-top: .25rem; }
-      .head { left: .6rem; top: .6rem; max-width: min(22rem, calc(100% - 1.2rem)); }
+      .scale { display: flex; justify-content: space-between; margin-top: .25rem; }
+      .scale span { display: flex; flex-direction: column; }
+      .scale span:last-child { align-items: flex-end; }
+      .scale strong { font-size: .7rem; font-weight: 650; color: var(--text); }
+      .scale small { font: var(--mono); color: var(--muted); }
+      /* The zoom control sits at the top right, so the card stops
+         short of it. On a phone the two used to touch. */
+      .head { left: .6rem; top: .6rem; max-width: min(22rem, calc(100% - 4.5rem)); }
       .head h1 { margin: 0 0 .15rem; font-size: .95rem; font-weight: 650; }
       .head p { margin: 0; font-size: .75rem; color: var(--muted); line-height: 1.45; }
       .head select {
@@ -102,7 +108,12 @@
     <div class="card legend" data-legend hidden>
       <b>Usable both ways</b>
       <div class="ramp"></div>
-      <div class="scale"><span data-floor></span><span data-ceiling></span></div>
+      <!-- The words as well as the figures. A public page is read by
+           somebody who does not know what a dBm is. -->
+      <div class="scale">
+        <span><strong>Weak</strong><small data-floor></small></span>
+        <span><strong>Strong</strong><small data-ceiling></small></span>
+      </div>
     </div>
 
     <div class="credit" data-credit></div>
