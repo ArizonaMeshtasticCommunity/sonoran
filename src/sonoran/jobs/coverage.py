@@ -863,9 +863,13 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     groups, left_out, coarse = group_by_preset(settings, nodes, overrides, offsets)
     if not groups:
         dropped = sum(sum(counts.values()) for counts in left_out.values())
+        # Name the setting, not the mesh. "No infrastructure node" is
+        # true and unhelpful when the cause is a role set that matches
+        # nothing: it sends the reader out to look at the radios.
         logger.info(
-            "no infrastructure node on a modem preset, so no coverage run. "
-            "%s positioned nodes were left out by role",
+            "no node matched %s on a modem preset, so no coverage run. "
+            "%s positioned nodes were left out",
+            settings.coverage_site_roles,
             dropped,
         )
         return None

@@ -6,7 +6,7 @@ handheld that crossed town once is not, and drawing a permanent
 footprint around it promises reach that nobody can use.
 
 This module holds the one test for that, so the coverage job and the
-public embed agree on it. It has no dependencies and touches nothing.
+public embed agree on it. It touches nothing but the log.
 
 ## The trap
 
@@ -24,6 +24,10 @@ A NULL role is therefore not "unknown, so include it". It is "a client,
 or a node we know nothing about", and neither may hold coverage open.
 `docs/COVERAGE.md` 11 and `AGENTS.md` 9.22 say the same.
 """
+
+from sonoran.logging import get_logger
+
+logger = get_logger(__name__)
 
 # The roles that may transmit on a coverage map.
 #
@@ -57,6 +61,35 @@ def role_name(role: str | None) -> str:
     return (role or "").upper() or NO_ROLE
 
 
+# Every role the firmware defines, for checking a setting against.
+#
+# Not a rule about what may transmit — `INFRASTRUCTURE_ROLES` is that.
+# This exists so a typo in `COVERAGE_SITE_ROLES` is caught and said out
+# loud. `ROUTR` parses to a set that matches nothing, the run finds no
+# site, and the log line blames the mesh for having no routers on it.
+# The operator then goes looking at the mesh.
+#
+# A name that is not here is still used. Firmware adds roles, and a
+# deployment must not be stopped by a version of this list that is a
+# release behind. It is warned about, and nothing more.
+KNOWN_ROLES = frozenset(
+    {
+        "CLIENT",
+        "CLIENT_MUTE",
+        "ROUTER",
+        "ROUTER_CLIENT",
+        "REPEATER",
+        "TRACKER",
+        "SENSOR",
+        "TAK",
+        "CLIENT_HIDDEN",
+        "LOST_AND_FOUND",
+        "TAK_TRACKER",
+        "ROUTER_LATE",
+        "CLIENT_BASE",
+    }
+)
+
 # What an operator writes to ask for every role at once.
 #
 # Logan asked for this on the pull request: the infrastructure filter is
@@ -81,6 +114,20 @@ def parse_site_roles(text: str) -> frozenset[str] | None:
         return INFRASTRUCTURE_ROLES
     if EVERY_ROLE in wanted:
         return None
+    unknown = sorted(wanted - KNOWN_ROLES)
+    if unknown:
+        # Said here, once, at the point the setting is read. A name
+        # that is not a role matches nothing, and the run then reports
+        # that the mesh has no routers on it, which sends the reader to
+        # the wrong place entirely.
+        logger.warning(
+            "COVERAGE_SITE_ROLES names %s, which %s not a Meshtastic role. "
+            "No node will match. The roles are: %s, or %s for every one.",
+            ", ".join(unknown),
+            "is" if len(unknown) == 1 else "are",
+            ", ".join(sorted(KNOWN_ROLES)),
+            EVERY_ROLE,
+        )
     return frozenset(wanted)
 
 

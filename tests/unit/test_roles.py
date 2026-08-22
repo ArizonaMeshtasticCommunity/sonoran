@@ -148,3 +148,45 @@ def test_a_diagnostic_run_can_never_widen_the_public_map() -> None:
         "role",
         "is_mqtt_gateway",
     ]
+
+
+def test_a_role_that_does_not_exist_is_said_out_loud(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A typo matches nothing, and nothing is a silent answer.
+
+    `COVERAGE_SITE_ROLES=ROUTR,REPEATER` parses to a set that no node
+    can be in. The run then finds no site and reports that the mesh has
+    no routers on it, which sends the reader out to look at the radios.
+    """
+    with caplog.at_level("WARNING"):
+        allowed = parse_site_roles("ROUTR,REPEATER")
+    assert allowed == frozenset({"ROUTR", "REPEATER"})
+    assert "ROUTR" in caplog.text
+    # And it names the real ones, so the reader does not have to search.
+    assert "ROUTER_LATE" in caplog.text
+
+
+def test_a_role_the_firmware_adds_later_still_works(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Warned about, never refused.
+
+    This list will fall a release behind the firmware. A deployment
+    must not stop because of that.
+    """
+    with caplog.at_level("WARNING"):
+        allowed = parse_site_roles("ROUTER,SOME_NEW_ROLE")
+    assert allowed is not None
+    assert is_site_role("SOME_NEW_ROLE", allowed)
+    assert "SOME_NEW_ROLE" in caplog.text
+
+
+def test_the_default_setting_names_only_real_roles() -> None:
+    """The shipped default must not trip its own warning."""
+    from sonoran.config import Settings
+    from sonoran.roles import KNOWN_ROLES
+
+    shipped = Settings(_env_file=None).coverage_site_roles
+    assert {part.strip().upper() for part in shipped.split(",")} <= KNOWN_ROLES
+    assert parse_site_roles(shipped) == INFRASTRUCTURE_ROLES
