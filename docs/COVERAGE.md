@@ -339,11 +339,18 @@ routers:
 | ...and the clutter charged at both ends | 4 | 4,435 km² |
 | ...and a router assumed to be on a mast | 4 | 4,908 km² |
 
-The role test does most of it. The clutter takes off a further eight
-percent here and would take off much more over a city, because Arizona
-is mostly scrub and this seed is mostly not in Phoenix. The mast height
-puts eleven percent back, which is the one correction that goes the
-other way: a router really does reach further than a shed roof.
+The role test does most of it. The mast height puts eleven percent
+back, which is the one correction that goes the other way: a router
+really does reach further than a shed roof.
+
+**The clutter figure understates it, and the reason is worth knowing.**
+That machine held one land cover page, N33W112, out of the eighty one
+degrees the region covers. Clutter was charged around Phoenix and
+nowhere else. A deployment that has run `tools/prefetch_landcover.py`
+for the whole region will see a larger reduction, concentrated in the
+built-up degrees. `has_landcover` is true only when every degree has a
+page, and the manifest names the ones that do not, so the page cannot
+claim buildings were accounted for when they were not.
 
 A map that is a third of the size is not a worse map. The area it lost
 was never there.

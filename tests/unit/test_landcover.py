@@ -120,3 +120,75 @@ def test_a_source_block_too_small_for_a_page_is_refused() -> None:
 
     with pytest.raises(ValueError, match="too small"):
         reduce_to_page(np.zeros((10, 10), dtype=np.uint8))
+
+
+# --- what the map may claim about clutter -------------------------------
+
+
+def _one_degree_settings(tmp_path: Path, west: int) -> "Settings":
+    from sonoran.config import Settings
+
+    return Settings(
+        _env_file=None,
+        landcover_cache_dir=str(tmp_path),
+        terrain_lat_min=33,
+        terrain_lat_max=33,
+        terrain_lon_min=west,
+        terrain_lon_max=-112,
+    )
+
+
+def _write_page(tmp_path: Path, name: str, code: int) -> None:
+    from sonoran.landcover.store import PAGE_SIZE
+
+    (tmp_path / f"{name}.class.u8").write_bytes(
+        np.full(PAGE_SIZE * PAGE_SIZE, code, dtype=np.uint8).tobytes()
+    )
+
+
+def test_a_region_with_every_page_says_so(tmp_path: Path) -> None:
+    """`has_landcover` used to be true when one page existed anywhere.
+
+    A missing degree charges no clutter over the whole of it, and the
+    edge is a straight step of eighteen dB in a town. Nobody would
+    attribute that to a file that failed to download.
+    """
+    from sonoran.coverage.grid import region_grid
+    from sonoran.jobs.coverage import receiver_loss
+
+    _write_page(tmp_path, "N33W112", 50)
+    loss, missing = receiver_loss(
+        _one_degree_settings(tmp_path, -112), region_grid(33, 33, -112, -112)
+    )
+    assert missing == [], "a region whose every degree has a page is covered"
+    assert loss is not None
+    assert int(loss.max()) > 0
+
+
+def test_a_region_missing_a_degree_names_it(tmp_path: Path) -> None:
+    from sonoran.coverage.grid import region_grid
+    from sonoran.jobs.coverage import receiver_loss
+
+    _write_page(tmp_path, "N33W112", 50)
+    _, missing = receiver_loss(
+        _one_degree_settings(tmp_path, -113), region_grid(33, 33, -113, -112)
+    )
+    assert missing == ["N33W113"]
+
+
+def test_a_degree_the_region_does_not_touch_is_not_missing(tmp_path: Path) -> None:
+    """The loop runs one degree past each edge, so a region that does
+    not start on a whole degree is covered. Those extra degrees touch
+    no cell, and a page that is not wanted is not one that is absent.
+
+    Counting them made `has_landcover` false for every deployment.
+    """
+    from sonoran.coverage.grid import region_grid
+    from sonoran.jobs.coverage import receiver_loss
+
+    _write_page(tmp_path, "N33W112", 50)
+    _, missing = receiver_loss(
+        _one_degree_settings(tmp_path, -112), region_grid(33, 33, -112, -112)
+    )
+    for name in ("N34W112", "N33W111", "N34W111"):
+        assert name not in missing, f"{name} is off the region and was counted"

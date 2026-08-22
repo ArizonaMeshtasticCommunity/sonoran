@@ -20,6 +20,16 @@ The backfill takes the newest report of each node, inside the retention
 window, so the first coverage run after this revision is already right
 instead of waiting a week for every node to report again.
 
+The newest report, not the newest one that carried a precision. A node
+that reported through the public broker last week and directly over the
+radio an hour ago has an exact position now, and picking the older
+value would call it coarse and drop a good site.
+
+A node with no report inside the window keeps NULL, which
+`is_precise_enough` reads as full precision. The migration therefore
+fails open, not shut: a deployment with short retention predicts from
+everything until each node reports again.
+
 Revision ID: 0012
 Revises: 0011
 Create Date: 2026-08-21
@@ -56,8 +66,7 @@ def upgrade() -> None:
         FROM (
             SELECT DISTINCT ON (node_num) node_num, precision_bits
             FROM position_metrics
-            WHERE precision_bits IS NOT NULL
-              AND time >= now() - INTERVAL '{BACKFILL_DAYS} days'
+            WHERE time >= now() - INTERVAL '{BACKFILL_DAYS} days'
             ORDER BY node_num, time DESC
         ) AS newest
         WHERE node.node_num = newest.node_num

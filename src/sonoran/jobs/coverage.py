@@ -73,8 +73,9 @@ from sonoran.landcover.store import PAGE_SIZE, class_page, have_pages
 from sonoran.landcover.store import tile_name as landcover_tile_name
 from sonoran.logging import get_logger
 from sonoran.positions import is_precise_enough, is_usable
+from sonoran.radio.overrides import EMPTY as EMPTY_OVERRIDES
 from sonoran.radio.overrides import Overrides, load_overrides
-from sonoran.radio.presets import ModemPreset, preset_for_channel
+from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
 from sonoran.roles import is_infrastructure, role_name
 from sonoran.terrain.store import coordinates_in_region, load_page, read_cached_page
@@ -105,12 +106,19 @@ def worker_count(settings: Settings) -> int:
     return max(1, (os.cpu_count() or 2) - 1)
 
 
-async def select_nodes(session: AsyncSession, settings: Settings) -> Sequence[Node]:
+async def select_nodes(
+    session: AsyncSession, settings: Settings, overrides: Overrides = EMPTY_OVERRIDES
+) -> Sequence[Node]:
     """Return the nodes a run may predict from.
 
     A node needs a position to be a transmitter. A node the mesh has not
     heard from for a long time is left out, because a node that is gone
     must not hold coverage open on the map.
+
+    The position an operator gave is used for this test as well. A node
+    whose reported position is missing or nonsense is exactly the node
+    an operator writes a position for, and testing the reported one
+    first would drop it before the file was ever read.
     """
     since = datetime.now(UTC) - timedelta(hours=settings.coverage_active_hours)
     rows = await session.scalars(
@@ -118,8 +126,8 @@ async def select_nodes(session: AsyncSession, settings: Settings) -> Sequence[No
     )
 
     def is_in_region(node: Node) -> bool:
-        latitude = node.last_lat
-        longitude = node.last_lon
+        given = overrides.position_of(f"!{node.node_num:08x}")
+        latitude, longitude = given if given else (node.last_lat, node.last_lon)
         if latitude is None or longitude is None or not is_usable(latitude, longitude):
             return False
         return coordinates_in_region(settings, latitude, longitude)
@@ -405,11 +413,11 @@ def predict_preset(
     grid: Grid,
     sites: Sequence[Site],
     workers: int,
-) -> tuple[Levels, Levels, list[dict[str, object]], set[str]]:
+) -> tuple[Levels, Levels, Levels, list[dict[str, object]], set[str]]:
     """Predict one preset from every site on it.
 
-    Returns the downlink grid, the uplink grid, a note about each site,
-    and the terrain tiles that were missing.
+    Returns the downlink grid, the uplink grid, the usable grid, a note
+    about each site, and the terrain tiles that were missing.
 
     The engine runs in worker processes. One site takes a few seconds of
     solid floating point, and a mesh of several hundred would take the
@@ -439,15 +447,19 @@ def _predict(
     grid: Grid,
     sites: Sequence[Site],
     workers: int,
-) -> tuple[Levels, Levels, list[dict[str, object]], set[str]]:
+) -> tuple[Levels, Levels, Levels, list[dict[str, object]], set[str]]:
     """Predict one preset with a given number of processes.
 
     The results are put on the region grid here, in the order the sites
     were given, so the answer never depends on which worker finished
     first.
+
+    Three layers come back, and `usable` is built here rather than from
+    the other two. See the note on it below.
     """
     downlink = grid.empty()
     uplink = grid.empty()
+    usable = grid.empty()
     notes: list[dict[str, object]] = []
     missing: set[str] = set()
     down_offset = downlink_offset_db(settings)
@@ -464,10 +476,19 @@ def _predict(
         # The clutter around the node costs the same at both ends,
         # because it is a loss on this end of every path.
         here = site.clutter_loss_db
-        added_down = blit_max(downlink, grid, _shift(levels, down_offset - here), site_grid)
-        added_up = blit_max(
-            uplink, grid, _shift(levels, uplink_offset_db(settings, site) - here), site_grid
-        )
+        down_here = _shift(levels, down_offset - here)
+        up_here = _shift(levels, uplink_offset_db(settings, site) - here)
+        added_down = blit_max(downlink, grid, down_here, site_grid)
+        added_up = blit_max(uplink, grid, up_here, site_grid)
+        # `usable` is the weaker direction **of one node**, and only
+        # then the best node. Taking the best of each direction first
+        # and the weaker of the two afterwards lets one node answer for
+        # the downlink and another for the uplink, and paints a place
+        # as usable both ways where no single node closes both. A tall
+        # router a handheld cannot answer, beside a solar node the
+        # handheld can reach but which cannot be heard, is exactly that
+        # place, and the mesh does not work there.
+        blit_max(usable, grid, combine_min(down_here, up_here), site_grid)
         notes.append(
             {
                 "node_id": site.node_id,
@@ -489,7 +510,7 @@ def _predict(
         with SplatModule().instance() as instance:
             for index, site in enumerate(sites):
                 take(index, site, _to_plain(_site_levels(instance, settings, site)))
-        return downlink, uplink, notes, missing
+        return downlink, uplink, usable, notes, missing
 
     with ProcessPoolExecutor(
         max_workers=workers, initializer=_worker_start, mp_context=_pool_context()
@@ -498,7 +519,7 @@ def _predict(
         for index, (site, result) in enumerate(zip(sites, computed, strict=True)):
             take(index, site, result)
 
-    return downlink, uplink, notes, missing
+    return downlink, uplink, usable, notes, missing
 
 
 def render_layer(
@@ -529,7 +550,7 @@ def render_layer(
     return written
 
 
-def receiver_loss(settings: Settings, grid: Grid) -> Levels | None:
+def receiver_loss(settings: Settings, grid: Grid) -> tuple[Levels | None, list[str]]:
     """Return the clutter loss at the receiving end, cell by cell.
 
     The map is drawn for a handheld at `COVERAGE_RX_HEIGHT_M`, which is
@@ -546,9 +567,10 @@ def receiver_loss(settings: Settings, grid: Grid) -> Levels | None:
     every prediction for no reason.
     """
     if not have_pages(settings):
-        return None
+        return None, []
 
     table = loss_by_class(settings.coverage_rx_height_m, DEFAULT_FREQUENCY_MHZ)
+    missing: list[str] = []
     loss = np.zeros((grid.height, grid.width), dtype=np.uint8)
     north = int(np.floor(grid.north))
     west = int(np.floor(grid.west))
@@ -556,9 +578,11 @@ def receiver_loss(settings: Settings, grid: Grid) -> Levels | None:
 
     for latitude in range(int(np.floor(grid.south)), north + 1):
         for longitude in range(west, int(np.floor(grid.east)) + 1):
-            page = class_page(settings, landcover_tile_name(latitude, longitude))
-            if page is None:
-                continue
+            # Where this degree lands on the region, before the page
+            # is read. The loop runs one degree past each edge so that
+            # a region which does not start on a whole degree is
+            # covered, and those extra degrees touch nothing. A page
+            # that is not wanted is not a page that is missing.
             row = round((grid.north - (latitude + 1)) * per_degree)
             column = round((longitude - grid.west) * per_degree)
             top, left = max(row, 0), max(column, 0)
@@ -566,9 +590,24 @@ def receiver_loss(settings: Settings, grid: Grid) -> Levels | None:
             right = min(column + PAGE_SIZE, grid.width)
             if bottom <= top or right <= left:
                 continue
+
+            name = landcover_tile_name(latitude, longitude)
+            page = class_page(settings, name)
+            if page is None:
+                # No page means no clutter charged over that whole
+                # degree, and the edge of it is a straight step of
+                # eighteen dB in a town. The manifest names it, as it
+                # already does for terrain.
+                missing.append(name)
+                continue
             patch = page[top - row : bottom - row, left - column : right - column]
             loss[top:bottom, left:right] = table[patch]
-    return loss
+    if missing:
+        logger.warning(
+            "%s degrees of the region have no land cover page, so no clutter is charged over them",
+            len(missing),
+        )
+    return loss, sorted(set(missing))
 
 
 def _charge_receiver(levels: Levels, loss: Levels | None) -> Levels:
@@ -581,6 +620,32 @@ def _charge_receiver(levels: Levels, loss: Levels | None) -> Levels:
         return levels
     moved = np.clip(levels.astype(np.int16) - loss.astype(np.int16), MIN_LEVEL, MAX_LEVEL)
     return np.where(levels == NO_COVERAGE, NO_COVERAGE, moved).astype(np.uint8)
+
+
+def _empty_summary(key: str, rejected: "Counter[str]") -> store.PresetSummary:
+    """Return the summary of a preset that kept no site at all.
+
+    Every node on it was a client, or every position was too coarse.
+    The page must still say so: a preset that is missing from the
+    manifest reads as a preset the mesh does not use.
+    """
+    preset = preset_by_key(key)
+    assert preset is not None, key
+    return store.PresetSummary(
+        preset=preset.name,
+        label=preset.label,
+        sensitivity_dbm=preset.sensitivity_dbm,
+        node_count=0,
+        candidate_count=sum(rejected.values()),
+        site_count=0,
+        skipped_count=0,
+        excluded_by_role=dict(sorted(rejected.items())),
+        usable_area_km2=0.0,
+        downlink_area_km2=0.0,
+        tile_count=0,
+        data_bounds=None,
+        nodes=[],
+    )
 
 
 def _build(
@@ -599,6 +664,10 @@ def _build(
         settings.terrain_lon_min,
         settings.terrain_lon_max,
     )
+    # Clear anything a previous run left behind. See
+    # `store.clear_pending`: a run that dies is never published, so
+    # nothing else would ever remove it.
+    store.clear_pending(settings, keep=stamp)
     root = store.pending_dir(settings, stamp)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -606,12 +675,21 @@ def _build(
     missing_all: set[str] = set()
     # The receiving end does not change with the preset, so it is built
     # once for the whole run.
-    rx_loss = receiver_loss(settings, grid)
+    rx_loss, missing_landcover = receiver_loss(settings, grid)
 
-    for key, sites in sorted(groups.items()):
+    # Every preset that had a candidate, not only every preset that
+    # kept one. A preset whose nodes were all clients used to vanish
+    # from the manifest entirely, which is the opposite of what the
+    # counts are for: the reader sees no mention of it and concludes
+    # the mesh does not use it.
+    for key in sorted(set(groups) | set(left_out)):
+        sites = groups.get(key, [])
+        rejected = left_out.get(key, Counter())
+        if not sites:
+            summaries.append(_empty_summary(key, rejected))
+            continue
         preset: ModemPreset = sites[0].preset
         chosen = sites[: settings.coverage_max_nodes]
-        rejected = left_out.get(key, Counter())
         logger.info(
             "preset %s: %s sites, %s nodes left out by role",
             preset.name,
@@ -619,11 +697,14 @@ def _build(
             sum(rejected.values()),
         )
 
-        downlink, uplink, notes, missing = predict_preset(settings, grid, chosen, workers)
+        downlink, uplink, usable, notes, missing = predict_preset(settings, grid, chosen, workers)
         missing_all.update(missing)
+        # The receiving end is the same wherever it stands, so taking
+        # it off after the sites are combined is the same as taking it
+        # off each one, and costs one pass instead of many.
         downlink = _charge_receiver(downlink, rx_loss)
         uplink = _charge_receiver(uplink, rx_loss)
-        usable = combine_min(downlink, uplink)
+        usable = _charge_receiver(usable, rx_loss)
         threshold = preset.sensitivity_dbm
 
         tiles = 0
@@ -668,7 +749,11 @@ def _build(
         rx_gain_dbi=settings.coverage_rx_gain_dbi,
         handheld_tx_power_dbm=HANDHELD_TX_POWER_DBM,
         has_terrain=bool(held_terrain),
-        has_landcover=have_pages(settings),
+        # True only when every degree of the region has a page. One
+        # page used to be enough to claim it, and the edge of a missing
+        # degree is a straight step of eighteen dB in a town.
+        has_landcover=have_pages(settings) and not missing_landcover,
+        missing_landcover_tiles=missing_landcover,
         calibrated_nodes=sum(
             1 for sites in groups.values() for site in sites if site.profile.is_measured
         ),
@@ -686,7 +771,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     working state for a new deployment.
     """
     overrides = load_overrides(settings.radio_overrides_path)
-    nodes = await select_nodes(session, settings)
+    nodes = await select_nodes(session, settings, overrides)
     # What the mesh measured, where there is enough of it. A node
     # with thin evidence is absent rather than zero, so it keeps its
     # nameplate figures.

@@ -173,7 +173,17 @@ def uplink_offset_db(settings: Settings, site: Site) -> float:
     See the note at the top of this module. The whole antenna of the
     node cancels, and what is left is the handheld's radiated power
     against the node's transmit power.
+
+    The nameplate power, not the corrected one. The engine was set up
+    with the correction already in it, so taking the corrected power
+    off here would cancel it exactly and the uplink would be the
+    uncalibrated prediction. It was, and because the handheld is the
+    weaker end almost everywhere, `usable` inherited the error: a node
+    measured 9 dB below its nameplate was still drawn at its nameplate.
+
+    The fit means the correction to apply at both ends. See
+    `coverage/calibrate.py`: one offset for each node, appearing at
+    both ends of every link, because a wrong antenna helps the same
+    amount whichever way the signal goes.
     """
-    return handheld_eirp_dbm(settings) - (
-        site.profile.tx_power_dbm + site.profile.calibration_offset_db
-    )
+    return handheld_eirp_dbm(settings) - site.profile.tx_power_dbm

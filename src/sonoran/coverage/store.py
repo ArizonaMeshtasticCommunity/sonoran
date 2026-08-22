@@ -130,6 +130,10 @@ class Manifest:
     # from here rather than each holding a copy, because two copies
     # drift and a legend that disagrees with its map is worse than no
     # legend. See `coverage/render.py`.
+    # The degrees of the region with no land cover page. Clutter is
+    # charged nowhere in these, so `has_landcover` is false while any
+    # remain.
+    missing_landcover_tiles: list[str] = field(default_factory=list)
     ramp_span_db: float = RAMP_SPAN_DB
     data_bounds: list[float] | None = None
     presets: list[PresetSummary] = field(default_factory=list)
@@ -192,6 +196,36 @@ def publish(settings: Settings, stamp: str, manifest: Manifest) -> Path:
     prune(settings)
     logger.info("published coverage run %s", stamp)
     return final
+
+
+def clear_pending(settings: Settings, keep: str | None = None) -> int:
+    """Delete every half built run but one. Return how many went.
+
+    A run is built under `pending-{stamp}` and renamed only when it is
+    whole, so a run that dies leaves its directory behind. Nothing
+    published it, so `prune` never sees it: `prune` reads `runs`, and
+    this sits beside it.
+
+    That is a slow disk leak. A run of the Arizona mesh writes 16 MB,
+    and a job that fails every six hours adds that four times a day
+    until the volume fills. It has happened here once already, when a
+    run was ended by the memory killer.
+
+    A run calls this before it starts, rather than after it finishes,
+    because a run that fails never reaches its own end. At most one
+    dead run is on the disk at a time.
+    """
+    root = Path(settings.coverage_cache_dir)
+    if not root.is_dir():
+        return 0
+    removed = 0
+    for path in root.glob("pending-*"):
+        if not path.is_dir() or (keep is not None and path.name == f"pending-{keep}"):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+        logger.info("removed a coverage run that never finished: %s", path.name)
+    return removed
 
 
 def prune(settings: Settings, keep: int = KEEP_RUNS) -> None:

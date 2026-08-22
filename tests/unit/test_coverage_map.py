@@ -17,6 +17,7 @@ import json
 import re
 import struct
 import zlib
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -799,3 +800,147 @@ def test_the_span_is_wide_enough_to_say_something() -> None:
     # And the median must land where the colours are furthest apart.
     middle = live_percentiles[50] / RAMP_SPAN_DB
     assert 0.4 < middle < 0.75, f"the median sits at {middle:.2f} of the ramp"
+
+
+# --- the two ways a map can claim reach it does not have ----------------
+
+
+def test_the_calibration_reaches_the_uplink_too() -> None:
+    """The correction must not cancel itself out.
+
+    The engine is set up with the corrected power, so taking the
+    corrected power off again on the uplink cancels it exactly. It did,
+    and the handheld is the weaker end almost everywhere, so `usable`
+    was drawn from the uncalibrated prediction: a node measured 9 dB
+    below its nameplate was still painted at its nameplate.
+    """
+    from sonoran.config import Settings
+    from sonoran.coverage.sites import (
+        HANDHELD_TX_POWER_DBM,
+        make_site,
+        uplink_offset_db,
+    )
+    from sonoran.radio.presets import preset_for_channel
+    from sonoran.radio.resolve import resolve_profile
+
+    settings = Settings(_env_file=None)
+    preset = preset_for_channel("LongFast")
+    assert preset is not None
+    loss_db = 120.0
+
+    for correction in (0.0, -9.0, +6.0):
+        profile = resolve_profile("!d", "RAK4631", calibration_offset_db=correction)
+        site = make_site(settings, "!d", 1, "d", 33.4, -112.0, profile, preset)
+        # What the engine puts on the ground, which already holds the
+        # correction because `engine_params` put it in the power.
+        field = (
+            profile.tx_power_dbm
+            + profile.calibration_offset_db
+            + profile.antenna_gain_dbi
+            - profile.cable_loss_db
+            - loss_db
+        )
+        uplink = field + uplink_offset_db(settings, site)
+        # The handheld transmits; the node's antenna, cable and its own
+        # measured correction all apply at the receiving end.
+        expected = (
+            HANDHELD_TX_POWER_DBM
+            + settings.coverage_rx_gain_dbi
+            + profile.antenna_gain_dbi
+            - profile.cable_loss_db
+            + correction
+            - loss_db
+        )
+        assert uplink == pytest.approx(expected, abs=1e-9), correction
+
+
+def test_usable_is_the_weaker_direction_of_one_node() -> None:
+    """Not the weaker of the best of each direction.
+
+    Taking the best downlink and the best uplink and then the weaker of
+    the two lets one node answer for one direction and another node for
+    the other. A tall router a handheld cannot answer, beside a solar
+    node the handheld can reach but which cannot be heard back, then
+    paints as usable both ways. The mesh does not work there.
+    """
+    from sonoran.coverage.grid import combine_min, to_dbm, to_level
+
+    threshold = -134.0
+    tall = (-130.0, -138.0)  # a mast: heard far, cannot hear back
+    solar = (-136.0, -131.0)  # a small node: hears well, is not heard
+
+    def level(value: float) -> np.ndarray:
+        return np.array([[to_level(value)]], dtype=np.uint8)
+
+    # Neither node closes both directions on its own.
+    for down, up in (tall, solar):
+        assert min(down, up) < threshold
+
+    wrong = combine_min(
+        np.maximum(level(tall[0]), level(solar[0])),
+        np.maximum(level(tall[1]), level(solar[1])),
+    )
+    right = np.maximum(
+        combine_min(level(tall[0]), level(tall[1])),
+        combine_min(level(solar[0]), level(solar[1])),
+    )
+    assert to_dbm(int(wrong[0, 0])) >= threshold, "the old order painted this covered"
+    assert to_dbm(int(right[0, 0])) < threshold, "and the right order does not"
+
+
+def test_the_job_builds_usable_from_each_site() -> None:
+    """`_predict` must return its own usable layer, not one derived
+    from the other two afterwards."""
+    import inspect
+
+    from sonoran.jobs import coverage
+
+    source = inspect.getsource(coverage._predict)
+    assert "blit_max(usable, grid, combine_min(" in source
+    assert "return downlink, uplink, usable, notes, missing" in source
+
+
+def test_a_preset_that_kept_no_site_is_still_reported(tmp_path: Path) -> None:
+    """A preset whose nodes were all clients used to vanish.
+
+    `_build` iterated the sites it kept, so a preset with candidates
+    and no survivors produced no summary at all, and a reader concluded
+    the mesh does not use it. That is the opposite of what the counts
+    are for.
+    """
+    import inspect
+
+    from sonoran.jobs import coverage
+
+    source = inspect.getsource(coverage._build)
+    assert "set(groups) | set(left_out)" in source, "iterate every preset that had a candidate"
+    assert "_empty_summary" in source
+
+    summary = coverage._empty_summary("LONG_FAST", Counter({"NULL": 40, "CLIENT": 2}))
+    assert summary.site_count == 0
+    assert summary.candidate_count == 42
+    assert summary.excluded_by_role == {"CLIENT": 2, "NULL": 40}
+    assert summary.usable_area_km2 == 0.0
+    assert summary.data_bounds is None
+
+
+def test_a_half_built_run_is_cleared_before_the_next_one(tmp_path: Path) -> None:
+    """A run that dies is never published, so nothing else removes it.
+
+    `prune` reads `runs`; a pending directory sits beside it. A run of
+    the Arizona mesh writes 16 MB, and a job failing every six hours
+    adds that four times a day until the volume fills.
+    """
+    from sonoran.coverage import store
+
+    settings = _settings(tmp_path)
+    root = Path(settings.coverage_cache_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    for stamp in ("20260101T000000Z", "20260102T000000Z"):
+        (root / f"pending-{stamp}").mkdir()
+    (root / "pending-20260103T000000Z").mkdir()
+
+    assert store.clear_pending(settings, keep="20260103T000000Z") == 2
+    assert [path.name for path in root.glob("pending-*")] == ["pending-20260103T000000Z"]
+    # And the run in progress is untouched on a second call.
+    assert store.clear_pending(settings, keep="20260103T000000Z") == 0

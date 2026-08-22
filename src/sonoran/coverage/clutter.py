@@ -55,6 +55,13 @@ from sonoran.landcover.classes import CLASSES
 # hundred metres of ground and says nothing about streets.
 STREET_WIDTH_M = 27.0
 
+# The lowest terminal height the model is evaluated at, in metres.
+#
+# Equation (2b) is a ratio of the terminal height to the clutter
+# height, so it runs away as the height goes to zero. Ten centimetres
+# is below any radio somebody carries and keeps the answer finite.
+MINIMUM_TERMINAL_M = 0.1
+
 # The band edges the model is defined over, in MHz.
 FREQUENCY_MIN_MHZ = 30.0
 FREQUENCY_MAX_MHZ = 3000.0
@@ -92,8 +99,11 @@ def terminal_loss_db(
     """
     if clutter_height_m <= 0.0 or terminal_height_m >= clutter_height_m:
         return 0.0
-    if terminal_height_m <= 0.0:
-        return 0.0
+    # A terminal on the ground is as deep in the clutter as it gets,
+    # not out of it. Equation (2b) divides by the height, so it needs a
+    # floor rather than a special case: returning zero here made the
+    # loss jump from 34 dB at five centimetres to nothing at zero.
+    terminal_height_m = max(terminal_height_m, MINIMUM_TERMINAL_M)
 
     ghz = max(FREQUENCY_MIN_MHZ, min(frequency_mhz, FREQUENCY_MAX_MHZ)) / 1000.0
     difference = clutter_height_m - terminal_height_m

@@ -62,14 +62,18 @@ def test_a_missing_role_is_counted_under_a_name_of_its_own() -> None:
 
 
 def test_the_public_embed_shares_this_table() -> None:
-    """One table, two rules.
+    """One table, and now one rule.
 
-    The embed adds MQTT gateways on top, because running one is a
-    deliberate act. The coverage job must not: a gateway is often a
-    client radio in a house that happens to have wifi.
+    The embed used to add MQTT gateways on top, on the reasoning that
+    running one is a deliberate act. It is not: the flag is set for any
+    node that publishes and never cleared, so a client with the uplink
+    switched on carried its home onto a public map. Both rules now ask
+    the same question.
     """
     from sonoran.embed.sanitise import PUBLIC_ROLES, is_public_node
 
     assert PUBLIC_ROLES is INFRASTRUCTURE_ROLES
-    assert is_public_node("CLIENT", True)
-    assert not is_infrastructure("CLIENT")
+    for role in ("CLIENT", "CLIENT_MUTE", None):
+        assert not is_public_node(role, True), role
+        assert not is_infrastructure(role), role
+    assert is_public_node("ROUTER", False)
