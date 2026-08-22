@@ -40,11 +40,14 @@ from sonoran.coverage.calibrate import (
     fit_offsets,
     residual_summary,
 )
+from sonoran.coverage.clutter import terminal_loss_db
 from sonoran.coverage.engine import EngineError, SplatInstance, SplatModule
-from sonoran.coverage.params import EngineParams, erp_watts
+from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ, EngineParams, erp_watts
 from sonoran.db.models import NeighborMetrics, Node
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.jobs.coverage import ensure_terrain, read_page, tiles_around
+from sonoran.landcover.classes import is_diffracting
+from sonoran.landcover.store import class_at, clutter_at
 from sonoran.logging import get_logger
 from sonoran.positions import is_precise_enough, is_usable
 from sonoran.radio.overrides import Overrides, load_overrides
@@ -79,6 +82,13 @@ class Peer:
     longitude: float
     profile: RadioProfile
     preset: ModemPreset
+    # What the clutter around this node costs its own antenna, in dB.
+    #
+    # The coverage job charges this against every path the node is in.
+    # The fit has to charge it too, or the residual it leaves behind
+    # holds the clutter, the per-node offset absorbs it, and the job
+    # then takes it off a second time. See `coverage/clutter.py`.
+    clutter_loss_db: float = 0.0
 
 
 def _distance_km(first: Peer, second: Peer) -> float:
@@ -128,13 +138,22 @@ async def read_peers(
         if not is_precise_enough(node.last_position_precision_bits):
             continue
         identifier = f"!{node.node_num:08x}"
+        profile = resolve_profile(identifier, node.hw_model, overrides, role=node.role)
+        around = clutter_at(settings, latitude, longitude)
+        height = 1e9 if profile.above_clutter else profile.antenna_height_m
         peers[node.node_num] = Peer(
             node_id=identifier,
             node_num=node.node_num,
             latitude=latitude,
             longitude=longitude,
-            profile=resolve_profile(identifier, node.hw_model, overrides, role=node.role),
+            profile=profile,
             preset=preset,
+            clutter_loss_db=terminal_loss_db(
+                around,
+                height,
+                DEFAULT_FREQUENCY_MHZ,
+                is_diffracting(class_at(settings, latitude, longitude)),
+            ),
         )
     return peers
 
@@ -168,13 +187,17 @@ async def read_reports(
     taken, because a poor one may be a collision rather than a path.
     """
     since = datetime.now(UTC) - timedelta(hours=settings.calibration_window_hours)
-    rows = await session.scalars(
-        select(NeighborMetrics).where(
-            NeighborMetrics.time >= since, NeighborMetrics.snr.is_not(None)
-        )
+    # Streamed, not read whole. The window is two weeks by default and
+    # `neighbor_metrics` is fed by anybody with a radio, so the row
+    # count is not bounded by the size of the mesh. Reading it all into
+    # the process at once is how the jobs container runs out of memory.
+    rows = await session.stream_scalars(
+        select(NeighborMetrics)
+        .where(NeighborMetrics.time >= since, NeighborMetrics.snr.is_not(None))
+        .execution_options(yield_per=1000)
     )
     reports: dict[int, dict[int, float]] = {}
-    for row in rows.all():
+    async for row in rows:
         if row.snr is None or not _matches_current_preset(row, peers):
             continue
         heard = reports.setdefault(row.node_num, {})
@@ -279,7 +302,17 @@ def _fill(
                     # run centred on the listener gives the loss of the
                     # link the other way round as well.
                     loss_db = listener_eirp - link.dbm
-                    predicted = peer.profile.effective_eirp_dbm - loss_db
+                    # Both ends are nodes here, and each pays for the
+                    # clutter around it. The coverage job charges the
+                    # same two terms, so leaving them out here would
+                    # push them into the per-node offset and charge
+                    # them twice on the map.
+                    predicted = (
+                        peer.profile.effective_eirp_dbm
+                        - loss_db
+                        - peer.clutter_loss_db
+                        - listener.clutter_loss_db
+                    )
 
                     if peer.node_num in reported:
                         measured = floor + heard[peer.node_num]
