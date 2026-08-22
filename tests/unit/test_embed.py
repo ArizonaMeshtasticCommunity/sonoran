@@ -13,6 +13,8 @@ still there and still assert `DENY`. A test that changes to let a new
 feature through stops protecting the old one.
 """
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -290,3 +292,50 @@ def test_a_tab_inside_an_origin_collapses_rather_than_splitting() -> None:
     nothing. It is not a way to name a second origin.
     """
     assert frame_ancestors(["https://a.com\tb.com"]) == "https://a.comb.com"
+
+
+# --- the diagnostic run must never look like a coverage map ------------
+
+
+def test_a_diagnostic_run_is_withheld_from_the_public_page(tmp_path: Path) -> None:
+    """Not labelled. Withheld.
+
+    `COVERAGE_SITE_ROLES=ALL` predicts from every client node, and a
+    client node is usually somebody's house. Each one draws a footprint
+    centred on it. `public_nodes` already keeps the markers back, but a
+    footprint has a centre, and a stranger reading the tiles can find
+    it. A warning banner does not fix that; not serving it does.
+    """
+    import asyncio
+    import json
+
+    from sonoran.api.routes import embed
+
+    run = tmp_path / "runs" / "20260101T000000Z"
+    run.mkdir(parents=True)
+    manifest = {"stamp": "20260101T000000Z", "is_diagnostic": True, "presets": [{"preset": "X"}]}
+    (run / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / "index.json").write_text(
+        json.dumps({"current": "20260101T000000Z"}), encoding="utf-8"
+    )
+
+    settings = Settings(coverage_cache_dir=str(tmp_path), embed_enabled=True)
+    embed._summary_cache = None
+    try:
+        answer = asyncio.run(embed.embed_summary(settings))
+    finally:
+        embed._summary_cache = None
+
+    assert answer["available"] is False
+    assert answer["presets"] == []
+    assert answer["reason"] == "diagnostic"
+    # And nothing about the run leaks through the refusal.
+    assert "bounds" not in answer
+    assert "stamp" not in answer
+
+
+def test_the_public_page_says_which_kind_of_empty_it_is() -> None:
+    """ "No map yet" sent an operator looking for a failed job once."""
+    script = Path("src/sonoran/web/static/embed-coverage.js").read_text(encoding="utf-8")
+    assert "reason === 'diagnostic'" in script
+    assert "No coverage map has been made yet." in script

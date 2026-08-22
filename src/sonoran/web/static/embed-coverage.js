@@ -148,7 +148,19 @@
 
     state.summary = summary;
     if (!summary.available || !(summary.presets || []).length) {
-      note('No coverage map has been made yet.');
+      /*
+       * A diagnostic run is withheld from this page by the server: it
+       * predicts from client nodes, and a footprint has a centre, so
+       * publishing the tiles would put a ring around somebody's house.
+       * Say which of the two states this is, because "no map yet" sent
+       * an operator looking for a failed job once.
+       */
+      note(
+        summary.reason === 'diagnostic'
+          ? 'The last run was a diagnostic and is not published here. '
+            + 'A public map is made from the routers and repeaters only.'
+          : 'No coverage map has been made yet.',
+      );
       return;
     }
 

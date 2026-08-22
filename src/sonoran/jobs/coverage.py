@@ -77,7 +77,13 @@ from sonoran.radio.overrides import EMPTY as EMPTY_OVERRIDES
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
-from sonoran.roles import is_infrastructure, role_name
+from sonoran.roles import (
+    EVERY_ROLE,
+    INFRASTRUCTURE_ROLES,
+    is_site_role,
+    parse_site_roles,
+    role_name,
+)
 from sonoran.terrain.store import coordinates_in_region, load_page, read_cached_page
 
 logger = get_logger(__name__)
@@ -149,9 +155,11 @@ def group_by_preset(
     has. Such a node is left out rather than guessed at, because putting
     it on the wrong preset draws a link that cannot exist.
 
-    A node that is not infrastructure is left out as well. Only a node
-    that stays where it is can hold coverage open. See `sonoran/roles.py`
-    for why a missing role is a client and not an unknown.
+    A node whose role is not in `COVERAGE_SITE_ROLES` is left out as
+    well. The default is the infrastructure set, because only a node
+    that stays where it is can hold coverage open. See
+    `sonoran/roles.py` for why a missing role is a client and not an
+    unknown, and for the `ALL` diagnostic that turns the test off.
 
     So is a node whose position is known to be coarse. The public
     Meshtastic broker fuzzes a position by up to 23 km, and the terrain
@@ -161,6 +169,7 @@ def group_by_preset(
     because the manifest has to report them. A run that quietly drops
     nine nodes in ten must say so on the page.
     """
+    allowed = parse_site_roles(settings.coverage_site_roles)
     groups: dict[str, list[Site]] = {}
     left_out: dict[str, Counter[str]] = {}
     for node in nodes:
@@ -168,7 +177,7 @@ def group_by_preset(
         if preset is None:
             continue
         rejected = left_out.setdefault(preset.key, Counter())
-        if not is_infrastructure(node.role):
+        if not is_site_role(node.role, allowed):
             rejected[role_name(node.role)] += 1
             continue
         identifier = f"!{node.node_num:08x}"
@@ -381,17 +390,40 @@ def _pool_context() -> multiprocessing.context.BaseContext:
     return multiprocessing.get_context("spawn")
 
 
-def _worker_start() -> None:
+def _worker_start(nice: int = 0) -> None:
     """Set up one worker process.
 
-    Only the engine is made here. The terrain a worker needs is read
-    from the disk cache as the work asks for it, because sending the
-    pages through the pool would copy the whole region into every
-    process.
+    Only the engine is made here, and the niceness. The terrain a worker
+    needs is read from the disk cache as the work asks for it, because
+    sending the pages through the pool would copy the whole region into
+    every process. Nothing else may be passed through this initialiser:
+    an argument crosses to every worker at start up.
+
+    The niceness is why an argument is taken at all. The engine is a
+    solid floating point loop, so a run pins every worker for minutes,
+    and on a machine that also serves the dashboard and takes MQTT that
+    is felt by everybody using it. A niced worker still gets every idle
+    cycle and hands the CPU straight back to anything interactive.
     """
     global _WORKER_MODULE, _WORKER_INSTANCE
+    _be_nice(nice)
     _WORKER_MODULE = SplatModule()
     _WORKER_INSTANCE = _WORKER_MODULE.instance()
+
+
+def _be_nice(nice: int) -> None:
+    """Lower the priority of this process, where the platform has it.
+
+    Never raised. A process cannot restore its own priority without
+    privilege, so a negative value is refused rather than acted on and
+    then regretted. A platform with no `os.nice` is left alone.
+    """
+    if nice <= 0 or not hasattr(os, "nice"):
+        return
+    try:
+        os.nice(nice)
+    except OSError as error:  # pragma: no cover - depends on the host
+        logger.debug("could not lower the worker priority: %s", error)
 
 
 def _to_plain(computed: tuple[Levels, Grid, list[str]] | None) -> SiteResult | None:
@@ -431,15 +463,19 @@ def predict_preset(
     accumulators are made inside `_predict`, so the retry starts from
     empty ground and never counts a site twice.
     """
-    if workers > 1:
+    if workers >= 1:
         try:
             return _predict(settings, grid, sites, workers)
         except BrokenProcessPool:
             logger.warning(
-                "a worker process died, so this preset is predicted in one "
+                "a worker process died, so this preset is predicted in this "
                 "process instead. The usual cause is memory."
             )
-    return _predict(settings, grid, sites, 1)
+    # Zero means here, in the jobs process, and is the crash fallback
+    # rather than a setting. One worker is still a worker: it is the
+    # answer for a small box, and it is niced, which a run inside the
+    # jobs process could not be without slowing every other job down.
+    return _predict(settings, grid, sites, 0)
 
 
 def _predict(
@@ -506,14 +542,17 @@ def _predict(
         if (index + 1) % 25 == 0:
             logger.info("  %s of %s sites", index + 1, len(sites))
 
-    if workers <= 1:
+    if workers < 1:
         with SplatModule().instance() as instance:
             for index, site in enumerate(sites):
                 take(index, site, _to_plain(_site_levels(instance, settings, site)))
         return downlink, uplink, usable, notes, missing
 
     with ProcessPoolExecutor(
-        max_workers=workers, initializer=_worker_start, mp_context=_pool_context()
+        max_workers=workers,
+        initializer=_worker_start,
+        initargs=(settings.coverage_worker_nice,),
+        mp_context=_pool_context(),
     ) as pool:
         computed = pool.map(partial(_worker_site, settings), sites, chunksize=1)
         for index, (site, result) in enumerate(zip(sites, computed, strict=True)):
@@ -658,6 +697,10 @@ def _build(
 ) -> store.Manifest:
     """Run every preset and write its tiles. This holds the processor."""
     started = time.monotonic()
+    # Read again rather than passed in. `group_by_preset` reads the same
+    # setting to decide, and the manifest has to report what was
+    # actually used, so the two must come from one source.
+    allowed = parse_site_roles(settings.coverage_site_roles)
     grid = region_grid(
         settings.terrain_lat_min,
         settings.terrain_lat_max,
@@ -754,6 +797,11 @@ def _build(
         # degree is a straight step of eighteen dB in a town.
         has_landcover=have_pages(settings) and not missing_landcover,
         missing_landcover_tiles=missing_landcover,
+        # What the run predicted from, carried with the run. A reader
+        # who opens the page later cannot otherwise tell a coverage map
+        # from a diagnostic one.
+        site_roles=sorted(allowed) if allowed is not None else [EVERY_ROLE],
+        is_diagnostic=allowed != INFRASTRUCTURE_ROLES,
         calibrated_nodes=sum(
             1 for sites in groups.values() for site in sites if site.profile.is_measured
         ),
@@ -828,3 +876,17 @@ async def main() -> None:
                 )
     finally:
         await engine.dispose()
+
+
+def run() -> None:
+    """Make one coverage run and stop. The console entry point.
+
+    The scheduler makes a run every `COVERAGE_INTERVAL_HOURS`. This is
+    the other half of that: one run, now, so that an operator bringing
+    a box up does not have to wait for the timer, and so that a first
+    run can be watched. It writes into the same cache and publishes the
+    same way, so the schedule picks up from where this left off.
+
+        sonoran-coverage-once
+    """
+    asyncio.run(main())

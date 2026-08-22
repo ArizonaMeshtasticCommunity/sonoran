@@ -393,19 +393,58 @@
         .sort((a, b) => counts[b] - counts[a])
         .map((name) => `${counts[name]} ${label(name)}`)
         .join(', '),
-      '. Only a router or a repeater holds coverage open, because only a node that '
-        + 'stays where it is can.',
+        state.summary.is_diagnostic
+        ? '. This run predicted from every role it was given, so what is left out '
+          + 'here is only what had no position or no preset.'
+        : '. Only a router or a repeater holds coverage open, because only a node '
+          + 'that stays where it is can.',
       counts['coarse-position']
         ? el(
             'span',
             {},
             ' ',
             el('strong', { text: `${counts['coarse-position']} of those` }),
-            ' are routers whose position the broker rounded off too far to predict from. '
-              + 'Give each one a latitude and longitude in config/nodes.yaml and it '
-              + 'becomes a site again.',
+            // "routers" is right for an ordinary run, because nothing
+            // else reaches the position test. A diagnostic run tests
+            // every role, so there it has to be the wider word.
+            state.summary.is_diagnostic
+              ? ' are nodes whose position the broker rounded off too far to predict '
+                + 'from. Give each one a latitude and longitude in config/nodes.yaml '
+                + 'and it becomes a site again.'
+              : ' are routers whose position the broker rounded off too far to predict '
+                + 'from. Give each one a latitude and longitude in config/nodes.yaml '
+                + 'and it becomes a site again.',
           )
         : null,
+    );
+  }
+
+  /*
+   * A run that predicted from every node is a useful thing to look at
+   * and is not a coverage map: a handheld that crossed town once draws
+   * a permanent footprint. Neither the heading nor the panel may let
+   * the two be mistaken for each other, because the tiles look
+   * identical.
+   */
+  function drawDiagnosticBanner(page) {
+    const sub = $('[data-coverage-sub]', page);
+    const summary = state.summary;
+    if (!sub || !summary || !summary.available) return;
+    sub.textContent = summary.is_diagnostic
+      ? `Diagnostic run: predicted from ${(summary.site_roles || []).join(', ') || 'every role'}.`
+      : 'Where the mesh reaches, predicted from the routers and repeaters that carry it.';
+  }
+
+  function diagnosticNotice() {
+    if (!state.summary.is_diagnostic) return null;
+    return el(
+      'p',
+      { class: 'notice warn', style: 'font-weight:600' },
+      'This is a diagnostic run. It predicted from every node it was given, '
+        + 'including handhelds and nodes that never said what they are, so it '
+        + 'shows where a radio could reach on the day and not where the mesh '
+        + 'reaches. Set COVERAGE_SITE_ROLES back to its default for a map to '
+        + 'publish.',
     );
   }
 
@@ -420,6 +459,7 @@
     const missing = (summary.missing_terrain_tiles || []).length;
     replace(
       host,
+      diagnosticNotice(),
       el(
         'p',
         {},
@@ -639,6 +679,7 @@
     drawViews(page);
     drawLegend(page);
     drawStats(page);
+    drawDiagnosticBanner(page);
     drawAssumes(page);
     drawSites(page);
     drawBaseMap();
@@ -675,7 +716,8 @@
           + 'each modem preset the mesh is using.',
         '',
       );
-      drawAssumes(page);
+      drawDiagnosticBanner(page);
+    drawAssumes(page);
       return;
     }
     notice(page, '');

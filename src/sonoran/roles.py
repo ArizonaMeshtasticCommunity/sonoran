@@ -55,3 +55,44 @@ def is_infrastructure(role: str | None) -> bool:
 def role_name(role: str | None) -> str:
     """Return the name to count a node under in a report."""
     return (role or "").upper() or NO_ROLE
+
+
+# What an operator writes to ask for every role at once.
+#
+# Logan asked for this on the pull request: the infrastructure filter is
+# right for the map somebody publishes, and an "all nodes" run is still
+# the way to answer "why is this ridge empty?".
+EVERY_ROLE = "ALL"
+
+
+def parse_site_roles(text: str) -> frozenset[str] | None:
+    """Return the roles a coverage run may predict from.
+
+    None means every role, which is the diagnostic answer. A run in that
+    state is not a coverage map and must say so on the page: see
+    `Manifest.is_diagnostic`.
+
+    An empty or unreadable setting gives the infrastructure set. A
+    deployment must not lose its filter to a typo, so the failure is to
+    the safe answer rather than to the wide one.
+    """
+    wanted = {part.strip().upper() for part in text.split(",") if part.strip()}
+    if not wanted:
+        return INFRASTRUCTURE_ROLES
+    if EVERY_ROLE in wanted:
+        return None
+    return frozenset(wanted)
+
+
+def is_site_role(role: str | None, allowed: frozenset[str] | None) -> bool:
+    """Return true when a node may be a coverage transmitter.
+
+    `allowed` of None accepts everything, including a NULL role. That is
+    the diagnostic run and nothing else may use it. The public embed
+    asks `is_public_node`, which is fixed to the infrastructure set and
+    takes no setting, so a diagnostic run cannot put a stranger's house
+    on a public map.
+    """
+    if allowed is None:
+        return True
+    return (role or "").upper() in allowed

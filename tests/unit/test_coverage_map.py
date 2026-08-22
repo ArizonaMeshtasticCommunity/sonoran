@@ -14,6 +14,7 @@ finished map:
 """
 
 import json
+import os
 import re
 import struct
 import zlib
@@ -677,11 +678,20 @@ def test_a_run_stamp_that_is_not_a_stamp_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_worker_reads_terrain_from_the_disk_cache(tmp_path: Path) -> None:
-    """Nothing sends a terrain page through the process pool."""
+    """Nothing sends a terrain page through the process pool.
+
+    The initialiser takes one argument, the niceness, which is an int.
+    Anything bigger crossing here is copied into every worker at start
+    up, which is how the pool died on a small machine, so the test
+    pins the size of what may cross rather than that nothing does.
+    """
+    import inspect
+
     from sonoran.jobs import coverage
 
     assert not hasattr(coverage, "_WORKER_PAGES")
-    assert coverage._worker_start.__code__.co_argcount == 0
+    parameters = list(inspect.signature(coverage._worker_start).parameters.values())
+    assert [(item.name, item.annotation) for item in parameters] == [("nice", int)]
 
 
 def test_the_page_hold_is_bounded(tmp_path: Path) -> None:
@@ -757,13 +767,17 @@ def test_a_dead_worker_pool_costs_time_and_not_the_run(
         _settings: Settings, _grid: Grid, _sites: object, workers: int
     ) -> tuple[object, object, list[dict[str, object]], set[str]]:
         calls.append(workers)
-        if workers > 1:
+        if workers >= 1:
             raise BrokenProcessPool("out of memory")
         return _grid.empty(), _grid.empty(), [], set()
 
     monkeypatch.setattr(coverage, "_predict", fake_predict)
     coverage.predict_preset(settings, grid, [], 4)
-    assert calls == [4, 1]
+    # Zero, not one. One worker is still a worker process, and is the
+    # answer for a small box, because a worker can be niced and a run
+    # inside the jobs process cannot be without slowing every other job
+    # down. Zero is the crash fallback and means "in this process".
+    assert calls == [4, 0]
 
 
 def test_the_ramp_span_is_served_and_not_copied() -> None:
@@ -944,3 +958,69 @@ def test_a_half_built_run_is_cleared_before_the_next_one(tmp_path: Path) -> None
     assert [path.name for path in root.glob("pending-*")] == ["pending-20260103T000000Z"]
     # And the run in progress is untouched on a second call.
     assert store.clear_pending(settings, keep="20260103T000000Z") == 0
+
+
+# --- keeping the box usable while a run happens ------------------------
+#
+# Tyler asked for this in the review thread: "have it run on a single
+# low priority thread too". Logan's machine was audibly struggling
+# through a run. The engine is a solid floating point loop with no IO
+# to yield on, so without this it takes every core it is given and
+# holds them for minutes, on a box that is also serving the dashboard
+# and taking MQTT.
+
+
+def test_the_worker_priority_is_only_ever_lowered() -> None:
+    """A process cannot raise its own priority back afterwards.
+
+    So a negative setting must be refused rather than acted on. If it
+    were applied, the run would take priority over the API on the same
+    box and there would be no way to undo it short of a restart.
+    """
+    from sonoran.jobs import coverage
+
+    seen: list[int] = []
+    original = os.nice
+
+    def fake_nice(value: int) -> int:
+        seen.append(value)
+        return value
+
+    try:
+        os.nice = fake_nice  # type: ignore[assignment]
+        coverage._be_nice(-5)
+        coverage._be_nice(0)
+        assert seen == []
+        coverage._be_nice(10)
+        assert seen == [10]
+    finally:
+        os.nice = original  # type: ignore[assignment]
+
+
+def test_a_host_without_nice_is_left_alone() -> None:
+    """The setting must not be able to stop a run on a platform that
+    has no such thing."""
+    from sonoran.jobs import coverage
+
+    original = os.nice
+    try:
+        del os.nice  # type: ignore[attr-defined]
+        coverage._be_nice(10)
+    finally:
+        os.nice = original  # type: ignore[assignment]
+
+
+def test_the_niceness_reaches_the_workers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """It is set in the initialiser, so it applies to every worker.
+
+    Setting it in the parent would be wrong: the jobs process also runs
+    the snapshot and the calibration, and it cannot put its priority
+    back.
+    """
+    import inspect
+
+    from sonoran.jobs import coverage
+
+    source = inspect.getsource(coverage._predict)
+    assert "initargs=(settings.coverage_worker_nice,)" in source
+    assert "_be_nice" in inspect.getsource(coverage._worker_start)

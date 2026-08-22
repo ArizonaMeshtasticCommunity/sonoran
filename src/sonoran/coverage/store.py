@@ -135,6 +135,17 @@ class Manifest:
     # charged nowhere in these, so `has_landcover` is false while any
     # remain.
     missing_landcover_tiles: list[str] = field(default_factory=list)
+    # The roles this run predicted from, and whether that set is the
+    # infrastructure one.
+    #
+    # A diagnostic run predicts from handhelds and from nodes that
+    # never said what they are, and it is useful for exactly that. It
+    # is not a coverage map, and a reader who opens the page a week
+    # later has no way to know which they are looking at unless the run
+    # carries it. Both the dashboard and the public embed read this and
+    # label the map. See `sonoran/roles.py`.
+    site_roles: list[str] = field(default_factory=list)
+    is_diagnostic: bool = False
     data_bounds: list[float] | None = None
     presets: list[PresetSummary] = field(default_factory=list)
 

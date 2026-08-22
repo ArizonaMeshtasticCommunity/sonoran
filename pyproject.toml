@@ -50,6 +50,9 @@ dev = [
 sonoran-api = "sonoran.api.app:run"
 sonoran-ingest = "sonoran.ingest.pipeline:run"
 sonoran-jobs = "sonoran.jobs.scheduler:run"
+# One coverage run, now, instead of waiting for the timer. For bringing
+# a box up and for watching the first run.
+sonoran-coverage-once = "sonoran.jobs.coverage:run"
 
 [build-system]
 requires = ["hatchling"]

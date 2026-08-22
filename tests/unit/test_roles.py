@@ -10,7 +10,15 @@ that never introduced itself are the same row. See `sonoran/roles.py`.
 
 import pytest
 
-from sonoran.roles import INFRASTRUCTURE_ROLES, NO_ROLE, is_infrastructure, role_name
+from sonoran.roles import (
+    EVERY_ROLE,
+    INFRASTRUCTURE_ROLES,
+    NO_ROLE,
+    is_infrastructure,
+    is_site_role,
+    parse_site_roles,
+    role_name,
+)
 
 
 @pytest.mark.parametrize("role", sorted(INFRASTRUCTURE_ROLES))
@@ -77,3 +85,66 @@ def test_the_public_embed_shares_this_table() -> None:
         assert not is_public_node(role, True), role
         assert not is_infrastructure(role), role
     assert is_public_node("ROUTER", False)
+
+
+# --- the diagnostic set ------------------------------------------------
+#
+# Logan asked on the pull request that an explicit "all nodes" run stay
+# available beside the filter. It is genuinely useful for answering
+# "why is this ridge empty?". It is also the one setting in this
+# service that can make an honest-looking map dishonest, so the tests
+# below are about what it must never reach.
+
+
+def test_the_default_setting_is_the_infrastructure_set() -> None:
+    assert parse_site_roles("ROUTER,ROUTER_LATE,REPEATER") == INFRASTRUCTURE_ROLES
+
+
+def test_a_typo_falls_back_to_the_safe_answer() -> None:
+    """A deployment must not lose its filter to an empty string.
+
+    The failure has to be to the narrow set. Falling open would turn a
+    published map into a diagnostic one without anybody asking.
+    """
+    assert parse_site_roles("") == INFRASTRUCTURE_ROLES
+    assert parse_site_roles("   ,  ,") == INFRASTRUCTURE_ROLES
+
+
+def test_all_means_every_role_including_the_missing_one() -> None:
+    allowed = parse_site_roles(EVERY_ROLE)
+    assert allowed is None
+    for role in ("CLIENT", "CLIENT_MUTE", "TRACKER", None, ""):
+        assert is_site_role(role, allowed), role
+
+
+def test_a_named_set_is_taken_as_written() -> None:
+    """An operator may widen it a little without going all the way."""
+    allowed = parse_site_roles("router, client_base")
+    assert allowed == frozenset({"ROUTER", "CLIENT_BASE"})
+    assert is_site_role("CLIENT_BASE", allowed)
+    assert not is_site_role("CLIENT", allowed)
+    assert not is_site_role(None, allowed)
+
+
+def test_a_diagnostic_run_can_never_widen_the_public_map() -> None:
+    """The landmine this setting would otherwise be.
+
+    `COVERAGE_SITE_ROLES=ALL` predicts from handhelds, which is what it
+    is for. If the public embed read the same setting, one environment
+    variable would put every client node in the mesh — homes, mostly —
+    onto a public page at a kilometre. The embed asks its own question
+    and takes no setting at all.
+    """
+    import inspect
+
+    from sonoran.embed import sanitise
+
+    assert sanitise.PUBLIC_ROLES is INFRASTRUCTURE_ROLES
+    source = inspect.getsource(sanitise)
+    assert "parse_site_roles" not in source
+    assert "coverage_site_roles" not in source
+    # And the function takes no settings argument to read one from.
+    assert list(inspect.signature(sanitise.is_public_node).parameters) == [
+        "role",
+        "is_mqtt_gateway",
+    ]

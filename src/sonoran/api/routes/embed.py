@@ -99,6 +99,27 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
     if manifest is None:
         return {"available": False, "presets": []}
 
+    # A diagnostic run does not reach a public page at all.
+    #
+    # Labelling it is not enough here, and the reason is not honesty.
+    # A run with `COVERAGE_SITE_ROLES=ALL` predicts from every client
+    # node, and a client node is usually somebody's house. Each one
+    # then draws a footprint centred on it. The markers are already
+    # held back by `embed/sanitise.py`, but a footprint has a centre,
+    # and a stranger reading the tiles can find it.
+    #
+    # The dashboard shows the run with a notice on it, because that is
+    # the audience the diagnostic is for. The public page says there is
+    # no map, which is true: what exists is not one.
+    if manifest.get("is_diagnostic"):
+        withheld: dict[str, object] = {
+            "available": False,
+            "presets": [],
+            "reason": "diagnostic",
+        }
+        _summary_cache = (now, withheld)
+        return withheld
+
     raw_presets = manifest.get("presets")
     presets = [
         {
@@ -123,6 +144,10 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
         "rx_height_m": manifest.get("rx_height_m"),
         "ramp_span_db": manifest.get("ramp_span_db"),
         "has_landcover": manifest.get("has_landcover"),
+        # Always false here: a diagnostic run returned above. It is
+        # sent anyway so the page has one thing to read rather than
+        # inferring the state from a missing key.
+        "is_diagnostic": False,
         "presets": presets,
     }
     _summary_cache = (now, answer)

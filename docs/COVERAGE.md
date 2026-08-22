@@ -48,6 +48,52 @@ use.
 | `coverage/grid.py` | How a raster maps to the ground |
 | `embed/sanitise.py` | What a public viewer may see |
 
+### 3.1 The diagnostic run
+
+`COVERAGE_SITE_ROLES` names the roles a run may predict from. The
+default is the infrastructure set. Setting it to `ALL` predicts from
+every node, and a named list such as `ROUTER,CLIENT_BASE` predicts from
+exactly that.
+
+An "all nodes" run is a genuinely useful thing. It answers "why is
+this ridge empty — is there nothing there, or is there something there
+with no role set?", and it is the only way to see what the filter is
+costing on a particular mesh.
+
+It is also not a coverage map, and its tiles look exactly like one.
+So a run that is not the infrastructure set carries `is_diagnostic` in
+its manifest, and three things read it:
+
+- The coverage page replaces its heading with the roles that were used,
+  and puts a notice above the assumptions panel.
+- The exclusion sentence stops claiming that only a router holds
+  coverage open, because in that run it did not.
+- **The public embed refuses to serve it at all.** `/api/embed/coverage`
+  answers `available: false` with `reason: "diagnostic"`, and the page
+  says a diagnostic is not published there.
+
+That last one is not about honesty, and a warning banner would not
+have done. A diagnostic run predicts from every client node, and a
+client node is usually somebody's house. Each one draws a footprint,
+and a footprint has a centre. `embed/sanitise.py` already keeps the
+markers back, but a stranger reading the tiles can find the middle of
+a circle. The public page therefore gets nothing rather than a labelled
+something.
+
+**The embed reads the manifest flag and never the setting.**
+`embed/sanitise.py` takes no settings argument at all. If it read
+`COVERAGE_SITE_ROLES`, one environment variable would put every client
+node on the mesh onto a public page. A test pins that:
+`test_a_diagnostic_run_can_never_widen_the_public_map`.
+
+**One caveat, stated because it is not fixed here.** The tile route
+under `/api/coverage` is the dashboard's, and it keeps serving a
+diagnostic run — that is the whole point of the feature, because the
+dashboard is the audience for it. Anybody who can reach the dashboard
+API can therefore read those tiles. If the dashboard is exposed to the
+open internet on a deployment, do not leave a diagnostic run published:
+set `COVERAGE_SITE_ROLES` back and run `sonoran-coverage-once`.
+
 ## 4. Two directions, and why the default is the weaker one
 
 A coverage map has two questions in it:
@@ -271,11 +317,16 @@ The job runs on a timer in the jobs process. When calibration is due,
 it finishes before coverage starts. The coverage run then reads the
 new calibration file.
 
-To run one by hand:
+To run one by hand, now, instead of waiting for the timer:
 
 ```bash
-uv run python -c "import asyncio; from sonoran.jobs.coverage import main; asyncio.run(main())"
+sonoran-coverage-once
 ```
+
+It writes into the same cache and publishes the same way, so the
+schedule carries on from where it left off. That is the answer to
+"make sure this is one time and updates on a schedule": the timer is
+the schedule, and this is the one time.
 
 Fill the caches once:
 
@@ -294,6 +345,27 @@ The engine is a tight loop of floating point and takes a few seconds
 for each node, so the work is split across worker processes.
 `COVERAGE_WORKERS` is zero by default, which means as many as the
 machine has, less one.
+
+**A run is niced, and on a small box it should also be narrowed.** The
+engine has no IO to yield on, so a worker holds its core solid for
+minutes. On a machine that also serves the dashboard and takes MQTT
+that is felt by everybody using it — the first person to try this on a
+small-form-factor box reported it audibly. `COVERAGE_WORKER_NICE` is 10
+by default, which is a background batch job: the kernel still gives the
+run every idle cycle and hands the CPU straight back the moment a
+request arrives.
+
+For the smallest deployment, `COVERAGE_WORKERS=1` with the default
+niceness is one low priority worker. A fifty site run then takes about
+fifteen minutes instead of five, against an interval of six hours, and
+the machine stays responsive throughout.
+
+The niceness is applied in the worker initialiser and never in the
+jobs process. A process cannot raise its own priority back afterwards,
+and the jobs process also runs the snapshot and the calibration. For
+the same reason a negative value is refused rather than acted on, and
+one worker is still a worker process: a run inside the jobs process
+could not be niced without slowing every other job down for good.
 
 The cost is roughly linear in the number of nodes and grows with the
 square of `COVERAGE_RADIUS_KM`. A radius below the real reach of a tall

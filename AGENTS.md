@@ -533,6 +533,26 @@ ground as usable both ways where no single radio closes both.
 each site, before anything is combined. Do not derive it from the
 finished layers.
 
+### 9.25 A diagnostic coverage run never reaches the public embed
+
+`COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
+for. It also predicts from every client, and a client is usually
+somebody's house. Each one then draws a footprint, and a footprint has
+a centre.
+
+`embed/sanitise.py` keeps the markers back and always has. The tiles
+are the leak. So `/api/embed/coverage` answers `available: false` with
+`reason: "diagnostic"` for such a run rather than labelling it, and the
+public page says a diagnostic is not published there.
+
+Do not "improve" this into a banner. A banner tells a reader what they
+are looking at; it does not stop them reading the middle of a circle.
+
+`embed/sanitise.py` also takes no settings argument, and must not gain
+one. If the public role test read `COVERAGE_SITE_ROLES`, one
+environment variable would put the whole mesh on a public map.
+`test_a_diagnostic_run_can_never_widen_the_public_map` pins it.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

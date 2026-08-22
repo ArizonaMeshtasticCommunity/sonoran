@@ -146,10 +146,35 @@ class Settings(BaseSettings):
     coverage_min_precision_bits: int = 16
     coverage_rx_height_m: float = 1.5
     coverage_rx_gain_dbi: float = 2.15
+    # Which roles a run may predict from, as a comma separated list.
+    #
+    # The default is the infrastructure set, which is what a published
+    # map wants. `ALL` predicts from every node, including handhelds,
+    # and is a diagnostic: the manifest marks such a run, and both the
+    # dashboard and the public embed label it rather than passing it
+    # off as coverage. See `sonoran/roles.py`.
+    coverage_site_roles: str = "ROUTER,ROUTER_LATE,REPEATER"
     # How many worker processes predict at once. Zero means as many
     # as the machine has, less one, so the jobs process keeps a core
     # for everything else it does.
+    #
+    # On a small box that also serves the dashboard, set this to 1.
+    # With the niceness below, a run then takes about three times as
+    # long and leaves the machine responsive throughout.
     coverage_workers: int = 0
+    # How much to lower the priority of each worker process.
+    #
+    # The engine is a solid floating point loop, so a run pins every
+    # worker at 100% for minutes. On a machine that also serves the
+    # dashboard and takes MQTT that is felt by everybody using it. A
+    # positive niceness keeps the run off the back of anything
+    # interactive: the kernel still gives it every idle cycle, and
+    # hands the CPU back the moment a request arrives.
+    #
+    # Ten is a background batch job. Zero turns it off. It is only
+    # applied where the platform has it, and never lowered, because a
+    # process may not raise its own priority back.
+    coverage_worker_nice: int = 10
     # The zoom levels of tile that the job writes. Level 11 is about
     # 76 m for each pixel, which is finer than the 90 m terrain, so
     # there is nothing to gain past it.
