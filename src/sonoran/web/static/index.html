@@ -10,11 +10,11 @@
       dark browser chrome. iOS ignores transparency and composites onto
       black, so the touch icon carries a solid tile of the page colour.
     -->
-    <link rel="icon" type="image/png" sizes="256x256" href="static/favicon.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="static/apple-touch-icon.png" />
-    <link rel="manifest" href="static/manifest.webmanifest" />
-    <link rel="stylesheet" href="static/vendor/leaflet.css" />
-    <link rel="stylesheet" href="static/app.css" />
+    <link rel="icon" type="image/png" sizes="256x256" href="static/favicon.png?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="apple-touch-icon" sizes="180x180" href="static/apple-touch-icon.png?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="manifest" href="static/manifest.webmanifest?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="stylesheet" href="static/vendor/leaflet.css?v=__SONORAN_ASSET_VERSION__" />
+    <link rel="stylesheet" href="static/app.css?v=__SONORAN_ASSET_VERSION__" />
   </head>
   <body>
     <!--
@@ -26,6 +26,7 @@
     <svg class="sprite" aria-hidden="true" focusable="false">
     <symbol id="i-dashboard" viewBox="0 0 24 24"><path d="M13,3V9H21V3M13,21H21V11H13M3,21H11V15H3M3,13H11V3H3V13Z"/></symbol>
     <symbol id="i-map" viewBox="0 0 24 24"><path d="M12,2C15.31,2 18,4.66 18,7.95C18,12.41 12,19 12,19C12,19 6,12.41 6,7.95C6,4.66 8.69,2 12,2M12,6A2,2 0 0,0 10,8A2,2 0 0,0 12,10A2,2 0 0,0 14,8A2,2 0 0,0 12,6M20,19C20,21.21 16.42,23 12,23C7.58,23 4,21.21 4,19C4,17.71 5.22,16.56 7.11,15.83L7.75,16.74C6.67,17.19 6,17.81 6,18.5C6,19.88 8.69,21 12,21C15.31,21 18,19.88 18,18.5C18,17.81 17.33,17.19 16.25,16.74L16.89,15.83C18.78,16.56 20,17.71 20,19Z"/></symbol>
+    <symbol id="i-coverage" viewBox="0 0 24 24"><path d="M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M3.9,6.5C3.9,6.5 2,10 2,12C2,14 3.9,17.5 3.9,17.5L5.55,16.5C5.55,16.5 4,14 4,12C4,10 5.55,7.5 5.55,7.5L3.9,6.5M20.1,6.5L18.45,7.5C18.45,7.5 20,10 20,12C20,14 18.45,16.5 18.45,16.5L20.1,17.5C20.1,17.5 22,14 22,12C22,10 20.1,6.5 20.1,6.5M7.2,9.5C7.2,9.5 6,10.75 6,12C6,13.25 7.2,14.5 7.2,14.5L8.85,13.5C8.85,13.5 8,12.75 8,12C8,11.25 8.85,10.5 8.85,10.5L7.2,9.5M16.8,9.5L15.15,10.5C15.15,10.5 16,11.25 16,12C16,12.75 15.15,13.5 15.15,13.5L16.8,14.5C16.8,14.5 18,13.25 18,12C18,10.75 16.8,9.5 16.8,9.5Z"/></symbol>
     <symbol id="i-planner" viewBox="0 0 24 24"><path d="M12,2A3,3 0 0,1 15,5C15,6.31 14.17,7.42 13,7.83V10H17A2,2 0 0,1 19,12V13.17C20.17,13.58 21,14.69 21,16A3,3 0 0,1 18,19A3,3 0 0,1 15,16C15,14.69 15.83,13.58 17,13.17V12H13V17.17C14.17,17.58 15,18.69 15,20A3,3 0 0,1 12,23A3,3 0 0,1 9,20C9,18.69 9.83,17.58 11,17.17V12H7V13.17C8.17,13.58 9,14.69 9,16A3,3 0 0,1 6,19A3,3 0 0,1 3,16C3,14.69 3.83,13.58 5,13.17V12A2,2 0 0,1 7,10H11V7.83C9.83,7.42 9,6.31 9,5A3,3 0 0,1 12,2Z"/></symbol>
     <symbol id="i-config" viewBox="0 0 24 24"><path d="M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M10.5,17.5L7,14L8.41,12.59L10.5,14.67L15.59,9.59L17,11L10.5,17.5Z"/></symbol>
     <symbol id="i-graph" viewBox="0 0 24 24"><path d="M2 3V9H4.95L6.95 15H6V21H12V16.41L17.41 11H22V5H16V9.57L10.59 15H9.06L7.06 9H8V3M4 5H6V7H4M18 7H20V9H18M8 17H10V19H8Z"/></symbol>
@@ -44,7 +45,7 @@
           text stays, so the page never shows a broken image.
         -->
         <div class="brand">
-          <img class="brand-mark" data-brand-mark src="static/logo.png" alt="Sonoran" />
+          <img class="brand-mark" data-brand-mark src="static/logo.png?v=__SONORAN_ASSET_VERSION__" alt="Sonoran" />
           <div class="brand-text" data-brand-text>
             <h1>Sonoran</h1>
             <span>azmsh.net</span>
@@ -54,6 +55,7 @@
           <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a>
           <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
           <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg>Coverage planner</a>
+          <a href="#coverage" data-nav="coverage"><svg class="sprite" aria-hidden="true"><use href="#i-coverage" /></svg>Coverage map</a>
           <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg>Config check</a>
           <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg>Mesh graph</a>
           <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg>Nodes</a>
@@ -163,6 +165,70 @@
         </section>
 
         <!-- Coverage planner -->
+        <section class="page" data-page="coverage">
+          <div class="page-head">
+            <div>
+              <h2>Coverage map</h2>
+              <p class="sub" data-coverage-sub>Where the mesh reaches, predicted from the routers and repeaters that carry it.</p>
+            </div>
+            <div class="controls">
+              <label class="coverage-pick">Preset
+                <select data-coverage-preset></select>
+              </label>
+            </div>
+          </div>
+
+          <p class="notice" data-coverage-notice hidden></p>
+
+          <div class="coverage-layers" role="group" aria-label="Coverage layer" data-coverage-layers></div>
+
+          <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
+
+          <div class="map-shell">
+            <div id="coverage-map"></div>
+            <div class="coverage-legend" data-coverage-legend hidden>
+              <span class="coverage-legend-title" data-coverage-legend-title></span>
+              <div class="coverage-ramp" aria-hidden="true"></div>
+              <div class="coverage-scale">
+                <span><strong>Weak</strong><small data-coverage-floor></small></span>
+                <span><strong>Strong</strong><small data-coverage-ceiling></small></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid" data-coverage-stats></div>
+
+          <div class="panel coverage-assumes">
+            <h3>What this map assumes</h3>
+            <div data-coverage-assumes></div>
+          </div>
+
+          <!-- Only drawn when a run left a site out for a coarse
+               position. See drawCoarse in coverage.js. -->
+          <div class="panel" data-coverage-coarse-panel hidden>
+            <h3>Routers that need a position</h3>
+            <p class="sub" style="margin: 0 0 .6rem">
+              The broker rounded these off too far to predict from. Paste the block
+              into <code>config/nodes.yaml</code>, correct each latitude and longitude,
+              and they become sites on the next run.
+            </p>
+            <div data-coverage-coarse></div>
+          </div>
+
+          <div class="panel">
+            <h3>Measured against predicted</h3>
+            <p class="sub" style="margin: 0 0 .6rem">
+              What the mesh hears, against what the model said it would.
+            </p>
+            <div data-coverage-calibration></div>
+          </div>
+
+          <div class="panel">
+            <h3>Sites in this run</h3>
+            <div class="table-wrap" data-coverage-sites></div>
+          </div>
+        </section>
+
         <section class="page" data-page="planner">
           <div class="page-head">
             <div>
@@ -562,8 +628,8 @@
 
 
     <script>window.SONORAN = __SONORAN_CONFIG__;</script>
-    <script src="static/vendor/leaflet.js"></script>
-    <script src="static/vendor/echarts.min.js"></script>
+    <script src="static/vendor/leaflet.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/vendor/echarts.min.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The planner loads before app.js on purpose. app.js runs the router
       as its last act, and the router needs window.SonoranPlanner to
@@ -571,9 +637,16 @@
       dashboard. The planner uses helpers from app.js only inside
       functions, which run long after both files are loaded.
     -->
-    <script src="static/planner-params.js"></script>
-    <script src="static/planner.js"></script>
-    <script src="static/app.js"></script>
+    <script src="static/planner-params.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/planner.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!--
+      The coverage map has its own file for the same reason the
+      planner does: its own Leaflet map, its own state, and no need
+      to make app.js larger. It loads before app.js so the router
+      finds it on a reload straight to #coverage.
+    -->
+    <script src="static/coverage.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/app.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The config checker's logic expects three globals, which its own
       page loads the same way: the protobuf runtime, the YAML parser,
@@ -583,14 +656,14 @@
       "jsyaml is not defined", and only the build-from-scratch path
       works. The integrity hashes are upstream's, unchanged.
     -->
-    <script src="static/vendor/config-checker/js/vendor/protobuf.min.js" integrity="sha384-BGZSJW0orEarb+6hjaZkIh5GqTIGkZc86kh+9qAZpJPniwsiGHRi0vJ02S+rTztc" crossorigin="anonymous"></script>
-    <script src="static/vendor/config-checker/js/vendor/js-yaml.min.js" integrity="sha384-hyhT0yrWXjngXhDa5wpJTU0pt/Djmlx4KtZECqqS6ZHf3ah4fWkFeW/2eWX9cX5J" crossorigin="anonymous"></script>
-    <script src="static/vendor/config-checker/js/protobuf/meshtastic-proto.js"></script>
+    <script src="static/vendor/config-checker/js/vendor/protobuf.min.js?v=__SONORAN_ASSET_VERSION__" integrity="sha384-BGZSJW0orEarb+6hjaZkIh5GqTIGkZc86kh+9qAZpJPniwsiGHRi0vJ02S+rTztc" crossorigin="anonymous"></script>
+    <script src="static/vendor/config-checker/js/vendor/js-yaml.min.js?v=__SONORAN_ASSET_VERSION__" integrity="sha384-hyhT0yrWXjngXhDa5wpJTU0pt/Djmlx4KtZECqqS6ZHf3ah4fWkFeW/2eWX9cX5J" crossorigin="anonymous"></script>
+    <script src="static/vendor/config-checker/js/protobuf/meshtastic-proto.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The config check page imports the checker's logic from
       vendor/config-checker/. That code is ES modules, so this file is
       one too, which means it runs after app.js. app.js waits for it.
     -->
-    <script type="module" src="static/config-check.js"></script>
+    <script type="module" src="static/config-check.js?v=__SONORAN_ASSET_VERSION__"></script>
   </body>
 </html>

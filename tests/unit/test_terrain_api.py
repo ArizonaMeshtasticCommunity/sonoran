@@ -5,6 +5,7 @@ check the guards first: a bad name, and a tile outside the region this
 service covers.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,14 @@ from fastapi.testclient import TestClient
 from sonoran.api.app import create_app
 from sonoran.config import Settings
 from sonoran.terrain.srtm import PAGE_BYTES, PAGE_SIZE
-from sonoran.terrain.store import in_region, is_tile_name, page_path, tile_bounds, write_page
+from sonoran.terrain.store import (
+    coordinates_in_region,
+    in_region,
+    is_tile_name,
+    page_path,
+    tile_bounds,
+    write_page,
+)
 
 
 def _settings(cache: Path, **overrides: object) -> Settings:
@@ -92,6 +100,17 @@ class TestRegionGuard:
         assert not in_region(settings, "N51W001")
         assert not in_region(settings, "S34E018")
         assert not in_region(settings, "N45W112")
+
+    def test_coordinates_use_the_same_region_as_the_tiles(self, tmp_path: Path) -> None:
+        settings = _settings(
+            tmp_path,
+            terrain_lat_min=33,
+            terrain_lat_max=33,
+            terrain_lon_min=-113,
+            terrain_lon_max=-112,
+        )
+        assert coordinates_in_region(settings, 33.5, -112.5)
+        assert not coordinates_in_region(settings, 34.0, -112.5)
 
     def test_endpoint_refuses_a_tile_outside_the_region(self, tmp_path: Path) -> None:
         """Even when the page is cached, an outside tile is not served."""
@@ -182,6 +201,10 @@ class TestAnUnwritableCache:
     is a problem to fix rather than a reason to serve nothing.
     """
 
+    @pytest.mark.skipif(
+        os.geteuid() == 0,
+        reason="root writes a read-only directory, so the case cannot be made",
+    )
     def test_write_page_reports_failure_instead_of_raising(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path / "read-only" / "terrain")
         (tmp_path / "read-only").mkdir()

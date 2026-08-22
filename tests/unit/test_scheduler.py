@@ -1,0 +1,48 @@
+"""Tests for the order of the scheduled jobs."""
+
+import asyncio
+from typing import cast
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from sonoran.config import Settings
+from sonoran.jobs import scheduler
+
+
+def test_calibration_finishes_before_coverage(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Coverage must read the calibration made in the same cycle."""
+    calls: list[str] = []
+
+    async def calibrated(session: AsyncSession, settings: Settings) -> None:
+        calls.append("calibration")
+
+    async def covered(session: AsyncSession, settings: Settings) -> None:
+        calls.append("coverage")
+
+    monkeypatch.setattr(scheduler.calibrate, "run_once", calibrated)
+    monkeypatch.setattr(scheduler.coverage, "run_once", covered)
+
+    asyncio.run(
+        scheduler._coverage_cycle(
+            cast(AsyncSession, object()), Settings(_env_file=None), run_calibration=True
+        )
+    )
+
+    assert calls == ["calibration", "coverage"]
+
+
+def test_coverage_does_not_get_a_competing_calibration_task() -> None:
+    """One task owns both jobs when coverage consumes calibration."""
+    tasks = scheduler.build_tasks(
+        Settings(_env_file=None, calibration_enabled=True, coverage_enabled=True)
+    )
+
+    assert [task.name for task in tasks] == ["snapshot", "coverage"]
+
+
+def test_calibration_keeps_its_task_when_coverage_is_off() -> None:
+    tasks = scheduler.build_tasks(
+        Settings(_env_file=None, calibration_enabled=True, coverage_enabled=False)
+    )
+
+    assert [task.name for task in tasks] == ["snapshot", "calibration"]

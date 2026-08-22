@@ -84,7 +84,7 @@ def test_brand_mark_is_optional() -> None:
     missing file never shows a broken image.
     """
     text = _client().get("/").text
-    assert 'src="static/logo.png"' in text
+    assert 'src="static/logo.png?v=' in text
     assert "data-brand-text" in text
     script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert "data-brand-mark" in script
@@ -156,7 +156,9 @@ def test_dashboard_uses_base_relative_api_paths() -> None:
     assert app.root_path == "/mesh"
     response = TestClient(app).get("/")
     assert response.status_code == 200
-    assert 'src="static/app.js"' in response.text
+    assert 'src="static/app.js?v=' in response.text
+    assert "__SONORAN_ASSET_VERSION__" not in response.text
+    assert response.headers["Cache-Control"] == "no-cache"
     assert "document.baseURI" in (STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
 
@@ -197,6 +199,22 @@ def test_registered_api_routes_are_read_only() -> None:
         methods = getattr(route, "methods", None)
         if methods and getattr(route, "path", "").startswith("/api"):
             assert methods <= {"GET"}
+
+
+def test_the_radio_route_is_registered() -> None:
+    """The coverage work reads a node's radio through the API."""
+    paths = {route.path for route in nodes.router.routes}
+    assert "/api/nodes/{node_id}/radio" in paths
+
+
+def test_the_radio_overrides_are_read_once_at_startup() -> None:
+    """Reading the file for each request would be waste.
+
+    The file ships with the image, so a change to it arrives with a
+    deploy and never during the life of a process.
+    """
+    app = create_app(Settings(_env_file=None, radio_overrides_path="does-not-exist.yaml"))
+    assert app.state.radio_overrides.nodes == {}
 
 
 def test_core_documented_routes_are_registered() -> None:

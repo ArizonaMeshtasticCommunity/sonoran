@@ -77,6 +77,34 @@ A pull request can merge only when all jobs pass.
 - Check the response shape against the pydantic models.
 - Check that no endpoint accepts POST, PUT, PATCH, or DELETE.
 
+### 4.3.1 The coverage map
+
+1. The engine must answer the same in Python and in the browser.
+   `tests/unit/test_coverage_engine.py` pins a fixed scenario by hash,
+   and `tools/dev/engine_parity.js` makes that hash again. If it fails,
+   the engine changed. Do not paste the new value in. Find out what
+   changed.
+2. Every state a new deployment starts in is a working state: no
+   nodes, no positions, no preset, no terrain, no land cover, no
+   calibration. `tests/integration/test_coverage_job.py` runs each one
+   against a real database.
+3. A change to the colour ramp must change `web/static/app.css`,
+   `web/static/embed-coverage.html` and `coverage/render.py` together.
+   A test reads the gradient stops out of each stylesheet and compares
+   them in order. The span itself travels in the manifest, so a page
+   cannot hold its own copy.
+4. Run `node tools/dev/check_pages.js` against a preview. There is no
+   JavaScript test runner here, so a name that does not exist is caught
+   by nothing until somebody opens the page, and it does not look like
+   a fault: the function stops and the part of the page it was drawing
+   stays empty. The embed legend lost its upper figure that way.
+5. A change to what may be a site, or to the propagation, must be
+   measured against a real mesh before it is believed. Run
+   `tools/validate_coverage.py` against a MeshMonitor instance and
+   compare the figures with `docs/COVERAGE.md` 9.1.3. A number that
+   falls means the map lost ground the mesh really covers. A number
+   near a hundred everywhere means it has stopped saying no.
+
 ### 4.4 Fixtures
 
 - Record real MQTT payloads from the azmsh.net broker.
@@ -142,6 +170,13 @@ Check these items on every pull request:
 3. No secrets in the repository.
 4. Security headers still apply to static files.
 5. New dependencies come from trusted sources. Pin versions.
+6. The dashboard still refuses to be framed. `X-Frame-Options` is
+   `DENY` and `frame-ancestors` is `'none'` on every path but the
+   embed. See `tests/unit/test_embed.py`.
+7. Nothing new leaves the server to a public viewer without going
+   through `sonoran/embed/sanitise.py`.
+8. A value read off disk that becomes part of a path is checked for
+   shape first.
 
 ## 10. Release policy
 

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mesh coverage</title>
+    <!--
+      The public coverage embed.
+
+      This is its own document on purpose. The dashboard carries
+      `serial=(self)` so the config checker can read a node over USB,
+      and putting that page in a frame on somebody else's site would
+      take Web Serial and the whole navigation with it.
+
+      Nothing here reads the API the dashboard reads. It reads
+      /api/embed/*, which is the only surface that decides what a public
+      viewer sees. See src/sonoran/embed/sanitise.py.
+    -->
+    <link rel="stylesheet" href="../static/vendor/leaflet.css" />
+    <style>
+      /* The Sonoran palette, from app.css. The embed stands alone, so
+         the few values it needs are here rather than pulling the whole
+         stylesheet of a dashboard it does not show. */
+      :root {
+        color-scheme: dark;
+        --bg: #17100b;
+        --panel: #221811;
+        --line: #422f23;
+        --text: #f6ece2;
+        --muted: #b59c88;
+        --accent: #f4703f;
+        --font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        --mono: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: var(--font); }
+      #map { height: 100%; width: 100%; background: var(--panel); }
+      .leaflet-container { background: var(--panel); font: var(--font); }
+
+      .card {
+        position: absolute;
+        z-index: 500;
+        background: rgba(34, 24, 17, .93);
+        border: 1px solid var(--line);
+        border-radius: .5rem;
+        padding: .55rem .7rem;
+      }
+      .legend { right: .6rem; bottom: 1.6rem; min-width: 11rem; pointer-events: none; }
+      .legend b {
+        display: block;
+        font-size: .68rem;
+        text-transform: uppercase;
+        letter-spacing: .06em;
+        color: var(--muted);
+        font-weight: 600;
+        margin-bottom: .35rem;
+      }
+      /* The stops are the ramp in coverage/render.py. */
+      .ramp {
+        height: .45rem;
+        border-radius: 999px;
+        background: linear-gradient(
+          to right, #ff2d55 0%, #ff7a00 25%, #ffe600 50%, #00d98b 75%, #00a8ff 100%
+        );
+      }
+      .scale { display: flex; justify-content: space-between; margin-top: .25rem; }
+      .scale span { display: flex; flex-direction: column; }
+      .scale span:last-child { align-items: flex-end; }
+      .scale strong { font-size: .7rem; font-weight: 650; color: var(--text); }
+      .scale small { font: var(--mono); color: var(--muted); }
+      /* The zoom control sits at the top right, so the card stops
+         short of it. On a phone the two used to touch. */
+      .head { left: .6rem; top: .6rem; max-width: min(22rem, calc(100% - 4.5rem)); }
+      .head h1 { margin: 0 0 .15rem; font-size: .95rem; font-weight: 650; }
+      .head p { margin: 0; font-size: .75rem; color: var(--muted); line-height: 1.45; }
+      .head select {
+        margin-top: .45rem;
+        font: inherit;
+        font-size: .78rem;
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: .3rem;
+        padding: .2rem .35rem;
+      }
+      .credit {
+        position: absolute;
+        left: .6rem;
+        bottom: .6rem;
+        z-index: 500;
+        font: var(--mono);
+        color: var(--muted);
+      }
+      .credit a { color: var(--accent); }
+      .empty { padding: 2rem; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+
+    <div class="card head">
+      <h1>Mesh coverage</h1>
+      <p data-note>Loading.</p>
+      <select data-preset hidden aria-label="Modem preset"></select>
+    </div>
+
+    <div class="card legend" data-legend hidden>
+      <b>Usable both ways</b>
+      <div class="ramp"></div>
+      <!-- The words as well as the figures. A public page is read by
+           somebody who does not know what a dBm is. -->
+      <div class="scale">
+        <span><strong>Weak</strong><small data-floor></small></span>
+        <span><strong>Strong</strong><small data-ceiling></small></span>
+      </div>
+    </div>
+
+    <div class="credit" data-credit></div>
+
+    <script>window.SONORAN_EMBED = __SONORAN_EMBED_CONFIG__;</script>
+    <script src="../static/vendor/leaflet.js"></script>
+    <script src="../static/embed-coverage.js"></script>
+  </body>
+</html>

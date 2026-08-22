@@ -46,3 +46,80 @@ def clean(latitude: float | None, longitude: float | None) -> tuple[float | None
     if not is_usable(latitude, longitude):
         return (None, None)
     return (latitude, longitude)
+
+
+# How coarse a position may be and still name a place, in bits.
+#
+# Meshtastic can send a position with fewer bits than it measured. The
+# firmware calls it `position_precision`, and the public broker at
+# mqtt.meshtastic.org limits what it relays to between 10 and 16 bits.
+# Map reporting defaults to 14, which is about 1459 m.
+#
+# Sixteen bits is about 365 m. The terrain under a prediction is 90 m
+# across, so even the finest setting the public broker allows is four
+# terrain cells of doubt. Below that the node could be on the other
+# side of a ridge, and a coverage footprint drawn around it describes
+# ground that has no radio on it.
+MIN_SITE_PRECISION_BITS = 16
+
+# What each precision setting costs, in metres of deviation.
+#
+# The firmware table. Only the values the public broker sends are
+# listed; a node that reports its position in full sends 32.
+PRECISION_DEVIATION_M: dict[int, float] = {
+    10: 23300.0,
+    11: 11700.0,
+    12: 5800.0,
+    13: 2900.0,
+    14: 1459.0,
+    15: 729.0,
+    16: 364.7,
+    17: 182.4,
+    18: 91.2,
+    19: 45.6,
+    32: 0.0,
+}
+
+
+def precision_deviation_m(bits: int | None) -> float | None:
+    """Return how far a position of this precision may be from the truth.
+
+    None when nothing is known about the precision. A value between two
+    listed settings takes the coarser of the two, because each bit
+    halves the deviation.
+    """
+    if bits is None or bits <= 0:
+        return None
+    if bits >= 32:
+        return 0.0
+    known = sorted(PRECISION_DEVIATION_M)
+    for value in known:
+        if bits <= value:
+            return PRECISION_DEVIATION_M[value]
+    return 0.0
+
+
+def is_precise_enough(bits: int | None, minimum: int = MIN_SITE_PRECISION_BITS) -> bool:
+    """Return true when a position may anchor a coverage prediction.
+
+    **A missing value is true, and that is the decision this function
+    exists to make.** `ingest/handlers/position.py` writes
+
+        "precision_bits": position.precision_bits or None,
+
+    so a node that sent no precision field at all and a node that sent
+    zero both arrive as NULL. The first is the common case for a node
+    heard directly over the radio, and it is full precision.
+
+    So the rule is to exclude a position **known** to be coarse, never
+    one that failed to say. A run reports the two counts apart, so
+    nobody has to guess which one a mesh is made of.
+
+    A `minimum` of zero turns the test off, for a deployment that reads
+    its own broker and trusts every position it is given.
+    """
+    if minimum <= 0:
+        return True
+    if bits is None or bits <= 0:
+        return True
+    return bits >= minimum

@@ -385,6 +385,189 @@ before the growth points at a buffer that has been thrown away, and
 reads rubbish without raising anything. Every `_splat_malloc` also needs
 a `_splat_free` in a `finally`: the module has no garbage collector.
 
+### 9.16.1 The engine declares integers where JavaScript hides them
+
+`splat_create` takes sixteen values. Three of them are `i32` and the
+rest are `f64`:
+
+    (f64 f64 f64 f64 f64 f64 f64 f64 f64 i32 i32 f64 f64 f64 f64 i32)
+
+The three are the radio climate, the polarization, and the resolution.
+
+JavaScript has one number type and the Emscripten loader converts, so
+`planner.worker.js` can pass `4` or `4.0` and never notice. Python does
+not, and `wasmtime` refuses a float where the module declared an
+integer. Passing `float(climate)` there raises
+
+    TypeError: don't know how to convert 4.0 to i32
+
+and no run starts at all.
+
+`EngineParams.to_arguments` returns the right type for each position,
+and a test asserts the three stay whole numbers. Read the signature out
+of the binary rather than the loader if a fourth is ever added: the
+loader shows none of this.
+
+### 9.16.2 A coverage level does not fit a signed byte
+
+The engine reports a field strength as a byte with a 200 dB offset. It
+is tempting to take the offset off and keep a signed byte, because a
+level looks like a small negative number.
+
+It does not fit. A signed byte reaches -128 and the sensitivity of Long
+fast is -139 dBm. Every level clipped to -127, every level then sat
+above every threshold, and the usable filter passed the whole map
+without failing anything.
+
+`sonoran/coverage/grid.py` keeps the engine's own encoding: an unsigned
+byte, zero meaning no run reached the cell. `to_level` and `to_dbm` are
+the only places that convert, and a threshold goes through `to_level`
+before it meets a grid.
+
+### 9.16.3 A route that must refuse cannot check inside the handler
+
+A FastAPI handler body runs after every parameter is resolved. A check
+at the top of the body has already opened a database session.
+
+The embed must answer 404 while it is off, and it must do that without
+touching the database. So the check is a dependency of the whole
+router:
+
+    router = APIRouter(dependencies=[Depends(_require_enabled)])
+
+`tests/unit/test_embed.py` pins it.
+
+### 9.16.4 An engine instance is made for a process, not for a run
+
+`SplatInstance` owns a WebAssembly linear memory. The memory grows to
+the largest run the instance has made and never shrinks, which is why
+one instance is held and reused: the second run costs no new memory.
+
+Making a new instance for each prediction grows a new heap of several
+hundred megabytes each time, and the old ones are never given back. The
+store holds the three host functions, which are bound methods of the
+instance, so the instance and its store hold each other. The cyclic
+collector does not help: it counts objects, and the heap is memory no
+Python object accounts for. `close` is the only way to give one back.
+
+`test_an_instance_that_is_dropped_and_not_closed_keeps_its_heap`
+measures it. Twenty megabytes for each dropped instance at a 20 km
+radius, and it does not come back.
+
+A three hundred node run was ended by the memory killer for this, with
+each worker at 4.7 GB. `web/static/planner.worker.js` never had the
+problem: it instantiates the module once and memoises the promise.
+
+So one instance for each process, held for every site. Use `close`, or
+the instance as a context manager, for a caller that must let one go.
+
+### 9.16.5 A worker process is started by spawn, never by fork
+
+`jobs/coverage.py` builds in a worker thread, because the engine holds
+the processor and would otherwise stop the event loop of the whole jobs
+process. It starts worker processes from inside that thread.
+
+Fork copies only the thread that calls it. A lock that any other thread
+held at that moment is held for ever in the child, and the logging lock
+is the one that does it: this job logs from the main thread while it
+works. The child then blocks before it runs a single instruction of the
+initialiser.
+
+There is no error and no timeout. The pool waits for a result that
+never comes, the run never finishes, and the scheduler waits on a task
+that never returns. It was found with two workers sitting in
+`futex_wait` with no processor time at all, twenty minutes after they
+were made.
+
+It does not fail every time, which is worse. A run whose main thread
+happens to hold no lock at the moment of the fork works.
+
+    ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn"))
+
+Spawn starts a new interpreter and inherits no locks. It costs about a
+second for each worker, once, against a run of half an hour.
+
+### 9.22 A role of NULL is a client, not an unknown
+
+`ingest/handlers/nodeinfo.py` reads an enum with
+
+    if not value:
+        return None
+
+and Meshtastic numbers `CLIENT` as zero. So the most common node on a
+mesh is stored with `role IS NULL`, exactly like a node that has never
+sent a NodeInfo at all.
+
+Never read NULL as "unknown, so include it". The coverage map did, and
+predicted from 689 nodes where 50 were infrastructure. `sonoran/roles.py`
+holds the test and `tests/unit/test_roles.py` pins it.
+
+The same trap is why `tests/integration/test_coverage_job.py::_add_node`
+takes its role as a required keyword argument. It defaulted to `ROUTER`,
+so every coverage test asserted about routers while its author believed
+it asserted about nodes. Do not give it a default again.
+
+### 9.23 The engine's clutter scalar is passed as zero on purpose
+
+`coverage/params.py` sets `clutter_height_m=0.0` for every prediction.
+That looks like a value somebody forgot to fill in. It is not.
+
+The scalar was measured on flat ground at 906 MHz. A 9 m clutter
+height costs a 30 m antenna 0.00 dB and a 3 m antenna 66 dB, so it is
+a step at the antenna height and not a loss. The receiving end is
+charged 0.00 dB at any height, and the receiving end is the 1.5 m
+handheld the whole map is drawn for.
+
+The correction is `coverage/clutter.py`, which is ITU-R P.2108-1 3.1
+charged at both terminals. Turning the scalar back on double-charges
+the transmitter and still charges the receiver nothing.
+
+### 9.24 `usable` is the weaker direction of one node, then the best node
+
+Not the weaker of the two combined layers. Taking the best of each
+direction across every site first, and the minimum afterwards, lets one
+node answer for the downlink and another for the uplink, and paints
+ground as usable both ways where no single radio closes both.
+
+`jobs/coverage.py::_predict` builds it beside the two directions, for
+each site, before anything is combined. Do not derive it from the
+finished layers.
+
+### 9.26 The calibration fit reads every role. The map does not.
+
+These are opposite questions and the answer is opposite.
+
+The coverage map predicts from infrastructure, because only a node that
+stays where it is can hold coverage open. The fit measures what a radio
+heard, and it needs both ends of a link. On the Arizona mesh 50 of 931
+positioned nodes are infrastructure, so a role-filtered fit would throw
+away almost every measurement there is.
+
+A client is poor evidence of where the mesh reaches and good evidence
+of what a radio heard. `jobs/calibrate.py::read_peers` reads the role
+only to pick an antenna height. Do not add a role test to it.
+`test_the_fit_reads_every_role_and_the_map_does_not` pins it.
+
+### 9.25 A diagnostic coverage run never reaches the public embed
+
+`COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
+for. It also predicts from every client, and a client is usually
+somebody's house. Each one then draws a footprint, and a footprint has
+a centre.
+
+`embed/sanitise.py` keeps the markers back and always has. The tiles
+are the leak. So `/api/embed/coverage` answers `available: false` with
+`reason: "diagnostic"` for such a run rather than labelling it, and the
+public page says a diagnostic is not published there.
+
+Do not "improve" this into a banner. A banner tells a reader what they
+are looking at; it does not stop them reading the middle of a circle.
+
+`embed/sanitise.py` also takes no settings argument, and must not gain
+one. If the public role test read `COVERAGE_SITE_ROLES`, one
+environment variable would put the whole mesh on a public map.
+`test_a_diagnostic_run_can_never_widen_the_public_map` pins it.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config
@@ -502,6 +685,31 @@ had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for
 the worst, and only 5.4 percent of relay observations resolving to a
 single node. It also names the last hop alone, never the path. Drawing
 a line from it would be a guess.
+
+### 9.21 A calibration estimate is not a radio reading
+
+`neighbor_metrics.snr` is measured. `NodeFit.offset_db` is inferred.
+Never present the second value as if a node reported it.
+
+The censored regression once had no bound and did not fit its global
+model bias during each expectation round. A node with seven silent
+links and no reported link reached -1830.35 dB. Some usable raw offsets
+also passed 50 dB. The radio-profile resolver held the value to 15 dB,
+but the report still showed the impossible estimate and the bad node
+could pull the rest of the fit.
+
+Keep all of these guards:
+
+1. Fit the global bias in every censored-data round.
+2. Bound and anchor node offsets in every round.
+3. Check the bound again when a stored file is read.
+4. Give no offset to a node with too little evidence or wide scatter.
+5. Reject the whole fit when its bias or scatter is outside 20 dB.
+6. Run a due calibration before coverage, never beside it.
+
+The live fit on 2026-08-21 had a bias near -41 dB and was rejected. Do
+not increase the guard to make live data pass. First prove that absence
+from an aggregated neighbour list means the radio link was silent.
 
 ## 10. Reference documents
 

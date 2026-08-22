@@ -272,10 +272,19 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .leaflet-container { background: var(--panel-2); font: var(--font); }
 /*
  * Make the light basemap fit the dark interface, then warm it with
- * sepia so the map matches the desert palette. Markers sit in another
- * pane, so the filter does not touch them.
+ * sepia so the map matches the desert palette.
+ *
+ * The selector names the basemap layer, not the pane. Every tile layer
+ * shares the pane, and the coverage overlay is a tile layer, so the
+ * pane rule inverted the signal colours as well: the map drew the
+ * ramp backwards while the legend beside it drew it correctly. The
+ * planner escaped only because it happens to use an image overlay,
+ * which sits in a different pane.
+ *
+ * Cancelling the filter on the overlay instead would fix one layer and
+ * leave the next one to find the bug again.
  */
-.leaflet-tile-pane {
+.leaflet-tile-pane .basemap-tiles {
   filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.88) saturate(.6) sepia(.35);
 }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
@@ -535,3 +544,131 @@ div.check { cursor: default; }
 .pill.info { color: var(--muted); }
 
 .notice.good { border-color: var(--good); color: var(--good); }
+
+/* Coverage map */
+
+#coverage-map { height: min(70vh, 40rem); width: 100%; }
+
+.coverage-pick { display: flex; align-items: center; gap: .45rem; font-size: .85rem; color: var(--muted); }
+
+.coverage-layers { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .85rem; }
+
+.coverage-view-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .4rem;
+  margin: -.2rem 0 .7rem;
+}
+.coverage-view-controls::before {
+  content: "Show";
+  color: var(--muted);
+  font-size: .76rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-right: .15rem;
+}
+.coverage-view-controls button {
+  font: inherit;
+  font-size: .78rem;
+  padding: .3rem .65rem;
+  border-radius: .35rem;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+.coverage-view-controls button:hover { border-color: var(--accent-soft); color: var(--text); }
+.coverage-view-controls button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--panel-2);
+}
+.coverage-view-controls button[aria-pressed="true"]::before {
+  content: "✓";
+  color: var(--accent);
+  margin-right: .35rem;
+}
+.coverage-view-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/*
+ * The layer buttons read as one control, so they sit in a row and the
+ * chosen one is filled rather than outlined. A reader must be able to
+ * tell at a glance which question the map is answering.
+ */
+.coverage-layers button {
+  font: inherit;
+  font-size: .82rem;
+  padding: .38rem .8rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+.coverage-layers button:hover { border-color: var(--accent-soft); color: var(--text); }
+.coverage-layers button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1b1109;
+  font-weight: 600;
+}
+.coverage-layers button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.coverage-legend {
+  position: absolute;
+  right: .75rem;
+  bottom: .75rem;
+  z-index: 500;
+  background: rgba(34, 24, 17, .92);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .55rem .7rem;
+  min-width: 12rem;
+  pointer-events: none;
+}
+.coverage-legend-title {
+  display: block;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  margin-bottom: .4rem;
+}
+/* The stops are the ramp in coverage/render.py. Keep the two the same. */
+.coverage-ramp {
+  height: .65rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #ff2d55 0%, #ff7a00 25%, #ffe600 50%, #00d98b 75%, #00a8ff 100%
+  );
+}
+.coverage-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  margin-top: .3rem;
+}
+.coverage-scale > span { display: flex; flex-direction: column; gap: .05rem; }
+.coverage-scale > span:last-child { align-items: flex-end; }
+.coverage-scale strong { color: var(--text); font-size: .68rem; font-weight: 650; }
+.coverage-scale small { font: var(--mono); font-size: .64rem; color: var(--muted); }
+
+.coverage-assumes p { margin: 0 0 .5rem; color: var(--muted); font-size: .87rem; line-height: 1.55; }
+.coverage-assumes p:last-child { margin-bottom: 0; }
+.coverage-assumes strong { color: var(--text); font-weight: 600; }
+
+.coverage-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .75rem;
+  border-radius: 999px;
+  padding: .12rem .5rem;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.coverage-flag.warn { border-color: var(--warn); color: var(--warn); }
+.coverage-flag.good { border-color: var(--good); color: var(--good); }

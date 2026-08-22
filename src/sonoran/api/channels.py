@@ -11,6 +11,8 @@ import re
 from sqlalchemy import ColumnElement, true
 from sqlalchemy.orm import InstrumentedAttribute
 
+from sonoran.radio.presets import PRESETS as _PRESET_TABLE
+
 # The query value that selects links with no stored channel. Rows
 # written before migration 0007 have no channel. Keep this a plain word,
 # because it travels in a URL query string.
@@ -19,18 +21,21 @@ UNKNOWN_CHANNEL = "unknown"
 # The text shown for a channel that has no name.
 UNKNOWN_LABEL = "(no channel)"
 
+_WORD = re.compile(r"[^a-z0-9]+")
+
+
+def _normalise(name: str) -> str:
+    """Return a lowercase name with separators removed."""
+    return _WORD.sub("", name.lower())
+
+
 # The default channel name of each LoRa modem preset.
-PRESETS: dict[str, str] = {
-    "longfast": "LongFast",
-    "longslow": "LongSlow",
-    "longmoderate": "LongModerate",
-    "verylongslow": "VeryLongSlow",
-    "mediumfast": "MediumFast",
-    "mediumslow": "MediumSlow",
-    "shortfast": "ShortFast",
-    "shortslow": "ShortSlow",
-    "shortturbo": "ShortTurbo",
-}
+#
+# The names come from `sonoran.radio.presets`, which is the one preset
+# table. This module held its own copy of the nine names until the
+# coverage work needed the bandwidth and the sensitivity beside them.
+# Two lists of the same nine names would drift.
+PRESETS: dict[str, str] = {_normalise(preset.name): preset.name for preset in _PRESET_TABLE}
 
 # Topic groups matched by a word in the channel name.
 TOPICS: dict[str, tuple[str, ...]] = {
@@ -53,13 +58,6 @@ CUSTOM_GROUP = "Custom"
 # it.
 CORE_TIER = "core"
 EXTRA_TIER = "extra"
-
-_WORD = re.compile(r"[^a-z0-9]+")
-
-
-def _normalise(name: str) -> str:
-    """Return a lowercase name with separators removed."""
-    return _WORD.sub("", name.lower())
 
 
 def classify(channel: str | None, core: tuple[str, ...] = ()) -> dict[str, str]:

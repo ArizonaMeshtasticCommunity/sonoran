@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.api.dependencies import get_session, parse_node_id
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
 from sonoran.api.schemas import NodeSummary
+from sonoran.coverage.store import calibration_offsets
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
@@ -25,6 +26,7 @@ from sonoran.db.models import (
 )
 from sonoran.meshtastic import portnums_pb2
 from sonoran.positions import is_usable
+from sonoran.radio.resolve import resolve_profile
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
@@ -440,6 +442,51 @@ async def node_config(
         {"type": item.config_type, "value": item.config_json, "updated_at": item.updated_at}
         for item in rows.all()
     ]
+
+
+@router.get("/{node_id}/radio")
+async def node_radio(
+    node_id: str, request: Request, session: AsyncSession = Depends(get_session)
+) -> dict[str, object]:
+    """Return the radio characteristics a prediction would use.
+
+    The mesh reports the hardware model and nothing else about the
+    radio. The rest comes from the overrides file and from the
+    calibration job. `sources` says where each value came from, so a
+    reader can tell a measurement from a guess.
+    """
+    node_num = _require_node_num(node_id)
+    node = await session.scalar(select(Node).where(Node.node_num == node_num))
+    if node is None:
+        raise HTTPException(status_code=404, detail="node not found")
+
+    identifier = format_node_id(node_num)
+    settings = request.app.state.settings
+    overrides = request.app.state.radio_overrides
+    offsets = calibration_offsets(settings)
+    profile = resolve_profile(
+        identifier, node.hw_model, overrides, offsets.get(identifier), role=node.role
+    )
+
+    return {
+        "node_id": identifier,
+        "display_name": display_name(node_num, node.long_name, node.short_name),
+        "hw_model": node.hw_model,
+        "chipset": profile.chipset,
+        "hardware_inferred": profile.hardware_inferred,
+        "tx_power_dbm": profile.tx_power_dbm,
+        "antenna_gain_dbi": profile.antenna_gain_dbi,
+        "antenna_height_m": profile.antenna_height_m,
+        "cable_loss_db": profile.cable_loss_db,
+        "above_clutter": profile.above_clutter,
+        "eirp_dbm": round(profile.eirp_dbm, 2),
+        "effective_eirp_dbm": round(profile.effective_eirp_dbm, 2),
+        "calibration_offset_db": profile.calibration_offset_db,
+        "is_measured": profile.is_measured,
+        "locked": profile.locked,
+        "note": overrides.for_node(identifier).note,
+        "sources": dict(profile.sources),
+    }
 
 
 @router.get("/{node_id}/heard-by")

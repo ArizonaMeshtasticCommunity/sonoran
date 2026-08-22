@@ -107,10 +107,119 @@ class Settings(BaseSettings):
     terrain_lon_min: int = -116
     terrain_lon_max: int = -109
 
+    # Land cover. The pages say what stands on the ground, so a
+    # prediction can charge the clutter loss that ITM leaves out. Make
+    # them once with tools/prefetch_landcover.py. A deployment with no
+    # pages predicts with no clutter, which is what the planner has
+    # always done.
+    landcover_cache_dir: str = "/var/lib/sonoran/landcover"
+
+    # Coverage map. The job predicts from every node the mesh reports
+    # and writes the result here, as tiles a browser can cache.
+    coverage_cache_dir: str = "/var/lib/sonoran/coverage"
+    coverage_enabled: bool = True
+    # How often the job runs. A run costs about a second for each node,
+    # so a large mesh takes minutes. It must not hold up the daily
+    # snapshot, which is why the jobs process schedules them apart.
+    coverage_interval_hours: int = 6
+    # A node the mesh has not heard from in this long is left out. A
+    # node that is gone must not hold coverage open.
+    coverage_active_hours: int = 168
+    # How far each node is predicted to reach, in kilometres. Past this
+    # the prediction is cut, so a figure below the real reach of a tall
+    # router understates the mesh.
+    coverage_radius_km: float = 60.0
+    # The largest number of nodes one run predicts from. The strongest
+    # sites are taken first. It is a guard against a run that never
+    # ends, not a limit anybody should want to reach.
+    coverage_max_nodes: int = 600
+    # The receiver the map assumes: a handheld with a stock antenna,
+    # held about a metre and a half above the ground.
+    # How coarse a position may be and still anchor a prediction, in
+    # bits. Zero turns the test off. See `sonoran/positions.py`.
+    #
+    # Sixteen is the finest the public Meshtastic broker relays, and
+    # about 365 m. On a mesh that arrives through that broker most of
+    # the backbone reports 13 bits, which is 2.9 km, so most of it will
+    # need a position in `config/nodes.yaml` to be a site at all. The
+    # manifest counts what was left out for this reason.
+    coverage_min_precision_bits: int = 16
+    coverage_rx_height_m: float = 1.5
+    coverage_rx_gain_dbi: float = 2.15
+    # Which roles a run may predict from, as a comma separated list.
+    #
+    # The default is the infrastructure set, which is what a published
+    # map wants. `ALL` predicts from every node, including handhelds,
+    # and is a diagnostic: the manifest marks such a run, and both the
+    # dashboard and the public embed label it rather than passing it
+    # off as coverage. See `sonoran/roles.py`.
+    coverage_site_roles: str = "ROUTER,ROUTER_LATE,REPEATER"
+    # How many worker processes predict at once. Zero means as many
+    # as the machine has, less one, so the jobs process keeps a core
+    # for everything else it does.
+    #
+    # On a small box that also serves the dashboard, set this to 1.
+    # With the niceness below, a run then takes about three times as
+    # long and leaves the machine responsive throughout.
+    coverage_workers: int = 0
+    # How much to lower the priority of each worker process.
+    #
+    # The engine is a solid floating point loop, so a run pins every
+    # worker at 100% for minutes. On a machine that also serves the
+    # dashboard and takes MQTT that is felt by everybody using it. A
+    # positive niceness keeps the run off the back of anything
+    # interactive: the kernel still gives it every idle cycle, and
+    # hands the CPU back the moment a request arrives.
+    #
+    # Ten is a background batch job. Zero turns it off. It is only
+    # applied where the platform has it, and never lowered, because a
+    # process may not raise its own priority back.
+    coverage_worker_nice: int = 10
+    # The zoom levels of tile that the job writes. Level 11 is about
+    # 76 m for each pixel, which is finer than the 90 m terrain, so
+    # there is nothing to gain past it.
+    coverage_min_zoom: int = 6
+    coverage_max_zoom: int = 11
+
+    # The public coverage embed. It is off until somebody turns it on,
+    # which is the same default STORE_TEXT_MESSAGES takes: the private
+    # value is the safe one.
+    embed_enabled: bool = False
+    # The sites that may put the embed in a frame. Anything that is not
+    # an origin is dropped, and an empty list means nothing may frame
+    # it. It never becomes a wildcard.
+    embed_frame_ancestors: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # How far to snap a public marker, in degrees. About 0.01 degrees is
+    # a kilometre, which names a hill and not a building. Zero gives the
+    # exact position.
+    embed_position_step: float = 0.01
+
+    # Calibration. The job asks the mesh how far the prediction is out,
+    # node by node, from the neighbour reports the nodes publish.
+    calibration_enabled: bool = True
+    calibration_interval_hours: int = 24
+    # How far back to read neighbour reports. `neighbor_metrics` is kept
+    # for RETENTION_DAYS_METRIC days, so a window past that reads
+    # nothing.
+    calibration_window_hours: int = 336
+
+    # Radio overrides. The file names the antenna, the mast height, and
+    # the power of a node, which the mesh itself never reports. It is
+    # kept in the repository, so every change to it has an author and a
+    # review. A file that is not there gives no overrides, which is a
+    # working state.
+    radio_overrides_path: str = "config/nodes.yaml"
+
     # Logging.
     log_level: str = "INFO"
 
-    @field_validator("mqtt_topics", "channel_keys", "core_channels", mode="before")
+    @field_validator(
+        "mqtt_topics",
+        "channel_keys",
+        "core_channels",
+        "embed_frame_ancestors",
+        mode="before",
+    )
     @classmethod
     def split_csv(cls, value: object) -> object:
         """Accept comma-separated strings for list settings."""

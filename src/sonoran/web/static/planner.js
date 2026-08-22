@@ -420,7 +420,11 @@ function ensurePlannerMap() {
   const map = L.map('planner-map', { preferCanvas: true })
     .setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
   if (CONFIG.tileUrl) {
-    L.tileLayer(CONFIG.tileUrl, { attribution: CONFIG.tileAttribution || '', maxZoom: 19 }).addTo(map);
+    L.tileLayer(CONFIG.tileUrl, {
+      className: 'basemap-tiles',
+      attribution: CONFIG.tileAttribution || '',
+      maxZoom: 19,
+    }).addTo(map);
   }
   state.coverageLayer = L.layerGroup().addTo(map);
   state.linkLayer = L.layerGroup().addTo(map);

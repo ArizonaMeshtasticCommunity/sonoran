@@ -22,7 +22,16 @@ Three processes share one Python package:
 |---------|-------------------|---------------|
 | ingest | `sonoran.ingest.pipeline:main` | INSERT and UPDATE only |
 | api | `sonoran.api.app:create_app` | SELECT only |
-| jobs | `sonoran.jobs.*:main` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
+| jobs | `sonoran.jobs.scheduler:run` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
+
+The daily snapshot has its own clock. Calibration and coverage share a
+clock because coverage consumes the calibration file. A due calibration
+finishes before coverage starts. A failed calibration leaves the last
+published coverage run in place.
+
+The coverage job writes no database row. It writes tiles and a manifest
+to disk, because the tiles are the run, and holding the two apart lets
+them disagree.
 
 The database roles are enforced by PostgreSQL grants.
 The grants are part of the first migration.
@@ -147,6 +156,63 @@ channel, Data message metadata, and receive time.
 - `migrations/` has the Alembic environment and revisions.
 - No business logic lives here.
 
+### 3.6.1 `radio`
+
+- Job: say what radio a node has.
+- `presets.py` is the one modem preset table. It holds the spreading
+  factor, the bandwidth, and the sensitivity of each preset, and the
+  noise floor that turns a reported SNR into a received power.
+- `hardware.py` maps a hardware model to the radio in it. The transmit
+  power and the antenna gain in it are assumptions, not facts.
+- `overrides.py` reads the operator file named by
+  `RADIO_OVERRIDES_PATH`.
+- `resolve.py` puts the three together. It is the only place that
+  decides the radio characteristics of a node, so the coverage job, the
+  calibration job, and the API cannot disagree.
+- Every resolved value carries the name of its source.
+- This package must never touch the database. It has the same rule as
+  `decode` and `crypto`.
+
+### 3.6.2 `coverage`
+
+- Job: predict where a radio is heard.
+- `units.py` holds the one conversion from metres to feet. SPLAT! reads
+  feet and nothing else here does.
+- `params.py` holds the values the engine takes. It is the Python side
+  of `web/static/planner-params.js`.
+- `engine.py` runs the vendored SPLAT! WebAssembly file with `wasmtime`.
+  The module imports three functions and asks for no files, no clock,
+  and no network.
+- `grid.py` is the only place that decides how a raster maps to the
+  ground. Every engine raster shares one lattice, so a raster is placed
+  on the region grid rather than resampled onto it.
+- `sites.py` turns a node into a prediction, and one prediction into
+  both directions of a link.
+- `render.py` colours a grid and writes map tiles.
+- `store.py` keeps a run on disk. A run is one directory and becomes
+  visible in one step, so a reader never sees half of one.
+- `calibrate.py` fits bounded node corrections and a network-wide model
+  bias. A fit outside its trust guards gives no correction.
+- The planner page runs the same file in a browser worker. A hash test
+  pins the two to the same rasters.
+- The engine is under the GNU General Public License, version 3. See
+  `AGENTS.md` 7.1.
+- This package must never touch the database.
+
+### 3.6.3 `embed`
+
+- Job: decide what a public viewer of the coverage map may see.
+- `sanitise.py` is the only place that decides it. Infrastructure roles
+  and MQTT gateways only, positions snapped to a grid, short names
+  only.
+- It is the same arrangement as `positions.py` and `api/traces.py`: one
+  module holds the rule, so two pages cannot disagree.
+- `frame_ancestors` checks every origin the settings name through the
+  same test the other security headers use. It never returns a
+  wildcard.
+- The embed is off until `EMBED_ENABLED` is true.
+- This package must never touch the database.
+
 ### 3.7 `api`
 
 - Job: serve read-only JSON and static files.
@@ -209,7 +275,12 @@ general proxy for the tile source.
 - Job: run scheduled maintenance.
 - `retention.py` checks that TimescaleDB retention policies exist and work.
 - `snapshots.py` writes one `daily_snapshot` row per day.
-- Each job is a small async `main` that runs once, or on a simple loop with a sleep.
+- `calibrate.py` reads current neighbour reports and writes one computed
+  calibration file.
+- `coverage.py` reads that file and publishes one complete static tile
+  run.
+- `scheduler.py` runs a due calibration before coverage. The snapshot
+  remains independent.
 
 ### 3.10 `web/static`
 

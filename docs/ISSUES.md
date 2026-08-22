@@ -189,16 +189,51 @@ relayed the packet once that is known.
 
 ### 2.4 The coverage planner covers one site at a time
 
-**State:** Open. Deliberately deferred.
+**State:** Closed. The coverage map answers the other question.
 
-The planner predicts one transmitter for each run. The most useful
-question for the mesh is the other one: where is the mesh blind when
-every node is considered together?
+The planner still predicts one transmitter for each run, and that is
+the right shape for it: a person trying a mast anywhere, in the
+browser, telling nobody where. The other question, where the mesh is
+blind when every node is considered together, is now the coverage map.
+See `docs/COVERAGE.md`.
 
-The upstream site planner merges several runs into one layer
-(`src/engine/merge.ts`). The merge itself is already ported, because the
-workers need it. What is missing is a queue of runs and a way to hold
-several results at once.
+The merge is not the merge this note expected. `mergeFirstTouch` in
+`planner.js` merges radial slices of one run on one grid. Putting
+different sites together is a different operation, because each run
+comes back on its own degree-aligned region. `coverage/grid.py` does
+it, and it needs no resampling: every engine raster sits on the same
+lattice of 1200 cells to the degree, so a raster is placed at a whole
+cell offset and no value changes.
+
+Two things the note did not anticipate:
+
+- A coverage map has two directions and they are not the same. See
+  `coverage/sites.py`.
+- The whole map cannot be recomputed by every reader, so it runs in the
+  jobs process. `docs/PLANNER.md` 2 says why that does not weaken the
+  rule about the planner page.
+
+### 2.4.1 The calibration reads neighbour reports only
+
+**State:** Open.
+
+`jobs/calibrate.py` fits its per-node correction from
+`neighbor_metrics`. Traceroute carries a per-hop SNR as well and would
+roughly double the evidence.
+
+It is left out because the only correct reading of a traceroute row is
+`sonoran/api/traces.py`, and the jobs process does not import the api
+package. Moving that reading into a module both can import is the work
+to do first. See `AGENTS.md` 9.6 and 9.18 for why the reading is not
+something to write a second time.
+
+The live fit on 2026-08-21 found a network-wide model bias near -41 dB.
+That is outside the 20 dB trust guard, so Sonoran applies no per-node
+correction. The coverage map currently uses nameplate radio profiles.
+The large bias can mean that the propagation assumptions are wrong, or
+that absence from an aggregated neighbour list is not reliable evidence
+that a link was silent. Do not raise the guard to make the fit apply.
+Validate that evidence first.
 
 ### 2.5 The planner draws 90 m terrain only
 

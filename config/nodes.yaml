@@ -1,0 +1,66 @@
+# Radio facts the mesh cannot report.
+#
+# A node tells us its hardware model. It does not tell us what antenna
+# is on it, how high that antenna stands, or what power it transmits
+# with. Somebody knows. Write it here.
+#
+# Everything here beats the hardware default. The calibration job
+# corrects what is left, unless `lock_calibration` holds it.
+#
+# Every key is optional. Keep a note on every entry, because the person
+# who reads this next will not know why 5.8 was the right number.
+#
+# After a change, run the coverage job again to see it on the map.
+
+nodes:
+  # This entry is an example. Delete it, or replace the node ID with a
+  # real one.
+  #
+  # "!0a51b007":
+  #   # Where the node really is.
+  #   #
+  #   # The public Meshtastic broker rounds off the position it relays.
+  #   # Most of a mesh backbone arrives about 2.9 km out, and the
+  #   # terrain under a prediction is 90 m across, so such a node
+  #   # cannot be a site: it could be on either side of a ridge.
+  #   #
+  #   # A position given here is treated as exact, whatever the broker
+  #   # said, and the node becomes a site again. Both values are
+  #   # needed. The coverage page names how many nodes are waiting on
+  #   # this.
+  #   latitude: 33.4484
+  #   longitude: -112.0740
+  #
+  #   # The gain of the antenna, in dBi. A stock rubber antenna is
+  #   # about 2.15. A good omni on a mast is 5.8 to 9.
+  #   antenna_gain_dbi: 5.8
+  #
+  #   # The height of the antenna above the ground it stands on, in
+  #   # metres. This is not the height above sea level. The terrain
+  #   # gives the ground. This gives the mast.
+  #   #
+  #   # It is the single largest unknown in a prediction. A node at 30 m
+  #   # reaches many times further than the same node at 3 m.
+  #   antenna_height_m: 12.0
+  #
+  #   # The power the radio transmits with, in dBm. 30 is one watt.
+  #   # Leave this out unless you know it. The hardware model gives a
+  #   # figure that is right for most nodes.
+  #   tx_power_dbm: 30
+  #
+  #   # The loss between the radio and the antenna, in dB. A stock
+  #   # device with the antenna screwed on has none. A cable run to a
+  #   # mast has one to three.
+  #   cable_loss_db: 1.5
+  #
+  #   # True when the antenna stands above the roofs and the trees
+  #   # around it. A node on a tower or a ridge does not take the
+  #   # clutter loss a node at street level takes.
+  #   above_clutter: true
+  #
+  #   # True holds this node against the calibration job. Use it when
+  #   # the build is known exactly, or when the measurements for this
+  #   # node are known to mislead.
+  #   lock_calibration: false
+  #
+  #   note: "Rooftop omni on the water tank. Measured 2026-03."

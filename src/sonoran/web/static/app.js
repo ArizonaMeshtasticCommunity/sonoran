@@ -601,6 +601,7 @@ function ensureMap() {
     .setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
   if (CONFIG.tileUrl) {
     L.tileLayer(CONFIG.tileUrl, {
+      className: 'basemap-tiles',
       attribution: CONFIG.tileAttribution || '',
       maxZoom: 19,
     }).addTo(map);
@@ -748,13 +749,18 @@ function flashTraffic(event) {
     : `relayed over ${event.hops_taken} ${event.hops_taken === 1 ? 'hop' : 'hops'}, `
       + 'path not recorded';
 
+  // A text node, never a string. Leaflet writes a string tooltip with
+  // innerHTML, and a display name is whatever the node's owner typed
+  // into their radio.
   parts[0].bindTooltip(
-    `${portnumLabel(event.portnum)} from ${event.from.display_name}, ` +
-    `uploaded by ${event.gateway.display_name}` +
-    (direct
-      ? `, direct${event.snr == null ? '' : `, ${round(event.snr, 1)} dB`}`
-      : `, ${hops}, so this line is not the route`) +
-    '. Click for the packet.',
+    document.createTextNode(
+      `${portnumLabel(event.portnum)} from ${event.from.display_name}, ` +
+      `uploaded by ${event.gateway.display_name}` +
+      (direct
+        ? `, direct${event.snr == null ? '' : `, ${round(event.snr, 1)} dB`}`
+        : `, ${hops}, so this line is not the route`) +
+      '. Click for the packet.',
+    ),
   );
   for (const part of parts) {
     part.on('click', () => { location.hash = packetHref(event).slice(1); });
@@ -875,9 +881,11 @@ function animateHop(hop, trace, delay) {
       { color: snrColour(hop.snr), weight: 3, opacity: 0.95 },
     ).addTo(mapState.traces);
     line.bindTooltip(
-      `${hop.from.display_name} to ${hop.to.display_name}` +
-      (hop.snr == null ? ', signal not measured' : `, ${round(hop.snr, 1)} dB`) +
-      '. Click for the whole traceroute.',
+      document.createTextNode(
+        `${hop.from.display_name} to ${hop.to.display_name}` +
+        (hop.snr == null ? ', signal not measured' : `, ${round(hop.snr, 1)} dB`) +
+        '. Click for the whole traceroute.',
+      ),
     );
     // Clickable while it is on the map. The same trace stays in the
     // side list afterwards, which is the part that does not expire.
@@ -1459,6 +1467,15 @@ function graphTabs(page, all) {
  * file. It has its own map, its own workers and a vendored WebAssembly
  * engine, so it is kept out of this file.
  */
+/*
+ * The coverage map lives in coverage.js, which loads before this file.
+ * It draws what the coverage job already computed and predicts nothing
+ * itself, so it needs no workers and no engine.
+ */
+PAGES.coverage = async (page) => {
+  await window.SonoranCoverage.show(page);
+};
+
 PAGES.planner = async () => {
   await window.SonoranPlanner.show();
 };
@@ -2642,7 +2659,11 @@ function positionMap(target, rows) {
   map = L.map(target, { attributionControl: true }).setView(points[0], 13);
   packetMaps.set(target, map);
   if (CONFIG.tileUrl) {
-    L.tileLayer(CONFIG.tileUrl, { attribution: CONFIG.tileAttribution || '', maxZoom: 19 })
+    L.tileLayer(CONFIG.tileUrl, {
+      className: 'basemap-tiles',
+      attribution: CONFIG.tileAttribution || '',
+      maxZoom: 19,
+    })
       .addTo(map);
   }
   for (const point of points) {
