@@ -60,6 +60,20 @@ this ridge empty — is there nothing there, or is there something there
 with no role set?", and it is the only way to see what the filter is
 costing on a particular mesh.
 
+Measured against the live Arizona mesh, 931 positioned nodes in region:
+
+| `COVERAGE_SITE_ROLES` | Sites | Left out |
+|---|---|---|
+| `ROUTER,ROUTER_LATE,REPEATER`, the default | 16 | 915 |
+| `ROUTER,CLIENT_BASE` | 21 | 910 |
+| `ALL` | 176 | 755 |
+
+`ALL` is 176 and not 931, because a node still needs a modem preset and
+a position precise enough to anchor a prediction. It is also about
+eleven times the work of a default run: budget half an hour rather than
+five minutes, and see 9.1 for keeping the machine usable while it
+happens.
+
 It is also not a coverage map, and its tiles look exactly like one.
 So a run that is not the infrastructure set carries `is_diagnostic` in
 its manifest, and three things read it:
