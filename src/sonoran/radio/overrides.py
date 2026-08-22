@@ -45,6 +45,8 @@ _BOUNDS: dict[str, tuple[float, float]] = {
     "antenna_height_m": (0.0, 500.0),
     "tx_power_dbm": (-10.0, 40.0),
     "cable_loss_db": (0.0, 20.0),
+    "latitude": (-90.0, 90.0),
+    "longitude": (-180.0, 180.0),
 }
 
 
@@ -55,6 +57,19 @@ class NodeOverride:
     Every field is optional. None means "no opinion, use the default".
     """
 
+    # Where the node really is.
+    #
+    # The public Meshtastic broker reduces the precision of a position
+    # it relays, and most of a mesh backbone arrives at 13 bits, which
+    # is about 2.9 km. A footprint drawn around that describes ground
+    # that may have no radio on it, so such a node is not a site.
+    #
+    # An operator knows where their own router is. A position given
+    # here is treated as exact, whatever the broker said, and the node
+    # becomes a site again. Both values are needed; one alone is
+    # ignored. See `sonoran/positions.py`.
+    latitude: float | None = None
+    longitude: float | None = None
     antenna_gain_dbi: float | None = None
     antenna_height_m: float | None = None
     tx_power_dbm: float | None = None
@@ -79,6 +94,18 @@ class Overrides:
     def for_node(self, node_id: str) -> NodeOverride:
         """Return the override for a node, or an empty one."""
         return self.nodes.get(node_id, NodeOverride())
+
+    def position_of(self, node_id: str) -> tuple[float, float] | None:
+        """Return the position an operator gave for a node, if any.
+
+        Both values are needed. A latitude with no longitude is a typing
+        mistake, not a place, and using half of it would put the node on
+        the Greenwich meridian.
+        """
+        override = self.for_node(node_id)
+        if override.latitude is None or override.longitude is None:
+            return None
+        return (override.latitude, override.longitude)
 
 
 EMPTY = Overrides(nodes={})

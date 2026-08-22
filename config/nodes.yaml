@@ -17,6 +17,20 @@ nodes:
   # real one.
   #
   # "!0a51b007":
+  #   # Where the node really is.
+  #   #
+  #   # The public Meshtastic broker rounds off the position it relays.
+  #   # Most of a mesh backbone arrives about 2.9 km out, and the
+  #   # terrain under a prediction is 90 m across, so such a node
+  #   # cannot be a site: it could be on either side of a ridge.
+  #   #
+  #   # A position given here is treated as exact, whatever the broker
+  #   # said, and the node becomes a site again. Both values are
+  #   # needed. The coverage page names how many nodes are waiting on
+  #   # this.
+  #   latitude: 33.4484
+  #   longitude: -112.0740
+  #
   #   # The gain of the antenna, in dBi. A stock rubber antenna is
   #   # about 2.15. A good omni on a mast is 5.8 to 9.
   #   antenna_gain_dbi: 5.8

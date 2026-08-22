@@ -163,13 +163,18 @@ def group_by_preset(
         if not is_infrastructure(node.role):
             rejected[role_name(node.role)] += 1
             continue
-        if not is_precise_enough(node.last_position_precision_bits):
+        identifier = f"!{node.node_num:08x}"
+        # An operator who says where their own router is beats the
+        # broker, which fuzzes what it relays.
+        given = overrides.position_of(identifier)
+        if given is None and not is_precise_enough(
+            node.last_position_precision_bits, settings.coverage_min_precision_bits
+        ):
             # The node said where it is, and said the answer is coarse.
             # A footprint drawn around it would describe ground that
             # may have no radio on it. See `sonoran/positions.py`.
             rejected[COARSE_POSITION] += 1
             continue
-        identifier = f"!{node.node_num:08x}"
         profile = resolve_profile(
             identifier,
             node.hw_model,
@@ -177,8 +182,7 @@ def group_by_preset(
             (offsets or {}).get(identifier),
             role=node.role,
         )
-        latitude = node.last_lat
-        longitude = node.last_lon
+        latitude, longitude = given if given else (node.last_lat, node.last_lon)
         if latitude is None or longitude is None:
             continue
         site = make_site(

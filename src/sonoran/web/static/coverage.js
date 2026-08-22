@@ -327,8 +327,10 @@
     const layer = (state.summary.layers || []).find((item) => item.key === state.layer);
     $('[data-coverage-legend-title]', legend).textContent = layer ? layer.label : 'Signal';
     $('[data-coverage-floor]', legend).textContent = `${floor} dBm`;
-    // The ramp in coverage/render.py spans 30 dB above the limit.
-    $('[data-coverage-ceiling]', legend).textContent = `${floor + 30} dBm`;
+    // The span comes from the run, so the legend cannot drift from
+    // the tiles it describes. See coverage/render.py.
+    const span = Number(state.summary.ramp_span_db) || 0;
+    $('[data-coverage-ceiling]', legend).textContent = `${floor + span} dBm`;
   }
 
   function statTile(value, label, delta) {
@@ -393,6 +395,17 @@
         .join(', '),
       '. Only a router or a repeater holds coverage open, because only a node that '
         + 'stays where it is can.',
+      counts['coarse-position']
+        ? el(
+            'span',
+            {},
+            ' ',
+            el('strong', { text: `${counts['coarse-position']} of those` }),
+            ' are routers whose position the broker rounded off too far to predict from. '
+              + 'Give each one a latitude and longitude in config/nodes.yaml and it '
+              + 'becomes a site again.',
+          )
+        : null,
     );
   }
 

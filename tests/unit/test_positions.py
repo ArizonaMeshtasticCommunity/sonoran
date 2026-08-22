@@ -139,3 +139,29 @@ def test_the_deviation_grows_as_the_precision_falls() -> None:
     # The two figures the Meshtastic documentation names.
     assert precision_deviation_m(14) == 1459.0
     assert precision_deviation_m(16) == 364.7
+
+
+def test_the_precision_test_can_be_turned_off() -> None:
+    """A deployment that reads its own broker sees every position at
+    full precision and does not need the test."""
+    from sonoran.positions import is_precise_enough
+
+    assert not is_precise_enough(13)
+    assert is_precise_enough(13, minimum=0)
+    assert is_precise_enough(13, minimum=13)
+
+
+def test_the_threshold_measured_against_the_live_mesh() -> None:
+    """What the default costs, recorded so a change is deliberate.
+
+    Of 50 infrastructure nodes on the Arizona mesh, 24 report 13 bits,
+    7 report 14 and 3 report 15. The default keeps 16 of the 50; the
+    other 34 need a position in `config/nodes.yaml`. See
+    `docs/COVERAGE.md` 9.1.2.
+    """
+    from sonoran.positions import MIN_SITE_PRECISION_BITS, is_precise_enough
+
+    assert MIN_SITE_PRECISION_BITS == 16
+    live = {13: 24, 14: 7, 15: 3, 17: 4, 18: 3, 32: 9}
+    kept = sum(count for bits, count in live.items() if is_precise_enough(bits))
+    assert kept == 16, "the default keeps 16 of the 50 live infrastructure nodes"

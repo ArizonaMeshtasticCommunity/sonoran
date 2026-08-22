@@ -709,3 +709,41 @@ def test_the_manifest_counts_a_fuzzed_position_apart_from_a_role(
     assert manifest is not None
     excluded = manifest.presets[0].excluded_by_role
     assert excluded == {"NULL": 1, "coarse-position": 1}
+
+
+def test_an_operator_position_brings_a_coarse_router_back(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The escape hatch, end to end.
+
+    On the live Arizona mesh 34 of 50 routers report a position the
+    broker rounded to between 2.9 and 23 km. Without this they are not
+    sites at all, and the map shows a third of the mesh.
+    """
+    overrides = tmp_path / "nodes.yaml"
+    overrides.write_text(
+        'nodes:\n  "!000dbba1":\n    latitude: 33.4500\n    longitude: -112.0700\n',
+        encoding="utf-8",
+    )
+    settings = _settings(timescale_url, tmp_path, radio_overrides_path=str(overrides))
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900001, 33.45, -112.07, role="ROUTER", precision_bits=13)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    preset = manifest.presets[0]
+    assert preset.site_count == 1
+    assert "coarse-position" not in preset.excluded_by_role
+
+
+def test_the_precision_test_can_be_turned_off_for_a_private_broker(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """A deployment reading its own broker sees full precision."""
+    settings = _settings(timescale_url, tmp_path, coverage_min_precision_bits=0)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900002, 33.45, -112.07, role="ROUTER", precision_bits=13)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    assert manifest.presets[0].site_count == 1

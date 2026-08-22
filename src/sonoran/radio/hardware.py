@@ -85,6 +85,10 @@ _PROFILES: dict[str, HardwareProfile] = {
     "RAK11200": _sx1262(),
     "RAK11310": _sx1262(),
     "RAK3172": _sx1262(),
+    # Seen on the live Arizona mesh, and previously unknown. See
+    # `docs/COVERAGE.md` 9.1.2.
+    "RAK3401": _sx1262(),
+    "XIAO_NRF52_KIT": _sx1262(INTERNAL_ANTENNA_GAIN_DBI),
     "HELTEC_V3": _sx1262(),
     "HELTEC_V4": _sx1262(),
     "HELTEC_WSL_V3": _sx1262(),

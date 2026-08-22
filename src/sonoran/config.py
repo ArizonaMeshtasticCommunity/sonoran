@@ -135,6 +135,15 @@ class Settings(BaseSettings):
     coverage_max_nodes: int = 600
     # The receiver the map assumes: a handheld with a stock antenna,
     # held about a metre and a half above the ground.
+    # How coarse a position may be and still anchor a prediction, in
+    # bits. Zero turns the test off. See `sonoran/positions.py`.
+    #
+    # Sixteen is the finest the public Meshtastic broker relays, and
+    # about 365 m. On a mesh that arrives through that broker most of
+    # the backbone reports 13 bits, which is 2.9 km, so most of it will
+    # need a position in `config/nodes.yaml` to be a site at all. The
+    # manifest counts what was left out for this reason.
+    coverage_min_precision_bits: int = 16
     coverage_rx_height_m: float = 1.5
     coverage_rx_gain_dbi: float = 2.15
     # How many worker processes predict at once. Zero means as many

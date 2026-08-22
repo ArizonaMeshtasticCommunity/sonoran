@@ -424,3 +424,35 @@ def test_the_assumption_says_it_is_one() -> None:
 
     assert Source.ROLE == "role"
     assert set(ROLE_ANTENNA_HEIGHT_M) == {"ROUTER", "ROUTER_LATE", "REPEATER"}
+
+
+# --- a position an operator gives ---------------------------------------
+
+
+def test_an_operator_may_give_a_position() -> None:
+    """The escape hatch for a broker that rounds a position off.
+
+    Most of the Arizona backbone arrives at 13 bits, which is 2.9 km,
+    and cannot anchor a prediction. The operator of a router knows
+    where it is.
+    """
+    overrides = Overrides({"!a": NodeOverride(latitude=33.4484, longitude=-112.0740)})
+    assert overrides.position_of("!a") == (33.4484, -112.0740)
+
+
+def test_half_a_position_is_not_a_place() -> None:
+    """A latitude with no longitude is a typing mistake. Using it alone
+    would put the node on the Greenwich meridian."""
+    assert Overrides({"!a": NodeOverride(latitude=33.4)}).position_of("!a") is None
+    assert Overrides({"!a": NodeOverride(longitude=-112.0)}).position_of("!a") is None
+
+
+def test_a_node_with_no_override_has_no_given_position() -> None:
+    assert Overrides({}).position_of("!a") is None
+
+
+def test_a_position_outside_the_earth_is_refused() -> None:
+    from sonoran.radio.overrides import parse_overrides
+
+    text = 'nodes:\n  "!a":\n    latitude: 999.0\n    longitude: -112.0\n'
+    assert parse_overrides(text).position_of("!a") is None

@@ -99,7 +99,7 @@ def precision_deviation_m(bits: int | None) -> float | None:
     return 0.0
 
 
-def is_precise_enough(bits: int | None) -> bool:
+def is_precise_enough(bits: int | None, minimum: int = MIN_SITE_PRECISION_BITS) -> bool:
     """Return true when a position may anchor a coverage prediction.
 
     **A missing value is true, and that is the decision this function
@@ -114,7 +114,12 @@ def is_precise_enough(bits: int | None) -> bool:
     So the rule is to exclude a position **known** to be coarse, never
     one that failed to say. A run reports the two counts apart, so
     nobody has to guess which one a mesh is made of.
+
+    A `minimum` of zero turns the test off, for a deployment that reads
+    its own broker and trusts every position it is given.
     """
+    if minimum <= 0:
+        return True
     if bits is None or bits <= 0:
         return True
-    return bits >= MIN_SITE_PRECISION_BITS
+    return bits >= minimum

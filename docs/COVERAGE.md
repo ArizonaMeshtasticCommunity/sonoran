@@ -334,6 +334,58 @@ other way: a router really does reach further than a shed roof.
 A map that is a third of the size is not a worse map. The area it lost
 was never there.
 
+### 9.1.2 What the live mesh actually looks like
+
+Measured against the Arizona mesh, 2,381 nodes of which 931 report a
+position:
+
+| Role | Nodes | |
+|---|---|---|
+| CLIENT | 370 | 39.7% |
+| CLIENT_MUTE | 260 | 27.9% |
+| No role reported | 158 | 17.0% |
+| CLIENT_BASE | 89 | 9.6% |
+| ROUTER_LATE | 35 | 3.8% |
+| ROUTER | 15 | 1.6% |
+| TRACKER | 4 | 0.4% |
+
+**Fifty nodes of 931 are infrastructure.** That is the number the role
+test exists for.
+
+Position precision is the harder half. Of those 50:
+
+| Precision | Deviation | Nodes |
+|---|---|---|
+| 13 bits | 2.9 km | 24 |
+| 14 bits | 1459 m | 7 |
+| 15 bits | 729 m | 3 |
+| 17 bits | 182 m | 4 |
+| 18 bits | 91 m | 3 |
+| 32 bits | exact | 9 |
+
+So `COVERAGE_MIN_PRECISION_BITS` at 16 keeps **16 of the 50**, and the
+other 34 need a position in `config/nodes.yaml`.
+
+That is a real cost and it is the right default. A run of the whole
+mesh at both settings:
+
+| | Sites | Usable |
+|---|---|---|
+| 16 bits, the default | 16 | 11,065 km² |
+| 0, trusting the broker | 50 | 21,001 km² |
+
+Half the coverage in the second row rests on positions rounded to
+between 2.9 and 23 km, over terrain that is 90 m across. A node can sit
+on either side of a ridge at that distance. The map would claim ground
+nobody can use, which is the failure this whole page is about.
+
+The way to have both is the overrides file. An operator knows where
+their own router is, and a position given there is used as exact. The
+page names the count and says so.
+
+`COVERAGE_MIN_PRECISION_BITS` may be set to zero by a deployment that
+reads its own broker, where every position arrives at full precision.
+
 ### 9.2 What a run holds in memory
 
 Memory, not time, is what stops a large run. A three hundred node run
