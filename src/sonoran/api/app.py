@@ -4,7 +4,6 @@ The API is read-only. It registers GET routes only.
 It connects to the database with the SELECT-only role.
 """
 
-import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hashlib import sha256
@@ -18,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
 from sonoran import __version__
+from sonoran.api.html import as_script_json
 from sonoran.api.routes.chat import router as chat_router
 from sonoran.api.routes.coverage import router as coverage_router
 from sonoran.api.routes.embed import router as embed_router
@@ -277,7 +277,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "mapCenter": [settings.map_default_lat, settings.map_default_lon],
             "mapZoom": settings.map_default_zoom,
         }
-        html = html.replace("__SONORAN_CONFIG__", json.dumps(config))
+        html = html.replace("__SONORAN_CONFIG__", as_script_json(config))
         html = html.replace("__SONORAN_ASSET_VERSION__", app.state.asset_version)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 

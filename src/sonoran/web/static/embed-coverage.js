@@ -113,7 +113,12 @@
         fillColor: '#8cb369',
         fillOpacity: 0.9,
       })
-        .bindTooltip(node.short_name || node.role, { direction: 'top' })
+        // A text node, never a string. Leaflet writes a string
+        // tooltip with innerHTML, and a short name is whatever the
+        // node's owner typed into their radio.
+        .bindTooltip(document.createTextNode(node.short_name || node.role || ''), {
+          direction: 'top',
+        })
         .addTo(map);
     }
   }

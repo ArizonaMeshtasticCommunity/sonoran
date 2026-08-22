@@ -39,7 +39,7 @@ class TerrainError(Exception):
 
 def is_tile_name(name: str) -> bool:
     """Return true when the name is a well formed tile name."""
-    return TILE_PATTERN.match(name) is not None
+    return TILE_PATTERN.fullmatch(name) is not None
 
 
 def tile_bounds(name: str) -> tuple[int, int]:
@@ -79,7 +79,14 @@ def page_path(settings: Settings, name: str) -> Path:
 
 
 def read_cached_page(settings: Settings, name: str) -> bytes | None:
-    """Return a cached page, or None when it is absent or damaged."""
+    """Return a cached page, or None when it is absent or damaged.
+
+    The name is checked here and not only by the caller. It becomes a
+    file path, and `docs/QA.md` 9 asks that every such value be checked
+    for shape where it is used.
+    """
+    if not is_tile_name(name):
+        return None
     path = page_path(settings, name)
     try:
         data = path.read_bytes()

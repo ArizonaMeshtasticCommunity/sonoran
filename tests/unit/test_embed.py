@@ -128,9 +128,19 @@ def test_a_client_node_never_appears(role: str | None) -> None:
     assert not is_public_node(role, False)
 
 
-def test_a_gateway_appears_whatever_its_role() -> None:
-    """Running one is a deliberate act of infrastructure."""
-    assert is_public_node("CLIENT", True)
+def test_a_gateway_is_drawn_as_a_gateway_but_does_not_get_in() -> None:
+    """This used to assert the opposite, and the opposite was wrong.
+
+    The reasoning was that running a gateway is a deliberate act of
+    infrastructure. It is not: `ingest/handlers/presence.py` sets the
+    flag for any node that publishes a packet and never clears it, so
+    a client with the MQTT uplink switched on is a gateway for ever.
+
+    `is_gateway` still travels on the answer, because the map draws a
+    ring around one. It no longer decides who is on the map.
+    """
+    assert not is_public_node("CLIENT", True)
+    assert is_public_node("REPEATER", True)
 
 
 def test_a_position_is_snapped_before_it_leaves_the_server() -> None:
@@ -193,3 +203,90 @@ def test_the_public_node_list_is_held_for_a_while() -> None:
     from sonoran.api.routes import embed
 
     assert embed.NODE_CACHE_SECONDS >= 60.0
+
+
+# --- what the security review found ------------------------------------
+
+
+def test_a_gateway_alone_does_not_reach_a_public_map() -> None:
+    """A gateway is not evidence of infrastructure.
+
+    `ingest/handlers/presence.py` sets `is_mqtt_gateway` for any node
+    that publishes a packet and never clears it, so a person who turns
+    the MQTT uplink on in the radio on their kitchen table is marked a
+    gateway for ever. This rule used to put that kitchen on a public
+    map, at a kilometre, with no way to come off it.
+    """
+    assert not is_public_node("CLIENT", True)
+    assert not is_public_node(None, True)
+    assert not is_public_node("CLIENT_BASE", True)
+    # A gateway that really is infrastructure still appears.
+    assert is_public_node("ROUTER", True)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        ["https://*"],
+        ["https://a.com;script-src *"],
+        ["https://a.com 'unsafe-inline'"],
+        ["https://a.com,b.com"],
+    ],
+)
+def test_a_framing_origin_cannot_inject_another_directive(bad: list[str]) -> None:
+    """`frame-ancestors` is the last directive in the header, so a
+    semicolon in the value starts a new one.
+
+    `urlsplit` is not a validator: it keeps a space or a semicolon
+    inside the network location. A value like
+    `https://azmsh.net;script-src *` would have replaced the script
+    policy of the embed with a wildcard.
+    """
+    assert frame_ancestors(bad) == "'none'"
+
+
+def test_a_real_origin_still_passes() -> None:
+    """The check must not be so tight that it refuses a port."""
+    assert frame_ancestors(["https://azmsh.net", "http://localhost:8080"]) == (
+        "https://azmsh.net http://localhost:8080"
+    )
+
+
+def test_a_page_config_cannot_close_its_own_script_element() -> None:
+    """A configured value holding `</script>` would end the element and
+    everything after it would be markup."""
+    import json
+
+    from sonoran.api.html import as_script_json
+
+    written = as_script_json({"tileAttribution": "</script><img src=x onerror=alert(1)>"})
+    assert "</script>" not in written
+    assert "<" not in written
+    # And it is still the same value once the browser parses it.
+    assert json.loads(written)["tileAttribution"] == "</script><img src=x onerror=alert(1)>"
+
+
+def test_the_public_map_never_writes_a_node_name_as_markup() -> None:
+    """Leaflet writes a string tooltip with innerHTML, and a short name
+    is whatever the node's owner typed into their radio."""
+    from pathlib import Path
+
+    static = Path("src/sonoran/web/static")
+    for name in ("embed-coverage.js", "app.js"):
+        text = (static / name).read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if "bindTooltip(" not in line:
+                continue
+            assert "createTextNode" in line or line.rstrip().endswith("bindTooltip("), (
+                f"{name}: {line.strip()}"
+            )
+
+
+def test_a_tab_inside_an_origin_collapses_rather_than_splitting() -> None:
+    """`urlsplit` removes a tab, so it cannot separate two hosts.
+
+    Recorded because it looks like it should be refused and is not. The
+    answer is one hostname that resolves to nothing, which frames
+    nothing. It is not a way to name a second origin.
+    """
+    assert frame_ancestors(["https://a.com\tb.com"]) == "https://a.comb.com"

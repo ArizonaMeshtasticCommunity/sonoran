@@ -749,13 +749,18 @@ function flashTraffic(event) {
     : `relayed over ${event.hops_taken} ${event.hops_taken === 1 ? 'hop' : 'hops'}, `
       + 'path not recorded';
 
+  // A text node, never a string. Leaflet writes a string tooltip with
+  // innerHTML, and a display name is whatever the node's owner typed
+  // into their radio.
   parts[0].bindTooltip(
-    `${portnumLabel(event.portnum)} from ${event.from.display_name}, ` +
-    `uploaded by ${event.gateway.display_name}` +
-    (direct
-      ? `, direct${event.snr == null ? '' : `, ${round(event.snr, 1)} dB`}`
-      : `, ${hops}, so this line is not the route`) +
-    '. Click for the packet.',
+    document.createTextNode(
+      `${portnumLabel(event.portnum)} from ${event.from.display_name}, ` +
+      `uploaded by ${event.gateway.display_name}` +
+      (direct
+        ? `, direct${event.snr == null ? '' : `, ${round(event.snr, 1)} dB`}`
+        : `, ${hops}, so this line is not the route`) +
+      '. Click for the packet.',
+    ),
   );
   for (const part of parts) {
     part.on('click', () => { location.hash = packetHref(event).slice(1); });
@@ -876,9 +881,11 @@ function animateHop(hop, trace, delay) {
       { color: snrColour(hop.snr), weight: 3, opacity: 0.95 },
     ).addTo(mapState.traces);
     line.bindTooltip(
-      `${hop.from.display_name} to ${hop.to.display_name}` +
-      (hop.snr == null ? ', signal not measured' : `, ${round(hop.snr, 1)} dB`) +
-      '. Click for the whole traceroute.',
+      document.createTextNode(
+        `${hop.from.display_name} to ${hop.to.display_name}` +
+        (hop.snr == null ? ', signal not measured' : `, ${round(hop.snr, 1)} dB`) +
+        '. Click for the whole traceroute.',
+      ),
     );
     // Clickable while it is on the map. The same trace stays in the
     // side list afterwards, which is the part that does not expire.

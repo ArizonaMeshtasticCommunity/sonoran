@@ -2,10 +2,10 @@
 
 Three things are taken off a node before it goes out:
 
-- Every node that is not infrastructure. A router, a repeater, or an
-  MQTT gateway is a thing somebody chose to put on a hill and told the
-  mesh about. A client node is usually a person, often at home, and it
-  never appears here.
+- Every node that is not infrastructure. A router or a repeater is a
+  thing somebody chose to put on a hill and told the mesh about. A
+  client node is usually a person, often at home, and it never appears
+  here, whatever else it does.
 - The exact position. What is left is snapped to a grid, so the marker
   says which hill and not which building.
 - Every name but the short one, the hardware, the topic, and the time
@@ -17,6 +17,7 @@ which is a different audience.
 """
 
 import math
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -33,6 +34,20 @@ from sonoran.roles import INFRASTRUCTURE_ROLES
 # gateway below: "what a stranger may see" is not "what may transmit".
 PUBLIC_ROLES = INFRASTRUCTURE_ROLES
 
+# What a host may look like in a framing origin.
+#
+# `urlsplit` is not a validator. It keeps a space or a semicolon inside
+# the network location, and the answer here is put straight into a
+# `Content-Security-Policy` header, where `frame-ancestors` is the last
+# directive. A semicolon therefore starts a new one:
+#
+#     EMBED_FRAME_ANCESTORS='https://azmsh.net;script-src *'
+#
+# would have replaced the script policy of the embed with a wildcard.
+# A wildcard host is refused for the same reason: `https://*` lets any
+# site frame the page.
+HOST = re.compile(r"[A-Za-z0-9.\-]+(:\d{1,5})?")
+
 
 @dataclass(frozen=True)
 class PublicNode:
@@ -48,11 +63,22 @@ class PublicNode:
 def is_public_node(role: str | None, is_mqtt_gateway: bool) -> bool:
     """Return true when a node may appear on a public map.
 
-    A gateway counts whatever its role, because running one is a
-    deliberate act of infrastructure.
+    The role decides, and only the role. Being an MQTT gateway is not
+    enough and used to be.
+
+    The reason it used to be is that running a gateway reads like a
+    deliberate act of infrastructure. It is not one.
+    `ingest/handlers/presence.py` sets the flag for **any** node that
+    publishes a packet, and never clears it, so a person who turns the
+    MQTT uplink on in the radio on their kitchen table is marked a
+    gateway for ever. The rule put that kitchen on a public map, at a
+    kilometre, with no way to come off it.
+
+    A gateway that really is infrastructure has a role that says so and
+    still appears. `is_gateway` stays on the answer, because the map
+    draws a ring around one, but it no longer decides who is on it.
     """
-    if is_mqtt_gateway:
-        return True
+    del is_mqtt_gateway  # Named to say it is deliberately not used.
     return (role or "").upper() in PUBLIC_ROLES
 
 
@@ -111,7 +137,7 @@ def frame_ancestors(origins: Sequence[str]) -> str:
     safe: list[str] = []
     for origin in origins:
         parts = urlsplit(origin.strip())
-        if parts.scheme in {"http", "https"} and parts.netloc:
+        if parts.scheme in {"http", "https"} and HOST.fullmatch(parts.netloc):
             value = f"{parts.scheme}://{parts.netloc}"
             if value not in safe:
                 safe.append(value)

@@ -171,8 +171,12 @@ def parse_overrides(text: str) -> Overrides:
     """
     try:
         document = yaml.safe_load(text)
-    except yaml.YAMLError as error:
-        logger.error("the radio overrides file is not valid YAML, ignored: %s", error)
+    # `RecursionError` is not a `YAMLError`. A deeply nested document
+    # raises it out of the parser, and the API builds its overrides at
+    # start up, so an unguarded one takes the whole service down over a
+    # file somebody hand-edits.
+    except (yaml.YAMLError, RecursionError, ValueError) as error:
+        logger.error("the radio overrides file could not be read, ignored: %s", error)
         return EMPTY
 
     if document is None:

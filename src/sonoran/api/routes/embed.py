@@ -13,7 +13,6 @@ would take Web Serial and the whole navigation onto a third party page.
 public viewer sees. Nothing here reaches around it.
 """
 
-import json
 import time
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import HTMLResponse
 
 from sonoran.api.dependencies import get_session
+from sonoran.api.html import as_script_json
 from sonoran.config import Settings
 from sonoran.coverage import store
 from sonoran.db.models import Node
@@ -54,7 +54,16 @@ router = APIRouter(tags=["embed"], dependencies=[Depends(_require_enabled)])
 # hammers. The sites of a mesh change over hours, not seconds.
 NODE_CACHE_SECONDS = 300.0
 
+# And the same for the manifest.
+#
+# It is a file on disk, read and parsed inside the event loop, and it
+# carries up to `MANIFEST_NODE_LIMIT` site records for each preset. The
+# node list below was given a hold for exactly this reason; this
+# endpoint, which every embed load hits first, was not.
+SUMMARY_CACHE_SECONDS = 30.0
+
 _node_cache: tuple[float, list[dict[str, object]]] | None = None
+_summary_cache: tuple[float, dict[str, object]] | None = None
 
 STATIC_DIR = Path(__file__).parent.parent.parent / "web" / "static"
 
@@ -70,7 +79,7 @@ async def embed_page(settings: Settings = Depends(_require_enabled)) -> HTMLResp
         "mapCenter": [settings.map_default_lat, settings.map_default_lon],
         "mapZoom": settings.map_default_zoom,
     }
-    return HTMLResponse(html.replace("__SONORAN_EMBED_CONFIG__", json.dumps(config)))
+    return HTMLResponse(html.replace("__SONORAN_EMBED_CONFIG__", as_script_json(config)))
 
 
 @router.get("/api/embed/coverage")
@@ -81,6 +90,11 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
     tiles it was missing, and how long it took are all operational
     detail that a public page has no use for.
     """
+    global _summary_cache
+    now = time.monotonic()
+    if _summary_cache is not None and now - _summary_cache[0] < SUMMARY_CACHE_SECONDS:
+        return _summary_cache[1]
+
     manifest = store.read_manifest(settings)
     if manifest is None:
         return {"available": False, "presets": []}
@@ -98,7 +112,7 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
         for item in (raw_presets if isinstance(raw_presets, list) else [])
         if isinstance(item, dict)
     ]
-    return {
+    answer: dict[str, object] = {
         "available": True,
         "stamp": manifest.get("stamp"),
         "generated_at": manifest.get("generated_at"),
@@ -111,6 +125,8 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
         "has_landcover": manifest.get("has_landcover"),
         "presets": presets,
     }
+    _summary_cache = (now, answer)
+    return answer
 
 
 @router.get("/api/embed/nodes")
