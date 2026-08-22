@@ -133,7 +133,7 @@ async def read_peers(
             node_num=node.node_num,
             latitude=latitude,
             longitude=longitude,
-            profile=resolve_profile(identifier, node.hw_model, overrides),
+            profile=resolve_profile(identifier, node.hw_model, overrides, role=node.role),
             preset=preset,
         )
     return peers

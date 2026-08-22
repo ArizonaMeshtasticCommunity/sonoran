@@ -35,6 +35,27 @@ from sonoran.radio.overrides import EMPTY, NodeOverride, Overrides
 # further, so a tower must be named in the overrides file.
 DEFAULT_ANTENNA_HEIGHT_M = 3.0
 
+# The height to assume from a node's role, in metres.
+#
+# A router or a repeater is a sited asset. Somebody carried it up
+# something and bolted it down, and the whole point of the exercise was
+# height. Three metres describes the shed roof it is not on.
+#
+# This is an assumption and the profile says so: the source of the
+# value is `role`, not `override`, and the node page prints that beside
+# it. `AGENTS.md` 9.21 is the same discipline for a calibration
+# estimate. An operator who knows the real figure writes it in
+# `config/nodes.yaml` and that wins.
+#
+# Eight metres is deliberately modest. It is a two storey roof or a
+# short pole, not a tower, because a wrong guess upward draws coverage
+# that is not there and this file cannot tell a hilltop from a garden.
+ROLE_ANTENNA_HEIGHT_M: dict[str, float] = {
+    "ROUTER": 8.0,
+    "ROUTER_LATE": 8.0,
+    "REPEATER": 8.0,
+}
+
 # The loss between the radio and the antenna, in dB, when nobody says
 # otherwise.
 #
@@ -60,6 +81,8 @@ class Source(StrEnum):
     DEFAULT = "default"
     # A figure that follows from the hardware model.
     HARDWARE = "hardware"
+    # A figure assumed from what the node says it is for.
+    ROLE = "role"
     # A figure an operator wrote in the overrides file.
     OVERRIDE = "override"
     # A figure the calibration job measured.
@@ -120,6 +143,8 @@ def resolve_profile(
     hw_model: str | None,
     overrides: Overrides = EMPTY,
     calibration_offset_db: float | None = None,
+    *,
+    role: str | None = None,
 ) -> RadioProfile:
     """Return the radio profile of one node.
 
@@ -145,12 +170,14 @@ def resolve_profile(
         hardware.assumed_antenna_gain_dbi,
         Source.HARDWARE if not hardware.inferred else Source.DEFAULT,
     )
+    assumed_height = ROLE_ANTENNA_HEIGHT_M.get((role or "").upper(), DEFAULT_ANTENNA_HEIGHT_M)
+    height_source = Source.ROLE if assumed_height != DEFAULT_ANTENNA_HEIGHT_M else Source.DEFAULT
     height = _pick(
         sources,
         "antenna_height_m",
         override.antenna_height_m,
-        DEFAULT_ANTENNA_HEIGHT_M,
-        Source.DEFAULT,
+        assumed_height,
+        height_source,
     )
     cable = _pick(
         sources,

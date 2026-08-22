@@ -313,6 +313,27 @@ The machine this was measured on held 24 of the 64 terrain tiles the
 run wanted, so part of it predicted over flat ground. A deployment with
 the whole cache is slower than this, not faster.
 
+### 9.1.1 What the accuracy rules cost in area
+
+Measured on the development mesh, which is 17 nodes of which 4 are
+routers:
+
+| | Sites | Usable |
+|---|---|---|
+| Every positioned node, old clutter rule | 17 | 16,972 km² |
+| Infrastructure only | 4 | 4,813 km² |
+| ...and the clutter charged at both ends | 4 | 4,435 km² |
+| ...and a router assumed to be on a mast | 4 | 4,908 km² |
+
+The role test does most of it. The clutter takes off a further eight
+percent here and would take off much more over a city, because Arizona
+is mostly scrub and this seed is mostly not in Phoenix. The mast height
+puts eleven percent back, which is the one correction that goes the
+other way: a router really does reach further than a shed roof.
+
+A map that is a third of the size is not a worse map. The area it lost
+was never there.
+
 ### 9.2 What a run holds in memory
 
 Memory, not time, is what stops a large run. A three hundred node run

@@ -464,7 +464,9 @@ async def node_radio(
     settings = request.app.state.settings
     overrides = request.app.state.radio_overrides
     offsets = calibration_offsets(settings)
-    profile = resolve_profile(identifier, node.hw_model, overrides, offsets.get(identifier))
+    profile = resolve_profile(
+        identifier, node.hw_model, overrides, offsets.get(identifier), role=node.role
+    )
 
     return {
         "node_id": identifier,

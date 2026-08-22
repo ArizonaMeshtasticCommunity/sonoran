@@ -171,7 +171,11 @@ def group_by_preset(
             continue
         identifier = f"!{node.node_num:08x}"
         profile = resolve_profile(
-            identifier, node.hw_model, overrides, (offsets or {}).get(identifier)
+            identifier,
+            node.hw_model,
+            overrides,
+            (offsets or {}).get(identifier),
+            role=node.role,
         )
         latitude = node.last_lat
         longitude = node.last_lon

@@ -383,3 +383,44 @@ def test_a_mast_taller_than_the_clutter_is_above_it_whatever_the_file_says() -> 
     profile = resolve_profile("!a", "RAK4631", overrides)
     assert profile.above_clutter is False
     assert terminal_loss_db(10.0, profile.antenna_height_m, FREQUENCY, True) == 0.0
+
+
+# --- what a role implies about height -----------------------------------
+
+
+def test_a_router_is_assumed_to_be_on_something() -> None:
+    """A router is a sited asset and the point of it was height.
+
+    Three metres describes the shed roof it is not on. Eight is a two
+    storey roof or a short pole, and deliberately modest: a wrong guess
+    upward draws coverage that is not there.
+    """
+    profile = resolve_profile("!a", "RAK4631", role="ROUTER")
+    assert profile.antenna_height_m == 8.0
+    assert profile.sources["antenna_height_m"] == "role"
+
+
+def test_a_client_keeps_the_plain_default() -> None:
+    for role in (None, "CLIENT", "CLIENT_MUTE", "TRACKER"):
+        profile = resolve_profile("!a", "RAK4631", role=role)
+        assert profile.antenna_height_m == 3.0
+        assert profile.sources["antenna_height_m"] == "default"
+
+
+def test_an_operator_beats_the_assumption() -> None:
+    """The role height is a guess. A measured figure is not."""
+    overrides = Overrides({"!a": NodeOverride(antenna_height_m=30.0)})
+    profile = resolve_profile("!a", "RAK4631", overrides, role="ROUTER")
+    assert profile.antenna_height_m == 30.0
+    assert profile.sources["antenna_height_m"] == "override"
+
+
+def test_the_assumption_says_it_is_one() -> None:
+    """A number the page prints as a fact must be traceable to one.
+
+    `AGENTS.md` 9.21 says the same about a calibration estimate.
+    """
+    from sonoran.radio.resolve import ROLE_ANTENNA_HEIGHT_M, Source
+
+    assert Source.ROLE == "role"
+    assert set(ROLE_ANTENNA_HEIGHT_M) == {"ROUTER", "ROUTER_LATE", "REPEATER"}
