@@ -13,6 +13,7 @@ finished map:
   reach that does not exist.
 """
 
+import inspect
 import json
 import os
 import re
@@ -1024,3 +1025,60 @@ def test_the_niceness_reaches_the_workers(monkeypatch: pytest.MonkeyPatch, tmp_p
     source = inspect.getsource(coverage._predict)
     assert "initargs=(settings.coverage_worker_nice,)" in source
     assert "_be_nice" in inspect.getsource(coverage._worker_start)
+
+
+# --- naming the sites an operator has to fix ---------------------------
+#
+# The assumptions panel says "34 of those are routers whose position the
+# broker rounded off. Give each one a latitude and longitude in
+# config/nodes.yaml". A count is not an instruction: without the names
+# there is no way to act on it, and on the live mesh this is the single
+# biggest thing standing between the map and the other 34 sites.
+
+
+def test_the_page_writes_a_block_the_overrides_parser_accepts() -> None:
+    """The snippet is pasted into a real file and read by a real parser.
+
+    So the shape it writes has to be the shape `parse_overrides` reads.
+    These two are in different languages and nothing else connects
+    them, which is exactly how a format drifts.
+    """
+    from sonoran.radio.overrides import parse_overrides
+
+    script = (STATIC / "coverage.js").read_text(encoding="utf-8")
+    assert "function coarseYaml" in script
+
+    # The same lines the function builds, for the shape it builds them
+    # in. A change to one without the other fails here.
+    text = "\n".join(
+        [
+            "nodes:",
+            "  # Shaw Butte (ROUTER, 2,921 m out)",
+            '  "!0a51b007":',
+            "    latitude: 33.5891",
+            "    longitude: -112.0912",
+        ]
+    )
+    overrides = parse_overrides(text)
+    assert overrides.position_of("!0a51b007") == (33.5891, -112.0912)
+
+    # And the keys the script writes are the keys the parser reads.
+    assert "latitude: ${site.rounded_lat}" in script
+    assert "longitude: ${site.rounded_lon}" in script
+    assert '"${site.node_id}":' in script
+
+
+def test_the_named_list_is_bounded_and_the_count_is_not() -> None:
+    """Nobody fixes two hundred sites by hand.
+
+    The list is capped so the manifest stays small. The count in
+    `excluded_by_role` is the whole number, so a shortened list can
+    never read as the whole story.
+    """
+    from sonoran.jobs import coverage
+
+    assert coverage.COARSE_REPORT_LIMIT <= 100
+    source = inspect.getsource(coverage.group_by_preset)
+    # The counter is incremented before the cap is tested, so the cap
+    # cannot reach it.
+    assert source.index("rejected[COARSE_POSITION] += 1") < source.index("COARSE_REPORT_LIMIT")

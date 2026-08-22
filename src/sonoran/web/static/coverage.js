@@ -610,6 +610,72 @@
     );
   }
 
+  /*
+   * The nodes a run could not use because the broker rounded their
+   * position off, as a block to paste into config/nodes.yaml.
+   *
+   * The assumptions panel gives the count. A count is not an
+   * instruction: "give each one a latitude and longitude" is only
+   * followable if the page says which ones, and the rounded position
+   * is what there is to start from. Coarsest first, because the node
+   * that is 23 km out is the one moving the map most.
+   */
+  function coarseYaml(sites) {
+    const lines = ['nodes:'];
+    for (const site of sites) {
+      const off = site.deviation_m ? `${number(Math.round(site.deviation_m))} m out` : 'rounded';
+      lines.push(`  # ${site.display_name} (${site.role}, ${off})`);
+      lines.push(`  "${site.node_id}":`);
+      lines.push(`    latitude: ${site.rounded_lat}`);
+      lines.push(`    longitude: ${site.rounded_lon}`);
+    }
+    return lines.join('\n');
+  }
+
+  function drawCoarse(page) {
+    const panel = $('[data-coverage-coarse-panel]', page);
+    const host = $('[data-coverage-coarse]', page);
+    if (!panel || !host) return;
+    const sites = (state.summary && state.summary.coarse_sites) || [];
+    panel.hidden = !sites.length;
+    if (!sites.length) return;
+
+    const text = coarseYaml(sites);
+    // `.panel pre` and a plain button are already styled. Nothing new
+    // is needed in the stylesheet for this panel.
+    const copy = el('button', {
+      type: 'button',
+      text: 'Copy',
+      onclick: () => {
+        // The clipboard is not always there: an insecure origin has no
+        // navigator.clipboard at all. Say so rather than doing nothing.
+        const done = (ok) => {
+          copy.textContent = ok ? 'Copied' : 'Select and copy';
+          setTimeout(() => {
+            copy.textContent = 'Copy';
+          }, 2000);
+        };
+        if (!navigator.clipboard) {
+          done(false);
+          return;
+        }
+        navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+      },
+    });
+    replace(
+      host,
+      el(
+        'p',
+        { class: 'muted', style: 'font-size:.84rem' },
+        `${sites.length} named here, coarsest first. The position shown is the `
+          + 'rounded one, so it names the area and not the mast. Replace each with '
+          + 'the real one.',
+      ),
+      el('div', { style: 'margin:0 0 .5rem' }, copy),
+      el('pre', { text }),
+    );
+  }
+
   function drawSites(page) {
     const host = $('[data-coverage-sites]', page);
     if (!host) return;
@@ -681,6 +747,7 @@
     drawStats(page);
     drawDiagnosticBanner(page);
     drawAssumes(page);
+    drawCoarse(page);
     drawSites(page);
     drawBaseMap();
     drawTiles();
@@ -718,6 +785,7 @@
       );
       drawDiagnosticBanner(page);
     drawAssumes(page);
+    drawCoarse(page);
       return;
     }
     notice(page, '');

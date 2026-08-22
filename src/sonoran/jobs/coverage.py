@@ -72,7 +72,7 @@ from sonoran.db.session import make_engine, make_session_factory
 from sonoran.landcover.store import PAGE_SIZE, class_page, have_pages
 from sonoran.landcover.store import tile_name as landcover_tile_name
 from sonoran.logging import get_logger
-from sonoran.positions import is_precise_enough, is_usable
+from sonoran.positions import is_precise_enough, is_usable, precision_deviation_m
 from sonoran.radio.overrides import EMPTY as EMPTY_OVERRIDES
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
@@ -99,6 +99,13 @@ MANIFEST_NODE_LIMIT = 250
 # It sits beside the role names in the same report. A role can never
 # take this value, so the two cannot collide.
 COARSE_POSITION = "coarse-position"
+
+# How many coarse sites the manifest names.
+#
+# The list exists so an operator can fix them, and nobody fixes two
+# hundred by hand. The count beside it is always the whole number, so a
+# shortened list cannot read as the whole story.
+COARSE_REPORT_LIMIT = 50
 
 
 def worker_count(settings: Settings) -> int:
@@ -146,9 +153,9 @@ def group_by_preset(
     nodes: Sequence[Node],
     overrides: Overrides,
     offsets: dict[str, float] | None = None,
-) -> tuple[dict[str, list[Site]], dict[str, Counter[str]]]:
-    """Return the sites of each preset, strongest first, and what was
-    left out of each.
+) -> tuple[dict[str, list[Site]], dict[str, Counter[str]], list[dict[str, object]]]:
+    """Return the sites of each preset, strongest first, what was left
+    out of each, and the nodes left out for a coarse position.
 
     A node whose channel is not a preset name rides on top of a preset
     and does not name one. Weather and PKI are the examples this mesh
@@ -172,6 +179,7 @@ def group_by_preset(
     allowed = parse_site_roles(settings.coverage_site_roles)
     groups: dict[str, list[Site]] = {}
     left_out: dict[str, Counter[str]] = {}
+    coarse: list[dict[str, object]] = []
     for node in nodes:
         preset = preset_for_channel(node.last_channel)
         if preset is None:
@@ -191,6 +199,27 @@ def group_by_preset(
             # A footprint drawn around it would describe ground that
             # may have no radio on it. See `sonoran/positions.py`.
             rejected[COARSE_POSITION] += 1
+            # And keep it, so the page can name it. Telling an operator
+            # to write a position for "34 of those" and not saying
+            # which is not an instruction anybody can follow. The
+            # rounded position is what there is, and it is enough to
+            # recognise a site by.
+            if (
+                len(coarse) < COARSE_REPORT_LIMIT
+                and node.last_lat is not None
+                and node.last_lon is not None
+            ):
+                coarse.append(
+                    {
+                        "node_id": identifier,
+                        "display_name": node.long_name or node.short_name or identifier,
+                        "role": role_name(node.role),
+                        "precision_bits": node.last_position_precision_bits,
+                        "deviation_m": precision_deviation_m(node.last_position_precision_bits),
+                        "rounded_lat": round(node.last_lat, 4),
+                        "rounded_lon": round(node.last_lon, 4),
+                    }
+                )
             continue
         profile = resolve_profile(
             identifier,
@@ -216,7 +245,10 @@ def group_by_preset(
 
     for sites in groups.values():
         sites.sort(key=lambda site: site.sort_key, reverse=True)
-    return groups, left_out
+    # Coarsest first. That is the order to fix them in: the node whose
+    # position is 23 km out is the one moving the map most.
+    coarse.sort(key=lambda item: -float(item["deviation_m"] or 0.0))  # type: ignore[arg-type]
+    return groups, left_out, coarse
 
 
 def _tile_name(latitude: int, longitude: int) -> str:
@@ -691,6 +723,7 @@ def _build(
     settings: Settings,
     groups: dict[str, list[Site]],
     left_out: dict[str, Counter[str]],
+    coarse: list[dict[str, object]],
     held_terrain: set[str],
     stamp: str,
     workers: int,
@@ -802,6 +835,7 @@ def _build(
         # from a diagnostic one.
         site_roles=sorted(allowed) if allowed is not None else [EVERY_ROLE],
         is_diagnostic=allowed != INFRASTRUCTURE_ROLES,
+        coarse_sites=coarse,
         calibrated_nodes=sum(
             1 for sites in groups.values() for site in sites if site.profile.is_measured
         ),
@@ -826,7 +860,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     offsets = store.calibration_offsets(settings)
     if offsets:
         logger.info("%s nodes carry a measured correction", len(offsets))
-    groups, left_out = group_by_preset(settings, nodes, overrides, offsets)
+    groups, left_out, coarse = group_by_preset(settings, nodes, overrides, offsets)
     if not groups:
         dropped = sum(sum(counts.values()) for counts in left_out.values())
         logger.info(
@@ -851,7 +885,9 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     stamp = store.new_stamp()
     workers = worker_count(settings)
     logger.info("predicting with %s worker processes", workers)
-    manifest = await asyncio.to_thread(_build, settings, groups, left_out, held, stamp, workers)
+    manifest = await asyncio.to_thread(
+        _build, settings, groups, left_out, coarse, held, stamp, workers
+    )
     store.publish(settings, stamp, manifest)
     return manifest
 

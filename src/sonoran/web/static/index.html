@@ -203,6 +203,18 @@
             <div data-coverage-assumes></div>
           </div>
 
+          <!-- Only drawn when a run left a site out for a coarse
+               position. See drawCoarse in coverage.js. -->
+          <div class="panel" data-coverage-coarse-panel hidden>
+            <h3>Routers that need a position</h3>
+            <p class="sub" style="margin: 0 0 .6rem">
+              The broker rounded these off too far to predict from. Paste the block
+              into <code>config/nodes.yaml</code>, correct each latitude and longitude,
+              and they become sites on the next run.
+            </p>
+            <div data-coverage-coarse></div>
+          </div>
+
           <div class="panel">
             <h3>Measured against predicted</h3>
             <p class="sub" style="margin: 0 0 .6rem">

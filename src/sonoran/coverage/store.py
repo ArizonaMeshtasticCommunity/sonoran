@@ -146,6 +146,17 @@ class Manifest:
     # label the map. See `sonoran/roles.py`.
     site_roles: list[str] = field(default_factory=list)
     is_diagnostic: bool = False
+    # The nodes left out because the broker rounded their position off.
+    #
+    # A count alone is not actionable. The page tells an operator to
+    # write a position in `config/nodes.yaml` for each of these, and
+    # "34 of those" is not an instruction anybody can follow. Each
+    # entry carries the rounded position, which is enough to recognise
+    # a site by, and the deviation, which says how wrong it is.
+    #
+    # Bounded by `COARSE_REPORT_LIMIT`. The count in
+    # `PresetSummary.excluded_by_role` is always the whole number.
+    coarse_sites: list[dict[str, object]] = field(default_factory=list)
     data_bounds: list[float] | None = None
     presets: list[PresetSummary] = field(default_factory=list)
 

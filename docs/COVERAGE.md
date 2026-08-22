@@ -484,8 +484,21 @@ on either side of a ridge at that distance. The map would claim ground
 nobody can use, which is the failure this whole page is about.
 
 The way to have both is the overrides file. An operator knows where
-their own router is, and a position given there is used as exact. The
-page names the count and says so.
+their own router is, and a position given there is used as exact.
+
+**And the page names them, not just the count.** "Give each one a
+latitude and longitude in config/nodes.yaml" is not something anybody
+can act on without knowing which ones. The manifest carries
+`coarse_sites` — up to `COARSE_REPORT_LIMIT` of them, coarsest first —
+and the coverage page renders a block ready to paste into
+`config/nodes.yaml`, with the rounded position filled in as a starting
+point and the deviation in the comment beside each name.
+
+The rounded position names the area and not the mast, so each one
+still has to be corrected by somebody who knows the site. It saves the
+looking up, not the knowing. A test pins that the block the page
+writes is the shape `parse_overrides` reads, because the two are in
+different languages and nothing else connects them.
 
 `COVERAGE_MIN_PRECISION_BITS` may be set to zero by a deployment that
 reads its own broker, where every position arrives at full precision.
