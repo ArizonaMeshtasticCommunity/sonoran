@@ -569,6 +569,25 @@ div.check { cursor: default; }
 
 .coverage-layers { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .85rem; }
 
+.coverage-opacity {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  margin: -.35rem 0 .8rem;
+  font-size: .76rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.coverage-opacity input[type="range"] {
+  width: 9rem;
+  max-width: 45vw;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.coverage-opacity input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
+.coverage-opacity-value { font-variant-numeric: tabular-nums; min-width: 2.6rem; }
+
 .coverage-view-controls {
   display: flex;
   flex-wrap: wrap;

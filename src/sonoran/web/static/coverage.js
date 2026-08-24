@@ -33,6 +33,30 @@
    */
   const DEFAULT_LAYER = 'usable';
 
+  // How see-through the signal layer is drawn, 0 to 1. This is the
+  // viewer's own choice, not the deployment's: it restyles the tiles
+  // already in their browser and touches nothing on the server and no
+  // other viewer. Kept in localStorage so their choice survives a
+  // reload; a viewer who has never touched it opens fully opaque. See
+  // `recallOpacity`.
+  const OPACITY_KEY = 'sonoran.coverage.signalOpacity';
+
+  function recallOpacity() {
+    try {
+      const saved = Number(localStorage.getItem(OPACITY_KEY));
+      // Honour a saved level only when it is a real fraction the map is
+      // still visible at. Nothing saved, a zero, or junk all mean "open
+      // fully opaque": a first visit should show all of the signal, and
+      // a saved zero would reopen to a blank map that looks broken.
+      // Hiding the signal outright is the "Signal strength" toggle's
+      // job, not a persisted opacity of nothing.
+      if (Number.isFinite(saved) && saved > 0 && saved <= 1) return saved;
+    } catch {
+      // Storage off or unreadable. The default stands.
+    }
+    return 1;
+  }
+
   const state = {
     map: null,
     baseTiles: null,
@@ -47,6 +71,9 @@
     showMap: true,
     showNodes: true,
     showSignal: true,
+    // First visit opens fully opaque; after that, whatever the viewer
+    // last set. See `recallOpacity`.
+    signalOpacity: recallOpacity(),
     loaded: false,
   };
 
@@ -217,7 +244,7 @@
           [summary.bounds[0], summary.bounds[1]],
           [summary.bounds[2], summary.bounds[3]],
         ),
-        opacity: 1,
+        opacity: state.signalOpacity,
         // A tile that was never written is ground no node reaches. That
         // is a 404 and it must not log an error for every empty square.
         errorTileUrl:
@@ -293,7 +320,26 @@
     }
     if (request !== state.nodeRequest || preset !== state.preset || !state.showNodes) return;
 
-    for (const node of rows) {
+    /* Draw only the nodes the map on show was predicted from, so the
+       dots agree with the banner and the site set. The infrastructure
+       view draws routers and repeaters; the extended view adds the
+       nodes that repeat. A CLIENT_MUTE, a tracker or an unintroduced
+       (roleless) node the prediction left out is left off the map too,
+       instead of sitting on a footprint it did not contribute to.
+
+       A deployment-wide diagnostic run names every role (EVERY_ROLE,
+       "ALL"), and then nothing is filtered and every node is drawn. */
+    const roles = shownRoles();
+    const allowed = new Set(roles);
+    /* Fail open. An empty set means the roles could not be read at all
+       (an old manifest with no site_roles, say), and hiding every node
+       then is the wrong failure: the overlay is there to be read, so an
+       unknown role set draws everything rather than nothing. */
+    const shown = (!allowed.size || allowed.has('ALL'))
+      ? rows
+      : rows.filter((node) => node.role && allowed.has(node.role));
+
+    for (const node of shown) {
       if (node.lat == null || node.lon == null) continue;
       L.circleMarker([node.lat, node.lon], nodeStyle(node))
         .bindPopup(nodePopup(node))
@@ -349,11 +395,25 @@
             if (key === 'showSignal') {
               drawTiles();
               drawLegend(page);
+              drawOpacity(page);
             }
           },
         }),
       ),
     );
+  }
+
+  /* Keep the opacity slider in step with the state, and dim it when
+     the signal layer is off, because it has nothing to act on then.
+     The slider is the viewer's control: it never leaves the browser. */
+  function drawOpacity(page) {
+    const input = $('[data-coverage-opacity]', page);
+    if (!input) return;
+    const pct = Math.round(state.signalOpacity * 100);
+    input.value = String(pct);
+    input.disabled = !state.showSignal;
+    const out = $('[data-coverage-opacity-value]', page);
+    if (out) out.textContent = `${pct}%`;
   }
 
   function drawSiteSets(page) {
@@ -842,6 +902,7 @@
     drawPresets(page);
     drawLayers(page);
     drawViews(page);
+    drawOpacity(page);
     drawLegend(page);
     drawStats(page);
     drawDiagnosticBanner(page);
@@ -908,15 +969,42 @@
           drawAll(page);
         });
       }
+      const opacity = $('[data-coverage-opacity]', page);
+      if (opacity) {
+        opacity.addEventListener('input', () => {
+          const pct = Number(opacity.value);
+          state.signalOpacity = Number.isFinite(pct) ? pct / 100 : 1;
+          const out = $('[data-coverage-opacity-value]', page);
+          if (out) out.textContent = `${Math.round(state.signalOpacity * 100)}%`;
+          /* setOpacity restyles the tiles already on the map, so
+             dragging refetches nothing. drawTiles is not called. */
+          if (state.tiles) state.tiles.setOpacity(state.signalOpacity);
+          try {
+            // Remember a level the map is visible at; a zero is not a
+            // preference to keep, so it clears back to the default.
+            if (state.signalOpacity > 0) {
+              localStorage.setItem(OPACITY_KEY, String(state.signalOpacity));
+            } else {
+              localStorage.removeItem(OPACITY_KEY);
+            }
+          } catch {
+            // Storage off. The slider still works for this visit.
+          }
+        });
+      }
       const setPicker = $('[data-coverage-siteset]', page);
       if (setPicker) {
         setPicker.addEventListener('change', () => {
           state.siteSet = setPicker.value;
           /* The two sets need not carry the same presets: a preset
              whose only nodes are clients exists in one and not the
-             other. Drop the choice and let it settle again. */
-          if (!presetOf(summary, state.preset)) state.preset = null;
-          state.nodeRows.clear();
+             other. If the chosen preset is not in the new set, land on
+             the busiest one there, never on nothing, or the map goes
+             blank with a preset still named in the picker. */
+          if (!presetOf(summary, state.preset)) state.preset = busiestPreset(summary);
+          /* The node rows are keyed on preset, not on the site set, so
+             they survive a set switch. Only the role filter in
+             drawNodes changes, and it runs again from the cache. */
           drawAll(page);
         });
       }
