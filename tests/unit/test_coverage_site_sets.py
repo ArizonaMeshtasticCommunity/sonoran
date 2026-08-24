@@ -211,3 +211,35 @@ class TestTheDashboardLabelsWhatItShows:
         block = source.split("function drawSiteSets(")[1].split("function ")[0]
         assert "sets.length < 2" in block
         assert "wrap.hidden = true" in block
+
+
+class TestTheNavIcon:
+    """Every page in the sidebar shows an icon."""
+
+    def _html(self) -> str:
+        from pathlib import Path
+
+        return Path("src/sonoran/web/static/index.html").read_text(encoding="utf-8")
+
+    def test_every_nav_link_uses_the_icon_class(self) -> None:
+        """`.sprite` is `display: none`. It hides the sprite sheet, and it
+        hid the coverage icon for as long as the link carried it."""
+        import re
+
+        html = self._html()
+        nav = html.split("<nav aria-label=", 1)[1].split("</nav>", 1)[0]
+        links = re.findall(r"<a href=\"#[^\"]+\"[^>]*>(.*?)</a>", nav, re.S)
+        assert links, "no nav links found"
+        for link in links:
+            assert 'class="icon"' in link, link.strip()[:80]
+            assert 'class="sprite"' not in link, link.strip()[:80]
+
+    def test_every_nav_icon_names_a_symbol_that_exists(self) -> None:
+        import re
+
+        html = self._html()
+        defined = set(re.findall(r'<symbol id="(i-[a-z-]+)"', html))
+        nav = html.split("<nav aria-label=", 1)[1].split("</nav>", 1)[0]
+        used = set(re.findall(r'<use href="#(i-[a-z-]+)"', nav))
+        assert used, "no nav icons found"
+        assert used <= defined, f"missing symbols: {sorted(used - defined)}"

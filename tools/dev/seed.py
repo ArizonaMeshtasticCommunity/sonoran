@@ -261,7 +261,22 @@ LINKS = [
     (0x0A51A005, 0x0A51B009, 1.25),
 ]
 
-CHANNELS = ["LongFast", "LongFast", "LongFast", "azmsh", "MediumSlow", "AZ-Weather"]
+# The Arizona mesh runs MediumFast, not the Meshtastic default.
+#
+# Measured: the WisMesh Station gateway has MediumFast as its primary
+# channel, and Arizona-region nodes on the public broker run 174
+# MediumFast against 41 LongFast. A seed that claims to be an Arizona
+# mesh and shows LongFast sends a reader to the wrong preset picker
+# before they have looked at anything.
+#
+# Some LongFast is kept on purpose. A mesh really does carry both, the
+# preset picker only means something with more than one, and AGENTS.md
+# 9.7 is the rule the picker exists to keep: a node on one preset
+# cannot hear a node on another, so the two must never be drawn
+# together.
+PRIMARY_PRESET = "MediumFast"
+SECONDARY_PRESET = "LongFast"
+CHANNELS = [PRIMARY_PRESET, PRIMARY_PRESET, PRIMARY_PRESET, "azmsh", "MediumSlow", "AZ-Weather"]
 
 MESSAGES = [
     "Morning net check-in from the south valley.",
@@ -317,6 +332,9 @@ async def main() -> None:
         # Nodes.
         for num, short, long_name, hw, role, lat, lon, alt, gw in NODES:
             heard = NOW - timedelta(minutes=RNG.randint(1, 240))
+            # Roughly one node in five is on the other preset, which is
+            # about the ratio the live mesh has.
+            node_channel = SECONDARY_PRESET if num % 5 == 0 else PRIMARY_PRESET
             await conn.execute(
                 text(
                     """
@@ -327,7 +345,7 @@ async def main() -> None:
                         first_seen, updated_at)
                     VALUES (:num, :nid, :long, :short, :hw, :role, false,
                         :lat, :lon, :alt, :ptime, :heard, :gw, :topic,
-                        'LongFast', :first, :heard)
+                        :node_channel, :first, :heard)
                     """
                 ),
                 {
@@ -343,7 +361,8 @@ async def main() -> None:
                     "ptime": heard,
                     "heard": heard,
                     "gw": gw,
-                    "topic": "msh/US/AZ/2/e/LongFast/" + node_id(num),
+                    "node_channel": node_channel,
+                    "topic": f"msh/US/AZ/2/e/{node_channel}/" + node_id(num),
                     "first": NOW - timedelta(days=RNG.randint(30, 400)),
                 },
             )
