@@ -55,7 +55,7 @@
           <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a>
           <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
           <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg>Coverage planner</a>
-          <a href="#coverage" data-nav="coverage"><svg class="sprite" aria-hidden="true"><use href="#i-coverage" /></svg>Coverage map</a>
+          <a href="#coverage" data-nav="coverage"><svg class="icon" aria-hidden="true"><use href="#i-coverage"/></svg>Coverage map</a>
           <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg>Config check</a>
           <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg>Mesh graph</a>
           <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg>Nodes</a>
@@ -172,6 +172,11 @@
               <p class="sub" data-coverage-sub>Where the mesh reaches, predicted from the routers and repeaters that carry it.</p>
             </div>
             <div class="controls">
+              <!-- Only shown when the run published more than one site
+                   set, which needs COVERAGE_INCLUDE_CLIENTS. -->
+              <label class="coverage-pick" data-coverage-siteset-wrap hidden>Predict from
+                <select data-coverage-siteset></select>
+              </label>
               <label class="coverage-pick">Preset
                 <select data-coverage-preset></select>
               </label>

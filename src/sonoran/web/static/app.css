@@ -194,7 +194,7 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 }
 .panel.span-2 { grid-column: 1 / -1; }
 
-.stat { display: flex; flex-direction: column; gap: .2rem; }
+.stat { display: flex; flex-direction: column; gap: .3rem; padding: 1.15rem 1.2rem; }
 .stat .value { font-size: 1.9rem; font-weight: 650; line-height: 1.1; }
 .stat .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
 .stat .delta { font-size: .78rem; color: var(--muted); }
@@ -548,6 +548,22 @@ div.check { cursor: default; }
 /* Coverage map */
 
 #coverage-map { height: min(70vh, 40rem); width: 100%; }
+
+/* Vertical rhythm down the coverage page.
+ *
+ * `.map-shell`, `.grid` and `.panel` all carry no margin of their own,
+ * because most pages space their sections with a grid gap. This page
+ * stacks them directly instead, so without this the map, the stats and
+ * the panels below meet with no gap at all and the page reads as one
+ * block pressed against its borders.
+ *
+ * The map keeps a slightly wider gap beneath it than the panels keep
+ * between themselves: it is the tallest thing on the page and the eye
+ * needs more of a break after it. */
+.page[data-page="coverage"] > .map-shell { margin-bottom: 1.35rem; }
+.page[data-page="coverage"] > .grid,
+.page[data-page="coverage"] > .panel { margin-bottom: 1.1rem; }
+.page[data-page="coverage"] > :last-child { margin-bottom: 0; }
 
 .coverage-pick { display: flex; align-items: center; gap: .45rem; font-size: .85rem; color: var(--muted); }
 

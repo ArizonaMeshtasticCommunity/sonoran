@@ -568,6 +568,40 @@ one. If the public role test read `COVERAGE_SITE_ROLES`, one
 environment variable would put the whole mesh on a public map.
 `test_a_diagnostic_run_can_never_widen_the_public_map` pins it.
 
+### 9.27 A run can publish more than one map, and only one is public
+
+`COVERAGE_INCLUDE_CLIENTS` makes a run predict a second map from the
+nodes that repeat traffic without being infrastructure: `CLIENT`,
+`CLIENT_BASE` and `ROUTER_CLIENT`. It answers a real question, which is
+why a neighbourhood works where no router covers it.
+
+Three things hold it apart from the public map, and each one is
+load-bearing:
+
+1. The tile path carries the site set:
+   `{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`. Two maps of the same
+   preset are different answers and must never share a tile.
+2. `Manifest.presets` and `Manifest.is_diagnostic` stay the
+   **infrastructure** map. A reader that takes them without asking for
+   a site set gets the narrow answer, and `/api/embed/coverage` is that
+   reader. `Manifest.site_sets` carries every map, and the dashboard
+   reads it.
+3. `web/static/embed-coverage.js` names the site set as a constant,
+   never from the summary it was handed. A manifest that somehow named
+   another set still cannot move the public tiles.
+
+`EXTENDED_ROLES` is not a subset of `INFRASTRUCTURE_ROLES`, so
+`is_diagnostic_role_set` already calls the wider map diagnostic and
+`/api/embed/coverage` already refuses a diagnostic run. That is the
+first lock, and it was there before this feature.
+
+Membership of the set is quoted from `meshtastic/config.proto` in
+`sonoran/roles.py`, never inferred. `CLIENT_MUTE` is out because the
+proto says it "does not forward packets from other devices". `SENSOR`,
+`TAK` and `LOST_AND_FOUND` are out because the proto never says whether
+they forward, and this project does not assert what the vendor did not
+state. `TRACKER` and `TAK_TRACKER` are out because they move.
+
 ### 9.17 The config check page imports vendored logic and its globals
 
 `web/static/vendor/config-checker/` is a copy of the community config

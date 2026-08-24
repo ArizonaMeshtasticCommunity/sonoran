@@ -154,6 +154,20 @@ class Settings(BaseSettings):
     # dashboard and the public embed label it rather than passing it
     # off as coverage. See `sonoran/roles.py`.
     coverage_site_roles: str = "ROUTER,ROUTER_LATE,REPEATER"
+    # Also predict a second, wider map that includes the ordinary nodes
+    # which repeat traffic: CLIENT, CLIENT_BASE and ROUTER_CLIENT.
+    #
+    # Off by default, and the cost is why. A run predicts from every
+    # site it is given, so turning this on multiplies the work by
+    # however many clients the mesh has. On the Arizona mesh that is
+    # about fifty infrastructure nodes against nine hundred clients,
+    # capped by COVERAGE_MAX_NODES.
+    #
+    # When it is on, both maps are published and the dashboard offers a
+    # picker. The infrastructure map stays the default view, and it is
+    # the only one the public embed will ever serve, whatever this is
+    # set to. See `sonoran/roles.py` and `AGENTS.md` 9.25.
+    coverage_include_clients: bool = False
     # How many worker processes predict at once. Zero means as many
     # as the machine has, less one, so the jobs process keeps a core
     # for everything else it does.
