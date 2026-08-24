@@ -772,8 +772,12 @@ def _build_site_set(
             continue
         preset: ModemPreset = sites[0].preset
         chosen = sites[: settings.coverage_max_nodes]
+        # Name the site set. A run that publishes two maps logs this
+        # line twice, and without the set the two are indistinguishable
+        # while being the whole point of the feature.
         logger.info(
-            "preset %s: %s sites, %s nodes left out by role",
+            "%s, preset %s: %s sites, %s nodes left out by role",
+            site_set,
             preset.name,
             len(chosen),
             sum(rejected.values()),
