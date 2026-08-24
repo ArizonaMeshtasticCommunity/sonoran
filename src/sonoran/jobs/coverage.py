@@ -26,6 +26,7 @@ from collections import Counter, OrderedDict
 from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -79,10 +80,14 @@ from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
 from sonoran.roles import (
     EVERY_ROLE,
+    SITE_SET_EXTENDED,
+    SITE_SET_INFRASTRUCTURE,
+    SITE_SET_LABELS,
     is_diagnostic_role_set,
     is_site_role,
     parse_site_roles,
     role_name,
+    site_set_roles,
 )
 from sonoran.terrain.store import coordinates_in_region, load_page, read_cached_page
 
@@ -153,6 +158,7 @@ def group_by_preset(
     nodes: Sequence[Node],
     overrides: Overrides,
     offsets: dict[str, float] | None = None,
+    allowed: frozenset[str] | None = None,
 ) -> tuple[dict[str, list[Site]], dict[str, Counter[str]], list[dict[str, object]]]:
     """Return the sites of each preset, strongest first, what was left
     out of each, and the nodes left out for a coarse position.
@@ -176,7 +182,12 @@ def group_by_preset(
     because the manifest has to report them. A run that quietly drops
     nine nodes in ten must say so on the page.
     """
-    allowed = parse_site_roles(settings.coverage_site_roles)
+    # `allowed` of None here means "read the setting", which is the
+    # single-map case. It is not the same as `parse_site_roles`
+    # returning None, which means every role. The sentinel is resolved
+    # before anything reads it, so the two never meet.
+    if allowed is None:
+        allowed = parse_site_roles(settings.coverage_site_roles)
     groups: dict[str, list[Site]] = {}
     left_out: dict[str, Counter[str]] = {}
     coarse: list[dict[str, object]] = []
@@ -596,6 +607,7 @@ def _predict(
 def render_layer(
     root: Path,
     preset: str,
+    site_set: str,
     layer: str,
     levels: Levels,
     grid: Grid,
@@ -616,7 +628,9 @@ def render_layer(
             image = colour_levels(patch, threshold)
             if not image[..., 3].any():
                 continue
-            store.write_tile(root, preset, layer, tile.zoom, tile.x, tile.y, write_png(image))
+            store.write_tile(
+                root, preset, site_set, layer, tile.zoom, tile.x, tile.y, write_png(image)
+            )
             written += 1
     return written
 
@@ -719,40 +733,32 @@ def _empty_summary(key: str, rejected: "Counter[str]") -> store.PresetSummary:
     )
 
 
-def _build(
+@dataclass(frozen=True)
+class SiteSetPlan:
+    """One map to build: which roles, and the sites they gave."""
+
+    key: str
+    label: str
+    allowed: frozenset[str] | None
+    groups: dict[str, list[Site]]
+    left_out: dict[str, Counter[str]]
+    coarse: list[dict[str, object]]
+
+
+def _build_site_set(
     settings: Settings,
-    groups: dict[str, list[Site]],
-    left_out: dict[str, Counter[str]],
-    coarse: list[dict[str, object]],
-    held_terrain: set[str],
-    stamp: str,
+    plan: SiteSetPlan,
+    grid: Grid,
+    rx_loss: Levels | None,
+    root: Path,
     workers: int,
-) -> store.Manifest:
-    """Run every preset and write its tiles. This holds the processor."""
-    started = time.monotonic()
-    # Read again rather than passed in. `group_by_preset` reads the same
-    # setting to decide, and the manifest has to report what was
-    # actually used, so the two must come from one source.
-    allowed = parse_site_roles(settings.coverage_site_roles)
-    grid = region_grid(
-        settings.terrain_lat_min,
-        settings.terrain_lat_max,
-        settings.terrain_lon_min,
-        settings.terrain_lon_max,
-    )
-    # Clear anything a previous run left behind. See
-    # `store.clear_pending`: a run that dies is never published, so
-    # nothing else would ever remove it.
-    store.clear_pending(settings, keep=stamp)
-    root = store.pending_dir(settings, stamp)
-    root.mkdir(parents=True, exist_ok=True)
-
+    missing_all: set[str],
+) -> list[store.PresetSummary]:
+    """Run every preset of one site set and write its tiles."""
+    site_set = plan.key
+    groups = plan.groups
+    left_out = plan.left_out
     summaries: list[store.PresetSummary] = []
-    missing_all: set[str] = set()
-    # The receiving end does not change with the preset, so it is built
-    # once for the whole run.
-    rx_loss, missing_landcover = receiver_loss(settings, grid)
-
     # Every preset that had a candidate, not only every preset that
     # kept one. A preset whose nodes were all clients used to vanish
     # from the manifest entirely, which is the opposite of what the
@@ -789,7 +795,9 @@ def _build(
             ("downlink", downlink),
             ("uplink", uplink),
         ):
-            tiles += render_layer(root, preset.name, layer, levels, grid, settings, threshold)
+            tiles += render_layer(
+                root, preset.name, site_set, layer, levels, grid, settings, threshold
+            )
 
         summaries.append(
             store.PresetSummary(
@@ -812,6 +820,66 @@ def _build(
         # named while the next preset makes two more is most of a
         # gigabyte for nothing.
         del downlink, uplink, usable
+
+    return summaries
+
+
+def _build(
+    settings: Settings,
+    plans: list[SiteSetPlan],
+    held_terrain: set[str],
+    stamp: str,
+    workers: int,
+) -> store.Manifest:
+    """Run every site set and every preset, and write the tiles.
+
+    This holds the processor. One grid and one receiver-loss field are
+    made for the whole run and shared by every site set: a region grid
+    of Arizona is 88 MB and the receiving end does not change with the
+    site set any more than it changes with the preset.
+    """
+    started = time.monotonic()
+    # The first plan is the infrastructure one. Its groups and its
+    # roles are what the manifest reports at the top level, so that a
+    # reader who takes `presets` without asking for a site set gets the
+    # narrow answer. See `AGENTS.md` 9.25.
+    allowed = plans[0].allowed
+    groups = plans[0].groups
+    coarse = plans[0].coarse
+    grid = region_grid(
+        settings.terrain_lat_min,
+        settings.terrain_lat_max,
+        settings.terrain_lon_min,
+        settings.terrain_lon_max,
+    )
+    # Clear anything a previous run left behind. See
+    # `store.clear_pending`: a run that dies is never published, so
+    # nothing else would ever remove it.
+    store.clear_pending(settings, keep=stamp)
+    root = store.pending_dir(settings, stamp)
+    root.mkdir(parents=True, exist_ok=True)
+
+    missing_all: set[str] = set()
+    # The receiving end does not change with the preset or with the
+    # site set, so it is built once for the whole run.
+    rx_loss, missing_landcover = receiver_loss(settings, grid)
+
+    set_summaries: list[store.SiteSetSummary] = []
+    for plan in plans:
+        summaries = _build_site_set(settings, plan, grid, rx_loss, root, workers, missing_all)
+        set_summaries.append(
+            store.SiteSetSummary(
+                key=plan.key,
+                label=plan.label,
+                site_roles=sorted(plan.allowed) if plan.allowed is not None else [EVERY_ROLE],
+                is_diagnostic=is_diagnostic_role_set(plan.allowed),
+                presets=summaries,
+                data_bounds=union_bounds([item.data_bounds or [] for item in summaries]),
+            )
+        )
+
+    # The infrastructure set is the top-level answer.
+    summaries = set_summaries[0].presets
 
     return store.Manifest(
         stamp=stamp,
@@ -843,7 +911,54 @@ def _build(
         seconds=round(time.monotonic() - started, 1),
         data_bounds=union_bounds([item.data_bounds or [] for item in summaries]),
         presets=summaries,
+        site_sets=set_summaries,
     )
+
+
+def _plans(
+    settings: Settings,
+    nodes: Sequence[Node],
+    overrides: Overrides,
+    offsets: dict[str, float] | None,
+) -> list[SiteSetPlan]:
+    """Return the maps this run will build, the narrow one first.
+
+    The infrastructure map is always built. The wider one is built as
+    well when `COVERAGE_INCLUDE_CLIENTS` is on, and it predicts from
+    the nodes that repeat traffic without being infrastructure. See
+    `sonoran/roles.py` for what is in that set and what the firmware
+    says about each one.
+
+    The order matters. `_build` reports the first plan at the top level
+    of the manifest, so a reader who takes `presets` without asking for
+    a site set gets the infrastructure answer.
+
+    A deployment that has set `COVERAGE_SITE_ROLES` to something of its
+    own keeps it: that setting is what the first plan uses, so a
+    diagnostic run of every role still behaves exactly as before.
+    """
+    wanted: list[tuple[str, frozenset[str] | None]] = [
+        (SITE_SET_INFRASTRUCTURE, parse_site_roles(settings.coverage_site_roles))
+    ]
+    if settings.coverage_include_clients:
+        wanted.append((SITE_SET_EXTENDED, site_set_roles(SITE_SET_EXTENDED)))
+
+    plans: list[SiteSetPlan] = []
+    for key, allowed in wanted:
+        groups, left_out, coarse = group_by_preset(
+            settings, nodes, overrides, offsets, allowed=allowed
+        )
+        plans.append(
+            SiteSetPlan(
+                key=key,
+                label=SITE_SET_LABELS.get(key, key),
+                allowed=allowed,
+                groups=groups,
+                left_out=left_out,
+                coarse=coarse,
+            )
+        )
+    return plans
 
 
 async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest | None:
@@ -860,8 +975,9 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     offsets = store.calibration_offsets(settings)
     if offsets:
         logger.info("%s nodes carry a measured correction", len(offsets))
-    groups, left_out, coarse = group_by_preset(settings, nodes, overrides, offsets)
-    if not groups:
+    plans = _plans(settings, nodes, overrides, offsets)
+    left_out = plans[0].left_out
+    if not any(plan.groups for plan in plans):
         dropped = sum(sum(counts.values()) for counts in left_out.values())
         # Name the setting, not the mesh. "No infrastructure node" is
         # true and unhelpful when the cause is a role set that matches
@@ -879,9 +995,10 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     # would leave the processor idle while a tile downloads. Only the
     # names are kept: the workers read the pages themselves.
     wanted: set[str] = set()
-    for sites in groups.values():
-        for site in sites[: settings.coverage_max_nodes]:
-            wanted.update(tiles_around(site, settings.coverage_radius_km))
+    for plan in plans:
+        for sites in plan.groups.values():
+            for site in sites[: settings.coverage_max_nodes]:
+                wanted.update(tiles_around(site, settings.coverage_radius_km))
 
     held = await ensure_terrain(settings, sorted(wanted))
     logger.info("%s of %s terrain tiles are held", len(held), len(wanted))
@@ -889,9 +1006,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     stamp = store.new_stamp()
     workers = worker_count(settings)
     logger.info("predicting with %s worker processes", workers)
-    manifest = await asyncio.to_thread(
-        _build, settings, groups, left_out, coarse, held, stamp, workers
-    )
+    manifest = await asyncio.to_thread(_build, settings, plans, held, stamp, workers)
     store.publish(settings, stamp, manifest)
     return manifest
 

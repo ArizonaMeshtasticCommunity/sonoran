@@ -39,6 +39,86 @@ logger = get_logger(__name__)
 # like one.
 INFRASTRUCTURE_ROLES = frozenset({"ROUTER", "ROUTER_LATE", "REPEATER"})
 
+# The roles that repeat other nodes' traffic without being infrastructure.
+#
+# A coverage map drawn from routers alone answers "where does the
+# backbone reach". It is the right default and it is not the only
+# question. A mesh also carries traffic on ordinary nodes, and an
+# operator asking "why does my neighbourhood work when no router
+# covers it" is asking about these.
+#
+# Membership is quoted from the firmware, never inferred. The text is
+# `meshtastic/config.proto`, `Config.DeviceConfig.Role`, at the
+# revision in `proto/UPSTREAM_REV.txt`:
+#
+# - CLIENT is "App connected or stand alone messaging device", the
+#   "Default Role". The proto does not say it forwards, but it defines
+#   CLIENT_MUTE as the role that does not, which leaves CLIENT as one
+#   that does.
+# - CLIENT_BASE "Treats packets from or to favorited nodes as
+#   ROUTER_LATE, and all other packets as CLIENT", and is "Used for
+#   stronger attic/roof nodes to distribute messages more widely". A
+#   roof node that stays on the roof is the best of these.
+# - ROUTER_CLIENT is "Combination of both ROUTER and CLIENT",
+#   deprecated but still set on live nodes.
+#
+# What is deliberately absent, and why:
+#
+# - CLIENT_MUTE is "Device that does not forward packets from other
+#   devices". It contributes no coverage. This is the one exclusion the
+#   proto states outright.
+# - CLIENT_HIDDEN "Still rebroadcasts, but with local only rebroadcast
+#   mode (known meshes only)", so it repeats little, and its stated
+#   purpose is "stealth" and "clandestine operation". Drawing a
+#   footprint around a node whose point is not being seen is a poor
+#   trade for the coverage it adds.
+# - TRACKER and TAK_TRACKER are mobile by definition. A footprint
+#   around where a tracker was is not coverage.
+# - SENSOR, TAK and LOST_AND_FOUND reduce their own routine
+#   broadcasts. The proto never says whether they forward for others,
+#   and this module does not assert what the vendor did not state.
+#
+# A NULL role is still excluded, by `is_site_role`. See the trap above:
+# NULL means a client or an unintroduced node, and a run that predicted
+# from every unintroduced node would be predicting from the whole mesh.
+REPEATING_CLIENT_ROLES = frozenset({"CLIENT", "CLIENT_BASE", "ROUTER_CLIENT"})
+
+# Every role a coverage run may predict from when clients are included.
+EXTENDED_ROLES = INFRASTRUCTURE_ROLES | REPEATING_CLIENT_ROLES
+
+# The name of each site set, and the roles it predicts from.
+#
+# `INFRASTRUCTURE` is the default and the only set the public embed
+# will ever serve. `EXTENDED` is a wider view for somebody reading the
+# dashboard, and `is_diagnostic_role_set` calls it diagnostic, because
+# it is: a client is usually somebody's house, and it moves.
+SITE_SET_INFRASTRUCTURE = "infrastructure"
+SITE_SET_EXTENDED = "extended"
+
+SITE_SET_ROLES: dict[str, frozenset[str]] = {
+    SITE_SET_INFRASTRUCTURE: INFRASTRUCTURE_ROLES,
+    SITE_SET_EXTENDED: EXTENDED_ROLES,
+}
+
+SITE_SET_LABELS: dict[str, str] = {
+    SITE_SET_INFRASTRUCTURE: "Routers and repeaters",
+    SITE_SET_EXTENDED: "Also nodes that repeat",
+}
+
+
+def site_set_roles(site_set: str) -> frozenset[str]:
+    """Return the roles one site set predicts from.
+
+    An unknown name gives the infrastructure set. The failure is to the
+    narrow answer, never the wide one: a typo must not put a mesh of
+    houses on a map. `parse_site_roles` fails the same way.
+    """
+    if site_set not in SITE_SET_ROLES:
+        logger.warning("unknown coverage site set %r, using %s", site_set, SITE_SET_INFRASTRUCTURE)
+        return INFRASTRUCTURE_ROLES
+    return SITE_SET_ROLES[site_set]
+
+
 # What a node with no role is counted as in a report.
 #
 # The manifest counts the nodes a run left out, by role. A NULL role

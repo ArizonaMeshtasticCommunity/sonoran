@@ -21,6 +21,8 @@
   // The layer a visitor sees. Not a choice: the other two need
   // explaining and this one does not.
   const LAYER = 'usable';
+  // The only site set a public page may ever draw.
+  const SITE_SET = 'infrastructure';
 
   // The ramp in coverage/render.py spans this above the limit.
 
@@ -69,7 +71,13 @@
     // The placeholders must not go through `new URL`, which percent
     // encodes the braces and asks for a tile named `%7Bz%7D`.
     const base = API(
-      `/api/coverage/tiles/${summary.stamp}/${state.preset}/${LAYER}/`,
+      /* Pinned to the infrastructure site set, and never read from
+         the summary. A run can also publish the wider map that
+         includes client nodes, and a client node is usually somebody's
+         house. `/api/embed/coverage` already refuses a diagnostic run,
+         and this is the second lock: even a summary that somehow named
+         another set could not move these tiles. See AGENTS.md 9.25. */
+      `/api/coverage/tiles/${summary.stamp}/${state.preset}/${SITE_SET}/${LAYER}/`,
     );
     state.tiles = L.tileLayer(`${base}{z}/{x}/{y}.png`, {
       minNativeZoom: summary.min_zoom,

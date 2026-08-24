@@ -106,6 +106,28 @@ class PresetSummary:
 
 
 @dataclass
+class SiteSetSummary:
+    """One map of the mesh, from one set of site roles.
+
+    A run publishes the infrastructure map always, and the wider map
+    that includes the nodes which repeat when
+    `COVERAGE_INCLUDE_CLIENTS` is on. They answer different questions
+    and each carries its own presets, areas and tiles.
+
+    `is_diagnostic` is true for any set that is not a subset of the
+    infrastructure roles. The public embed serves the infrastructure
+    set and nothing else, whatever this says. See `AGENTS.md` 9.25.
+    """
+
+    key: str
+    label: str
+    site_roles: list[str]
+    is_diagnostic: bool
+    presets: list[PresetSummary] = field(default_factory=list)
+    data_bounds: list[float] | None = None
+
+
+@dataclass
 class Manifest:
     """What one run did."""
 
@@ -159,6 +181,14 @@ class Manifest:
     coarse_sites: list[dict[str, object]] = field(default_factory=list)
     data_bounds: list[float] | None = None
     presets: list[PresetSummary] = field(default_factory=list)
+    # Every map this run published, the infrastructure one first.
+    #
+    # `presets` above stays the infrastructure map on its own. The
+    # embed and anything else that must never widen reads that field
+    # and cannot reach a client map through it, which is the property
+    # `AGENTS.md` 9.25 asks for: the narrow answer is the one a reader
+    # gets without asking for anything else.
+    site_sets: list[SiteSetSummary] = field(default_factory=list)
 
 
 def runs_dir(settings: Settings) -> Path:
@@ -181,14 +211,31 @@ def pending_dir(settings: Settings, stamp: str) -> Path:
     return Path(settings.coverage_cache_dir) / f"pending-{stamp}"
 
 
-def tile_path(root: Path, preset: str, layer: str, zoom: int, x: int, y: int) -> Path:
-    """Return where one tile of a run sits."""
-    return root / preset / layer / str(zoom) / str(x) / f"{y}.png"
+def tile_path(
+    root: Path, preset: str, site_set: str, layer: str, zoom: int, x: int, y: int
+) -> Path:
+    """Return where one tile of a run sits.
+
+    The site set is part of the path because one run can publish more
+    than one map of the same preset: the infrastructure map, and the
+    wider one that includes the nodes which repeat. They are different
+    answers and must never share a tile.
+    """
+    return root / preset / site_set / layer / str(zoom) / str(x) / f"{y}.png"
 
 
-def write_tile(root: Path, preset: str, layer: str, zoom: int, x: int, y: int, png: bytes) -> None:
+def write_tile(
+    root: Path,
+    preset: str,
+    site_set: str,
+    layer: str,
+    zoom: int,
+    x: int,
+    y: int,
+    png: bytes,
+) -> None:
     """Write one tile."""
-    path = tile_path(root, preset, layer, zoom, x, y)
+    path = tile_path(root, preset, site_set, layer, zoom, x, y)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(png)
 
@@ -311,7 +358,7 @@ def read_manifest(settings: Settings) -> dict[str, object] | None:
 
 
 def read_tile(
-    settings: Settings, preset: str, layer: str, zoom: int, x: int, y: int
+    settings: Settings, preset: str, site_set: str, layer: str, zoom: int, x: int, y: int
 ) -> bytes | None:
     """Return one tile of the current run, or None.
 
@@ -321,13 +368,14 @@ def read_tile(
     stamp = current_stamp(settings)
     if stamp is None:
         return None
-    return read_run_tile(settings, stamp, preset, layer, zoom, x, y)
+    return read_run_tile(settings, stamp, preset, site_set, layer, zoom, x, y)
 
 
 def read_run_tile(
     settings: Settings,
     stamp: str,
     preset: str,
+    site_set: str,
     layer: str,
     zoom: int,
     x: int,
@@ -341,7 +389,7 @@ def read_run_tile(
     root = run_root(settings, stamp)
     if root is None:
         return None
-    path = tile_path(root, preset, layer, zoom, x, y)
+    path = tile_path(root, preset, site_set, layer, zoom, x, y)
     try:
         return path.read_bytes()
     except (OSError, ValueError):

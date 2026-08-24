@@ -42,6 +42,7 @@
     nodeRequest: 0,
     summary: null,
     preset: null,
+    siteSet: null,
     layer: DEFAULT_LAYER,
     showMap: true,
     showNodes: true,
@@ -97,8 +98,40 @@
     return `${Math.round(hours / 24)} d ago`;
   }
 
+  /* A run publishes the infrastructure map, and the wider map that
+     includes the nodes which repeat, when the deployment turns that on.
+     `summary.presets` is always the infrastructure one, so a reader who
+     never touches the picker gets the narrow answer. */
+  function siteSets(summary) {
+    const sets = (summary && summary.site_sets) || [];
+    return Array.isArray(sets) ? sets : [];
+  }
+
+  function siteSetOf(summary, key) {
+    const sets = siteSets(summary);
+    if (!sets.length) return null;
+    return sets.find((item) => item.key === key) || sets[0];
+  }
+
+  /* The presets of the site set on show. Falls back to the top level,
+     which is the infrastructure map, for a run made before site sets
+     existed. */
+  function presetsOf(summary) {
+    const set = siteSetOf(summary, state.siteSet);
+    if (set && Array.isArray(set.presets)) return set.presets;
+    return (summary && summary.presets) || [];
+  }
+
   function presetOf(summary, name) {
-    return (summary.presets || []).find((item) => item.preset === name) || null;
+    return presetsOf(summary).find((item) => item.preset === name) || null;
+  }
+
+  /* The site set the tiles come from. The infrastructure map is the
+     answer whenever nothing else has been chosen, so a run with one
+     site set, or a reader who never touched the picker, gets it. */
+  function currentSiteSet() {
+    const set = siteSetOf(state.summary, state.siteSet);
+    return (set && set.key) || 'infrastructure';
   }
 
   /* ------------------------------------------------------------- map */
@@ -149,7 +182,7 @@
      * named `%7Bz%7D`. Resolve the part before them, then append.
      */
     const base = api(
-      `api/coverage/tiles/${summary.stamp}/${state.preset}/${state.layer}/`,
+      `api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`,
     );
     state.tiles = L.tileLayer(
       `${base}{z}/{x}/{y}.png`,
@@ -301,10 +334,29 @@
     );
   }
 
+  function drawSiteSets(page) {
+    const wrap = $('[data-coverage-siteset-wrap]', page);
+    const picker = $('[data-coverage-siteset]', page);
+    if (!wrap || !picker || !state.summary) return;
+    const sets = siteSets(state.summary);
+    /* One set is not a choice. The picker stays hidden rather than
+       offering a control that cannot change anything. */
+    if (sets.length < 2) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    replace(
+      picker,
+      sets.map((item) => el('option', { value: item.key, text: item.label })),
+    );
+    picker.value = currentSiteSet();
+  }
+
   function drawPresets(page) {
     const picker = $('[data-coverage-preset]', page);
     if (!picker || !state.summary) return;
-    const presets = state.summary.presets || [];
+    const presets = presetsOf(state.summary);
     replace(
       picker,
       presets.map((item) =>
@@ -736,6 +788,7 @@
   }
 
   function drawAll(page) {
+    drawSiteSets(page);
     drawPresets(page);
     drawLayers(page);
     drawViews(page);
@@ -786,14 +839,35 @@
     }
     notice(page, '');
 
+    if (!state.siteSet || !siteSetOf(summary, state.siteSet)) {
+      const sets = siteSets(summary);
+      state.siteSet = sets.length ? sets[0].key : 'infrastructure';
+    }
     if (!state.preset || !presetOf(summary, state.preset)) {
-      state.preset = summary.presets[0].preset;
+      const presets = presetsOf(summary);
+      state.preset = presets.length ? presets[0].preset : null;
+    }
+    if (!state.preset) {
+      notice(page, 'This run predicted from no node on any modem preset.');
+      return;
     }
     if (!state.loaded) {
       const picker = $('[data-coverage-preset]', page);
       if (picker) {
         picker.addEventListener('change', () => {
           state.preset = picker.value;
+          drawAll(page);
+        });
+      }
+      const setPicker = $('[data-coverage-siteset]', page);
+      if (setPicker) {
+        setPicker.addEventListener('change', () => {
+          state.siteSet = setPicker.value;
+          /* The two sets need not carry the same presets: a preset
+             whose only nodes are clients exists in one and not the
+             other. Drop the choice and let it settle again. */
+          if (!presetOf(summary, state.preset)) state.preset = null;
+          state.nodeRows.clear();
           drawAll(page);
         });
       }

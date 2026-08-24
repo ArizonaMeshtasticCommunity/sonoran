@@ -172,6 +172,11 @@
               <p class="sub" data-coverage-sub>Where the mesh reaches, predicted from the routers and repeaters that carry it.</p>
             </div>
             <div class="controls">
+              <!-- Only shown when the run published more than one site
+                   set, which needs COVERAGE_INCLUDE_CLIENTS. -->
+              <label class="coverage-pick" data-coverage-siteset-wrap hidden>Predict from
+                <select data-coverage-siteset></select>
+              </label>
               <label class="coverage-pick">Preset
                 <select data-coverage-preset></select>
               </label>

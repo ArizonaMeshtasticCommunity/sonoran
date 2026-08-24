@@ -519,6 +519,48 @@ different languages and nothing else connects them.
 `COVERAGE_MIN_PRECISION_BITS` may be set to zero by a deployment that
 reads its own broker, where every position arrives at full precision.
 
+### 9.1.2.2 Predicting from the nodes that repeat
+
+The map predicts from routers and repeaters because only a node that
+stays where it is can hold coverage open. That is the right default and
+it is not the only question. A mesh also carries traffic on ordinary
+nodes, and "why does my neighbourhood work when no router covers it" is
+a question about those.
+
+`COVERAGE_INCLUDE_CLIENTS=true` makes a run publish a second map beside
+the first, predicted from the roles that repeat traffic without being
+infrastructure. The dashboard then offers a picker, and the
+infrastructure map stays the view a reader gets without choosing
+anything.
+
+Which roles, and why, quoted from `meshtastic/config.proto`:
+
+| Role | In | Why |
+|---|---|---|
+| `ROUTER`, `ROUTER_LATE`, `REPEATER` | yes | The infrastructure set. Unchanged. |
+| `CLIENT` | yes | The default role. `CLIENT_MUTE` is defined as the one that does not forward, which leaves this one that does. |
+| `CLIENT_BASE` | yes | "Used for stronger attic/roof nodes to distribute messages more widely." A roof node that stays on the roof. |
+| `ROUTER_CLIENT` | yes | "Combination of both ROUTER and CLIENT." Deprecated, still set on live nodes. |
+| `CLIENT_MUTE` | no | "Device that does not forward packets from other devices." |
+| `CLIENT_HIDDEN` | no | Rebroadcasts "local only", and its stated purpose is stealth. |
+| `TRACKER`, `TAK_TRACKER` | no | Mobile by definition. |
+| `SENSOR`, `TAK`, `LOST_AND_FOUND` | no | The proto never says whether they forward, so nothing is asserted. |
+| no role | no | See `AGENTS.md` 9.22. NULL is a client or an unintroduced node. |
+
+**The cost is the reason it is off by default.** A run predicts from
+every site it is given, and a mesh has far more clients than routers:
+on the Arizona mesh about fifty infrastructure nodes against nine
+hundred clients, capped by `COVERAGE_MAX_NODES`.
+
+**It is a diagnostic and the public embed never serves it.** A client
+is usually somebody's house, and a footprint has a centre. See
+`AGENTS.md` 9.25 and 9.27 for the three separate locks that hold it
+back.
+
+Read the wider map for what it is. A handheld that crossed town once
+still draws a footprint where it stood, and the mesh will not be there
+tomorrow. The infrastructure map is the one to publish.
+
 ### 9.1.3 Is the map right?
 
 A prediction can be self consistent and still be wrong. The one test

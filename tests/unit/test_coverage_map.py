@@ -530,15 +530,15 @@ def test_a_run_becomes_visible_in_one_step(tmp_path: Path) -> None:
     from sonoran.coverage import store
 
     pending = store.pending_dir(settings, "20260820T000000Z")
-    (pending / "LongFast" / "usable" / "6" / "12").mkdir(parents=True)
-    (pending / "LongFast" / "usable" / "6" / "12" / "25.png").write_bytes(b"x")
+    (pending / "LongFast" / "infrastructure" / "usable" / "6" / "12").mkdir(parents=True)
+    (pending / "LongFast" / "infrastructure" / "usable" / "6" / "12" / "25.png").write_bytes(b"x")
 
     publish(settings, "20260820T000000Z", _manifest("20260820T000000Z"))
     read = read_manifest(settings)
     assert read is not None
     assert read["stamp"] == "20260820T000000Z"
-    assert store.read_tile(settings, "LongFast", "usable", 6, 12, 25) == b"x"
-    assert store.read_tile(settings, "LongFast", "usable", 6, 12, 99) is None
+    assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 25) == b"x"
+    assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 99) is None
 
 
 def test_old_runs_are_removed(tmp_path: Path) -> None:
@@ -563,20 +563,24 @@ def test_a_stamped_tile_never_moves_to_a_new_run(tmp_path: Path) -> None:
         ("20260820T000002Z", b"second"),
     ):
         pending = store.pending_dir(settings, stamp)
-        tile = pending / "LongFast" / "usable" / "6" / "12" / "25.png"
+        tile = pending / "LongFast" / "infrastructure" / "usable" / "6" / "12" / "25.png"
         tile.parent.mkdir(parents=True)
         tile.write_bytes(content)
         publish(settings, stamp, _manifest(stamp))
 
     assert (
-        store.read_run_tile(settings, "20260820T000001Z", "LongFast", "usable", 6, 12, 25)
+        store.read_run_tile(
+            settings, "20260820T000001Z", "LongFast", "infrastructure", "usable", 6, 12, 25
+        )
         == b"first"
     )
     assert (
-        store.read_run_tile(settings, "20260820T000002Z", "LongFast", "usable", 6, 12, 25)
+        store.read_run_tile(
+            settings, "20260820T000002Z", "LongFast", "infrastructure", "usable", 6, 12, 25
+        )
         == b"second"
     )
-    assert store.read_tile(settings, "LongFast", "usable", 6, 12, 25) == b"second"
+    assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 25) == b"second"
 
 
 def test_a_broken_index_reads_as_no_run(tmp_path: Path) -> None:
@@ -662,8 +666,11 @@ def test_a_run_stamp_that_is_not_a_stamp_is_refused(tmp_path: Path) -> None:
         path.write_text(json.dumps({"current": bad}), encoding="utf-8")
         assert store.current_stamp(settings) is None, bad
         assert store.current_root(settings) is None
-        assert store.read_tile(settings, "LongFast", "usable", 6, 12, 25) is None
-        assert store.read_run_tile(settings, bad, "LongFast", "usable", 6, 12, 25) is None
+        assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 25) is None
+        assert (
+            store.read_run_tile(settings, bad, "LongFast", "infrastructure", "usable", 6, 12, 25)
+            is None
+        )
 
     path.write_text(json.dumps({"current": "20260820T000000Z"}), encoding="utf-8")
     assert store.current_stamp(settings) == "20260820T000000Z"
@@ -927,7 +934,9 @@ def test_a_preset_that_kept_no_site_is_still_reported(tmp_path: Path) -> None:
 
     from sonoran.jobs import coverage
 
-    source = inspect.getsource(coverage._build)
+    # The loop moved into `_build_site_set` when a run gained the
+    # ability to publish more than one map. The rule did not move.
+    source = inspect.getsource(coverage._build_site_set)
     assert "set(groups) | set(left_out)" in source, "iterate every preset that had a candidate"
     assert "_empty_summary" in source
 

@@ -1,0 +1,177 @@
+"""Tests for the coverage site sets.
+
+A run publishes the infrastructure map always, and a wider map that
+includes the nodes which repeat traffic when a deployment turns it on.
+
+Each guard here is tested in the state it exists to refuse, not only in
+the state where it passes. See `AGENTS.md` 9.
+"""
+
+import inspect
+
+import pytest
+
+from sonoran.radio.overrides import EMPTY as EMPTY_OVERRIDES
+from sonoran.roles import (
+    EXTENDED_ROLES,
+    INFRASTRUCTURE_ROLES,
+    REPEATING_CLIENT_ROLES,
+    SITE_SET_EXTENDED,
+    SITE_SET_INFRASTRUCTURE,
+    SITE_SET_LABELS,
+    SITE_SET_ROLES,
+    is_diagnostic_role_set,
+    is_site_role,
+    site_set_roles,
+)
+
+
+class TestWhichRolesRepeat:
+    """Membership is quoted from the firmware, never inferred."""
+
+    def test_the_infrastructure_set_is_unchanged(self) -> None:
+        assert SITE_SET_ROLES[SITE_SET_INFRASTRUCTURE] == INFRASTRUCTURE_ROLES
+        assert INFRASTRUCTURE_ROLES == {"ROUTER", "ROUTER_LATE", "REPEATER"}
+
+    def test_the_extended_set_adds_the_roles_that_repeat(self) -> None:
+        assert REPEATING_CLIENT_ROLES == {"CLIENT", "CLIENT_BASE", "ROUTER_CLIENT"}
+        assert EXTENDED_ROLES == INFRASTRUCTURE_ROLES | REPEATING_CLIENT_ROLES
+
+    def test_client_mute_is_never_a_site(self) -> None:
+        """The proto: "Device that does not forward packets from other devices"."""
+        assert "CLIENT_MUTE" not in EXTENDED_ROLES
+        assert not is_site_role("CLIENT_MUTE", EXTENDED_ROLES)
+
+    @pytest.mark.parametrize(
+        "role",
+        [
+            "CLIENT_MUTE",  # states outright that it does not forward
+            "CLIENT_HIDDEN",  # rebroadcasts local-only, and its point is not being seen
+            "TRACKER",  # mobile by definition
+            "TAK_TRACKER",  # mobile by definition
+            "SENSOR",  # the proto never says it forwards for others
+            "TAK",  # the proto never says it forwards for others
+            "LOST_AND_FOUND",  # the proto never says it forwards for others
+        ],
+    )
+    def test_a_role_that_does_not_carry_coverage_is_left_out(self, role: str) -> None:
+        assert role not in EXTENDED_ROLES
+        assert not is_site_role(role, EXTENDED_ROLES)
+
+    @pytest.mark.parametrize("role", ["CLIENT", "CLIENT_BASE", "ROUTER_CLIENT"])
+    def test_a_repeating_client_is_a_site_only_in_the_extended_set(self, role: str) -> None:
+        assert is_site_role(role, EXTENDED_ROLES)
+        assert not is_site_role(role, INFRASTRUCTURE_ROLES)
+
+    def test_a_null_role_is_never_a_site_in_either_set(self) -> None:
+        """AGENTS.md 9.22: NULL is a client or an unintroduced node."""
+        assert not is_site_role(None, INFRASTRUCTURE_ROLES)
+        assert not is_site_role(None, EXTENDED_ROLES)
+
+
+class TestSiteSetLookup:
+    def test_each_set_has_a_label(self) -> None:
+        for key in SITE_SET_ROLES:
+            assert SITE_SET_LABELS.get(key)
+
+    def test_a_known_set_gives_its_roles(self) -> None:
+        assert site_set_roles(SITE_SET_EXTENDED) == EXTENDED_ROLES
+
+    @pytest.mark.parametrize("name", ["", "ALL", "clients", "Infrastructure", "../etc"])
+    def test_an_unknown_set_fails_to_the_narrow_answer(self, name: str) -> None:
+        """A typo must never widen a map. `parse_site_roles` fails the same way."""
+        assert site_set_roles(name) == INFRASTRUCTURE_ROLES
+
+
+class TestTheEmbedCanNeverWiden:
+    """AGENTS.md 9.25. A client node is usually somebody's house."""
+
+    def test_the_extended_set_is_diagnostic(self) -> None:
+        """Which is what stops `/api/embed/coverage` serving it."""
+        assert is_diagnostic_role_set(EXTENDED_ROLES) is True
+        assert is_diagnostic_role_set(INFRASTRUCTURE_ROLES) is False
+
+    def test_the_public_page_asks_for_the_infrastructure_tiles_only(self) -> None:
+        """The site set in the embed's tile URL is a constant, not a lookup.
+
+        If it read the summary, a manifest naming another set would move
+        the public tiles. It must not be reachable that way.
+        """
+        from pathlib import Path
+
+        source = Path("src/sonoran/web/static/embed-coverage.js").read_text(encoding="utf-8")
+        assert "const SITE_SET = 'infrastructure';" in source
+        assert "${SITE_SET}" in source
+        # It must not take the set from the summary it was given.
+        assert "summary.site_sets" not in source
+        assert "state.siteSet" not in source
+
+
+class TestTilePathsKeepTheSetsApart:
+    def test_the_site_set_is_part_of_the_path(self) -> None:
+        from pathlib import Path as FsPath
+
+        from sonoran.coverage.store import tile_path
+
+        root = FsPath("/tmp/run")
+        infra = tile_path(root, "LongFast", "infrastructure", "usable", 6, 12, 25)
+        wide = tile_path(root, "LongFast", "extended", "usable", 6, 12, 25)
+        assert infra != wide
+        assert infra.parts[-5] == "infrastructure"
+        assert wide.parts[-5] == "extended"
+
+    def test_two_sets_cannot_share_a_tile(self) -> None:
+        """The whole point: they are different answers to different questions."""
+        from pathlib import Path as FsPath
+
+        from sonoran.coverage.store import tile_path
+
+        seen = {
+            tile_path(FsPath("/r"), "LongFast", key, "usable", 6, 12, 25) for key in SITE_SET_ROLES
+        }
+        assert len(seen) == len(SITE_SET_ROLES)
+
+
+class TestThePlan:
+    """What a run decides to build, before it builds anything."""
+
+    def _settings(self, **kwargs: object) -> object:
+        from sonoran.config import Settings
+
+        return Settings(**kwargs)  # type: ignore[arg-type]
+
+    def test_one_map_by_default(self) -> None:
+        from sonoran.jobs.coverage import _plans
+
+        settings = self._settings()
+        assert settings.coverage_include_clients is False  # type: ignore[attr-defined]
+        plans = _plans(settings, [], EMPTY_OVERRIDES, None)  # type: ignore[arg-type]
+        assert [plan.key for plan in plans] == [SITE_SET_INFRASTRUCTURE]
+
+    def test_both_maps_when_clients_are_included(self) -> None:
+        from sonoran.jobs.coverage import _plans
+
+        settings = self._settings(coverage_include_clients=True)
+        plans = _plans(settings, [], EMPTY_OVERRIDES, None)  # type: ignore[arg-type]
+        assert [plan.key for plan in plans] == [SITE_SET_INFRASTRUCTURE, SITE_SET_EXTENDED]
+
+    def test_the_infrastructure_plan_is_always_first(self) -> None:
+        """`_build` reports the first plan at the top level of the manifest.
+
+        A reader who takes `presets` without asking for a site set must
+        get the narrow answer, and the embed is that reader.
+        """
+        from sonoran.jobs import coverage
+
+        source = inspect.getsource(coverage._build)
+        assert "plans[0]" in source
+        assert "presets=summaries" in source
+
+    def test_a_deployment_role_set_still_drives_the_first_plan(self) -> None:
+        """COVERAGE_SITE_ROLES=ALL must behave exactly as it did."""
+        from sonoran.jobs.coverage import _plans
+
+        settings = self._settings(coverage_site_roles="ALL")
+        plans = _plans(settings, [], EMPTY_OVERRIDES, None)  # type: ignore[arg-type]
+        assert plans[0].allowed is None
+        assert is_diagnostic_role_set(plans[0].allowed) is True
