@@ -126,6 +126,28 @@
     return presetsOf(summary).find((item) => item.preset === name) || null;
   }
 
+  /* The preset to open on: the one this mesh actually runs.
+
+     The manifest lists presets in name order, so taking the first gave
+     "Long fast" on a mesh whose backbone is all on Medium fast, and the
+     reader saw a nearly empty map of a preset nobody uses. A mesh
+     agrees one preset and puts its infrastructure there, so the busiest
+     one is the answer.
+
+     Sites first, because that is what the map is drawn from. Candidates
+     break a tie, so a preset with nodes and no usable sites still beats
+     one with nothing at all, and the name breaks the last tie so the
+     choice is stable between redraws. */
+  function busiestPreset(summary) {
+    const presets = presetsOf(summary).slice();
+    if (!presets.length) return null;
+    presets.sort((a, b) =>
+      (b.site_count || 0) - (a.site_count || 0)
+      || (b.candidate_count || 0) - (a.candidate_count || 0)
+      || String(a.preset).localeCompare(String(b.preset)));
+    return presets[0].preset;
+  }
+
   /* The site set the tiles come from. The infrastructure map is the
      answer whenever nothing else has been chosen, so a run with one
      site set, or a reader who never touched the picker, gets it. */
@@ -872,8 +894,7 @@
       state.siteSet = sets.length ? sets[0].key : 'infrastructure';
     }
     if (!state.preset || !presetOf(summary, state.preset)) {
-      const presets = presetsOf(summary);
-      state.preset = presets.length ? presets[0].preset : null;
+      state.preset = busiestPreset(summary);
     }
     if (!state.preset) {
       notice(page, 'This run predicted from no node on any modem preset.');

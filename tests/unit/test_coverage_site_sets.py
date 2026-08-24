@@ -243,3 +243,38 @@ class TestTheNavIcon:
         used = set(re.findall(r'<use href="#(i-[a-z-]+)"', nav))
         assert used, "no nav icons found"
         assert used <= defined, f"missing symbols: {sorted(used - defined)}"
+
+
+class TestTheDefaultPreset:
+    """The page opens on the preset the mesh actually runs."""
+
+    def _source(self) -> str:
+        from pathlib import Path
+
+        return Path("src/sonoran/web/static/coverage.js").read_text(encoding="utf-8")
+
+    def test_the_default_is_the_busiest_preset_not_the_first(self) -> None:
+        """The manifest lists presets in name order.
+
+        Taking the first gave "Long fast" on a mesh whose backbone is
+        all on "Medium fast", so the page opened on a nearly empty map
+        of a preset nobody uses. Seen on the live preview: Long fast (1)
+        was chosen over Medium fast (3).
+        """
+        source = self._source()
+        assert "function busiestPreset(" in source
+        assert "state.preset = busiestPreset(summary);" in source
+        # And not the old behaviour at the call site. `busiestPreset`
+        # itself ends in `presets[0].preset`, after it has sorted them,
+        # so the string alone is not the thing to test for.
+        assert "presets.length ? presets[0].preset : null" not in source
+
+    def test_it_ranks_by_sites_then_candidates_then_name(self) -> None:
+        source = self._source()
+        block = source.split("function busiestPreset(")[1].split("\n  }")[0]
+        assert "site_count" in block
+        # A tie on sites falls to candidates, so a preset with nodes and
+        # no usable site still beats one with nothing at all.
+        assert "candidate_count" in block
+        # And the last tie-break keeps the choice stable between redraws.
+        assert "localeCompare" in block
