@@ -332,9 +332,17 @@ async def main() -> None:
         # Nodes.
         for num, short, long_name, hw, role, lat, lon, alt, gw in NODES:
             heard = NOW - timedelta(minutes=RNG.randint(1, 240))
-            # Roughly one node in five is on the other preset, which is
-            # about the ratio the live mesh has.
-            node_channel = SECONDARY_PRESET if num % 5 == 0 else PRIMARY_PRESET
+            # The backbone is all on the primary preset, and a minority
+            # of ordinary nodes sit on the other one.
+            #
+            # That is the shape a real mesh has. A community agrees one
+            # preset and puts its routers on it; the nodes that turn up
+            # on another are usually somebody running the factory
+            # default. Splitting the routers between presets instead
+            # would leave each map missing most of its backbone, which
+            # is a worse preview and a less honest one.
+            is_infrastructure = role in ("ROUTER", "ROUTER_LATE", "REPEATER")
+            node_channel = PRIMARY_PRESET if is_infrastructure or num % 5 != 0 else SECONDARY_PRESET
             await conn.execute(
                 text(
                     """
