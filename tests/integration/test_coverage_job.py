@@ -250,9 +250,13 @@ def test_a_run_makes_tiles_the_api_serves(
 
     root = store.current_root(settings)
     assert root is not None
-    tile = next(root.glob("LongFast/usable/*/*/*.png"))
+    # A default run publishes the infrastructure site set, so the tiles
+    # and the URL both carry that segment now. See the site-sets work.
+    tile = next(root.glob("LongFast/infrastructure/usable/*/*/*.png"))
     zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
-    response = client.get(f"/api/coverage/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
+    response = client.get(
+        f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/usable/{zoom}/{x}/{y}.png"
+    )
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
