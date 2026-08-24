@@ -175,3 +175,39 @@ class TestThePlan:
         plans = _plans(settings, [], EMPTY_OVERRIDES, None)  # type: ignore[arg-type]
         assert plans[0].allowed is None
         assert is_diagnostic_role_set(plans[0].allowed) is True
+
+
+class TestTheDashboardLabelsWhatItShows:
+    """A map drawn from client nodes must never say it came from routers."""
+
+    def _source(self) -> str:
+        from pathlib import Path
+
+        return Path("src/sonoran/web/static/coverage.js").read_text(encoding="utf-8")
+
+    def test_the_notice_follows_the_chosen_site_set(self) -> None:
+        source = self._source()
+        assert "function shownIsDiagnostic()" in source
+        # It must consider the chosen set, not only the whole run. The
+        # run stays non-diagnostic while the wider view inside it is
+        # diagnostic, so reading the run alone would label nothing.
+        assert "set && set.is_diagnostic" in source
+        assert "shownIsDiagnostic()" in source.split("function diagnosticNotice()")[1]
+
+    def test_the_subtitle_follows_the_chosen_site_set(self) -> None:
+        source = self._source()
+        banner = source.split("function drawDiagnosticBanner(")[1].split("function ")[0]
+        assert "shownIsDiagnostic()" in banner
+        assert "shownRoles()" in banner
+        # The old code read the run's flag straight off the summary.
+        assert "summary.is_diagnostic\n" not in banner
+
+    def test_the_tile_url_carries_the_chosen_site_set(self) -> None:
+        assert "${currentSiteSet()}" in self._source()
+
+    def test_the_picker_hides_itself_when_there_is_one_set(self) -> None:
+        """A control that cannot change anything is worse than none."""
+        source = self._source()
+        block = source.split("function drawSiteSets(")[1].split("function ")[0]
+        assert "sets.length < 2" in block
+        assert "wrap.hidden = true" in block

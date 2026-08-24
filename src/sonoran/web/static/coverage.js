@@ -474,25 +474,53 @@
    * the two be mistaken for each other, because the tiles look
    * identical.
    */
+  /* Whether the map on show is a diagnostic one.
+
+     Two ways it can be. The whole run is diagnostic when a deployment
+     set COVERAGE_SITE_ROLES wide, and then every map is. Or the reader
+     picked the wider site set, and that one is. The page must say so
+     either way: a map drawn from client nodes that says it was drawn
+     from routers is the one thing worse than no map. */
+  function shownIsDiagnostic() {
+    const summary = state.summary;
+    if (!summary) return false;
+    if (summary.is_diagnostic) return true;
+    const set = siteSetOf(summary, state.siteSet);
+    return Boolean(set && set.is_diagnostic);
+  }
+
+  /* The roles the map on show was predicted from. */
+  function shownRoles() {
+    const summary = state.summary;
+    const set = siteSetOf(summary, state.siteSet);
+    const roles = (set && set.site_roles) || (summary && summary.site_roles) || [];
+    return Array.isArray(roles) ? roles : [];
+  }
+
   function drawDiagnosticBanner(page) {
     const sub = $('[data-coverage-sub]', page);
     const summary = state.summary;
     if (!sub || !summary || !summary.available) return;
-    sub.textContent = summary.is_diagnostic
-      ? `Diagnostic run: predicted from ${(summary.site_roles || []).join(', ') || 'every role'}.`
+    sub.textContent = shownIsDiagnostic()
+      ? `Diagnostic view: predicted from ${shownRoles().join(', ') || 'every role'}.`
       : 'Where the mesh reaches, predicted from the routers and repeaters that carry it.';
   }
 
   function diagnosticNotice() {
-    if (!state.summary.is_diagnostic) return null;
+    if (!shownIsDiagnostic()) return null;
+    const roles = shownRoles().join(', ') || 'roles outside the infrastructure set';
+    /* A run made diagnostic by the deployment cannot be fixed from the
+       page, so it names the setting. A view the reader chose can be
+       changed by choosing again, so it says that instead. */
+    const remedy = state.summary.is_diagnostic
+      ? 'Set COVERAGE_SITE_ROLES back to infrastructure roles for a map to publish.'
+      : 'Pick "Routers and repeaters" above for the map this mesh publishes.';
     return el(
       'p',
       { class: 'notice warn', style: 'font-weight:600' },
-      `This is a diagnostic run. It selected ${
-        (state.summary.site_roles || []).join(', ') || 'roles outside the infrastructure set'
-      }. It can include personal or mobile nodes, so it shows where a radio could `
-        + 'reach on the day and not where the mesh reaches. Set COVERAGE_SITE_ROLES '
-        + 'back to infrastructure roles for a map to publish.',
+      `This is a diagnostic view. It predicted from ${roles}. `
+        + 'It can include personal or mobile nodes, so it shows where a radio could '
+        + `reach on the day and not where the mesh reaches. ${remedy}`,
     );
   }
 
