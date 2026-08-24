@@ -189,6 +189,14 @@
 
           <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
 
+          <!-- Per-viewer control. Restyles the signal tiles already in
+               this browser; changes nothing on the server. -->
+          <label class="coverage-opacity" data-coverage-opacity-wrap>Signal opacity
+            <input type="range" min="0" max="100" step="5" value="100"
+                   data-coverage-opacity aria-label="Signal strength opacity" />
+            <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
+          </label>
+
           <div class="map-shell">
             <div id="coverage-map"></div>
             <div class="coverage-legend" data-coverage-legend hidden>
