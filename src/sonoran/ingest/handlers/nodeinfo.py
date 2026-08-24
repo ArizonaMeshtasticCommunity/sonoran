@@ -11,12 +11,19 @@ from sonoran.ingest.handlers.context import HandlerContext
 
 
 def _enum_name(message: Message, field_name: str) -> str | None:
-    """Return an enum field name when it has a nonzero value."""
+    """Return an enum field name when it has a nonzero value.
+
+    A value the compiled proto does not know is treated as unknown, not
+    as an error. Newer firmware reports newer hardware models and roles
+    than the vendored descriptors carry, and one of those must drop a
+    single field, never the whole nodeinfo packet.
+    """
     field = message.DESCRIPTOR.fields_by_name[field_name]
     value = getattr(message, field_name)
     if not value:
         return None
-    return field.enum_type.values_by_number[value].name
+    entry = field.enum_type.values_by_number.get(value)
+    return entry.name if entry is not None else None
 
 
 async def store_nodeinfo(session: AsyncSession, message: Message, context: HandlerContext) -> None:
