@@ -310,13 +310,48 @@ hidden ones beats ignoring them.
 | A node needs this many counterparties | 3 |
 | A node needs this many links that really worked | 2 |
 | An offset is clamped at | 15 dB |
-| A node may be pinned entirely | `lock_calibration` |
+| A node may be pinned at zero inside the fit | `lock_calibration` |
 
 The solver enforces the 15 dB bound during each fit round. This stops a
 node with mostly silent links from pulling the other offsets away. The
 stored-value reader and the radio-profile resolver enforce the same
 bound again. The API shows no offset for a node that does not have
 enough evidence.
+
+### 8.2.1 A pinned node is pinned inside the fit
+
+`lock_calibration` in `config/nodes.yaml` says the radio facts of a
+node are already known to be right. The fit therefore holds that node
+at zero **while it solves**. It is not a parameter the solver has, so
+every link the node is in charges the whole of its residual to the
+other end and to the model bias.
+
+It used to be fitted like any other node and only dropped on the way to
+the map. That is not the same answer. A free offset on a pinned node
+absorbs evidence that belongs elsewhere, and a node whose build somebody
+has measured came out of a live fit at +2.77 dB.
+
+A pinned node is also the anchor. The zero-sum rule exists only to
+remove the one freedom the model has — adding a constant to every offset
+and taking twice it off the bias predicts the same thing — and a node
+held at zero removes that freedom already. So the fit re-centres nothing
+when anything is pinned, and **the model bias it reports is then measured
+against the pinned radios** rather than against the average of every
+guess. That is the point of pinning: a mesh-wide number that means
+something needs a reference somebody measured.
+
+The 15 dB bound still applies to every node that is not pinned. The
+bound used to be enforced by the same projection that held the sum at
+zero, and a pinned fit does not run that projection, so the bound is
+applied on its own. `test_pinning_a_node_still_bounds_the_others` pins
+it, because dropping it would give back the unbounded estimate that
+`AGENTS.md` 9.21 exists about.
+
+Three places refuse to apply a pinned offset, and each one is cheap:
+the fit writes zero, `store.calibration_offsets` skips any node the file
+marks `locked`, and `radio/resolve.py` ignores the offset of a locked
+node whatever it holds. The middle one matters for a file written before
+a lock was added.
 
 A model bias is one error over the whole mesh. A value past 20 dB says
 the propagation model or the silent-link assumption does not describe

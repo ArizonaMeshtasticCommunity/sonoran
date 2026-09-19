@@ -81,6 +81,11 @@ class NodeOverride:
     # True holds the profile against the calibration job. Use it for a
     # node whose build is known exactly, or one whose measurements are
     # known to be misleading.
+    #
+    # The fit holds such a node at zero while it solves, so it anchors
+    # the other offsets and the model bias is measured against it. It is
+    # not an offset that is fitted and then dropped. See
+    # `sonoran/coverage/calibrate.py`.
     lock_calibration: bool = False
     note: str = ""
 

@@ -162,6 +162,19 @@ async def read_peers(
     return peers
 
 
+def locked_nodes(overrides: Overrides) -> frozenset[str]:
+    """Return the nodes an operator pinned with `lock_calibration`.
+
+    The lock is a statement that the radio facts of a node are already
+    right. The fit holds such a node at zero, so it anchors the other
+    offsets and the model bias rather than being fitted and then
+    dropped on the way to the map.
+    """
+    return frozenset(
+        node_id for node_id, override in overrides.nodes.items() if override.lock_calibration
+    )
+
+
 def _matches_current_preset(row: NeighborMetrics, peers: dict[int, Peer]) -> bool:
     """Return true when a report and both nodes name one preset.
 
@@ -373,7 +386,14 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
         store.clear_calibration(settings)
         return None
 
-    calibration = fit_offsets(observations)
+    # A node an operator pinned is held at zero inside the fit, not
+    # fitted and then ignored. The lock says its radio facts are
+    # already right, so it is the reference the rest is measured
+    # against. See `sonoran/coverage/calibrate.py`.
+    locked = locked_nodes(overrides)
+    if locked:
+        logger.info("%s node(s) are pinned by lock_calibration and held at zero", len(locked))
+    calibration = fit_offsets(observations, locked=locked)
     store.write_calibration(settings, calibration, summary)
     return calibration
 

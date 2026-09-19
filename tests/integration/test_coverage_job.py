@@ -400,6 +400,95 @@ def test_calibration_reads_the_neighbour_reports(
     )
 
 
+def _four_reporting_nodes(migrated_engine, first: int) -> None:  # type: ignore[no-untyped-def]
+    """Four nodes in a line, each reporting the other three.
+
+    Every reporter names a different SNR, so the fit has real per-node
+    offsets to hand out rather than a flat answer.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(text("DELETE FROM neighbor_metrics"))
+        for offset in range(4):
+            _add_node(connection, first + offset, 33.40 + offset / 200, -112.07, role="ROUTER")
+        for reporter in range(4):
+            for heard in range(4):
+                if reporter == heard:
+                    continue
+                connection.execute(
+                    text(
+                        "INSERT INTO neighbor_metrics "
+                        "(node_num, neighbor_node_num, snr, channel, time) "
+                        "VALUES (:a, :b, :snr, 'LongFast', :now)"
+                    ),
+                    {
+                        "a": first + reporter,
+                        "b": first + heard,
+                        "snr": -5.0 - 4.0 * reporter,
+                        "now": now,
+                    },
+                )
+
+
+def test_a_locked_node_is_held_at_zero_by_the_fit(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """Issue #3, item 4.
+
+    `lock_calibration` used to keep an offset from being applied and
+    leave the node free inside the fit, where it absorbed evidence that
+    belonged to the other end of every link it was in. The lock says
+    the radio facts are already right, so the fit has to solve around
+    the node rather than about it.
+
+    This is checked through the job, not only through `fit_offsets`,
+    because the overrides file is how an operator writes the lock and
+    the job is what has to read it.
+    """
+    _four_reporting_nodes(migrated_engine, 900130)
+    pinned_id = f"!{900130:08x}"
+
+    plain = _settings(timescale_url, tmp_path / "plain")
+    unpinned = _run(plain, calibrate.run_once)
+    assert unpinned is not None
+    loose = {fit.node_id: fit for fit in unpinned.nodes}
+    assert loose[pinned_id].offset_db != 0.0, (
+        "the fit must move this node when it is not pinned, or the test proves nothing"
+    )
+
+    overrides = tmp_path / "nodes.yaml"
+    overrides.write_text(
+        f'nodes:\n  "{pinned_id}":\n    lock_calibration: true\n'
+        '    note: "Measured on the mast."\n',
+        encoding="utf-8",
+    )
+    held = _settings(timescale_url, tmp_path / "held", radio_overrides_path=str(overrides))
+    result = _run(held, calibrate.run_once)
+    assert result is not None
+    fits = {fit.node_id: fit for fit in result.nodes}
+
+    assert fits[pinned_id].offset_db == 0.0, "a pinned node is held at zero inside the fit"
+    assert fits[pinned_id].locked is True
+    assert loose[pinned_id].locked is False
+    assert pinned_id not in result.usable()
+    # The fit still had offsets to hand out, and the other nodes took
+    # them. A fit that flattened everything would also pass the test
+    # above and would not be the fix.
+    assert any(fit.offset_db != 0.0 for fit in result.nodes if fit.node_id != pinned_id)
+    # The bias is now measured against the pinned radio, so the anchor
+    # moved and the answer is a different one.
+    assert result.model_bias_db != unpinned.model_bias_db
+
+    # And what the map reads never carries the pinned node.
+    assert pinned_id not in store.calibration_offsets(held)
+    client = TestClient(create_app(held))
+    report = client.get("/api/coverage/calibration").json()
+    entry = next(item for item in report["nodes"] if item["node_id"] == pinned_id)
+    assert entry["locked"] is True
+    assert entry["applied"] is False
+    assert entry["offset_db"] is None
+
+
 def test_calibration_rejects_a_report_from_another_preset(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]

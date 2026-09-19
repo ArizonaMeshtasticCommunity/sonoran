@@ -498,6 +498,11 @@ def calibration_offsets(settings: Settings) -> dict[str, float]:
             node_spread = float(item.get("residual_spread_db") or 0.0)
         except (TypeError, ValueError):
             continue
+        # A pinned node is fitted at zero and never applied. The file
+        # says so, and the reader checks it as well as the resolver, so
+        # a stale file from before a lock was added cannot move the map.
+        if item.get("locked") is True:
+            continue
         usable = (
             observations >= MIN_OBSERVATIONS
             and counterparties >= MIN_COUNTERPARTIES

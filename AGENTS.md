@@ -740,10 +740,36 @@ Keep all of these guards:
 4. Give no offset to a node with too little evidence or wide scatter.
 5. Reject the whole fit when its bias or scatter is outside 20 dB.
 6. Run a due calibration before coverage, never beside it.
+7. Hold a `lock_calibration` node at zero **inside** the fit, and keep
+   the 15 dB bound when you do.
+
+Guard 7 has a trap in it. The bound used to be applied by the same
+projection that held the offsets summing to zero. A pinned node is
+already the anchor, so a pinned fit must not re-centre anything — that
+would drag the pinned node off zero — and it therefore does not run that
+projection. The bound is then applied on its own, in the same place. Take
+the clip out and you are back to the -1830.35 dB estimate this section
+is about. `test_pinning_a_node_still_bounds_the_others` pins it.
+
+Pinning also moves the reported model bias, on purpose. With nothing
+pinned the bias is measured against the mean of every guess; with a node
+pinned it is measured against that radio. Two runs either side of a lock
+are two different answers and neither is a fault.
 
 The live fit on 2026-08-21 had a bias near -41 dB and was rejected. Do
 not increase the guard to make live data pass. First prove that absence
 from an aggregated neighbour list means the radio link was silent.
+
+The 2026-09-18 run read 420 links and 362 of them, 86 percent, were
+censored. The solver handles censoring correctly — measured against
+planted truth it recovers a bias to within 0.6 dB at 48 percent
+censoring — and it cannot survive a censored observation that is not
+true: false silence drives the fitted bias down almost linearly with its
+share while the reported-only mean stays at zero. `summary.mean_db` in
+`calibration.json` is that reported-only mean, it is already written on
+every run, and it is the one number that says whether the censored side
+or the reported side is doing it. Read it before changing anything. See
+`docs/ISSUES.md` 2.4.2.
 
 ## 10. Reference documents
 

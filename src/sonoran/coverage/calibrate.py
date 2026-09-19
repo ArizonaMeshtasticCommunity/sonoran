@@ -40,6 +40,21 @@ Adding a constant to every offset adds twice that to every residual, so
 the offsets are only fixed once their sum is. They are anchored at zero
 and whatever is left over is reported as one bias for the whole model.
 
+## Nodes an operator has pinned
+
+`lock_calibration` in the overrides file says the radio facts of a node
+are already known to be right. Such a node is held at zero **inside**
+the fit, not merely kept from taking its offset afterwards. It is a
+parameter the fit does not have, so every link it is in charges the
+whole of its residual to the other end and to the model bias.
+
+A pinned node is also the anchor. The zero-sum rule above exists only
+to remove the one freedom the model has, and a node held at zero
+removes it already. Re-centring the rest on their own mean would drag
+the pinned node off zero, so the fit centres nothing when anything is
+pinned, and the bias it reports is then measured against the pinned
+radios rather than against the average of every guess.
+
 ## Why the obvious fit is wrong
 
 The mesh only reports links that worked. Fitting to those alone says
@@ -61,6 +76,7 @@ two repeat until they stop moving. It needs no library beyond numpy and
 """
 
 import math
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -125,15 +141,23 @@ MAX_TRUSTED_SPREAD_DB = 20.0
 MAX_TRUSTED_BIAS_DB = 20.0
 
 
-def _bounded_anchor(values: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+def _bounded_anchor(
+    values: npt.NDArray[np.float64], *, hold_sum_at_zero: bool = True
+) -> npt.NDArray[np.float64]:
     """Hold offsets in their allowed range and keep their sum at zero.
 
     This is the projection onto the bounded, zero-sum parameter space.
     The fit must be bounded while censored links are filled in. A final
     clamp alone lets one silent node pull the other estimates away.
+
+    `hold_sum_at_zero` is false when an operator has pinned a node. The
+    pinned zero is then the anchor, and shifting the free offsets to
+    sum to zero would move the fit off it. The bound still applies.
     """
     if not values.size:
         return values
+    if not hold_sum_at_zero:
+        return np.clip(values, -MAX_CALIBRATION_DB, MAX_CALIBRATION_DB)
 
     # Find the shift that makes the clipped values sum to zero. The
     # sum decreases as the shift increases, so bisection has one stable
@@ -183,10 +207,16 @@ class NodeFit:
     # The spread of what is left after the offset is applied. A large
     # value means the offset does not explain this node.
     residual_spread_db: float
+    # True when an operator pinned this node with `lock_calibration`.
+    # Its offset is held at zero inside the fit, so it is reported for
+    # completeness and never applied.
+    locked: bool = False
 
     @property
     def is_usable(self) -> bool:
         """Return true when there is enough evidence to use this."""
+        if self.locked:
+            return False
         return (
             self.observations >= MIN_OBSERVATIONS
             and self.counterparties >= MIN_COUNTERPARTIES
@@ -269,11 +299,20 @@ def truncated_mean(limit: float, sigma: float = NOISE_SIGMA_DB) -> float:
 def fit_offsets(
     observations: list[LinkObservation],
     max_rounds: int = MAX_ROUNDS,
+    *,
+    locked: Collection[str] = (),
 ) -> Calibration:
     """Return the per-node offsets the measurements imply.
 
-    Every offset is anchored so they sum to zero. What is left over is
-    reported as the bias of the model itself.
+    `locked` names the nodes an operator pinned with
+    `lock_calibration`. Each one is held at zero inside the fit rather
+    than fitted and then ignored, so it constrains the other offsets
+    and the model bias instead of floating free of them.
+
+    With nothing pinned, every offset is anchored so they sum to zero.
+    What is left over is reported as the bias of the model itself. With
+    something pinned, the pinned zeros are the anchor and the bias is
+    measured against them.
     """
     if not observations:
         return Calibration(model_bias_db=0.0)
@@ -282,15 +321,24 @@ def fit_offsets(
     index = {name: position for position, name in enumerate(names)}
     count = len(names)
 
+    # A pinned node that took part in nothing is not a parameter of
+    # this fit at all, so only the ones the measurements name matter.
+    held = {name for name in names if name in locked}
+    free = np.array([position for name, position in index.items() if name not in held], dtype=int)
+
     # One row for each link, with a one at each end of it.
     rows = np.zeros((len(observations), count), dtype=np.float64)
     for row, item in enumerate(observations):
         rows[row, index[item.transmitter]] += 1.0
         rows[row, index[item.receiver]] += 1.0
+    # A pinned node has no column: its offset is zero and stays zero,
+    # so its end of a link charges nothing and the rest of the fit has
+    # to explain the whole residual.
+    #
     # The last column is the bias of the model over the whole mesh. It
     # must take part in every censored-data round. Leaving it until the
     # end makes the node offsets absorb a network-wide mismatch.
-    design = np.column_stack((rows, np.ones(len(observations), dtype=np.float64)))
+    design = np.column_stack((rows[:, free], np.ones(len(observations), dtype=np.float64)))
 
     measured = np.array([item.residual_db for item in observations], dtype=np.float64)
     censored = np.array([item.censored for item in observations], dtype=bool)
@@ -302,17 +350,24 @@ def fit_offsets(
 
     for attempt in range(1, max_rounds + 1):
         solved, *_ = np.linalg.lstsq(design, filled, rcond=None)
-        solved_offsets = solved[:-1]
+        solved_free = solved[:-1]
         solved_bias = float(solved[-1])
         # Anchor and bound the offsets exactly.
         #
         # Adding a value to each node and taking twice that value from
         # the bias gives the same prediction. Move that freedom into
         # the bias first. Then apply the physical node bound.
-        mean_offset = float(np.mean(solved_offsets))
-        solved_offsets = solved_offsets - mean_offset
-        solved_bias += 2.0 * mean_offset
-        solved_offsets = _bounded_anchor(solved_offsets)
+        #
+        # A pinned node has already removed that freedom, and shifting
+        # the free offsets would move the fit off the pinned zero, so
+        # nothing is re-centred when anything is pinned.
+        if not held and solved_free.size:
+            mean_offset = float(np.mean(solved_free))
+            solved_free = solved_free - mean_offset
+            solved_bias += 2.0 * mean_offset
+        solved_free = _bounded_anchor(solved_free, hold_sum_at_zero=not held)
+        solved_offsets = np.zeros(count, dtype=np.float64)
+        solved_offsets[free] = solved_free
         # Clipping changes the best bias. Its least-squares answer is
         # the mean left after the bounded node terms.
         solved_bias = float(np.mean(filled - rows @ solved_offsets))
@@ -365,6 +420,7 @@ def fit_offsets(
                 censored=sum(1 for item in mine if item.censored),
                 reported=sum(1 for item in mine if not item.censored),
                 residual_spread_db=round(float(np.std(left)), 2) if left else 0.0,
+                locked=name in held,
             )
         )
 
@@ -376,11 +432,12 @@ def fit_offsets(
         residual_spread_db=round(spread, 2),
     )
     logger.info(
-        "calibration fitted %s nodes from %s links in %s rounds, "
+        "calibration fitted %s nodes from %s links in %s rounds, %s node(s) pinned at zero, "
         "model bias %.1f dB, scatter %.1f dB%s",
         sum(1 for fit in fits if fit.is_usable),
         len(observations),
         rounds,
+        len(held),
         bias,
         spread,
         "" if result.is_trusted else " (too wide to use)",

@@ -235,6 +235,87 @@ that absence from an aggregated neighbour list is not reliable evidence
 that a link was silent. Do not raise the guard to make the fit apply.
 Validate that evidence first.
 
+### 2.4.2 The rejected fit is dominated by censored links
+
+**State:** Open. Issue #3, item 3.
+
+Three live readings of the same fault:
+
+| Run | Links | Censored | Model bias | Scatter | Applied |
+|---|---|---|---|---|---|
+| 2026-08-21 | — | — | -41 dB | — | 0 |
+| 2026-08-22 | 771 | — | -46.3 dB | 12.7 dB | 0 |
+| 2026-09-18 | 420 | 362 (86%) | -44.62 dB | 11.17 dB | 0 |
+
+The solver is not the fault. `fit_offsets` is a correct EM for a Tobit
+model: a censored link is filled with the conditional mean of the
+truncated normal it must have come from, the offsets are refitted, and
+the complete-data likelihood is quadratic, so ordinary least squares on
+the filled values is the right M step. Measured against planted truth,
+it recovers a zero bias to within 0.6 dB at 48 percent censoring, and a
+planted -6 dB bias to within 0.5 dB.
+
+What it cannot survive is a censored observation that is not true. The
+same harness, with links that really were heard and simply never
+reached the neighbour list, gives:
+
+| Heard links left out of the list | Censored | Reported-only mean | Fitted bias |
+|---|---|---|---|
+| 0% | 1% | -0.03 dB | -0.17 dB |
+| 25% | 26% | -0.73 dB | -7.50 dB |
+| 50% | 53% | -0.11 dB | -14.80 dB |
+| 75% | 74% | 0.18 dB | -21.89 dB |
+| 90% | 88% | 0.13 dB | -28.79 dB |
+| 98% | 98% | 3.44 dB | -38.76 dB |
+
+The true bias in every row is zero. The fitted bias tracks the share of
+false silence almost linearly, and the reported-only mean stays near
+zero throughout. That is the live signature: 86 percent censored, a
+scatter on the reported links that is ordinary for a LoRa SNR against a
+terrain model, and a mesh-wide bias no propagation error explains.
+
+Two structural reasons the censored side is that large, and neither is
+evidence about a radio:
+
+- `MAX_CANDIDATES` takes up to 40 silent candidates for each listener,
+  against however few neighbours it actually named. 362 censored links
+  over roughly ten listeners is that cap, not a measurement.
+- The NeighborInfo module is off on most nodes, and where it is on the
+  list it publishes is bounded and ages out. A node that heard a
+  neighbour and did not list it is charged with silence.
+
+**The one measurement that settles it** is already written down and has
+not been read: `summary.mean_db` in `calibration.json` is the mean
+residual over the reported links alone, and the job logs it as "model
+out by %.1f dB". Near zero with a fitted bias near -45 says the censored
+side is doing it, which is the table above. Also near -45 says the
+reported side is wrong on its own, and then the suspects are different:
+a LoRa SNR reading saturates near +12 dB, so a strong close link reads
+far lower than the model predicts, and the same harness shows a cap at
++12 dB alone producing a -20 dB bias with nothing censored at all.
+`noise_floor_dbm` also assumes thermal noise, and a band with
+interference in it puts every derived power below the truth.
+
+Do not raise the trust guard. `store.calibration_offsets` and
+`Calibration.is_trusted` both refused this fit and both were right.
+
+### 2.4.3 The fit charges no receive antenna gain at the listener
+
+**State:** Open. Found while reading 2.4.2, not measured live.
+
+`jobs/calibrate.py::_fill` recovers a path loss with
+`listener_eirp - link.dbm` and then predicts the far end with
+`peer.effective_eirp_dbm - loss_db`. Nothing adds the gain of the
+antenna the listener received on, although the coverage job does exactly
+that for its handheld through `params.received_dbm`.
+
+The sign is the opposite of the live bias — a missing receive gain makes
+the model pessimistic, not optimistic — so this is not the cause of
+2.4.2. The size is small too: 2.15 dBi for a stock node, more only where
+an operator has written a real antenna down. It is still a term the
+model is missing at one end of every link it reads, and it belongs in
+the same piece of work.
+
 ### 2.5 The planner draws 90 m terrain only
 
 **State:** Open.

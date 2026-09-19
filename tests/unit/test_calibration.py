@@ -26,8 +26,8 @@ from sonoran.coverage.calibrate import (
     truncated_mean,
 )
 from sonoran.db.models import NeighborMetrics
-from sonoran.jobs.calibrate import Peer, _matches_current_preset
-from sonoran.radio.overrides import Overrides
+from sonoran.jobs.calibrate import Peer, _matches_current_preset, locked_nodes
+from sonoran.radio.overrides import NodeOverride, Overrides
 from sonoran.radio.presets import preset_by_key
 from sonoran.radio.resolve import MAX_CALIBRATION_DB, resolve_profile
 
@@ -357,6 +357,130 @@ def test_a_node_whose_whole_case_is_silence_is_not_corrected() -> None:
 
     assert fits["!loud"].reported == 9
     assert fits["!loud"].is_usable
+
+
+# --- a node an operator has pinned -------------------------------------
+#
+# `lock_calibration` says the radio facts of a node are already right.
+# The fit has to hold it at zero while it solves, not fit it and then
+# drop the answer on the way to the map: an offset that was free to
+# move absorbed evidence that belonged to the other end of every link
+# it was in, and to the model bias.
+
+
+def _pinned_links() -> list[LinkObservation]:
+    """Links where one node is right and the other three are 5 dB out.
+
+    With nothing pinned the fit has no way to tell that apart from
+    every node being 1.25 dB out on a model that is 7.5 dB optimistic:
+    both explain the measurements exactly. The lock is what chooses.
+    """
+    rng = np.random.default_rng(20260918)
+    planted = {"!anchor": 0.0, "!a": 5.0, "!b": 5.0, "!c": 5.0}
+    return _links(planted, rng, per_pair=30, noise_db=0.5)
+
+
+def test_a_pinned_node_is_held_at_zero_inside_the_fit() -> None:
+    """The lock must constrain the fit, not just its output.
+
+    Issue #3, item 4: "It currently prevents application of the offset
+    but does not hold the node at zero inside the fit."
+    """
+    links = _pinned_links()
+
+    floating = {fit.node_id: fit.offset_db for fit in fit_offsets(links).nodes}
+    # Without the lock the zero-sum anchor puts the known-good node
+    # 3.75 dB below nothing at all. That is the bug.
+    assert floating["!anchor"] == pytest.approx(-3.75, abs=0.4)
+
+    pinned = fit_offsets(links, locked={"!anchor"})
+    found = {fit.node_id: fit.offset_db for fit in pinned.nodes}
+    assert found["!anchor"] == 0.0, "a pinned node is a parameter the fit has not got"
+    for name in ("!a", "!b", "!c"):
+        assert found[name] == pytest.approx(5.0, abs=0.5), name
+
+
+def test_a_pinned_node_is_what_the_model_bias_is_measured_against() -> None:
+    """The anchor moves, so the global bias moves with it.
+
+    Anchoring on the mean of every guess reports a mesh-wide error that
+    is really three nodes being wrong. Anchoring on a radio somebody
+    has measured reports zero, which is the true answer here.
+    """
+    links = _pinned_links()
+
+    assert fit_offsets(links).model_bias_db == pytest.approx(7.5, abs=0.8)
+    assert fit_offsets(links, locked={"!anchor"}).model_bias_db == pytest.approx(0.0, abs=0.8)
+
+
+def test_a_pinned_node_is_never_applied_however_much_evidence_it_has() -> None:
+    """Plenty of evidence is not a reason to overrule an operator."""
+    pinned = fit_offsets(_pinned_links(), locked={"!anchor"})
+    fits = {fit.node_id: fit for fit in pinned.nodes}
+
+    assert fits["!anchor"].locked is True
+    assert fits["!anchor"].observations >= MIN_OBSERVATIONS
+    assert not fits["!anchor"].is_usable
+    assert "!anchor" not in pinned.usable()
+    # And the nodes that are not pinned still are.
+    assert set(pinned.usable()) == {"!a", "!b", "!c"}
+
+
+def test_pinning_a_node_still_bounds_the_others() -> None:
+    """The lock removes the anchor. It must not remove the bound.
+
+    The zero-sum projection is what used to apply the 15 dB bound, and
+    a pinned fit does not run it. See `AGENTS.md` 9.21, guard 2.
+    """
+    links = [LinkObservation("!quiet", f"!peer{index}", -80.0, censored=True) for index in range(7)]
+    links.extend(
+        LinkObservation(f"!peer{first}", f"!peer{second}", 60.0)
+        for first in range(7)
+        for second in range(first + 1, 7)
+    )
+
+    result = fit_offsets(links, locked={"!peer0"})
+
+    assert all(abs(fit.offset_db) <= MAX_CALIBRATION_DB for fit in result.nodes)
+    assert next(fit for fit in result.nodes if fit.node_id == "!peer0").offset_db == 0.0
+
+
+def test_pinning_every_node_leaves_the_mismatch_in_the_model_bias() -> None:
+    """A mesh where every radio is known is a question about the model."""
+    rng = np.random.default_rng(4)
+    links = _links({"!a": 0.0, "!b": 0.0, "!c": 0.0}, rng, per_pair=20, noise_db=0.5, bias_db=-9.0)
+
+    result = fit_offsets(links, locked={"!a", "!b", "!c"})
+
+    assert all(fit.offset_db == 0.0 for fit in result.nodes)
+    assert result.model_bias_db == pytest.approx(-9.0, abs=0.5)
+    assert result.usable() == {}
+
+
+def test_pinning_a_node_the_measurements_never_name_changes_nothing() -> None:
+    """A lock on a node with no links is not a parameter of this fit."""
+    rng = np.random.default_rng(6)
+    links = _links({"!a": 3.0, "!b": 0.0, "!c": -3.0}, rng, per_pair=20, noise_db=0.5)
+
+    plain = fit_offsets(links)
+    absent = fit_offsets(links, locked={"!nowhere"})
+
+    assert [fit.node_id for fit in absent.nodes] == [fit.node_id for fit in plain.nodes]
+    assert absent.model_bias_db == plain.model_bias_db
+    assert all(fit.locked is False for fit in absent.nodes)
+
+
+def test_the_job_reads_the_lock_out_of_the_overrides_file() -> None:
+    """The flag an operator writes is what reaches the fit."""
+    overrides = Overrides(
+        {
+            "!held": NodeOverride(lock_calibration=True, note="measured on a mast"),
+            "!free": NodeOverride(antenna_gain_dbi=5.8),
+            "!said_no": NodeOverride(lock_calibration=False),
+        }
+    )
+    assert locked_nodes(overrides) == frozenset({"!held"})
+    assert locked_nodes(Overrides({})) == frozenset()
 
 
 # --- what the fit is allowed to read -----------------------------------

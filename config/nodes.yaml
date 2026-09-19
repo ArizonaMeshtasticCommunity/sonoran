@@ -61,6 +61,12 @@ nodes:
   #   # True holds this node against the calibration job. Use it when
   #   # the build is known exactly, or when the measurements for this
   #   # node are known to mislead.
+  #   #
+  #   # The fit holds a locked node at zero while it solves, so the
+  #   # node anchors every other offset and the mesh-wide model bias is
+  #   # then measured against this radio rather than against the
+  #   # average of every guess. Lock a node you have measured, not one
+  #   # you would like to be right.
   #   lock_calibration: false
   #
   #   note: "Rooftop omni on the water tank. Measured 2026-03."
