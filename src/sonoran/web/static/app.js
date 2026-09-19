@@ -483,7 +483,7 @@ PAGES.dashboard = async (page) => {
   replace($('[data-recent-nodes]', page), nodes
     ? table([
         { label: 'Node', cell: (row) => nodeChip(row) },
-        { label: 'Role', cell: (row) => row.role || '-' },
+        { label: 'Role', cell: (row) => roleCell(row.role) },
         { label: 'Heard', num: true, cell: (row) => `${ago(row.last_heard)} ago` },
       ], nodes, 'No nodes heard yet.')
     : failure(new Error('Cannot load nodes.')));
@@ -550,6 +550,21 @@ const roleColour = (role) => colour(`role-${role}`, PALETTE.muted);
 function roleLabel(role) {
   if (!role) return 'No role reported';
   return ROLE_LABELS.get(role) || role.replace(/_/g, ' ').toLowerCase();
+}
+
+/** A role as a table cell: readable, with the wire value on hover.
+ *
+ * These cells printed the protocol enum, and the column is narrow enough
+ * on the dashboard that `CLIENT_MUTE` was cut to `CLIENT_` — which is
+ * not a role, but reads exactly like one. Truncation that looks like a
+ * value is worse than truncation that looks like truncation.
+ *
+ * `roleLabel` already existed and was already used by the map legend and
+ * the node chips. The tables simply never called it.
+ */
+function roleCell(role) {
+  if (!role) return el('span', { class: 'muted', text: '-' });
+  return el('span', { title: role, text: roleLabel(role) });
 }
 
 /**
@@ -2026,7 +2041,7 @@ PAGES.nodes = async (page) => {
     { label: 'Node', cell: (row) => nodeChip(row) },
     { label: 'ID', cell: (row) => el('code', { text: row.node_id }) },
     { label: 'Hardware', cell: (row) => row.hw_model || '-' },
-    { label: 'Role', cell: (row) => row.role || '-' },
+    { label: 'Role', cell: (row) => roleCell(row.role) },
     {
       label: 'Flags',
       cell: (row) => el('span', {},
@@ -2121,7 +2136,7 @@ function identityPanel(node) {
     ['Long name', node.long_name || 'not reported'],
     ['Short name', node.short_name || 'not reported'],
     ['Hardware', node.hw_model || 'unknown'],
-    ['Role', node.role || 'unknown'],
+    ['Role', node.role ? `${roleLabel(node.role)} (${node.role})` : 'unknown'],
     ['Licensed', node.is_licensed ? 'yes' : 'no'],
     ['MQTT gateway', node.is_mqtt_gateway ? 'yes' : 'no'],
     ['Channel', node.last_channel || 'unknown'],

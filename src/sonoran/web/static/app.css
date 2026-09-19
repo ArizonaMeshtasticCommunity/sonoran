@@ -219,6 +219,9 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: .88rem; }
 th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+/* A clipped cell must look clipped. Without this a value cut mid-word
+   reads as a shorter value that happens to exist. */
+td { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
 th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
 tbody tr:hover { background: var(--panel-2); }
 td.wrap { white-space: normal; }
