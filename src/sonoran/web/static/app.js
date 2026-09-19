@@ -73,9 +73,32 @@ const PALETTE = {
   stale: colour('role-stale', '#7d6857'),
 };
 
-/** Return the colour for a signal quality, or the accent when unknown. */
+/** Say what one traffic observation actually is.
+ *
+ * `direct` is false for a node gatewaying its own packet, because there
+ * was no radio hop to measure — but calling that "relayed" says another
+ * node carried it, which is the one thing it rules out. The packet page
+ * has always distinguished the two.
+ */
+function trafficKind(event) {
+  if (event.from.node_id === event.gateway.node_id) return 'its own upload';
+  return event.direct ? 'direct' : 'relayed';
+}
+
+function trafficKindClass(event) {
+  if (event.from.node_id === event.gateway.node_id) return 'tag';
+  return event.direct ? 'tag router' : 'tag';
+}
+
+/** Return the colour for a signal quality, dimmed when there is none.
+ *
+ * An unmeasured link used to come back as the accent, which is the
+ * brightest colour on the map: the one link nobody had a figure for
+ * drew louder than every link that had been measured. Unknown is not a
+ * grade, and it must not outrank one.
+ */
 function snrColour(snr) {
-  if (snr == null) return PALETTE.accent;
+  if (snr == null) return PALETTE.stale;
   if (snr >= 0) return PALETTE.good;
   if (snr >= -10) return PALETTE.warn;
   return PALETTE.bad;
@@ -848,7 +871,13 @@ function flashTraffic(event) {
 function flashNewTraffic(events, firstPass, cutoffMs) {
   let started = 0;
   for (const event of events) {
-    const key = `${event.packet_id}-${event.gateway.node_id}-${event.time}`;
+    // Keyed on the packet and the gateway that uploaded it, never on
+    // the time. One gateway uploads the same packet more than once, and
+    // keying on the time drew a second line over the first: two strokes
+    // at 0.7 opacity read as one at 0.91, which is a quantity nobody
+    // measured. The sending node is part of the key because a packet ID
+    // is only unique per sender (AGENTS.md 9.1).
+    const key = `${event.from.node_id}-${event.packet_id}-${event.gateway.node_id}`;
     const known = trafficSeen.has(key);
     trafficSeen.set(key, Date.parse(event.time) || Date.now());
     if (known || !event.has_line || firstPass) continue;
@@ -1146,10 +1175,13 @@ PAGES.map = async (page) => {
             el('div', {}, nodeChip(event.from)),
             el('div', { class: 'meta' },
               el('span', { text: `via ${event.gateway.display_name}` }),
-              event.snr != null ? snrCell(event.snr) : null,
-              // A relayed observation is not evidence of a radio link.
-              el('span', { class: event.direct ? 'tag router' : 'tag',
-                text: event.direct ? 'direct' : 'relayed' }),
+              // Only a direct observation measures the sender's own
+              // link. On a relayed one the SNR belongs to the last hop,
+              // which is a different pair of radios. The tooltip on the
+              // map line has always known this; the row did not, and
+              // two places reading one feed gave two answers.
+              event.direct && event.snr != null ? snrCell(event.snr) : null,
+              el('span', { class: trafficKindClass(event), text: trafficKind(event) }),
               // The packet itself, so the whole record is one click away.
               el('a', {
                 class: 'linky',
