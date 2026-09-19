@@ -1,5 +1,12 @@
 """Read-only coverage map endpoints.
 
+These are the dashboard's. They serve every site set a run published,
+including a diagnostic one, because the dashboard is the audience a
+diagnostic is for. They are not the public surface and must never be
+exposed to one: see `api/routes/embed.py` for the tiles a public
+viewer may fetch, and `docs/API.md` 3B for the exact list of paths a
+reverse proxy may open.
+
 The coverage job writes tiles and a manifest to disk. This module serves
 them. It computes nothing: a request that needed a prediction would take
 seconds and could not be cached.
@@ -16,7 +23,7 @@ from starlette.responses import Response
 from sonoran.coverage import store
 from sonoran.coverage.render import TILE_SIZE
 from sonoran.coverage.store import LAYER_LABELS, LAYERS
-from sonoran.roles import SITE_SET_ROLES
+from sonoran.roles import SITE_SET_KEYS
 
 router = APIRouter(prefix="/api/coverage", tags=["coverage"])
 
@@ -113,7 +120,7 @@ async def coverage_tile(
     """
     if layer not in LAYERS:
         raise HTTPException(status_code=422, detail=f"not a coverage layer: {layer}")
-    if site_set not in SITE_SET_ROLES:
+    if site_set not in SITE_SET_KEYS:
         raise HTTPException(status_code=422, detail=f"not a coverage site set: {site_set}")
 
     # A tile index must fit the zoom it names, or the run is asked for

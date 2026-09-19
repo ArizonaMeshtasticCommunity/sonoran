@@ -13,6 +13,10 @@ still there and still assert `DENY`. A test that changes to let a new
 feature through stops protecting the old one.
 """
 
+import inspect
+import json
+import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -339,3 +343,359 @@ def test_the_public_page_says_which_kind_of_empty_it_is() -> None:
     script = Path("src/sonoran/web/static/embed-coverage.js").read_text(encoding="utf-8")
     assert "reason === 'diagnostic'" in script
     assert "No coverage map has been made yet." in script
+
+
+# --- the public tiles --------------------------------------------------
+#
+# The audit finding these pin: `embed/sanitise.py` is documented as the
+# one place that decides what a public viewer sees, and that was true
+# of the JSON and false of the pixels. The embed drew its tiles from
+# `/api/coverage/tiles`, which is the dashboard's route and carries no
+# embed switch and no diagnostic test, so turning the embed on meant
+# opening that path at the proxy. One path segment then fetched the
+# client map of the same run. See `AGENTS.md` 9.25 and 9.27.
+#
+# Every test here builds its URL from `embed-coverage.js` rather than
+# from a constant, because the question is not "is this route safe" but
+# "is the path the public embed actually exposes safe". A fix that
+# added a gated route and left the page pointing at the old one would
+# pass a test written against a constant.
+
+# One run, and the two maps it can publish. The bytes differ so a test
+# can say which map answered, rather than only that something did.
+INFRASTRUCTURE_PNG = b"\x89PNG\r\n\x1a\ninfrastructure"
+EXTENDED_PNG = b"\x89PNG\r\n\x1a\nextended"
+
+TILE_STAMP = "20260101T000000Z"
+TILE_PRESET = "LongFast"
+TILE_COORDS = (7, 20, 50)
+
+
+def _tile_template() -> str:
+    """Return the tile URL the embed page builds, with its placeholders.
+
+    Read from the script, not written here. This is the path an
+    operator has to open at the reverse proxy for the embed to draw
+    anything, which is the surface the finding is about.
+    """
+    source = (STATIC_DIR / "embed-coverage.js").read_text(encoding="utf-8")
+    matches = re.findall(r"`(/[^`]*/tiles/[^`]*)`", source)
+    assert len(matches) == 1, f"expected one tile URL in the embed script, found {matches}"
+    return matches[0]
+
+
+def _public_tile_url(**names: str) -> str:
+    """Return the embed's own tile URL, with the placeholders filled."""
+    url = _tile_template()
+    for name, value in names.items():
+        url = url.replace("${" + name + "}", value)
+    assert "${" not in url, f"a placeholder was left in {url}"
+    zoom, x, y = TILE_COORDS
+    return f"{url}{zoom}/{x}/{y}.png"
+
+
+def _embed_tile_url() -> str:
+    """The URL the public page asks for, exactly as the page builds it.
+
+    `SITE_SET` is filled too, although the page no longer names one.
+    The version before this fix named it in the path, and a helper that
+    could not fill it would fail these tests on a missing placeholder
+    instead of on the leak they are about. A guard is only verified
+    once it has been seen to refuse the thing it exists to refuse.
+    """
+    return _public_tile_url(
+        **{
+            "summary.stamp": TILE_STAMP,
+            "state.preset": TILE_PRESET,
+            "LAYER": "usable",
+            "SITE_SET": "infrastructure",
+        }
+    )
+
+
+def _public_tile_prefix() -> str:
+    """Return the part of the tile URL before the first placeholder."""
+    return _tile_template().split("${")[0]
+
+
+def _write_run(
+    root: Path,
+    *,
+    is_diagnostic: bool,
+    site_sets: dict[str, bytes],
+    stamp: str = TILE_STAMP,
+) -> None:
+    """Publish one coverage run on disk, with the tiles it wrote."""
+    run = root / "runs" / stamp
+    zoom, x, y = TILE_COORDS
+    for site_set, png in site_sets.items():
+        tile = run / TILE_PRESET / site_set / "usable" / str(zoom) / str(x) / f"{y}.png"
+        tile.parent.mkdir(parents=True, exist_ok=True)
+        tile.write_bytes(png)
+    (run / "manifest.json").write_text(
+        json.dumps(
+            {
+                "stamp": stamp,
+                "is_diagnostic": is_diagnostic,
+                "bounds": [33.0, -113.0, 34.0, -112.0],
+                "min_zoom": 6,
+                "max_zoom": 11,
+                "presets": [{"preset": TILE_PRESET, "sensitivity_dbm": -130.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "index.json").write_text(json.dumps({"current": stamp}), encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _forget_the_tile_gate() -> Iterator[None]:
+    """Let each test publish its own run.
+
+    The gate keeps its answer for one stamp of one cache directory, and
+    every test here uses the same stamp in a different `tmp_path`.
+    """
+    from sonoran.api.routes import embed
+
+    embed._publishable = None
+    yield
+    embed._publishable = None
+
+
+def test_the_public_tiles_cannot_be_asked_for_the_client_map(tmp_path: Path) -> None:
+    """The finding, path A. `COVERAGE_INCLUDE_CLIENTS` is on live.
+
+    A run publishes the infrastructure map and the wider one that
+    includes the nodes which repeat, into the same run directory. The
+    wider map draws a footprint around every client node it was given,
+    and a client node is usually somebody's house.
+
+    Before this was fixed the embed drew from the dashboard's tile
+    route, so substituting one path segment of the embed's own URL
+    returned those footprints. The site set is not in the public URL at
+    all now: there is nowhere to write it.
+    """
+    _write_run(
+        tmp_path,
+        is_diagnostic=False,
+        site_sets={"infrastructure": INFRASTRUCTURE_PNG, "extended": EXTENDED_PNG},
+    )
+    client = _client(embed_enabled=True, coverage_cache_dir=str(tmp_path))
+
+    # The page itself still draws.
+    allowed = client.get(_embed_tile_url())
+    assert allowed.status_code == 200
+    assert allowed.content == INFRASTRUCTURE_PNG
+
+    # And nothing under the public prefix answers with the client map.
+    zoom, x, y = TILE_COORDS
+    prefix = _public_tile_prefix()
+    for candidate in (
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/extended/usable/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/extended/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/usable/extended/{zoom}/{x}/{y}.png",
+    ):
+        response = client.get(candidate)
+        assert response.status_code >= 400, candidate
+        assert response.content != EXTENDED_PNG, candidate
+
+    # The dashboard still has it. That is what the dashboard is for,
+    # and this change must not have taken it away.
+    zoom, x, y = TILE_COORDS
+    dashboard = client.get(
+        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/extended/usable/{zoom}/{x}/{y}.png"
+    )
+    assert dashboard.status_code == 200
+    assert dashboard.content == EXTENDED_PNG
+
+
+def test_a_diagnostic_run_is_not_reachable_through_the_public_tiles(tmp_path: Path) -> None:
+    """The finding, path B, and the worse one.
+
+    `COVERAGE_SITE_ROLES=ALL` predicts from every node. The job used to
+    write that run's tiles under a directory named `infrastructure`
+    regardless, so the path said "routers and repeaters" and held a
+    footprint around every client in region. `/api/embed/coverage`
+    refused the run and the tiles were served anyway, behind nothing
+    but a stamp on a six-hour cadence.
+
+    The tiles here are written the way the old job wrote them, because
+    a run made before this fix is still on disk on a live deployment.
+    """
+    _write_run(tmp_path, is_diagnostic=True, site_sets={"infrastructure": EXTENDED_PNG})
+    client = _client(embed_enabled=True, coverage_cache_dir=str(tmp_path))
+
+    response = client.get(_embed_tile_url())
+    assert response.status_code == 404
+    assert response.content != EXTENDED_PNG
+
+    # The summary refuses it too, as it always has.
+    summary = client.get("/api/embed/coverage").json()
+    assert summary["available"] is False
+    assert summary["reason"] == "diagnostic"
+
+    # And the dashboard keeps it, which is the point of the feature.
+    zoom, x, y = TILE_COORDS
+    dashboard = client.get(
+        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/infrastructure/usable/{zoom}/{x}/{y}.png"
+    )
+    assert dashboard.status_code == 200
+
+
+def test_the_public_tiles_serve_the_published_run_only(tmp_path: Path) -> None:
+    """A stamp is a cache key here, not a lookup.
+
+    `KEEP_RUNS` is two, so the run before the current one is still on
+    disk. The public route answers for the published run and refuses
+    the rest, which is also what stops a stamp being worth guessing.
+    """
+    older = "20251231T180000Z"
+    _write_run(tmp_path, is_diagnostic=False, site_sets={"infrastructure": INFRASTRUCTURE_PNG})
+    run = tmp_path / "runs" / older
+    zoom, x, y = TILE_COORDS
+    tile = run / TILE_PRESET / "infrastructure" / "usable" / str(zoom) / str(x) / f"{y}.png"
+    tile.parent.mkdir(parents=True, exist_ok=True)
+    tile.write_bytes(EXTENDED_PNG)
+
+    client = _client(embed_enabled=True, coverage_cache_dir=str(tmp_path))
+    prefix = _public_tile_prefix()
+    stale = client.get(f"{prefix}{older}/{TILE_PRESET}/usable/{zoom}/{x}/{y}.png")
+    assert stale.status_code == 404
+    assert stale.content != EXTENDED_PNG
+
+
+def test_every_public_tile_path_is_gone_while_the_embed_is_off(tmp_path: Path) -> None:
+    """And it answers without opening a database session.
+
+    `AGENTS.md` 9.16.3: a handler body runs after every parameter is
+    resolved, so a check there has already asked the database for a
+    request that must never have reached it. The tile route is on the
+    embed router for that reason and not only for tidiness.
+    """
+    _write_run(tmp_path, is_diagnostic=False, site_sets={"infrastructure": INFRASTRUCTURE_PNG})
+
+    def never(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the embed opened a database session while it was off")
+
+    app = create_app(Settings(_env_file=None, coverage_cache_dir=str(tmp_path)))
+    app.state.session_factory = never
+    client = TestClient(app)
+
+    zoom, x, y = TILE_COORDS
+    prefix = _public_tile_prefix()
+    for path in (
+        _embed_tile_url(),
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/usable/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/infrastructure/usable/{zoom}/{x}/{y}.png",
+        "/embed/coverage",
+        "/api/embed/coverage",
+        "/api/embed/nodes",
+    ):
+        assert client.get(path).status_code == 404, path
+
+
+def test_the_dashboard_tile_route_still_serves_the_dashboard(tmp_path: Path) -> None:
+    """The fix must not be a removal.
+
+    The dashboard reads every site set a run published, by name, from
+    its own route. Narrowing that route would take the diagnostic away
+    from the only audience it is for.
+    """
+    _write_run(
+        tmp_path,
+        is_diagnostic=False,
+        site_sets={"infrastructure": INFRASTRUCTURE_PNG, "extended": EXTENDED_PNG},
+    )
+    client = _client(embed_enabled=False, coverage_cache_dir=str(tmp_path))
+    zoom, x, y = TILE_COORDS
+    for site_set, png in (("infrastructure", INFRASTRUCTURE_PNG), ("extended", EXTENDED_PNG)):
+        response = client.get(
+            f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/{site_set}/usable/{zoom}/{x}/{y}.png"
+        )
+        assert response.status_code == 200
+        assert response.content == png
+        assert "immutable" in response.headers.get("Cache-Control", "")
+
+
+def _flatten(routes: object) -> Iterator[object]:
+    """Yield every route, through the routers an include left in place.
+
+    FastAPI keeps an included router as one `_IncludedRouter` entry
+    rather than copying its routes up, and that entry has no path. So
+    walking a router for a path finds nothing inside an included one,
+    and a test that enumerates a surface that way enumerates an empty
+    set and passes. `original_router` is the way in.
+
+    A future version that copies the routes up still works here. One
+    that wraps them some third way yields an entry with no path, and
+    the test that compares the paths says so rather than passing.
+    """
+    for route in routes:  # type: ignore[attr-defined]
+        nested = getattr(route, "original_router", None)
+        if nested is not None:
+            yield from _flatten(nested.routes)
+            continue
+        yield route
+
+
+def test_the_embed_router_carries_exactly_these_routes() -> None:
+    """The public surface, written down where a change has to edit it.
+
+    A route added to this router is public the moment `EMBED_ENABLED`
+    is true. Anything new here has to be a deliberate line in this
+    list, and `docs/API.md` 3B has to say the same.
+    """
+    from sonoran.api.routes import embed
+
+    seen = {
+        (getattr(route, "path", ""), frozenset(getattr(route, "methods", set()) or set()))
+        for route in _flatten(embed.router.routes)
+    }
+    assert seen == {
+        ("/embed/coverage", frozenset({"GET"})),
+        ("/api/embed/coverage", frozenset({"GET"})),
+        ("/api/embed/nodes", frozenset({"GET"})),
+        ("/api/embed/tiles/{stamp}/{preset}/{layer}/{zoom}/{x}/{y}.png", frozenset({"GET"})),
+    }
+
+
+def test_every_public_route_refuses_before_a_handler_runs() -> None:
+    """`AGENTS.md` 9.16.3, for each route on the router.
+
+    Not a check in a body. A dependency, so the refusal happens while
+    the parameters are still being resolved.
+    """
+    from sonoran.api.routes import embed
+
+    for route in _flatten(embed.router.routes):
+        dependant = getattr(route, "dependant", None)
+        assert dependant is not None, route
+        calls = {item.call for item in dependant.dependencies}
+        assert embed._require_enabled in calls, getattr(route, "path", "")
+        if "/tiles/" in getattr(route, "path", ""):
+            assert embed._require_published_map in calls
+
+
+def test_the_public_tile_route_takes_no_site_set() -> None:
+    """The lock that cannot be picked: there is nowhere to name one.
+
+    This replaces the constant that used to sit in the browser. That
+    constant was the "second lock" of `AGENTS.md` 9.27, and it only
+    ever constrained a browser that meant no harm, because the route it
+    fed took the set from the path.
+    """
+    from sonoran.api.routes import embed
+
+    path = "/api/embed/tiles/{stamp}/{preset}/{layer}/{zoom}/{x}/{y}.png"
+    assert "{site_set}" not in path
+    source = inspect.getsource(embed.embed_tile)
+    assert "SITE_SET_INFRASTRUCTURE" in source
+    # It must not take the set from anywhere a request can reach.
+    assert "site_set" not in source
+
+    script = (STATIC_DIR / "embed-coverage.js").read_text(encoding="utf-8")
+    assert "/api/embed/tiles/" in script
+    assert "/api/coverage/tiles/" not in script
+    # And it still must not read a set from the summary it was handed.
+    assert "summary.site_sets" not in script
+    assert "state.siteSet" not in script

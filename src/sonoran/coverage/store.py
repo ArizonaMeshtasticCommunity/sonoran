@@ -12,8 +12,13 @@ step.
 The layout is:
 
     {cache}/runs/{stamp}/manifest.json
-    {cache}/runs/{stamp}/{preset}/{layer}/{z}/{x}/{y}.png
+    {cache}/runs/{stamp}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png
     {cache}/index.json
+
+The site set is part of the path because one run can publish more than
+one map. It is also the name a reader trusts, so a run that predicted
+from anything but infrastructure roles writes `diagnostic` there rather
+than `infrastructure`. See `sonoran/roles.py` and `AGENTS.md` 9.25.
 
 A run is built under `pending-{stamp}` and renamed when it is whole. A
 reader therefore never sees half a run, and a job that dies leaves

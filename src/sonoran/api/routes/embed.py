@@ -11,23 +11,46 @@ would take Web Serial and the whole navigation onto a third party page.
 
 `sonoran/embed/sanitise.py` is the only place that decides what a
 public viewer sees. Nothing here reaches around it.
+
+That claim used to hold for the JSON and not for the pixels. The embed
+drew its tiles from `/api/coverage/tiles`, which is the dashboard's
+route: it takes the site set from the path and serves whatever a run
+wrote, whatever the run was. Turning the embed on meant opening that
+path at the proxy, and one path segment then fetched the client map of
+the same run, whose footprints are centred on people's houses. A
+diagnostic run written under a directory named `infrastructure` was
+reachable the same way, behind nothing but a guessable stamp.
+
+So the public tiles are served from here, on this router, under the
+same `_require_enabled` dependency as everything else. The site set is
+not in the URL at all, the stamp is the published run, and a
+diagnostic run is refused before a handler body runs. See `AGENTS.md`
+9.25 and 9.27, and `docs/API.md` 3B for the paths a proxy may open.
 """
 
 import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Path as PathParam
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, Response
 
 from sonoran.api.dependencies import get_session
 from sonoran.api.html import as_script_json
+
+# One bound on the zoom a tile request may name, shared with the
+# dashboard route. Two copies would drift, and the lower one would
+# then be the only one anybody tested.
+from sonoran.api.routes.coverage import MAX_ZOOM
 from sonoran.config import Settings
 from sonoran.coverage import store
+from sonoran.coverage.store import LAYERS
 from sonoran.db.models import Node
 from sonoran.embed.sanitise import public_nodes
 from sonoran.positions import is_usable
+from sonoran.roles import SITE_SET_INFRASTRUCTURE
 
 
 def _require_enabled(request: Request) -> Settings:
@@ -200,3 +223,142 @@ async def embed_nodes(
     ]
     _node_cache = (now, answer)
     return answer
+
+
+# --- the public tiles --------------------------------------------------
+#
+# The pixels of the public map. `embed/sanitise.py` decides what a
+# public viewer sees, and these are the part of that answer a browser
+# fetches by the thousand, so every rule about them is here and none of
+# it is in the browser.
+#
+# Three things are held away from the URL, and each one was reachable
+# through `/api/coverage/tiles` before this route existed:
+#
+# 1. The site set. It is not a parameter. A public viewer cannot name
+#    `extended`, because there is nowhere to write it. The run publishes
+#    that map beside this one and a client node is usually somebody's
+#    house. See `AGENTS.md` 9.27.
+# 2. The run. The stamp in the URL is a cache key, not a lookup: it must
+#    be the run that is published now, and the bytes come from that run.
+#    An older or guessed stamp answers 404.
+# 3. A diagnostic run. `_require_published_map` refuses one for the
+#    whole router, so no handler body runs and no tile is read. This is
+#    `AGENTS.md` 9.16.3 one level down: a route that must refuse cannot
+#    check inside the handler.
+
+
+# What the gate decided, for one run of one cache directory.
+#
+# The gate reads the manifest, which is parsed in the event loop and
+# carries up to `MANIFEST_NODE_LIMIT` site records for each preset. A
+# map view fetches tiles by the dozen and each one asks this question,
+# so the answer is kept.
+#
+# It is keyed on the stamp rather than held for a while, because the
+# stamp changes exactly when the answer can change, and the index file
+# it is read from is thirty bytes. A hold on a clock would be either
+# long enough to serve a run that has been withdrawn or short enough to
+# be no hold at all.
+_publishable: tuple[str, str, bool] | None = None
+
+
+def _published_stamp(settings: Settings) -> str | None:
+    """Return the run a public viewer may draw, or None.
+
+    None for a deployment that has never run the job, and None for a
+    run that predicted from anything but infrastructure roles. The
+    second is the one that matters: such a run draws a footprint around
+    every client node it was given, and a footprint has a centre.
+
+    The manifest flag is what is read, never a setting.
+    `COVERAGE_SITE_ROLES` is not consulted here for the same reason
+    `embed/sanitise.py` takes no settings argument: one environment
+    variable must not be able to widen a public map. See `AGENTS.md`
+    9.25.
+    """
+    global _publishable
+    stamp = store.current_stamp(settings)
+    if stamp is None:
+        return None
+    root = str(settings.coverage_cache_dir)
+    if _publishable is not None and _publishable[0] == root and _publishable[1] == stamp:
+        return stamp if _publishable[2] else None
+    manifest = store.read_manifest(settings)
+    public = manifest is not None and not manifest.get("is_diagnostic")
+    _publishable = (root, stamp, public)
+    return stamp if public else None
+
+
+def _require_published_map(settings: Settings = Depends(_require_enabled)) -> str:
+    """Return the published run, or refuse.
+
+    A dependency of the tile router rather than a check in the handler,
+    for the reason `_require_enabled` is one: the refusal has to happen
+    before anything resolves a parameter or reads a file. See
+    `AGENTS.md` 9.16.3.
+    """
+    stamp = _published_stamp(settings)
+    if stamp is None:
+        raise HTTPException(status_code=404, detail="no coverage map is published here")
+    return stamp
+
+
+tile_router = APIRouter(tags=["embed"], dependencies=[Depends(_require_published_map)])
+
+
+@tile_router.get("/api/embed/tiles/{stamp}/{preset}/{layer}/{zoom}/{x}/{y}.png")
+async def embed_tile(
+    stamp: str = PathParam(pattern=r"^\d{8}T\d{6}Z$"),
+    preset: str = PathParam(pattern=r"^[A-Za-z]{1,32}$"),
+    layer: str = PathParam(pattern=r"^[a-z]{1,16}$"),
+    zoom: int = PathParam(ge=0, le=MAX_ZOOM),
+    x: int = PathParam(ge=0),
+    y: int = PathParam(ge=0),
+    settings: Settings = Depends(_require_enabled),
+    published: str = Depends(_require_published_map),
+) -> Response:
+    """Return one tile of the public coverage map.
+
+    The infrastructure map of the published run, and nothing else.
+
+    A tile that was never written is ground no node reaches. That is a
+    404, which is what a map library already knows how to draw.
+    """
+    if layer not in LAYERS:
+        raise HTTPException(status_code=422, detail=f"not a coverage layer: {layer}")
+
+    # A tile index must fit the zoom it names, or the run is asked for
+    # ground that does not exist.
+    limit = 1 << zoom
+    if x >= limit or y >= limit:
+        raise HTTPException(status_code=422, detail="the tile is outside the zoom level")
+
+    # The stamp is in the URL so a browser can cache a tile for ever,
+    # and it is checked rather than used. A run that is no longer the
+    # published one is not a run this page may draw.
+    if stamp != published:
+        raise HTTPException(status_code=404, detail="that is not the published coverage run")
+
+    png = store.read_run_tile(
+        settings, published, preset, SITE_SET_INFRASTRUCTURE, layer, zoom, x, y
+    )
+    if png is None:
+        raise HTTPException(status_code=404, detail="no coverage here")
+
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            # The run stamp is part of the URL, and a stamp names one
+            # run for ever. These bytes can never change.
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{stamp}-{preset}-{SITE_SET_INFRASTRUCTURE}-{layer}-{zoom}-{x}-{y}"',
+        },
+    )
+
+
+# On the embed router, so `_require_enabled` applies to the tiles as
+# well. A public tile route that the embed switch does not reach is the
+# defect this module's docstring is about.
+router.include_router(tile_router)

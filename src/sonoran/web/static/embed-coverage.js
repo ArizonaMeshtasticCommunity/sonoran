@@ -21,8 +21,10 @@
   // The layer a visitor sees. Not a choice: the other two need
   // explaining and this one does not.
   const LAYER = 'usable';
-  // The only site set a public page may ever draw.
-  const SITE_SET = 'infrastructure';
+  // There is no site set constant here any more. The public tile route
+  // does not take one: it serves the infrastructure map of the
+  // published run and nothing else. A constant in this file was only
+  // ever a rule for an honest browser.
 
   // The ramp in coverage/render.py spans this above the limit.
 
@@ -71,13 +73,18 @@
     // The placeholders must not go through `new URL`, which percent
     // encodes the braces and asks for a tile named `%7Bz%7D`.
     const base = API(
-      /* Pinned to the infrastructure site set, and never read from
-         the summary. A run can also publish the wider map that
-         includes client nodes, and a client node is usually somebody's
-         house. `/api/embed/coverage` already refuses a diagnostic run,
-         and this is the second lock: even a summary that somehow named
-         another set could not move these tiles. See AGENTS.md 9.25. */
-      `/api/coverage/tiles/${summary.stamp}/${state.preset}/${SITE_SET}/${LAYER}/`,
+      /* The public tile route. There is no site set in this URL, and
+         that is the point: the server serves the infrastructure map
+         and has nowhere to be told otherwise. A run can also publish
+         the wider map that includes client nodes, and a client node is
+         usually somebody's house.
+
+         This used to draw from the dashboard's tile route under
+         /api/coverage, naming the site set in the path. That route is
+         not gated by EMBED_ENABLED and it serves whatever set it is
+         asked for, so a constant in this file constrained an honest
+         browser and nothing else. See AGENTS.md 9.25 and 9.27. */
+      `/api/embed/tiles/${summary.stamp}/${state.preset}/${LAYER}/`,
     );
     state.tiles = L.tileLayer(`${base}{z}/{x}/{y}.png`, {
       minNativeZoom: summary.min_zoom,

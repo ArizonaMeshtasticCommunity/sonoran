@@ -80,6 +80,7 @@ from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
 from sonoran.radio.resolve import resolve_profile
 from sonoran.roles import (
     EVERY_ROLE,
+    SITE_SET_DIAGNOSTIC,
     SITE_SET_EXTENDED,
     SITE_SET_INFRASTRUCTURE,
     SITE_SET_LABELS,
@@ -941,8 +942,22 @@ def _plans(
     own keeps it: that setting is what the first plan uses, so a
     diagnostic run of every role still behaves exactly as before.
     """
+    narrow = parse_site_roles(settings.coverage_site_roles)
+    # Name the first map for what it holds, not for the slot it sits
+    # in. A run that predicts from a role outside the infrastructure
+    # set is a diagnostic, and its tiles must not be written under a
+    # directory called `infrastructure`: the site set is part of the
+    # tile path, and the public tile route reads the infrastructure
+    # name off that path. A path that lies is a path that serves
+    # somebody's house. See `AGENTS.md` 9.25.
+    #
+    # A subset such as `ROUTER` is not diagnostic and keeps the
+    # infrastructure name, because it cannot add a personal node.
     wanted: list[tuple[str, frozenset[str] | None]] = [
-        (SITE_SET_INFRASTRUCTURE, parse_site_roles(settings.coverage_site_roles))
+        (
+            SITE_SET_DIAGNOSTIC if is_diagnostic_role_set(narrow) else SITE_SET_INFRASTRUCTURE,
+            narrow,
+        )
     ]
     if settings.coverage_include_clients:
         wanted.append((SITE_SET_EXTENDED, site_set_roles(SITE_SET_EXTENDED)))

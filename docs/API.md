@@ -209,6 +209,12 @@ Response:
 The coverage job predicts from every node the mesh reports and writes
 map tiles. These endpoints serve what it wrote. They compute nothing.
 
+**These are the dashboard's, and they are not public.** They serve
+every site set a run published, including a diagnostic one, and
+`/api/coverage` carries the site records a run used. A reverse proxy
+that faces the open internet must not open this prefix. The public
+surface is 3B, and 3B.5 lists it exactly.
+
 ### 3A.1 `GET /api/coverage`
 
 Returns the current coverage run.
@@ -230,10 +236,13 @@ A page must open on `data_bounds`, not on `bounds`. The region covers
 every degree the terrain service serves, which is far more ground than
 any mesh reaches.
 
-### 3A.2 `GET /api/coverage/tiles/{stamp}/{preset}/{layer}/{z}/{x}/{y}.png`
+### 3A.2 `GET /api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`
 
 Returns one coverage tile, 256 pixels square, in the usual web map
 scheme.
+
+The dashboard's tiles. A public page draws from 3B.4 instead, which
+takes no site set and refuses a diagnostic run.
 
 `stamp` identifies one coverage run. It comes from `GET /api/coverage`.
 The URL always returns bytes from that run. It never moves to a newer
@@ -242,6 +251,21 @@ run.
 `preset` is a modem preset name, such as `LongFast`. A preset is a
 radio configuration, not a filter: a node on one preset cannot hear a
 node on another, so each has its own coverage. See `AGENTS.md` 9.7.
+
+`site_set` names which map of the run to read. One run can publish more
+than one, and they are different answers to different questions:
+
+| Site set | What it predicted from |
+|---|---|
+| `infrastructure` | Routers, router lates and repeaters, or a subset of them. The only map a public page ever draws |
+| `extended` | Also the roles that repeat without being infrastructure, when `COVERAGE_INCLUDE_CLIENTS` is on. A diagnostic |
+| `diagnostic` | Whatever `COVERAGE_SITE_ROLES` named, when that is not a subset of the infrastructure roles. A diagnostic |
+
+A run whose roles are not a subset of the infrastructure set writes
+`diagnostic` and never `infrastructure`. The site set is part of the
+path, so a path that said `infrastructure` while holding a footprint
+around every client node in region was a path that lied. See
+`AGENTS.md` 9.25.
 
 `layer` is one of:
 
@@ -276,11 +300,17 @@ outside the trusted 20 dB range.
 ## 3B. The public embed
 
 These serve a page for somebody else's website. They are all 404 until
-`EMBED_ENABLED` is true.
+`EMBED_ENABLED` is true, and each one refuses in a router dependency
+rather than in a handler, so a request while the embed is off never
+reaches the database. See `AGENTS.md` 9.16.3.
 
 `sonoran/embed/sanitise.py` is the only place that decides what a
 public viewer sees. `/api/map/nodes` is untouched: it serves the
 dashboard, which is a different audience.
+
+3B.5 is the exact list of paths a reverse proxy may open for the
+embed. Nothing outside it is needed, and opening a prefix instead of
+those paths exposes the dashboard's data.
 
 ### 3B.1 `GET /embed/coverage`
 
@@ -311,6 +341,71 @@ node ID, and the last heard time are all left out.
 
 The position is snapped in this process, before it is sent. Rounding it
 in the browser would mean the exact value had already left.
+
+### 3B.4 `GET /api/embed/tiles/{stamp}/{preset}/{layer}/{z}/{x}/{y}.png`
+
+One tile of the public coverage map: the infrastructure map of the
+published run, and nothing else.
+
+There is no site set in this URL, and that is the point rather than an
+omission. A run can also publish a map predicted from client nodes, and
+a client node is usually somebody's house. A footprint has a centre, so
+the tiles are the leak that holding back the markers does not close.
+The route serves the infrastructure map and has nowhere to be told
+otherwise.
+
+`stamp` is a cache key, not a lookup. It must be the run that is
+published now, which is the `stamp` from `GET /api/embed/coverage`; any
+other value answers 404. The bytes of one stamp never change, so the
+answer carries an immutable `Cache-Control` and an `ETag`.
+
+A diagnostic run publishes no public map. The whole route answers 404
+for one, in a router dependency, so no handler body runs and no tile is
+read from disk. `GET /api/embed/coverage` says the same thing with
+`reason: "diagnostic"`.
+
+A tile that was never written is ground no node reaches, and returns
+404. A map library already knows how to draw that.
+
+The dashboard reads 3A.2 instead. That route is not gated by
+`EMBED_ENABLED`, takes the site set from the path, and serves a
+diagnostic run, which is what the dashboard is for.
+
+### 3B.5 The exact public surface
+
+What the embed page needs to load, and nothing else. A reverse proxy
+that publishes the embed allows exactly these:
+
+| Path | What it is |
+|---|---|
+| `/embed/coverage` | The embed document |
+| `/api/embed/coverage` | The cut down manifest (3B.2) |
+| `/api/embed/nodes` | The public sites (3B.3) |
+| `/api/embed/tiles/` | The public tiles (3B.4), by prefix |
+| `/static/embed-coverage.js` | The page's own script |
+| `/static/vendor/leaflet.js`, `/static/vendor/leaflet.css` | The map library |
+| `/static/vendor/images/` | What `leaflet.css` refers to, by prefix |
+
+Every path that carries mesh data is under `/embed/` or `/api/embed/`,
+and both prefixes are 404 in full while `EMBED_ENABLED` is false. The
+three static files are not under them because `leaflet.css` resolves
+its image URLs relative to itself, and moving it would either break
+those or need the whole static directory served twice. They carry no
+mesh data, and the dashboard serves the same bytes from the same place.
+
+**Do not open `/api/coverage*` by prefix to make the tiles work.** That
+was the shape of the defect this list exists to prevent. It exposes:
+
+- `/api/coverage/tiles/{stamp}/{preset}/{site_set}/...`, which serves
+  the client-node map of the same run to anybody who types `extended`,
+  and a diagnostic run to anybody who guesses a stamp;
+- `/api/coverage`, whose `coarse_sites` carry display names with
+  rounded positions and whose `presets[].nodes` carry node IDs and long
+  names;
+- `/api/coverage/calibration`, which names nodes and what each one
+  measured.
+
+None of that belongs on a page anybody may load.
 
 ## 4. Packet endpoints
 

@@ -16,8 +16,10 @@ from sonoran.roles import (
     EXTENDED_ROLES,
     INFRASTRUCTURE_ROLES,
     REPEATING_CLIENT_ROLES,
+    SITE_SET_DIAGNOSTIC,
     SITE_SET_EXTENDED,
     SITE_SET_INFRASTRUCTURE,
+    SITE_SET_KEYS,
     SITE_SET_LABELS,
     SITE_SET_ROLES,
     is_diagnostic_role_set,
@@ -92,17 +94,27 @@ class TestTheEmbedCanNeverWiden:
         assert is_diagnostic_role_set(INFRASTRUCTURE_ROLES) is False
 
     def test_the_public_page_asks_for_the_infrastructure_tiles_only(self) -> None:
-        """The site set in the embed's tile URL is a constant, not a lookup.
+        """The site set is not in the public tile URL at all.
 
-        If it read the summary, a manifest naming another set would move
-        the public tiles. It must not be reachable that way.
+        It used to be a constant in this file, on the dashboard's tile
+        route. That constrained an honest browser and nothing else: the
+        route took the set from the path, carried no `EMBED_ENABLED`
+        dependency, and answered for `extended` to anybody who typed
+        it. The lock is now the route, which serves the infrastructure
+        map and has nowhere to be told otherwise, and this is the
+        strictly stronger property.
+
+        `tests/unit/test_embed.py` pins the route itself.
         """
         from pathlib import Path
 
         source = Path("src/sonoran/web/static/embed-coverage.js").read_text(encoding="utf-8")
-        assert "const SITE_SET = 'infrastructure';" in source
-        assert "${SITE_SET}" in source
-        # It must not take the set from the summary it was given.
+        assert "/api/embed/tiles/" in source
+        # Not the dashboard's route, which serves every site set.
+        assert "/api/coverage/tiles/" not in source
+        # And no site set named anywhere in the URL it builds.
+        assert "${SITE_SET}" not in source
+        # It must not take the set from the summary it was given either.
         assert "summary.site_sets" not in source
         assert "state.siteSet" not in source
 
@@ -175,6 +187,44 @@ class TestThePlan:
         plans = _plans(settings, [], EMPTY_OVERRIDES, None)  # type: ignore[arg-type]
         assert plans[0].allowed is None
         assert is_diagnostic_role_set(plans[0].allowed) is True
+
+    def test_a_diagnostic_run_is_not_written_under_the_infrastructure_name(self) -> None:
+        """The site set is part of the tile path, so the path must not lie.
+
+        `COVERAGE_SITE_ROLES=ALL` used to be keyed `infrastructure`
+        whatever it predicted from, so a directory named for routers and
+        repeaters held a footprint around every client node in region.
+        The manifest said `is_diagnostic`, and the tiles are what a
+        reader fetches. See `AGENTS.md` 9.25.
+        """
+        from sonoran.jobs.coverage import _plans
+
+        settings = self._settings(coverage_site_roles="ALL", coverage_include_clients=True)
+        plans = _plans(settings, [], EMPTY_OVERRIDES, None)  # type: ignore[arg-type]
+        assert [plan.key for plan in plans] == [SITE_SET_DIAGNOSTIC, SITE_SET_EXTENDED]
+        assert plans[0].label
+
+    @pytest.mark.parametrize("roles", ["", "ROUTER", "ROUTER,REPEATER,ROUTER_LATE"])
+    def test_a_set_that_cannot_add_a_personal_node_keeps_the_name(self, roles: str) -> None:
+        """A subset of the infrastructure roles is still the public map."""
+        from sonoran.jobs.coverage import _plans
+
+        settings = self._settings(coverage_site_roles=roles)
+        plans = _plans(settings, [], EMPTY_OVERRIDES, None)  # type: ignore[arg-type]
+        assert plans[0].key == SITE_SET_INFRASTRUCTURE
+
+    def test_the_diagnostic_name_is_servable_without_being_a_role_set(self) -> None:
+        """The dashboard has to be able to fetch a diagnostic tile.
+
+        `SITE_SET_ROLES` answers which roles a set predicts from, and
+        the diagnostic set has no fixed answer: it is whatever
+        `COVERAGE_SITE_ROLES` said. So the path allowlist is its own
+        name, and serving a tile is never a reason to widen the roles.
+        """
+        assert SITE_SET_DIAGNOSTIC in SITE_SET_KEYS
+        assert SITE_SET_DIAGNOSTIC not in SITE_SET_ROLES
+        assert SITE_SET_KEYS >= set(SITE_SET_ROLES)
+        assert SITE_SET_LABELS.get(SITE_SET_DIAGNOSTIC)
 
 
 class TestTheDashboardLabelsWhatItShows:

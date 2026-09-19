@@ -76,8 +76,18 @@ happens.
 
 It is also not a coverage map, and its tiles look exactly like one.
 So a run that can include a role outside the infrastructure set carries
-`is_diagnostic` in its manifest. A subset such as `ROUTER` stays safe to
-publish. Three things read the flag:
+`is_diagnostic` in its manifest, **and writes its tiles under a site set
+named `diagnostic`**. A subset such as `ROUTER` cannot add a personal
+node, so it stays safe to publish and keeps the `infrastructure` name.
+
+The directory name matters because the site set is part of the tile
+path. A `COVERAGE_SITE_ROLES=ALL` run used to be written under
+`infrastructure` whatever it predicted from, so the path said "routers
+and repeaters" while holding a footprint around every client node in
+region. The manifest was honest and the path was not, and the tiles are
+what a reader fetches.
+
+Four things read the flag:
 
 - The coverage page replaces its heading with the roles that were used,
   and puts a notice above the assumptions panel.
@@ -86,6 +96,9 @@ publish. Three things read the flag:
 - **The public embed refuses to serve it at all.** `/api/embed/coverage`
   answers `available: false` with `reason: "diagnostic"`, and the page
   says a diagnostic is not published there.
+- **The public tile route refuses it too**, in a router dependency, so
+  no handler body runs and no tile is read. The JSON refusal alone was
+  never enough: the tiles are the leak.
 
 That last one is not about honesty, and a warning banner would not
 have done. A diagnostic run predicts from every client node, and a
@@ -101,13 +114,24 @@ something.
 node on the mesh onto a public page. A test pins that:
 `test_a_diagnostic_run_can_never_widen_the_public_map`.
 
-**One caveat, stated because it is not fixed here.** The tile route
-under `/api/coverage` is the dashboard's, and it keeps serving a
-diagnostic run — that is the whole point of the feature, because the
-dashboard is the audience for it. Anybody who can reach the dashboard
-API can therefore read those tiles. If the dashboard is exposed to the
-open internet on a deployment, do not leave a diagnostic run published:
-set `COVERAGE_SITE_ROLES` back and run `sonoran-coverage-once`.
+**The dashboard keeps it, and the dashboard is not public.** The tile
+route under `/api/coverage` serves a diagnostic run — that is the whole
+point of the feature, because the dashboard is the audience for it.
+Anybody who can reach the dashboard API can read those tiles. That
+route is not part of the public surface and a proxy must not open it:
+`docs/API.md` 3B.5 is the exact list of paths the embed needs. If the
+dashboard itself is exposed to the open internet on a deployment, do not
+leave a diagnostic run published: set `COVERAGE_SITE_ROLES` back and run
+`sonoran-coverage-once`.
+
+**This was a real defect and it is worth knowing the shape of it.** The
+embed used to draw its tiles from `/api/coverage/tiles`, so publishing
+the embed meant opening that path. The site set is a path segment
+there, so one substitution returned the client-node map of the same
+run, and a diagnostic run written under `infrastructure` was reachable
+behind nothing but a stamp on a fixed six-hour cadence. The page held
+the site set in a JavaScript constant, which constrained an honest
+browser and nothing else. The locks now sit on the route.
 
 ## 4. Two directions, and why the default is the weaker one
 
@@ -588,9 +612,10 @@ on the Arizona mesh about fifty infrastructure nodes against nine
 hundred clients, capped by `COVERAGE_MAX_NODES`.
 
 **It is a diagnostic and the public embed never serves it.** A client
-is usually somebody's house, and a footprint has a centre. See
-`AGENTS.md` 9.25 and 9.27 for the three separate locks that hold it
-back.
+is usually somebody's house, and a footprint has a centre. The public
+tile route takes no site set at all, so there is nowhere to ask for
+this map: see `AGENTS.md` 9.25 and 9.27 for each lock and why it is
+load-bearing.
 
 Read the wider map for what it is. A handheld that crossed town once
 still draws a footprint where it stood, and the mesh will not be there
@@ -682,6 +707,32 @@ from `EMBED_FRAME_ANCESTORS`. Every other path keeps `DENY` and
 It shows routers, repeaters, and MQTT gateways, with positions snapped
 to a grid before they leave the process. A client node is usually a
 person, often at home, and never appears.
+
+### 10.1 What a proxy opens
+
+`docs/API.md` 3B.5 holds the exact list, and it is short: the embed
+document, three `/api/embed/` endpoints — one of them the tiles — and
+three static files the page loads.
+
+**Never `/api/coverage` by prefix.** The embed's tiles used to come
+from `/api/coverage/tiles`, which is the dashboard's route: it takes
+the site set from the path, carries no `EMBED_ENABLED` dependency, and
+serves a diagnostic run. Opening that prefix also publishes
+`/api/coverage`, whose `coarse_sites` and `presets[].nodes` carry node
+names and positions, and `/api/coverage/calibration`, which names what
+each node measured.
+
+The public tiles are `/api/embed/tiles/{stamp}/{preset}/{layer}/...`.
+No site set in the URL, the stamp must be the published run, and a
+diagnostic run answers 404 before a handler runs.
+
+### 10.2 Before turning it on
+
+`EMBED_ENABLED` defaults to false, and the switch is the owner's to
+throw. What it opens is the list above and nothing else. Set
+`EMBED_FRAME_ANCESTORS` to the sites that may frame the page: an empty
+list means nobody may, and a value that is not an origin is dropped
+rather than widened.
 
 ## 11. Limits
 

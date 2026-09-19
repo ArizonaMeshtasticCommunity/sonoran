@@ -563,6 +563,29 @@ public page says a diagnostic is not published there.
 Do not "improve" this into a banner. A banner tells a reader what they
 are looking at; it does not stop them reading the middle of a circle.
 
+**The JSON refusal is not the whole of it, and used not to be any of
+it.** The embed drew its tiles from `/api/coverage/tiles`, the
+dashboard's route, which has no `EMBED_ENABLED` dependency and no
+diagnostic test and takes the site set from the path. Publishing the
+embed meant opening that path, and one segment then fetched the client
+map. So there are now two more locks, and both are load-bearing:
+
+1. The public tiles are `/api/embed/tiles/{stamp}/{preset}/{layer}/...`
+   on the **embed** router, so `_require_enabled` reaches them. There is
+   no site set in the URL, the stamp must be the published run, and a
+   diagnostic run is refused by `_require_published_map`, a dependency
+   of the whole tile router. That is 9.16.3 one level down: the route
+   that carries the pixels is the route that has to refuse.
+2. A diagnostic run writes its tiles under the site set `diagnostic`,
+   never `infrastructure`. The path carries the set, so a path that
+   said `infrastructure` while holding a client footprint was a path
+   that lied, and the tiles are what a reader fetches.
+
+`docs/API.md` 3B.5 is the exact list of paths a proxy may open. Never
+`/api/coverage` by prefix: it publishes the dashboard's tiles of every
+site set, the node names and rounded positions in `coarse_sites` and
+`presets[].nodes`, and the calibration.
+
 `embed/sanitise.py` also takes no settings argument, and must not gain
 one. If the public role test read `COVERAGE_SITE_ROLES`, one
 environment variable would put the whole mesh on a public map.
@@ -586,9 +609,16 @@ load-bearing:
    a site set gets the narrow answer, and `/api/embed/coverage` is that
    reader. `Manifest.site_sets` carries every map, and the dashboard
    reads it.
-3. `web/static/embed-coverage.js` names the site set as a constant,
-   never from the summary it was handed. A manifest that somehow named
-   another set still cannot move the public tiles.
+3. The public tile route takes no site set. It is
+   `/api/embed/tiles/{stamp}/{preset}/{layer}/...`, it reads
+   `SITE_SET_INFRASTRUCTURE`, and there is nowhere in the URL to name
+   another set.
+
+The third one used to be a constant in
+`web/static/embed-coverage.js`, on a route that took the set from the
+path. A constant in a page the public loads is a rule for a browser
+that means no harm; it is not a lock. When something must be refused,
+refuse it where the bytes are served.
 
 `EXTENDED_ROLES` is not a subset of `INFRASTRUCTURE_ROLES`, so
 `is_diagnostic_role_set` already calls the wider map diagnostic and

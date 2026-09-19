@@ -262,6 +262,20 @@ def test_a_run_makes_tiles_the_api_serves(
     assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
     assert "immutable" in response.headers.get("Cache-Control", "")
 
+    # And the public embed serves the same pixels from its own route,
+    # which is the one an operator opens at the proxy. The site set is
+    # not in that URL: the route serves the infrastructure map and has
+    # nowhere to be told otherwise. See `docs/API.md` 3B.4.
+    public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
+    embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
+    assert embedded.status_code == 200
+    assert embedded.content == response.content
+    # With the embed off, as it ships, that path does not exist at all.
+    assert (
+        client.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png").status_code
+        == 404
+    )
+
 
 def test_two_presets_are_predicted_apart(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
@@ -769,6 +783,59 @@ def test_an_infrastructure_subset_is_not_a_diagnostic_run(
     assert manifest is not None
     assert manifest.site_roles == ["ROUTER"]
     assert manifest.is_diagnostic is False
+
+
+def test_a_diagnostic_run_never_reaches_the_public_tiles(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The whole pipeline of the finding, end to end.
+
+    `COVERAGE_SITE_ROLES=ALL` predicts from every node, including the
+    clients, and each one draws a footprint centred on somebody's
+    house. Two things then have to hold at once:
+
+    - the tiles are written under a directory that says what they are,
+      and never under one named `infrastructure`, and
+    - the public tile route answers nothing for the run, with the embed
+      switched on.
+
+    The dashboard keeps the run, because the dashboard is the audience a
+    diagnostic is for.
+    """
+    settings = _settings(timescale_url, tmp_path, coverage_site_roles="ALL")
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900130, 33.45, -112.07, role="CLIENT")
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    assert manifest.is_diagnostic is True
+    assert [item.key for item in manifest.site_sets] == ["diagnostic"]
+
+    root = store.current_root(settings)
+    assert root is not None
+    assert (root / "LongFast" / "diagnostic").is_dir()
+    # The path said "routers and repeaters" while holding a footprint
+    # around a client node. That is the directory that must not exist.
+    assert not (root / "LongFast" / "infrastructure").exists()
+
+    tile = next(root.glob("LongFast/diagnostic/usable/*/*/*.png"))
+    zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
+    stamp = manifest.stamp
+
+    public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
+    assert (
+        public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png").status_code
+        == 404
+    )
+    assert public.get("/api/embed/coverage").json()["reason"] == "diagnostic"
+
+    # And the dashboard has it, by the name the run wrote.
+    dashboard = TestClient(create_app(settings))
+    served = dashboard.get(
+        f"/api/coverage/tiles/{stamp}/LongFast/diagnostic/usable/{zoom}/{x}/{y}.png"
+    )
+    assert served.status_code == 200
+    assert served.content[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_a_mesh_of_only_clients_makes_no_run(

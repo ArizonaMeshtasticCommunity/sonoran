@@ -95,6 +95,21 @@ EXTENDED_ROLES = INFRASTRUCTURE_ROLES | REPEATING_CLIENT_ROLES
 SITE_SET_INFRASTRUCTURE = "infrastructure"
 SITE_SET_EXTENDED = "extended"
 
+# What a run predicted from when the operator named the roles itself
+# and the set it named is not a subset of the infrastructure roles.
+#
+# This set has no fixed roles, which is why it is not in
+# `SITE_SET_ROLES`: it is whatever `COVERAGE_SITE_ROLES` said, and that
+# is a deployment setting rather than a rule of this module.
+#
+# It exists because a path that says `infrastructure` must hold the
+# infrastructure map. A `COVERAGE_SITE_ROLES=ALL` run used to be
+# written under that name, so the directory said "routers and
+# repeaters" while holding a footprint around every client node in
+# region. The manifest was honest and the path was not, and the tiles
+# are what a reader fetches. See `AGENTS.md` 9.25.
+SITE_SET_DIAGNOSTIC = "diagnostic"
+
 SITE_SET_ROLES: dict[str, frozenset[str]] = {
     SITE_SET_INFRASTRUCTURE: INFRASTRUCTURE_ROLES,
     SITE_SET_EXTENDED: EXTENDED_ROLES,
@@ -103,7 +118,17 @@ SITE_SET_ROLES: dict[str, frozenset[str]] = {
 SITE_SET_LABELS: dict[str, str] = {
     SITE_SET_INFRASTRUCTURE: "Routers and repeaters",
     SITE_SET_EXTENDED: "Also nodes that repeat",
+    SITE_SET_DIAGNOSTIC: "Every role this run was given",
 }
+
+# Every name a run may write a directory of tiles under.
+#
+# `SITE_SET_ROLES` answers "which roles does this set predict from",
+# and the diagnostic set has no answer to that. This answers "may this
+# name appear in a path", which is the question the dashboard tile
+# route asks, and the two are not the same question. Serving a tile is
+# never a reason to widen the first dictionary.
+SITE_SET_KEYS: frozenset[str] = frozenset(SITE_SET_ROLES) | {SITE_SET_DIAGNOSTIC}
 
 
 def site_set_roles(site_set: str) -> frozenset[str]:
