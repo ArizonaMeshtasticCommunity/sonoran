@@ -744,6 +744,20 @@ function drawMapLegend(target, rows) {
     el('span', { class: 'legend-note' }, el('span', { class: 'line direct' }), 'Heard direct'),
     el('span', { class: 'legend-note' }, el('span', { class: 'line relayed' }), 'Relayed, arrow shows where it went'),
     el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }), 'Neighbour link'),
+    /*
+     * The two heat layers, named here as well as in the watch legend.
+     *
+     * They are drawn on this page too, and a mark that appears on the
+     * default view with nothing to say what it is invites a reader to
+     * invent a meaning for it — and the meaning they would invent for a
+     * glow around a node is "this is how many nodes heard it", which is
+     * the one reading AGENTS.md 9.5.1 exists to forbid. Short here,
+     * because the collapsible legend has the room for the rest.
+     */
+    el('span', { class: 'legend-note' }, el('span', { class: 'swatch halo' }),
+      'Halo: how much this node said'),
+    el('span', { class: 'legend-note' }, el('span', { class: 'swatch upload-ring' }),
+      'Ring: how much this node uploaded, as a gateway. Never added to the halo'),
     // Which nodes these dots are, so a shrunken map is never a mystery.
     mapNodeScope ? el('span', { class: 'legend-note muted', text: mapNodeScope }) : null,
   ]);
@@ -942,7 +956,24 @@ function drawLinks(edges, positions) {
  * all, so the line meant nothing. These are the hops the packet really
  * took, one segment for each.
  */
-const traceSeen = new Set();
+/*
+ * Each traceroute this tab has already drawn, mapped to its own time in
+ * ms — the same shape and the same reason as `trafficSeen`.
+ *
+ * It used to be a Set trimmed by slicing off the first thousand of two
+ * thousand, which is an insertion-order prune: the exact bug that was
+ * already found and fixed for traffic, where dropping the oldest *keys*
+ * rather than the oldest *traces* deleted the newest entries of the
+ * first pass and made the map redraw paths it had already drawn. It
+ * survived here only because a traceroute arrives about 1.25 times a
+ * minute, so two thousand keys is most of a day and the trim almost
+ * never ran. Rare is not fixed.
+ *
+ * Time is what the prune reads. A trace older than the window can never
+ * come back, so its key is safe to forget, and nothing still inside the
+ * window is ever dropped.
+ */
+const traceSeen = new Map();
 
 /**
  * Stop the animation and drop everything it holds.
@@ -972,13 +1003,13 @@ const TRACE_SEED = 3;
  * `traces` arrives newest first. After the first pass, only traces that
  * were not in the previous answer are drawn.
  */
-function drawTraceroutes(traces, firstPass) {
+function drawTraceroutes(traces, firstPass, cutoffMs) {
   let started = 0;
   let seeded = 0;
   for (const trace of traces) {
     const key = trace.trace_id || `${trace.time}-${trace.from.node_id}`;
     const known = traceSeen.has(key);
-    traceSeen.add(key);
+    traceSeen.set(key, Date.parse(trace.time) || Date.now());
     if (known) continue;
 
     const drawable = trace.hops.filter((hop) => hop.has_line);
@@ -999,9 +1030,15 @@ function drawTraceroutes(traces, firstPass) {
     started += 1;
   }
   started += seeded;
-  // The set would otherwise grow for as long as the tab is open.
-  if (traceSeen.size > 2000) {
-    for (const key of [...traceSeen].slice(0, 1000)) traceSeen.delete(key);
+  /*
+   * Pruned by time, never by insertion order. The map would otherwise
+   * grow for as long as the tab is open, and an order-based trim would
+   * forget traces that are still inside the window and draw them again.
+   */
+  if (cutoffMs != null) {
+    for (const [key, seenAt] of traceSeen) {
+      if (seenAt < cutoffMs) traceSeen.delete(key);
+    }
   }
   return started;
 }
@@ -1129,7 +1166,18 @@ let mapPresetLabel = '';
  */
 function trafficRow(packet) {
   return el('li', {},
-    el('div', {}, nodeChip(packet.from)),
+    el('div', {}, nodeChip(packet.from),
+      /*
+       * How many packets this row stands for, when a run of them from
+       * one sender of one kind collapsed into it. Always present and
+       * usually empty, so the keyed update has one cell to rewrite
+       * rather than a row to rebuild.
+       */
+      el('span', {
+        class: 'repeats',
+        'data-repeats': '',
+        text: packet.repeats > 1 ? `x${count(packet.repeats)}` : '',
+      })),
     el('div', { class: 'meta' },
       el('span', { text: gatewayTally(packet) }),
       // Only a direct observation measures the sender's own link. On a
@@ -1147,6 +1195,99 @@ function trafficRow(packet) {
         text: portnumLabel(packet.portnum),
       }),
       el('span', { text: clock(packet.time) })));
+}
+
+/* --- The feed under load ---------------------------------------- */
+
+/* How far apart two packets from one sender may be and still be one
+ * row. A tracker posting a position every thirty seconds is the case
+ * this exists for, so the gap has to be comfortably longer than that. */
+const COALESCE_MS = 60000;
+/* Forty rows, trimmed rather than rebuilt. */
+const FEED_ROWS = 40;
+
+/**
+ * Collapse a run of near-identical rows into one with a count.
+ *
+ * Consecutive packets from the same sender, of the same kind, inside a
+ * minute. Without this one tracker posting a position every thirty
+ * seconds owns the panel, and the panel is where the exact numbers live
+ * — so a panel a viewer has stopped reading has taken the precision
+ * with it.
+ *
+ * Only a consecutive run collapses. A row is never moved to join
+ * another, so the order is still the order things happened in and a gap
+ * in the middle is still a gap.
+ *
+ * The collapsed row keeps the newest packet, because that is the one
+ * whose link and whose counts are about now, and carries `repeats` so
+ * the row can say how many it stands for. Nothing is hidden: the number
+ * of packets is on the row and the window summary above it is unchanged.
+ */
+function coalesceFeed(packets) {
+  const rows = [];
+  for (const packet of packets) {
+    const last = rows[rows.length - 1];
+    if (last
+      && last.from.node_id === packet.from.node_id
+      && last.portnum === packet.portnum
+      && Math.abs(last.timeMs - packet.timeMs) <= COALESCE_MS) {
+      last.repeats = (last.repeats || 1) + 1;
+      continue;
+    }
+    rows.push({ ...packet, repeats: 1 });
+  }
+  return rows;
+}
+
+/**
+ * Update the feed in place instead of rebuilding it.
+ *
+ * `replace()` of the whole list every fifteen seconds destroys the
+ * scroll position and any text selection. On the ordinary page the list
+ * is short and the loss is an irritation; in watch mode the panel is
+ * tall and a viewer reading a row halfway down loses it four times a
+ * minute, which makes the panel useless for the one thing it is for.
+ *
+ * So rows are keyed and reconciled: an unchanged row is left alone, a
+ * new one is inserted where it belongs, a row whose repeat count grew
+ * has that one cell rewritten, and the surplus is trimmed off the end.
+ * A new row is marked for a moment so the eye can find what arrived.
+ */
+function updateFeed(list, rows, emptyText) {
+  if (!rows.length) {
+    replace(list, [empty(emptyText)]);
+    return;
+  }
+  const existing = new Map();
+  for (const item of [...list.children]) {
+    if (item.dataset && item.dataset.key) existing.set(item.dataset.key, item);
+    else item.remove();
+  }
+  let before = list.firstChild;
+  for (const row of rows) {
+    const held = existing.get(row.key);
+    if (held) {
+      existing.delete(row.key);
+      // The count is the only cell that can change on a row that is
+      // already drawn, so it is the only one rewritten.
+      const badge = held.querySelector('[data-repeats]');
+      const wanted = row.repeats > 1 ? `x${count(row.repeats)}` : '';
+      if (badge && badge.textContent !== wanted) badge.textContent = wanted;
+      if (held !== before) list.insertBefore(held, before);
+      else before = held.nextSibling;
+      continue;
+    }
+    const made = trafficRow(row);
+    made.dataset.key = row.key;
+    made.classList.add('feed-new');
+    list.insertBefore(made, before);
+    // One frame later, so the class change is a transition rather than
+    // the state the row was born in.
+    requestAnimationFrame(() => made.classList.remove('feed-new'));
+  }
+  for (const item of existing.values()) item.remove();
+  while (list.children.length > FEED_ROWS) list.lastChild.remove();
 }
 
 /** "3 gateways, 5 uploads", with the singulars right. */
@@ -1190,6 +1331,67 @@ function trafficTable(packets) {
     },
     { label: 'Channel', cell: (row) => el('span', { text: row.channel || '-' }) },
   ], packets, 'No traffic in the window.');
+}
+
+/* --- The packets-per-second sparkline ---------------------------- */
+
+/* Sixty one-second samples. The interval is stated beside the chart,
+ * because a rate chart whose sample interval is not given is a chart
+ * whose shape nobody can check. */
+const SPARK_SECONDS = 60;
+
+/**
+ * Packets a second, raw, over the last minute.
+ *
+ * One bar per second and no smoothing. A smoothed line would hide the
+ * bursts, and the bursts are the phenomenon: "there's so many nodes
+ * hearing things" is a description of a burst, and a chart that averaged
+ * it away would answer a question nobody asked.
+ *
+ * It counts packets, never uploads, for the same reason everything else
+ * on this page does. `packet_seen` holds MQTT uploads, so a chart of
+ * rows would rise when one gateway reconnected and uploaded a backlog,
+ * and read as the mesh getting busier when nothing had changed about the
+ * mesh. See AGENTS.md 9.5.1.
+ *
+ * Where the returned window does not cover a second, the bar is left out
+ * rather than drawn as zero. An endpoint row limit is not evidence that
+ * nothing happened (AGENTS.md 9.19), and a zero bar is exactly that
+ * claim. The gap is drawn as a gap and named under the chart.
+ */
+function drawSparkline(canvas, packets, truncated) {
+  if (!canvas) return;
+  const scale = Math.min(window.devicePixelRatio || 1, 2);
+  const width = canvas.clientWidth || 260;
+  const height = canvas.clientHeight || 34;
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  if (!packets.length) return;
+
+  const now = Date.now();
+  const oldest = packets.reduce(
+    (low, packet) => Math.min(low, packet.timeMs || now), now);
+  const buckets = new Array(SPARK_SECONDS).fill(0);
+  // A second older than the oldest row the endpoint returned is a second
+  // this page knows nothing about, so it is not a zero.
+  const known = buckets.map((_, index) => now - (SPARK_SECONDS - index) * 1000 >= oldest);
+  for (const packet of packets) {
+    const age = now - (packet.timeMs || now);
+    if (age < 0 || age >= SPARK_SECONDS * 1000) continue;
+    buckets[SPARK_SECONDS - 1 - Math.floor(age / 1000)] += 1;
+  }
+  const peak = Math.max(1, ...buckets.filter((_, index) => known[index]));
+  const step = width / SPARK_SECONDS;
+  ctx.fillStyle = colour('accent', '#f4703f');
+  for (let index = 0; index < SPARK_SECONDS; index += 1) {
+    if (!known[index]) continue;
+    const tall = (buckets[index] / peak) * (height - 2);
+    ctx.fillRect(index * step, height - tall, Math.max(1, step - 1), tall);
+  }
+  return { peak, truncated };
 }
 
 /* --- Watch mode ------------------------------------------------- */
@@ -1274,6 +1476,27 @@ function watchLegend(target) {
         return el('span', { class: 'legend-note' }, swatch(family), family.label);
       })),
     /*
+     * The two heat layers, named in the design's own words, and named
+     * separately because that is the whole of what keeps them honest.
+     *
+     * A halo is how much a node said: one point for each packet it
+     * originated. A ring is how much it uploaded as a gateway: one point
+     * for each upload row, other people's traffic included. They are
+     * never added together. A busy gateway relaying other people's
+     * traffic is not a chatty node, and one glow holding both would be
+     * AGENTS.md 9.5.1 reappearing as an aggregate — the map would be
+     * drawing uploads as though they were something the node did, which
+     * is the reading phase 1 spent its whole budget removing.
+     */
+    el('h4', { text: 'How busy a node is' }),
+    el('div', { class: 'legend' },
+      el('span', { class: 'legend-note' }, el('span', { class: 'swatch halo' }),
+        'Halo: how much this node said. Wider means more packets it sent itself, over the last half minute or so'),
+      el('span', { class: 'legend-note' }, el('span', { class: 'swatch upload-ring' }),
+        'Ring: how much this node uploaded. Thicker means more uploads it made as a gateway, of anybody’s traffic'),
+      el('span', { class: 'legend-note muted' },
+        'The two are never added together, and neither is a scale you can read a number off. A gateway carrying other people’s traffic is not a node with a lot to say.')),
+    /*
      * The one line of prose the design insists on. "Heard by" is banned
      * from this feature and the word is "uploaded": `packet_seen` records
      * MQTT uploads, so every observer this database can hold is a
@@ -1312,7 +1535,47 @@ function liveCounters(counts) {
   const lag = counts.lagMs == null
     ? ''
     : `replaying, about ${Math.max(1, Math.round(counts.lagMs / 1000))} s behind`;
-  SonoranWatch.status({ count: drawing, lag });
+
+  /*
+   * What the admission ladder did, and what it cost, in real numbers.
+   *
+   * The ladder drops from the bottom of its list when the measured rate
+   * or the measured frame time says the map is over budget. Every rung
+   * above the first is a thinner picture, so every rung above the first
+   * has to say so and say by how much — "the eye cannot count marks"
+   * cuts both ways, and a viewer who cannot see that two arcs of three
+   * are missing is a viewer being quietly misled about how many gateways
+   * uploaded a packet.
+   *
+   * The arcs are a separate refusal from the packets. A packet whose
+   * arcs were cut is still on the map: it has an emission pulse and it
+   * raised its sender's heat. So the two counts are both printed rather
+   * than being folded into one number that would be true of neither.
+   */
+  const rung = counts.rungLabel
+    ? counts.rungLabel
+      + (counts.arcsDropped ? `, ${count(counts.arcsDropped)} arcs not drawn` : '')
+    : '';
+  /*
+   * And the heat's own refusal. The halos and the rings are capped for
+   * the frame budget like everything else, and a heat map that quietly
+   * showed the loudest hundred and sixty nodes would be the same lie as
+   * a sampled animation that does not say it is sampled.
+   */
+  const heat = counts.heatHidden
+    ? `${count(counts.heatHidden)} quieter nodes not shown`
+    : '';
+
+  const pause = counts.paused
+    ? 'paused - Space resumes from here, L skips to live'
+    : '';
+
+  SonoranWatch.status({
+    count: drawing,
+    lag,
+    rung: [rung, heat].filter(Boolean).join(', '),
+    pause,
+  });
 }
 
 /** Write the status line, and the phone ticker. */
@@ -1330,13 +1593,22 @@ function updateWatchStatus(page, packets, traffic) {
   /*
    * The phone ticker. One event every two seconds, because a nine-column
    * table on a phone is worse than no table and pretending otherwise
-   * would be the dishonest option. It only runs in watch mode, so the
-   * page keeps to the two timers it is meant to have.
+   * would be the dishonest option.
+   *
+   * It runs only when the ticker is actually on screen. CSS shows it
+   * below 47.9 rem and at the peek height alone, and the timer used to
+   * run in watch mode at any width — so a desktop watching for three
+   * hours woke a timer five thousand times to write text into an element
+   * with `display: none`. The page is meant to hold two timers and a
+   * frame loop, and a third that does invisible work for hours is
+   * exactly what a long watch pays for.
    */
   clearInterval(mapState.tickerTimer);
   mapState.tickerTimer = null;
+  const ticker = $('[data-watch-ticker]', $('[data-map-shell]', page));
+  const visible = ticker && getComputedStyle(ticker).display !== 'none';
   const newest = packets.slice(-12).reverse();
-  if (!newest.length || !SonoranWatch.isOn()) {
+  if (!newest.length || !SonoranWatch.isOn() || !visible) {
     SonoranWatch.ticker('');
     return;
   }
@@ -1373,6 +1645,50 @@ function installWatchMode(map) {
       watchFragmentWrite = true;
       location.hash = next;
     },
+    /*
+     * Space. The engine freezes every mark's age and every heat decay,
+     * and the replay buffer keeps filling behind the freeze, so nothing
+     * that arrives while somebody is reading the panel is lost.
+     *
+     * The status line is written straight away rather than waiting for
+     * the loop, because the loop is the thing that just stopped.
+     */
+    onPause: () => {
+      if (!mapState.live) return;
+      mapState.live.togglePaused();
+      liveCounters(mapState.live.counts());
+    },
+    /*
+     * The other half of the choice, and it reports what it gave up. A
+     * backlog thrown away without a number is a gap in the record the
+     * viewer has no way to notice, which is the same fault as sampling
+     * without saying so.
+     */
+    onSkipToLive: () => {
+      if (!mapState.live) return;
+      const held = mapState.live.skipToLive();
+      if (mapState.live.isPaused()) mapState.live.setPaused(false);
+      SonoranWatch.status({
+        pause: held ? `skipped to live, gave up ${count(held)} buffered packets` : '',
+      });
+    },
+    /* Space is a watch-mode key, so leaving must not strand a paused map
+     * with no visible way to start it again. */
+    onLeavePaused: () => {
+      if (mapState.live && mapState.live.isPaused()) mapState.live.setPaused(false);
+    },
+    /*
+     * The phone ticker appears at the peek height alone, and the height
+     * changes on a keypress while the feed refreshes on a fifteen second
+     * timer. So a viewer who pressed E to get the ticker got an empty
+     * line for up to fifteen seconds and no way to know whether it was
+     * broken or the mesh was quiet. The status is rewritten from the
+     * packets already held, which costs no request.
+     */
+    onHeightChange: () => {
+      if (!mapState.lastPackets) return;
+      updateWatchStatus($('[data-page="map"]'), mapState.lastPackets, null);
+    },
   });
 
   const button = motionButton();
@@ -1400,8 +1716,29 @@ function installWatchMode(map) {
    * away and the next poll starts clean.
    */
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden || !mapState.live) return;
+    if (!mapState.live) return;
+    if (document.hidden) {
+      mapState.hiddenAt = Date.now();
+      return;
+    }
     const held = mapState.live.discardQueue();
+    /*
+     * And say what happened, rather than showing stale content under a
+     * stale "Updated HH:MM" with no warning at all. A tab hidden for
+     * three hours comes back to a map that is about three hours ago, and
+     * a viewer who cannot see that is being shown a picture of the past
+     * labelled as the present. The next poll replaces it within a few
+     * seconds; the line is there for those few seconds.
+     */
+    const away = mapState.hiddenAt ? Date.now() - mapState.hiddenAt : 0;
+    mapState.hiddenAt = null;
+    if (away > 60000) {
+      const minutes = Math.round(away / 60000);
+      SonoranWatch.status({
+        count: `resumed, skipped ${count(minutes)} min`
+          + (held ? `, gave up ${count(held)} buffered packets` : ''),
+      });
+    }
     if (held) console.info(`live map: discarded ${held} buffered packets on return`);
   });
 }
@@ -1465,6 +1802,42 @@ PAGES.map = async (page) => {
     nodes.filter((row) => row.lat != null && row.lon != null)
       .map((row) => [row.node_id, [row.lat, row.lon]]));
 
+  /*
+   * The watchdog.
+   *
+   * `getAll` turns a failed request into null rather than throwing, so a
+   * traffic fetch that fails leaves the page rendering happily with the
+   * last picture under a green dot and an "Updated HH:MM" that is a lie.
+   * The animation would go on replaying its last buffer as though the
+   * mesh were still talking, and a viewer watching for hours would have
+   * no way at all to tell a quiet mesh from a broken pipe.
+   *
+   * Three in a row, because one failed request is a hiccup and a dot
+   * that flickers on every hiccup is a dot nobody reads. After that the
+   * status goes down, the animation stops rather than replaying, and
+   * both panels say so in words.
+   */
+  if (showTraffic) {
+    mapState.failures = traffic ? 0 : (mapState.failures || 0) + 1;
+    if (mapState.failures >= 3) {
+      mapState.live.clear();
+      mapState.trafficPrimed = false;
+      setStatus('down', `No traffic since ${clock(new Date())}`);
+      $('[data-traffic-summary]', page).textContent =
+        `The last ${count(mapState.failures)} traffic requests failed. The map has stopped`
+        + ' rather than replay what it already had.';
+      SonoranWatch.status({
+        count: 'traffic requests are failing, the map has stopped',
+        lag: '',
+        rung: '',
+        pause: '',
+      });
+      return;
+    }
+  } else {
+    mapState.failures = 0;
+  }
+
   if (showTraffic && traffic) {
     /*
      * One aggregation pass, two consumers. The animation takes the
@@ -1493,14 +1866,30 @@ PAGES.map = async (page) => {
       + `${count(direct)} direct, from ${count(packets.length)} packets.`
       + (traffic.truncated ? ` Newest ${count(traffic.returned_count)} shown.` : '')
       + (fresh ? ` ${count(fresh)} new.` : '');
-    replace($('[data-traffic-feed]', page),
-      packets.length
-        ? packets.slice().reverse().slice(0, 40).map(trafficRow)
-        : [empty('No traffic in the window.')]);
+    /*
+     * One coalesced list, two renderings. The list is updated in place
+     * rather than replaced, so a viewer reading a row halfway down the
+     * watch panel keeps their place across a refresh.
+     */
+    const newest = coalesceFeed(packets.slice().reverse()).slice(0, FEED_ROWS);
+    updateFeed($('[data-traffic-feed]', page), newest, 'No traffic in the window.');
     replace($('[data-traffic-table]', page),
       packets.length
-        ? trafficTable(packets.slice().reverse().slice(0, 40))
+        ? trafficTable(packets.slice().reverse().slice(0, FEED_ROWS))
         : empty('No traffic in the window.'));
+    /*
+     * The rate chart, raw. The window's row cap is named under it rather
+     * than left to be inferred from a short chart, because a row limit
+     * must never be what decides how much evidence a reader thinks there
+     * is. See AGENTS.md 9.19.
+     */
+    drawSparkline($('[data-traffic-spark]', page), packets, traffic.truncated);
+    $('[data-traffic-spark-note]', page).textContent =
+      `Packets a second, 1 s samples, last ${SPARK_SECONDS} s`
+      + (traffic.truncated
+        ? `. The window returned its newest ${count(traffic.returned_count)} uploads, so anything`
+          + ' before those is not drawn rather than drawn as nothing.'
+        : '.');
     updateWatchStatus(page, packets, traffic);
     SonoranWatch.bump('traffic', fresh);
   } else {
@@ -1525,7 +1914,11 @@ PAGES.map = async (page) => {
 
   if (showTraces && traces) {
     const seeding = !mapState.tracesPrimed;
-    const started = drawTraceroutes(traces.traces, seeding);
+    // A refresh of slack past the trace window, for the same reason the
+    // traffic cutoff has one: a key is only forgotten once nothing can
+    // bring the trace back.
+    const traceCutoff = Date.now() - (traces.window_minutes * 60000 + LIVE_INTERVAL_MS);
+    const started = drawTraceroutes(traces.traces, seeding, traceCutoff);
     mapState.tracesPrimed = true;
     // The seeded paths of the first pass are old news, so they do not
     // earn a badge. Only a trace that arrived while somebody was looking

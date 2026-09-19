@@ -86,6 +86,40 @@
   --pkt-routing: #b59c88;
   --pkt-other: #7d6857;
   /*
+   * The two heat layers, which are never merged and never added.
+   *
+   * `--heat-emission` is how much a node SAID: one point per packet it
+   * originated, on a twenty second half-life, drawn as a halo whose
+   * radius is the quantity. `--heat-upload` is how much a node UPLOADED
+   * as a gateway: one point per upload row, on its own slower decay,
+   * drawn as the gateway ring getting thicker.
+   *
+   * A busy gateway relaying other people's traffic is not a chatty node.
+   * One glow holding both would be AGENTS.md 9.5.1 returning as an
+   * aggregate — the map would be drawing uploads as though they were
+   * something the node did — so there are two marks, two scales and two
+   * lines in the legend, and nothing in the code adds one to the other.
+   *
+   * Neither carries its meaning in its hue. The quantity is a radius and
+   * a thickness, which are sizes, so both survive a greyscale render and
+   * any colour-vision deficiency. The two are told apart by shape before
+   * colour is consulted at all: a filled annulus against a hollow ring.
+   *
+   * A third group, not a borrowed value from either of the other two. A
+   * role is what a node is, a family is what a packet was, and heat is
+   * how much of it there has been lately; all three are drawn in the
+   * same frame. The halo took `--pkt-position` for an afternoon and a
+   * quiet node's halo was then the same colour as a position particle
+   * flying over it, which is two different things wearing one colour —
+   * the exact reason the family palette is its own group.
+   *
+   * The upload ring does borrow, on purpose: it is `--text`, which is
+   * the colour of the bright ring a gateway already wears, because it is
+   * that ring getting thicker rather than a second mark beside it.
+   */
+  --heat-emission: #e8a33d;
+  --heat-upload: #f6ece2;
+  /*
    * One colour for each Meshtastic device role. The mesh runs many more
    * roles than "router" and "client" and they behave differently, so
    * the map gives each its own colour. Routers and repeaters are the
@@ -511,8 +545,27 @@ body.watch-mode { overflow: hidden; }
  * hides. Moved, not copied: two preset pickers could disagree, and the
  * day they do a viewer reads the wrong mesh.
  */
+/*
+ * The watch chrome sits above the animation canvas, and the numbers
+ * below say why the numbers are what they are.
+ *
+ * `#map` is `position: relative` with `z-index: auto`, so it does not
+ * open a stacking context and the Leaflet panes inside it compete
+ * directly with the chrome beside it. The animation pane is at 620,
+ * which is where it has to be to clear Leaflet's own marker pane at
+ * 600 — so chrome numbered in the five hundreds lost, and heat halos
+ * and arcs painted over the traffic table. It was caught in a
+ * screenshot of the expanded panel: a gold halo sitting on top of a
+ * row's SNR cell.
+ *
+ * Giving `#map` a stacking context would fix it and would also put
+ * Leaflet's own controls under the panel, and one of those controls is
+ * the button out of watch mode. So the chrome is raised instead:
+ * everything above 620, and still below Leaflet's control container at
+ * 800, which keeps the way out on top where it belongs.
+ */
 .watch-bar {
-  position: absolute; top: .5rem; left: .5rem; right: .5rem; z-index: 520;
+  position: absolute; top: .5rem; left: .5rem; right: .5rem; z-index: 640;
   display: flex; flex-wrap: wrap; align-items: center;
   justify-content: space-between; gap: .4rem .9rem;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -535,6 +588,15 @@ body.watch-mode { overflow: hidden; }
 }
 .watch-status .watch-preset { color: var(--text); font-weight: 600; }
 .watch-status span:empty { display: none; }
+/*
+ * The two lines that only appear when something is not being drawn in
+ * full. They are warnings about the picture rather than facts about the
+ * mesh, so they are the only part of the strip that takes the accent —
+ * and they take it with a word as well, never colour alone.
+ */
+.watch-status .watch-rung, .watch-status .watch-paused {
+  color: var(--accent); font-weight: 600;
+}
 
 /* The Leaflet controls move clear of the strip above them. The strip
    wraps with the window, so the offset is its measured height and not a
@@ -542,7 +604,7 @@ body.watch-mode { overflow: hidden; }
 .map-shell.watch .leaflet-top { top: calc(var(--watch-bar-h, 3rem) + .6rem); }
 
 .watch-panel {
-  bottom: .6rem; left: .6rem; z-index: 510;
+  bottom: .6rem; left: .6rem; z-index: 630;
   width: 26rem; max-width: calc(100% - 1.2rem);
   padding: .4rem .5rem .5rem;
   gap: .3rem;
@@ -605,10 +667,39 @@ body.watch-mode { overflow: hidden; }
 .watch-table th, .watch-table td { padding: .28rem .4rem; white-space: nowrap; }
 .map-shell:not(.watch) .watch-table, .map-shell:not(.watch) .watch-panel { display: none; }
 
+/*
+ * The rate chart lives with the wide table, at the expanded height, for
+ * the same reason the table does: it is something to read rather than
+ * something to glance at, and a viewer who expanded the panel is
+ * reading. It is raw and unsmoothed on purpose — the bursts are the
+ * phenomenon — and the line under it carries the sample interval.
+ */
+.watch-spark { display: none; }
+.watch-panel[data-height="expanded"] .watch-spark {
+  display: block; flex: none; padding-top: .35rem; border-top: 1px solid var(--line);
+}
+.watch-spark canvas { display: block; width: 100%; height: 34px; }
+.watch-spark p { margin: .25rem 0 0; font-size: .68rem; }
+.map-shell:not(.watch) .watch-spark { display: none; }
+
+/*
+ * A row that has just arrived, marked for a moment.
+ *
+ * The feed is updated in place rather than rebuilt, so a viewer reading
+ * a row halfway down keeps their place — but then nothing moves when
+ * something new lands, and the eye has no way to find it. This is what
+ * `replace()` used to buy by accident, bought back on purpose and for
+ * one row rather than forty.
+ */
+.feed > li { transition: background-color .4s ease; }
+.feed > li.feed-new { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.feed .repeats { color: var(--muted); font-size: .72rem; margin-left: .35rem; font-variant-numeric: tabular-nums; }
+.feed .repeats:empty { display: none; }
+
 .watch-ticker { display: none; }
 
 .watch-legend {
-  position: absolute; z-index: 530; right: .6rem;
+  position: absolute; z-index: 650; right: .6rem;
   top: calc(var(--watch-bar-h, 3rem) + 1.2rem);
   width: 24rem; max-width: calc(100% - 1.2rem);
   max-height: calc(100% - var(--watch-bar-h, 3rem) - 2.4rem);
@@ -682,6 +773,14 @@ body.watch-mode { overflow: hidden; }
  */
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+  /*
+   * Transitions as well as animations. The feed marks a new row by
+   * fading a colour off it, which is a transition and not an animation,
+   * so the earlier rule did not reach it. The mark itself stays — it is
+   * how the eye finds what arrived — it simply appears and goes rather
+   * than sliding.
+   */
+  * { transition-duration: .001ms !important; }
   .map-overlay, .watch-bar, .watch-status, .watch-legend { backdrop-filter: none; }
   html { scroll-behavior: auto; }
 }
@@ -693,6 +792,21 @@ body.watch-mode { overflow: hidden; }
 /* A gateway is drawn as a ring, not as a colour, so its role still shows. */
 .legend .swatch.ring { background: none; border: 2px solid var(--text); }
 .legend .swatch.faded { background: var(--muted); opacity: .3; }
+/*
+ * The two heat marks, told apart by shape before colour is consulted.
+ * The halo is a soft filled ring around a hole, the upload ring is a
+ * hard hollow one; in greyscale they are still two different things,
+ * which is the point, because they mean two different things and adding
+ * them would be AGENTS.md 9.5.1 as an aggregate.
+ */
+.legend .swatch.halo {
+  background: none; width: .85rem; height: .85rem;
+  border: 3px solid color-mix(in srgb, var(--heat-emission) 55%, transparent);
+}
+.legend .swatch.upload-ring {
+  background: none; width: .85rem; height: .85rem;
+  border: 2px solid var(--heat-upload);
+}
 .legend .line {
   display: inline-block; width: 1.6rem; height: 0; margin-right: .35rem;
   vertical-align: middle; border-top: 2px solid var(--muted);

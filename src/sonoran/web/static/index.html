@@ -204,6 +204,22 @@
                 <span data-watch-scope></span>
                 <span data-watch-count></span>
                 <span data-watch-lag></span>
+                <!--
+                  What the admission ladder did, in words and in real
+                  numbers. It is only ever written when the ladder
+                  actually refused something, and then it says how much:
+                  the eye cannot count marks, so a thinner picture has to
+                  be a stated one. At the top rung the map is a heat map
+                  and this is the line that says so.
+                -->
+                <span class="watch-rung" data-watch-rung></span>
+                <!--
+                  Paused, and the choice on the way out: resume from
+                  where it stopped, or give up the backlog and rejoin
+                  live. Shown rather than decided, because the right
+                  answer depends on why the viewer paused.
+                -->
+                <span class="watch-paused" data-watch-pause></span>
               </p>
               <!-- The controls row is moved in here on entry. -->
             </div>
@@ -264,6 +280,19 @@
                 belongs to a different pair of radios (AGENTS.md 9.5).
               -->
               <div class="watch-table" data-traffic-table></div>
+              <!--
+                Packets a second, raw, one bar per second over the last
+                minute. No smoothing: a smoothed line hides the bursts,
+                and the bursts are the thing worth watching. The sample
+                interval is written under it, because a rate chart whose
+                interval is not given is a shape nobody can check, and so
+                is the row cap when it bit — a limit must never be what
+                decides how much evidence a reader thinks there is.
+              -->
+              <div class="watch-spark" data-watch-spark>
+                <canvas data-traffic-spark aria-hidden="true"></canvas>
+                <p class="muted" data-traffic-spark-note></p>
+              </div>
             </div>
             <div class="panel" data-map-panel="traces">
               <h3><span>Traceroutes</span> <span class="muted head-note" data-trace-summary></span></h3>

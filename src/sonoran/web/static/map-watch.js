@@ -209,6 +209,12 @@ const SonoranWatch = (() => {
   async function leave() {
     if (!on) return;
     on = false;
+    /*
+     * Space is a watch-mode key, so a viewer who paused and then left
+     * would have no way to start the world again and a map that had
+     * stopped for no reason they could see. Leaving resumes.
+     */
+    if (ctx && ctx.onLeavePaused) ctx.onLeavePaused();
     if (!fallback && document.fullscreenElement) {
       try {
         await document.exitFullscreen();
@@ -434,6 +440,34 @@ const SonoranWatch = (() => {
       if (key === '1') { event.preventDefault(); setTab('traffic'); return; }
       if (key === '2') { event.preventDefault(); setTab('traces'); return; }
       if (key === 'e' || key === 'E') { event.preventDefault(); stepHeight(); return; }
+      /*
+       * Space is worth more than it looks. A viewer watching a burst
+       * wants to stop it and read what just happened, and the panel
+       * beside the map is where the exact numbers are. Pausing holds the
+       * replay buffer and keeps accumulating, so nothing that arrives
+       * while somebody is reading is lost.
+       *
+       * It only binds inside watch mode. On the ordinary page Space
+       * scrolls, and taking that away from a viewer who is reading the
+       * feed below the map would be a worse trade than the key is worth.
+       */
+      if (key === ' ' || key === 'Spacebar') {
+        event.preventDefault();
+        if (ctx.onPause) ctx.onPause();
+        return;
+      }
+      /*
+       * The other half of the choice. Resuming replays from the pause
+       * point, which is what a viewer who paused to read something
+       * wants; L gives up the backlog and rejoins live, which is what a
+       * viewer who paused and walked away wants. Both are offered in
+       * words on the status line rather than one being chosen for them.
+       */
+      if (key === 'l' || key === 'L') {
+        event.preventDefault();
+        if (ctx.onSkipToLive) ctx.onSkipToLive();
+        return;
+      }
       if (key === '?') { event.preventDefault(); toggleLegend(); }
     });
 

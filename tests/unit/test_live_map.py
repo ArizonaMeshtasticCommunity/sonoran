@@ -387,3 +387,386 @@ def test_the_seed_can_produce_live_traffic() -> None:
     # The fan-out and the hop mix follow the measurements, not convenience.
     assert "UNMEASURED_SNR = -128" in seed
     assert "def _burned(rng: random.Random) -> int:" in seed
+
+
+# --- Phase 2: the heat, the ladder, and watching for hours -------------
+
+
+def test_the_two_heat_layers_are_never_merged() -> None:
+    """Emission heat and upload heat are two quantities, not one.
+
+    A halo is how much a node said: one point for each packet it
+    originated. A ring is how much it uploaded as a gateway: one point
+    for each upload row, of anybody's traffic. Adding them would be
+    AGENTS.md 9.5.1 returning as an aggregate — the map would be drawing
+    uploads as though they were something the node did, which is the
+    reading the whole redesign exists to remove.
+
+    So there are two stores with two half-lives, and `heatAdd` takes the
+    store as an argument rather than reaching for one, which makes a
+    merge something somebody would have to write on purpose.
+    """
+    script = _read("map-live.js")
+    assert "const emitHeat = new Map();" in script
+    assert "const uploadHeat = new Map();" in script
+    assert "const EMIT_HALF_LIFE_MS = 20000;" in script
+    assert "const UPLOAD_HALF_LIFE_MS = 30000;" in script
+    assert "heatAdd(emitHeat" in script
+    assert "heatAdd(uploadHeat" in script
+    # The legend names both, separately, in the design's own terms.
+    app = _read("app.js")
+    assert "how much this node said" in app
+    assert "how much this node uploaded" in app
+    assert "never added together" in app
+
+
+def test_emission_counts_packets_and_upload_counts_uploads() -> None:
+    """The two stores are fed different things, which is the whole point.
+
+    Emission takes one point for each packet the node originated. Upload
+    takes `item.uploads` — rows — for every gateway of the packet, not
+    only the three that got an arc, because the uploads the arc cap
+    refused are exactly what the ring exists to hold. A count of rows is
+    not a count of gateways and neither is a count of listeners
+    (AGENTS.md 9.5.1).
+    """
+    script = _read("map-live.js")
+    assert "1, EMIT_HALF_LIFE_MS, at);" in script
+    assert "item.uploads, UPLOAD_HALF_LIFE_MS, at);" in script
+    # Every gateway, not only the drawn arcs.
+    assert "for (const item of packet.gateways.values()) {" in script
+
+
+def test_a_halo_can_never_paint_over_a_node_dot() -> None:
+    """Volume must never obscure identity.
+
+    The design puts the halo under the node dots in z-order. A canvas
+    pinned to the map container cannot sit under them — Leaflet's map
+    pane carries its own stacking context, so a sibling below it is below
+    the basemap too — so the halo is an annulus with a hole instead, and
+    the hole has to clear the widest dot, its stroke, and the widest the
+    upload ring can ever be.
+
+    The gateway dot is radius 7 with a 2.5 px stroke, so its outer edge
+    is at 8.25.
+    """
+    script = _read("map-live.js")
+    assert "const HALO_HOLE_PX = 10;" in script
+    assert "ctx.arc(x, y, HALO_HOLE_PX, 0, Math.PI * 2, true);" in script
+    # The node style the hole has to clear, unchanged.
+    app = _read("app.js")
+    assert "radius: node.is_mqtt_gateway ? 7 : 5," in app
+
+
+def test_heat_is_a_size_not_a_hue() -> None:
+    """Meaning is never in colour alone, and this is the layer most at
+    risk of it: a glow is the kind of mark that wants to say things with
+    colour.
+
+    The emission quantity is a radius and the upload quantity is a
+    thickness. Both are sizes, so both survive a greyscale render and any
+    colour-vision deficiency. The two layers are told apart by shape — a
+    soft filled annulus against a hard hollow ring — before colour is
+    consulted at all.
+    """
+    script = _read("map-live.js")
+    assert "const outer = HALO_MIN_PX + (HALO_MAX_PX - HALO_MIN_PX) * full;" in script
+    assert "const weight = RING_MIN_PX + RING_GAIN_PX * full;" in script
+    css = _read("app.css")
+    # A third palette group. A role is what a node is, a family is what a
+    # packet was, heat is how much there has been; all three are in one
+    # frame and none may borrow another's value. The one exception is
+    # written down: the upload ring is the gateway ring's own colour,
+    # because it is that ring getting thicker.
+    assert "--heat-emission: #e8a33d;" in css
+    assert "--heat-upload: #f6ece2;" in css
+    assert "--pkt-position: #f4703f;" in css
+
+
+def test_the_heat_ceilings_were_measured_not_guessed() -> None:
+    """A constant that decides what a viewer sees is a claim.
+
+    A linear ramp to the design's ceiling of 8 put every node at the
+    bottom of the scale and the mark said nothing. The values were
+    measured through `SonoranMap.stats.heatValues()` before the ramp was
+    changed, and the measurement is written beside the constant so the
+    next person can check it rather than take it on trust.
+    """
+    script = _read("map-live.js")
+    assert "const HEAT_FULL = 8;" in script
+    assert "const UPLOAD_FULL = 40;" in script
+    assert "0.27 to 2.06" in script
+    assert "0.36 to 18.4" in script
+    # Monotonic and logarithmic, so more is always bigger and the
+    # resolution sits where the values are.
+    assert "Math.log2(1 + value) / Math.log2(1 + ceiling)" in script
+    # And the numbers are readable from the console, because a quantity
+    # drawn as a size cannot be checked by looking at it.
+    assert "heatValues: () => ({" in script
+
+
+def test_the_heat_stores_cannot_grow_for_as_long_as_the_tab_is_open() -> None:
+    """The owner leaves this open for hours.
+
+    Both stores are pruned every frame against the same floor that
+    decides whether a mark is still saying anything, so a node that has
+    gone quiet leaves the map rather than sitting in it below the
+    threshold for ever. The loop's stop condition reads them, so an empty
+    mesh stops the animation dead rather than redrawing nothing at 60 Hz.
+    """
+    script = _read("map-live.js")
+    assert "heatPrune(emitHeat, started, EMIT_HALF_LIFE_MS);" in script
+    assert "heatPrune(uploadHeat, started, UPLOAD_HALF_LIFE_MS);" in script
+    assert "if (!liveCount && !queue.length && !emitHeat.size && !uploadHeat.size) {" in script
+
+
+def test_reduced_motion_steps_the_heat_rather_than_removing_it() -> None:
+    """Heat is a quantity, not an animation.
+
+    It means the same thing whether or not a viewer can take movement, so
+    it may not be a thing only some viewers get. With motion reduced its
+    clock is snapped to a one-second grid, so it steps rather than
+    glides, and the toggle does not throw it away — a toggle that
+    silenced part of the mesh would look like a fault.
+    """
+    script = _read("map-live.js")
+    assert "const HEAT_STEP_MS = 1000;" in script
+    assert "Math.floor(started / HEAT_STEP_MS) * HEAT_STEP_MS" in script
+    # setReduced drops the marks, which were sized for the other timing,
+    # and keeps the heat, which was not.
+    assert "The heat survives the switch." in script
+
+
+def test_the_admission_ladder_follows_the_measured_rate() -> None:
+    """The rate bands are the design's, and they are measured.
+
+    The rate is counted over the last five seconds of releases rather
+    than inferred from the size of a batch: a batch is whatever the poll
+    happened to return, and the rate is what the map is being asked to
+    draw.
+    """
+    script = _read("map-live.js")
+    assert "if (perSecond <= 6) return 0;" in script
+    assert "if (perSecond <= 20) return 1;" in script
+    assert "if (perSecond <= 50) return 3;" in script
+    assert "const RATE_WINDOW_MS = 5000;" in script
+    # The rungs protect the top of the design's keep list at every step:
+    # a traceroute, a direct observation and a text message.
+    assert "packet.portnum === 'TEXT_MESSAGE_APP'" in script
+    assert "packet.portnum === 'TRACEROUTE_APP'" in script
+    assert "if (rung >= RUNG_HEAT_ONLY) return protectedKind ? 1 : 0;" in script
+
+
+def test_the_frame_time_governor_has_hysteresis_in_both_directions() -> None:
+    """Three seconds over budget to step down, ten under it to step up.
+
+    The asymmetry is deliberate. Stepping down is a response to a problem
+    and stepping up is a claim that the problem is gone, and the second
+    deserves more evidence. Without hysteresis a map sitting on the
+    threshold flaps between rungs, and a picture that changes density
+    twice a second is worse than either density.
+    """
+    script = _read("map-live.js")
+    assert "const FRAME_BUDGET_MS = 8;" in script
+    assert "const FRAME_RECOVER_MS = 4;" in script
+    assert "const OVER_BUDGET_SECONDS = 3;" in script
+    assert "const UNDER_BUDGET_SECONDS = 10;" in script
+    # The percentile is over the last second and a bit, because a
+    # governor asking about three seconds cannot be answered by a
+    # percentile over a whole minute.
+    assert "frameLog.push({ at: started, ms: spent });" in script
+    assert "frameLog[0].at < started - 1200" in script
+    # Both drive it: the rate band is a floor and the governor may go
+    # finer, so the rung in force is the higher of the two.
+    assert "rung = Math.max(rungForRate(stats.perSecond), governorRung);" in script
+
+
+def test_the_ladder_never_drops_anything_silently() -> None:
+    """Whatever the ladder refuses appears in the counter.
+
+    The arcs are a separate refusal from the packets: a packet whose arcs
+    were cut is still on the map, because it has an emission pulse and it
+    raised its sender's heat. So the two are counted separately and both
+    are printed, rather than folded into one number that would be true of
+    neither. The heat has its own cap and its own count.
+
+    The eye cannot count marks. A thinner picture that does not say it is
+    thinner is the pixel form of sampling without saying so.
+    """
+    script = _read("map-live.js")
+    assert "stats.arcsDropped += 1;" in script
+    assert "arcsDropped: stats.arcsDropped," in script
+    assert "heatHidden: heatList.hidden," in script
+    # And the rung is named in words, because "rung 3" is not something a
+    # viewer can read.
+    assert "'heat map only, arcs off'," in script
+    app = _read("app.js")
+    assert "arcs not drawn" in app
+    assert "quieter nodes not shown" in app
+    assert "data-watch-rung" in _client().get("/").text
+
+
+def test_the_numeral_follows_the_rung() -> None:
+    """A `+N` computed for three arcs beside a packet that drew one is a
+    count of gateways that does not add up."""
+    script = _read("map-live.js")
+    assert "const willDraw = Math.min(budget, packet.arcs.length);" in script
+    assert "const numeral = Math.max(0, packet.gateway_count - willDraw);" in script
+
+
+def test_space_pauses_and_the_buffer_keeps_filling() -> None:
+    """A viewer watching a burst wants to stop it and read what happened.
+
+    Pausing holds the buffer and keeps accumulating, so nothing that
+    arrives while somebody is reading is lost. Resuming carries every
+    frozen age and every pending release forward by the length of the
+    pause, so the replay picks up where it stopped rather than firing the
+    whole pause into one frame — which is the manufactured burst this
+    feature exists to remove.
+
+    The other half of the choice is offered rather than decided, because
+    the right answer depends on why the viewer paused.
+    """
+    watch = _read("map-watch.js")
+    assert "if (key === ' ' || key === 'Spacebar') {" in watch
+    assert "ctx.onPause()" in watch
+    assert "ctx.onSkipToLive()" in watch
+    live = _read("map-live.js")
+    assert "for (const slot of pool) if (slot.live) slot.born += held;" in live
+    assert "for (const item of queue) item.at += held;" in live
+    assert "for (const cell of store.values()) cell.at += held;" in live
+    app = _read("app.js")
+    assert "paused - Space resumes from here, L skips to live" in app
+    # Space is a watch-mode key, so leaving must not strand a paused map.
+    assert "onLeavePaused" in app
+
+
+def test_a_paused_map_costs_no_processor_time() -> None:
+    """The loop stops rather than redrawing a still picture at 60 Hz.
+
+    One draw per map movement is exactly the work the loop would have
+    done, and none of the work it would have done in between. The owner
+    leaves this open for hours, and a paused map is a state he will leave
+    it in.
+    """
+    script = _read("map-live.js")
+    assert "map.on('move', () => { if (paused) repaint(); });" in script
+    assert "if (running || !pageActive || paused) return;" in script
+
+
+def test_trace_seen_is_pruned_by_time_not_by_insertion_order() -> None:
+    """The bug that was already found and fixed for traffic.
+
+    Slicing off the first thousand keys of two thousand drops the oldest
+    *keys*, which after one pass are the newest *traces*, and the map
+    then redraws paths it had already drawn. It survived in the trace
+    path only because a traceroute arrives about 1.25 times a minute, so
+    the trim almost never ran. Rare is not fixed.
+    """
+    script = _read("app.js")
+    assert "const traceSeen = new Map();" in script
+    assert "traceSeen.set(key, Date.parse(trace.time) || Date.now());" in script
+    assert "for (const [key, seenAt] of traceSeen) {" in script
+    # The insertion-order trim is gone.
+    assert "[...traceSeen].slice(0, 1000)" not in script
+
+
+def test_the_watchdog_can_go_red() -> None:
+    """A monitor that can only go green is not a monitor.
+
+    `getAll` turns a failed request into null rather than throwing, so a
+    traffic fetch that fails leaves the page rendering happily with the
+    last picture under a green dot. The animation would go on replaying
+    its last buffer as though the mesh were still talking, and a viewer
+    watching for hours could not tell a quiet mesh from a broken pipe.
+    """
+    script = _read("app.js")
+    assert "mapState.failures = traffic ? 0 : (mapState.failures || 0) + 1;" in script
+    assert "if (mapState.failures >= 3) {" in script
+    assert "traffic requests are failing, the map has stopped" in script
+
+
+def test_the_sparkline_is_raw_and_says_its_sample_interval() -> None:
+    """A smoothed rate line hides the bursts, and the bursts are the
+    phenomenon the owner wants to watch.
+
+    It counts packets rather than uploads, for the same reason everything
+    else on this page does: a chart of rows would rise when one gateway
+    reconnected and uploaded a backlog, and read as the mesh getting
+    busier when nothing about the mesh had changed (AGENTS.md 9.5.1).
+
+    A second the returned window does not cover is left out rather than
+    drawn as a zero. A row limit is not evidence that nothing happened
+    (AGENTS.md 9.19), and a zero bar is exactly that claim.
+    """
+    script = _read("app.js")
+    assert "const SPARK_SECONDS = 60;" in script
+    assert "Packets a second, 1 s samples, last ${SPARK_SECONDS} s" in script
+    assert "is not drawn rather than drawn as nothing." in script
+    # The gap is a gap.
+    assert "if (!known[index]) continue;" in script
+    assert "data-traffic-spark" in _client().get("/").text
+
+
+def test_the_feed_is_updated_in_place_and_coalesced() -> None:
+    """`replace()` of the whole list destroys the scroll position.
+
+    In watch mode the panel is tall and the panel is where the exact
+    numbers live, so a viewer reading a row halfway down lost it four
+    times a minute — which makes the panel useless for the one thing it
+    is for. And without coalescing, one tracker posting a position every
+    thirty seconds owns the whole feed.
+    """
+    script = _read("app.js")
+    assert "function coalesceFeed(packets)" in script
+    assert "const COALESCE_MS = 60000;" in script
+    assert "function updateFeed(list, rows, emptyText)" in script
+    assert "updateFeed($('[data-traffic-feed]', page), newest," in script
+    # Only a consecutive run collapses, so the order is still the order
+    # things happened in and a gap in the middle is still a gap.
+    assert "const last = rows[rows.length - 1];" in script
+
+
+def test_the_watch_chrome_sits_above_the_animation_canvas() -> None:
+    """`#map` does not open a stacking context, so the panes inside it
+    compete with the chrome beside it.
+
+    The animation pane is at 620, which is where it has to be to clear
+    Leaflet's marker pane at 600. Chrome numbered in the five hundreds
+    therefore lost, and heat halos painted over the traffic table — found
+    in a screenshot of the expanded panel, with a halo sitting on a row's
+    SNR cell. The chrome is raised above 620 and stays below Leaflet's
+    control container at 800, which keeps the way out of watch mode on
+    top where it belongs.
+    """
+    css = _read("app.css")
+    assert "right: .5rem; z-index: 640;" in css
+    assert "left: .6rem; z-index: 630;" in css
+    assert "position: absolute; z-index: 650; right: .6rem;" in css
+    assert "pane.style.zIndex = '620';" in _read("map-live.js")
+
+
+def test_the_page_says_what_it_skipped_after_a_sleep() -> None:
+    """A tab hidden for three hours comes back to a map of three hours
+    ago under a stale "Updated HH:MM" with no warning at all.
+
+    The buffer is discarded rather than replayed — playing out forty
+    minutes of sleep would manufacture exactly the burst this change
+    removed — and what was skipped is said.
+    """
+    script = _read("app.js")
+    assert "resumed, skipped ${count(minutes)} min" in script
+    assert "mapState.hiddenAt = Date.now();" in script
+
+
+def test_the_phone_ticker_does_not_run_where_it_cannot_be_seen() -> None:
+    """A timer that writes into a `display: none` element for hours.
+
+    CSS shows the ticker below 47.9 rem and at the peek height alone, and
+    the timer ran in watch mode at any width — so a desktop watching for
+    three hours woke a timer five thousand times to do nothing visible.
+    The page is meant to hold two timers and a frame loop.
+    """
+    script = _read("app.js")
+    assert "getComputedStyle(ticker).display !== 'none'" in script
+    assert "!SonoranWatch.isOn() || !visible" in script

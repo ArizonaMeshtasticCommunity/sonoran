@@ -22,6 +22,14 @@
  * in turn and say which, rather than failing with a stack trace.
  */
 function loadChromium() {
+  /*
+   * `@playwright/test` bundles its own copy and is what Homebrew
+   * installs, so a machine with a working `e2e.js` could still not run
+   * this one — it knew two of the three places and `npm i -g playwright`
+   * fails on that machine with a file conflict. A check that answers
+   * "not installed" on a machine that has it is a check nobody runs, so
+   * the two loaders now know the same list.
+   */
   const places = [
     'playwright',
     '/opt/node22/lib/node_modules/playwright',
