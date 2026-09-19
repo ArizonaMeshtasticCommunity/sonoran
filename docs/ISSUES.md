@@ -806,6 +806,57 @@ public embed publishes. On a shared box it also installs GDAL into an
 account other people use. Both of those belong to whoever operates the
 deployment, not to whoever happens to notice the flag is false.
 
+### 2.13 The siting half finds nothing on the live mesh
+
+**State:** Open. The feature works; the gate in front of it is too tight
+for the data it has.
+
+The first siting run against production returned **0 areas and 0
+candidates**, on a mesh where 132 MediumFast nodes and 50 LongFast nodes
+have a measured fault.
+
+`gaps/siting.py::is_demand` requires `position_confidence == "exact"`.
+Measured on that run, for the 132 MediumFast nodes with a fault:
+
+| Position confidence | Nodes |
+|---|---|
+| `coarse` | **75** (57%) |
+| `none` | 36 (27%) |
+| `exact` | 21 (16%) |
+
+21 survived that gate, 10 became demand points after the remaining
+tests, and 9 cells is not enough to form a cluster of 3 within the 8 km
+link distance. So the feature is correct and inert.
+
+**The gate is right about sites and wrong about demand.** Its reasoning
+is that a position accurate to 2.9 km cannot be sited for, which is
+true: a tower put 2.9 km from where it was meant to go is a different
+tower. But demand is not a site. The clustering already links at **8 km**
+and deduplicates onto a **300 m** cell, so a 2.9 km uncertainty is
+smaller than the scale the areas are drawn at. Excluding it makes the
+tool blind to 57% of the nodes it exists to help.
+
+There is a real asymmetry to keep, and it is not the current one:
+
+- **Where an area is** tolerates a coarse position. 2.9 km inside an
+  8 km link changes which cell a node lands in, not which neighbourhood.
+- **Which nodes a candidate would newly reach** does not. A footprint
+  edge is sharp, and a node that might be 2.9 km away might be on the
+  other side of it.
+
+So the shape of the fix is to let coarse positions establish demand and
+draw areas, while keeping the "would newly reach" count to exact ones —
+and to say on the page how many of an area's nodes are coarse, because a
+reader deserves to know an area was drawn from approximate ground.
+
+Not done here, because it changes what the feature claims and that is
+the owner's call, not a detail of implementation.
+
+**This is also the strongest argument yet for issue #3 item 1.** Those 31
+infrastructure nodes with coarse positions are a different set from
+these 75 clients, but `config/nodes.yaml` is the same mechanism, and it
+is the only one that turns a coarse position into an exact one.
+
 ## 4. Operational notes
 
 ### 4.1 Text storage is on
