@@ -25,8 +25,8 @@ JSON API and a static web UI. It replaces two older tools:
 
 - 🗺️ **Live map** — nodes, neighbour links, and live traffic, one modem preset at a time.
 - 🕸️ **Mesh graph** — the network laid out over the ground it sits on, coloured by role.
-- 🔭 **Coverage planner** — SPLAT!-based signal prediction from a vendored WebAssembly engine.
-- 📡 **Coverage map** — where the whole mesh reaches, predicted from every node, per preset,
+- 🔭 **Planner** — SPLAT!-based signal prediction from a vendored WebAssembly engine.
+- 📡 **Coverage** — where the whole mesh reaches, predicted from every node, per preset,
   corrected against what the mesh measures, and embeddable on your own site.
 - 📟 **Per-node pages** — telemetry, the gateways that heard it, and its links.
 - 💬 **Chat, firehose, and statistics** — every packet family, deduplicated.
