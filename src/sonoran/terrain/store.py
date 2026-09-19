@@ -32,6 +32,40 @@ TILE_PATTERN = re.compile(r"^[NS]\d{2}[EW]\d{3}$")
 # without this each of them would download it.
 _locks: dict[str, asyncio.Lock] = {}
 
+# How many tiles may be downloaded at once, across all tiles.
+#
+# The per-tile lock above stops the same tile being fetched twice. It
+# does nothing about *different* tiles, and that is the half a public
+# endpoint needs.
+#
+# `/api/terrain/page/{tile}` serves the planner, and anybody may call
+# it. The region check keeps it from being a general proxy, but inside
+# the region an uncached tile still starts an outbound fetch with its
+# own timeout and then a CPU-bound decode in a worker thread. The disk
+# cache is bounded by the region; the work in flight was not. The
+# region holds 56 tiles, so a cold cache and a handful of callers could
+# put every one of them in flight together, each holding a thread of
+# the default executor, on a box with three cores that also runs the
+# ingest.
+#
+# The semaphore is made per event loop for the reason `TimedCache` makes
+# its lock that way: a primitive created at import binds to the first
+# loop that awaits it and raises in any other.
+_download_slots: asyncio.Semaphore | None = None
+_download_slots_loop: asyncio.AbstractEventLoop | None = None
+_download_slots_size: int = 0
+
+
+def _slots(limit: int) -> asyncio.Semaphore:
+    """Return the download semaphore for the running loop."""
+    global _download_slots, _download_slots_loop, _download_slots_size
+    loop = asyncio.get_running_loop()
+    if _download_slots is None or _download_slots_loop is not loop or _download_slots_size != limit:
+        _download_slots = asyncio.Semaphore(max(1, limit))
+        _download_slots_loop = loop
+        _download_slots_size = max(1, limit)
+    return _download_slots
+
 
 class TerrainError(Exception):
     """A terrain page could not be supplied."""
@@ -175,7 +209,17 @@ async def load_page(settings: Settings, name: str) -> bytes | None:
         cached = await asyncio.to_thread(read_cached_page, settings, name)
         if cached is not None:
             return cached
-        page = await download_page(settings, name)
+        # And only so many different tiles may be fetched at once. A
+        # caller that would be one too many waits here rather than
+        # starting another connection, another timeout and another
+        # worker thread. See `_download_slots`.
+        async with _slots(settings.terrain_download_concurrency):
+            # Checked once more: this caller may have waited for a slot
+            # behind something that filled the cache for it.
+            cached = await asyncio.to_thread(read_cached_page, settings, name)
+            if cached is not None:
+                return cached
+            page = await download_page(settings, name)
         if page is None:
             return None
         await asyncio.to_thread(write_page, settings, name, page)

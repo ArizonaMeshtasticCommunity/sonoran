@@ -1285,3 +1285,221 @@ def test_the_daily_snapshot_days_parameter_is_bounded(migrated_engine, timescale
         assert client.get("/api/stats/snapshots/daily?days=0").status_code == 422
         assert client.get("/api/stats/snapshots/daily?days=9999").status_code == 422
         assert client.get("/api/stats/snapshots/daily?days=30").status_code == 200
+
+
+# --- what the whole-table endpoints cost ---------------------------------
+#
+# `/api/stats`, `/api/stats/hardware` and `/api/stats/portnums` are the
+# only answers in the API with no time window. They count every row ever
+# kept, so the work grows with retention and never with what the reader
+# asked for, and the dashboard asks for all three on every load.
+
+
+def test_the_statistics_are_counted_once_and_then_held(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """A second reader inside the hold is answered without a new scan.
+
+    Asserted by changing the database underneath and watching the
+    answer not move. That is the behaviour a cache has; a mock of the
+    session would only assert that this test knows how the code is
+    written.
+    """
+    _seed(migrated_engine)
+    app = create_app(
+        Settings(
+            _env_file=None,
+            database_url_api=_api_url(timescale_url),
+            stats_cache_seconds=300.0,
+        )
+    )
+    with TestClient(app) as client:
+        first = client.get("/api/stats").json()
+        assert first["node_count"] >= 1
+
+        with migrated_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, first_seen, "
+                    "updated_at, last_heard) "
+                    "VALUES (4343, '!000010f7', 'CACHE', now(), now(), now()) "
+                    "ON CONFLICT (node_num) DO NOTHING"
+                )
+            )
+
+        second = client.get("/api/stats").json()
+        assert second == first, "the second read counted the table again"
+
+    # And the new row is there, so the hold is what held it back and not
+    # a write that never landed.
+    with migrated_engine.connect() as connection:
+        total = connection.execute(text("SELECT count(*) FROM node")).scalar_one()
+    assert total > first["node_count"]
+
+
+def test_a_hold_of_zero_counts_every_time(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """`STATS_CACHE_SECONDS=0` is how a deployment asks for live figures.
+
+    The guard has to be seen in both states. A cache only ever observed
+    holding is a cache nobody has watched let go.
+    """
+    _seed(migrated_engine)
+    app = create_app(
+        Settings(
+            _env_file=None,
+            database_url_api=_api_url(timescale_url),
+            stats_cache_seconds=0.0,
+        )
+    )
+    with TestClient(app) as client:
+        first = client.get("/api/stats").json()
+        with migrated_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, first_seen, "
+                    "updated_at, last_heard) "
+                    "VALUES (4344, '!000010f8', 'LIVE', now(), now(), now()) "
+                    "ON CONFLICT (node_num) DO NOTHING"
+                )
+            )
+        second = client.get("/api/stats").json()
+
+    assert second["node_count"] > first["node_count"]
+
+
+def test_the_grouped_statistics_are_held_too(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """`/hardware` and `/portnums` are ungrouped full scans of their table."""
+    _seed(migrated_engine)
+    app = create_app(
+        Settings(
+            _env_file=None,
+            database_url_api=_api_url(timescale_url),
+            stats_cache_seconds=300.0,
+        )
+    )
+    with TestClient(app) as client:
+        hardware = client.get("/api/stats/hardware").json()
+        portnums = client.get("/api/stats/portnums").json()
+
+        with migrated_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, hw_model, "
+                    "first_seen, updated_at, last_heard) "
+                    "VALUES (4345, '!000010f9', 'HW', 'A_NEW_MODEL', now(), now(), now()) "
+                    "ON CONFLICT (node_num) DO NOTHING"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO packet (from_node_num, packet_id, portnum, first_seen_at) "
+                    "VALUES (4242, 991, 67, now()) ON CONFLICT DO NOTHING"
+                )
+            )
+
+        assert client.get("/api/stats/hardware").json() == hardware
+        assert client.get("/api/stats/portnums").json() == portnums
+
+
+# --- the public node list, against a real table --------------------------
+#
+# `/api/embed/nodes` used to be `select(Node)`: every row and every
+# column into Python, then filtered. The filters are in the query now.
+# The rule that decides who is public did not move — `public_nodes` in
+# `embed/sanitise.py` still applies it to every row that arrives — so
+# these tests exist to prove the narrowing did not change the answer.
+
+
+def _seed_public_and_private(migrated_engine) -> None:  # type: ignore[no-untyped-def]
+    """Insert one node of each kind the public rule has to sort out."""
+    rows = [
+        # (node_num, short, role, lat, lon, gateway)
+        (5001, "RTR", "ROUTER", 33.45, -112.07, False),
+        (5002, "RPT", "REPEATER", 33.50, -112.10, False),
+        (5003, "RLT", "ROUTER_LATE", 33.55, -112.15, False),
+        # A client is a person's house. Never public, whatever else.
+        (5004, "CLI", "CLIENT", 33.60, -112.20, False),
+        # A NULL role is a client, not an unknown. See AGENTS.md 9.22.
+        (5005, "NUL", None, 33.65, -112.25, False),
+        # A gateway is not evidence of infrastructure by itself.
+        (5006, "GWC", "CLIENT", 33.70, -112.30, True),
+        # A router with no position cannot be drawn.
+        (5007, "NOP", "ROUTER", None, None, False),
+        # A router at Null Island never had a fix.
+        (5008, "NIL", "ROUTER", 0.0, 0.0, False),
+        # Lower case in the column must still match the role table.
+        (5009, "LOW", "router", 33.75, -112.35, False),
+    ]
+    with migrated_engine.begin() as connection:
+        for node_num, short, role, lat, lon, gateway in rows:
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, role, last_lat, "
+                    "last_lon, is_mqtt_gateway, first_seen, updated_at, last_heard) "
+                    "VALUES (:n, :i, :s, :r, :lat, :lon, :g, now(), now(), now()) "
+                    "ON CONFLICT (node_num) DO UPDATE SET role = :r, last_lat = :lat, "
+                    "last_lon = :lon, is_mqtt_gateway = :g"
+                ),
+                {
+                    "n": node_num,
+                    "i": f"!{node_num:08x}",
+                    "s": short,
+                    "r": role,
+                    "lat": lat,
+                    "lon": lon,
+                    "g": gateway,
+                },
+            )
+
+
+def _embed_app(timescale_url: str):  # type: ignore[no-untyped-def]
+    """An app with the embed switched on, reading the SELECT-only role."""
+    return create_app(
+        Settings(
+            _env_file=None,
+            database_url_api=_api_url(timescale_url),
+            embed_enabled=True,
+            embed_position_step=0.01,
+        )
+    )
+
+
+def test_the_public_node_list_shows_infrastructure_only(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """The filters moved into SQL. The answer must not have moved."""
+    _seed_public_and_private(migrated_engine)
+    with TestClient(_embed_app(timescale_url)) as client:
+        response = client.get("/api/embed/nodes")
+    assert response.status_code == 200
+    names = {node["short_name"] for node in response.json()}
+
+    # Infrastructure with a usable position, including the lower case
+    # role, which `upper()` in the query has to fold.
+    assert {"RTR", "RPT", "RLT", "LOW"} <= names
+    # And nothing else. Each of these was a way in.
+    for absent in ("CLI", "NUL", "GWC", "NOP", "NIL"):
+        assert absent not in names, f"{absent} reached the public list"
+
+
+def test_the_public_node_list_sends_no_long_name_or_exact_position(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """The columns that are not read are the ones the embed keeps back.
+
+    `select(Node)` carried the long name, the public key and the raw
+    position out of the database only to throw them away in Python.
+    They are not selected at all now, so they never cross the wire.
+    """
+    _seed_public_and_private(migrated_engine)
+    with TestClient(_embed_app(timescale_url)) as client:
+        nodes = client.get("/api/embed/nodes").json()
+
+    assert nodes
+    for node in nodes:
+        assert set(node) == {"short_name", "lat", "lon", "role", "is_gateway"}
+
+    # The position is snapped, so it names a hill and not a building.
+    router = next(node for node in nodes if node["short_name"] == "RTR")
+    assert router["lat"] != 33.45
+    assert abs(router["lat"] - 33.45) < 0.02

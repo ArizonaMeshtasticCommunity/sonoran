@@ -324,11 +324,11 @@ def test_a_diagnostic_run_is_withheld_from_the_public_page(tmp_path: Path) -> No
     )
 
     settings = Settings(coverage_cache_dir=str(tmp_path), embed_enabled=True)
-    embed._summary_cache = None
+    embed._summary_cache.clear()
     try:
         answer = asyncio.run(embed.embed_summary(settings))
     finally:
-        embed._summary_cache = None
+        embed._summary_cache.clear()
 
     assert answer["available"] is False
     assert answer["presets"] == []

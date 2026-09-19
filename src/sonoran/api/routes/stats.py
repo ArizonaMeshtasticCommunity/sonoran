@@ -4,12 +4,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api.cache import TimedCache
 from sonoran.api.dependencies import get_session, parse_node_id
 from sonoran.api.names import format_node_id, name_of, resolve_names
+from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
 from sonoran.meshtastic import portnums_pb2
 
@@ -76,9 +78,48 @@ BROWNOUT_HIGH = 35.0
 ON_MAINS_ABOVE = 100.0
 
 
+# The three whole-table answers on this router, each held for a while.
+#
+# These are the only endpoints in the API that read a hypertable with
+# no time window at all: `COUNT(*)` over `packet` and `packet_seen`,
+# and two ungrouped scans over every row of `packet` and `node`. The
+# work is proportional to everything ever kept, so it grows with
+# retention and never with what the reader asked for.
+#
+# The dashboard calls all three on every load, on a three-core box that
+# also runs the ingest and the coverage engine. One reader refreshing a
+# page was enough to put three full scans on the queue.
+#
+# An approximate count was the other option and was measured and
+# rejected: see `docs/API.md`. `pg_class.reltuples` on a hypertable
+# parent is 0, because the rows live in the chunks, so an approximation
+# means summing every chunk's estimate — more query, not less, and an
+# answer that is wrong by an unknown amount on a page whose whole
+# purpose is to report counts.
+#
+# So the figures stay exact and the reader shares them. The lock in
+# `TimedCache` is the part that matters under load: without it, every
+# request that arrives in the instant the hold expires runs its own
+# scan.
+_summary_cache: TimedCache[dict[str, int]] = TimedCache()
+_hardware_cache: TimedCache[list[dict[str, object]]] = TimedCache()
+_portnums_cache: TimedCache[list[dict[str, object]]] = TimedCache()
+
+
 @router.get("")
-async def stats(session: AsyncSession = Depends(get_session)) -> dict[str, int]:
-    """Return current dashboard summary counts."""
+async def stats(request: Request, session: AsyncSession = Depends(get_session)) -> dict[str, int]:
+    """Return current dashboard summary counts.
+
+    Held for `STATS_CACHE_SECONDS`. A mesh does not change its totals
+    in a way anybody reads at second resolution, and these are the four
+    unbounded counts in the API.
+    """
+    settings: Settings = request.app.state.settings
+    return await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+
+
+async def _read_summary(session: AsyncSession) -> dict[str, int]:
+    """Count the nodes, the packets, the observations, and the gateways."""
     return {
         "node_count": (await session.scalar(select(func.count()).select_from(Node))) or 0,
         "packet_count": (await session.scalar(select(func.count()).select_from(Packet))) or 0,
@@ -92,8 +133,16 @@ async def stats(session: AsyncSession = Depends(get_session)) -> dict[str, int]:
 
 
 @router.get("/hardware")
-async def hardware(session: AsyncSession = Depends(get_session)) -> list[dict[str, object]]:
+async def hardware(
+    request: Request, session: AsyncSession = Depends(get_session)
+) -> list[dict[str, object]]:
     """Return node counts grouped by hardware model."""
+    settings: Settings = request.app.state.settings
+    return await _hardware_cache.get(settings.stats_cache_seconds, lambda: _read_hardware(session))
+
+
+async def _read_hardware(session: AsyncSession) -> list[dict[str, object]]:
+    """Group every node by the hardware it reported."""
     statement = (
         select(Node.hw_model, func.count().label("count"))
         .group_by(Node.hw_model)
@@ -106,8 +155,16 @@ async def hardware(session: AsyncSession = Depends(get_session)) -> list[dict[st
 
 
 @router.get("/portnums")
-async def portnums(session: AsyncSession = Depends(get_session)) -> list[dict[str, object]]:
+async def portnums(
+    request: Request, session: AsyncSession = Depends(get_session)
+) -> list[dict[str, object]]:
     """Return packet counts grouped by port number, with readable names."""
+    settings: Settings = request.app.state.settings
+    return await _portnums_cache.get(settings.stats_cache_seconds, lambda: _read_portnums(session))
+
+
+async def _read_portnums(session: AsyncSession) -> list[dict[str, object]]:
+    """Group every packet ever kept by its port number."""
     rows = await session.execute(
         select(Packet.portnum, func.count().label("total")).group_by(Packet.portnum)
     )

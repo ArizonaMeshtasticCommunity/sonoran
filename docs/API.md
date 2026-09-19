@@ -494,6 +494,13 @@ A cut down coverage manifest: the bounds, the zooms, the presets, and
 the receiver the map assumes. The sites a run used, the terrain it was
 missing, and how long it took are operational detail and are not here.
 
+Held for 30 seconds, **including the answers that say there is no map**.
+"No run yet" and "the run is diagnostic" are the cheapest answers to
+give and were the two that were not cached, so a deployment in either
+state read and parsed `index.json` inside the event loop on every
+request — and those are exactly the states where a page asks on every
+load.
+
 ### 3B.3 `GET /api/embed/nodes`
 
 The infrastructure sites a public page may show.
@@ -506,6 +513,24 @@ node ID, and the last heard time are all left out.
 
 The position is snapped in this process, before it is sent. Rounding it
 in the browser would mean the exact value had already left.
+
+Held for 300 seconds. This is the only part of the embed that reads the
+database, and the sites of a mesh change over hours.
+
+The query selects five columns and applies the role and position tests
+in SQL. It used to be `select(Node)`: every row of the table and every
+column of it, built into ORM objects and carried into Python, to answer
+a question about the roughly five per cent of a mesh that is
+infrastructure. The columns it dropped in Python included the long
+name, the public key and the exact position — the very fields this
+endpoint exists to keep back, fetched out of the database only to be
+discarded.
+
+**The rule that decides who is public did not move.** `public_nodes` in
+`sonoran/embed/sanitise.py` still applies the role test to every row
+that arrives, so the SQL narrows what is read and decides nothing. A
+mistake in the query can only ever show fewer nodes, never more. See
+`AGENTS.md` 9.25.
 
 ### 3B.4 `GET /api/embed/tiles/{stamp}/{preset}/{layer}/{z}/{x}/{y}.png`
 
@@ -1023,9 +1048,75 @@ Response: `a`, `b`, `window_hours`, `report_count`, `best_snr`,
 
 ## 8. Statistics endpoints
 
+### 8.0 Three of these read the whole table, and are held
+
+`/api/stats`, `/api/stats/hardware` and `/api/stats/portnums` are the
+only answers in the API with **no time window**. They count every row
+ever kept, so the work grows with retention and never with what the
+reader asked for. Everything else here takes `hours` and reads a slice.
+
+The dashboard calls all three on every load, on a three-core box that
+also runs the ingest and the coverage engine.
+
+Each is now held for `STATS_CACHE_SECONDS` (default 30). One reader is
+answered from the database; everybody else inside the window shares
+that answer. The figures are a sense of scale on a dashboard, and a
+mesh does not change its totals in a way anybody reads at second
+resolution. Set it to `0` to count on every request.
+
+The hold is taken with a lock, which is the half that matters under
+load. Without one, every request arriving in the instant a hold expires
+runs its own scan, so the endpoint costs its full price multiplied by
+the number of concurrent readers at exactly the moment it is busy.
+`sonoran/api/cache.py` holds that, and the embed endpoints use it too.
+
+#### What this cost, measured
+
+On a real TimescaleDB (`timescale/timescaledb-ha:pg17`) at head, seeded
+with 950 nodes, 200 000 `packet` rows and 60 000 `packet_seen` rows
+spread over a 30-day retention window. Best of three runs, warm cache:
+
+| Query | Time |
+|-------|-----:|
+| `SELECT count(*) FROM node` | 0.7 ms |
+| `SELECT count(*) FROM packet` | 11.8 ms |
+| `SELECT count(*) FROM packet_seen` | 4.0 ms |
+| `SELECT count(*) FROM node WHERE is_mqtt_gateway` | 0.6 ms |
+| **one `/api/stats` request** | **17.1 ms** |
+| `/api/stats/portnums` (`GROUP BY packet.portnum`) | 15.9 ms |
+| `/api/stats/hardware` (`GROUP BY node.hw_model`) | 0.7 ms |
+| **one dashboard load, all three** | **33.6 ms** |
+
+These are full scans, so the figures scale with the row count: the
+production `packet` table is larger than the one measured, and the
+measurement box (a 2-core, 955 MiB Docker VM) could not be seeded
+higher without the backend being killed. Read the table as the shape of
+the cost, not as the production number. The point is that it is
+proportional to everything retained and is paid on every page load.
+
+#### Why not an approximate count
+
+`pg_class.reltuples` was the obvious alternative and does not work
+here. On a hypertable the rows live in the chunks, not the parent, so
+the parent's estimate is **0**. Measured on the same database after
+`ANALYZE`:
+
+| Table | `pg_class.reltuples` | real count |
+|-------|---------------------:|-----------:|
+| `node` | 950 | 950 |
+| `packet` | **0** | 200 000 |
+| `packet_seen` | **0** | 60 000 |
+
+An approximation would therefore have to sum every chunk's estimate —
+more query, not less — and would still hand a page whose entire purpose
+is to report counts a number that is wrong by an unknown amount. So the
+figures stay exact and the readers share them.
+
 ### 8.1 `GET /api/stats`
 
 Returns the dashboard summary: node counts, packet counts, gateway counts, messages per hour.
+
+Held for `STATS_CACHE_SECONDS`. See 8.0.
 
 ### 8.2 `GET /api/stats/top`
 
@@ -1181,6 +1272,35 @@ A page never changes, so the browser is told to keep it forever.
 A tile outside the configured region is refused even when it is cached.
 Without that check the endpoint would fetch and keep any tile on earth
 for anybody who asked.
+
+#### The outbound fetch this endpoint can start
+
+Anybody may call this. While `TERRAIN_ALLOW_DOWNLOAD` is true, a
+request for an **in-region, uncached** tile makes this process open an
+outbound HTTP connection and then run a CPU-bound decode in a worker
+thread. The disk cache is bounded by the region. The work in flight was
+not:
+
+- The per-tile lock stops the *same* tile being fetched twice. It says
+  nothing about different tiles, and the region holds 56 of them, so a
+  cold cache and a few callers could put every one in flight at once.
+- The timeout was **120 seconds**, so one request could hold a
+  connection and a worker thread for two minutes.
+
+Two bounds now apply, and neither removes the exposure:
+
+| Setting | Default | What it bounds |
+|---|---|---|
+| `TERRAIN_TIMEOUT_SECONDS` | 30 | How long one fetch may hold its thread |
+| `TERRAIN_DOWNLOAD_CONCURRENCY` | 2 | How many different tiles are fetched at once |
+
+**The recommended posture is to remove it.** Run
+`tools/prefetch_terrain.py` once and set `TERRAIN_ALLOW_DOWNLOAD=false`.
+The API then cannot make an outbound request at all, which is the only
+complete answer; the bounds above are for a box that has not prefetched
+yet. This is the same reasoning as `AGENTS.md` 7: the terrain endpoint
+serves one configured region and must never become a general proxy for
+the tile source.
 
 ### 11.2 `GET /api/terrain/region`
 

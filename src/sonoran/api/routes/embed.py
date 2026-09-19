@@ -28,15 +28,15 @@ diagnostic run is refused before a handler body runs. See `AGENTS.md`
 9.25 and 9.27, and `docs/API.md` 3B for the paths a proxy may open.
 """
 
-import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import Path as PathParam
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import HTMLResponse, Response
 
+from sonoran.api.cache import TimedCache
 from sonoran.api.dependencies import get_session
 from sonoran.api.html import as_script_json
 
@@ -48,7 +48,7 @@ from sonoran.config import Settings
 from sonoran.coverage import store
 from sonoran.coverage.store import LAYERS
 from sonoran.db.models import Node
-from sonoran.embed.sanitise import public_nodes
+from sonoran.embed.sanitise import PUBLIC_ROLES, public_nodes
 from sonoran.positions import is_usable
 from sonoran.roles import SITE_SET_INFRASTRUCTURE
 
@@ -85,8 +85,21 @@ NODE_CACHE_SECONDS = 300.0
 # endpoint, which every embed load hits first, was not.
 SUMMARY_CACHE_SECONDS = 30.0
 
-_node_cache: tuple[float, list[dict[str, object]]] | None = None
-_summary_cache: tuple[float, dict[str, object]] | None = None
+# Both holds are `TimedCache`, which adds the half that was missing:
+# one caller refreshes an expired answer and the rest wait for it.
+#
+# The hand-rolled version read the clock, found the hold expired, and
+# ran the work — in every request that arrived in that instant. So the
+# hold made the endpoint cheap while it was warm and left it at its
+# full cost, multiplied by the number of concurrent readers, at the one
+# moment a public page is busy. A cold cache under load was worse than
+# no cache at all, because the herd all arrived together.
+#
+# This matters here more than anywhere else in the API: the embed is a
+# page on somebody else's site, so its load is not ours to shape.
+
+_node_cache: TimedCache[list[dict[str, object]]] = TimedCache()
+_summary_cache: TimedCache[dict[str, object]] = TimedCache()
 
 STATIC_DIR = Path(__file__).parent.parent.parent / "web" / "static"
 
@@ -113,13 +126,21 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
     tiles it was missing, and how long it took are all operational
     detail that a public page has no use for.
     """
-    global _summary_cache
-    now = time.monotonic()
-    if _summary_cache is not None and now - _summary_cache[0] < SUMMARY_CACHE_SECONDS:
-        return _summary_cache[1]
+    return await _summary_cache.get(SUMMARY_CACHE_SECONDS, lambda: _read_summary(settings))
 
+
+async def _read_summary(settings: Settings) -> dict[str, object]:
+    """Build the public summary from the manifest on disk."""
     manifest = store.read_manifest(settings)
     if manifest is None:
+        # Held, like every other answer here.
+        #
+        # "There is no map" used to be the one answer that was not
+        # cached, so a deployment that had never run the coverage job —
+        # or one between runs — read and parsed `index.json` inside the
+        # event loop on every single request. The cheapest answer to
+        # give was the only one the endpoint worked for, and it was the
+        # answer a page in that state asks for every time it loads.
         return {"available": False, "presets": []}
 
     # A diagnostic run does not reach a public page at all.
@@ -140,7 +161,6 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
             "presets": [],
             "reason": "diagnostic",
         }
-        _summary_cache = (now, withheld)
         return withheld
 
     raw_presets = manifest.get("presets")
@@ -173,7 +193,6 @@ async def embed_summary(settings: Settings = Depends(_require_enabled)) -> dict[
         "is_diagnostic": False,
         "presets": presets,
     }
-    _summary_cache = (now, answer)
     return answer
 
 
@@ -191,27 +210,68 @@ async def embed_nodes(
     embed that reads the database, and the sites of a mesh change over
     hours.
     """
-    global _node_cache
-    now = time.monotonic()
-    if _node_cache is not None and now - _node_cache[0] < NODE_CACHE_SECONDS:
-        return _node_cache[1]
+    return await _node_cache.get(NODE_CACHE_SECONDS, lambda: _read_public_nodes(session, settings))
 
-    rows = await session.scalars(select(Node))
+
+# The rows a public node needs, and no others.
+#
+# This used to be `select(Node)`: every row of the table and every
+# column of it, built into full ORM objects, carried into Python, and
+# then thrown away by `public_nodes`. On a mesh with 900-odd nodes of
+# which about 50 are infrastructure, that is the whole table read to
+# answer a question about five per cent of it, and the columns dropped
+# include the long name, the public key and the raw position — the very
+# fields the embed exists to keep back. There is no reason for them to
+# cross the wire at all.
+#
+# The rule that decides who is public is still `embed/sanitise.py`, and
+# that has not moved. The SQL below narrows what is read; it does not
+# decide anything. `public_nodes` applies the role test again to every
+# row that arrives, so a mistake here can only ever show fewer nodes,
+# never more. See `AGENTS.md` 9.25: one place decides, and this is not
+# it.
+_PUBLIC_NODE_COLUMNS = (
+    Node.short_name,
+    Node.last_lat,
+    Node.last_lon,
+    Node.role,
+    Node.is_mqtt_gateway,
+)
+
+
+async def _read_public_nodes(session: AsyncSession, settings: Settings) -> list[dict[str, object]]:
+    """Read the infrastructure sites a public page may show."""
+    statement = select(*_PUBLIC_NODE_COLUMNS).where(
+        # The same test `is_public_node` makes, pushed into the query.
+        # A NULL role is a client and is excluded, which is the answer
+        # `AGENTS.md` 9.22 insists on: NULL is not "unknown, so include
+        # it", it is the commonest node on the mesh.
+        func.upper(Node.role).in_(sorted(PUBLIC_ROLES)),
+        # A node with no position cannot be drawn, so it need not be
+        # read. The rest of `is_usable` — the ranges and Null Island —
+        # stays in Python, where the one definition of it lives.
+        Node.last_lat.is_not(None),
+        Node.last_lon.is_not(None),
+    )
+    rows = (await session.execute(statement)).all()
     nodes = public_nodes(
         (
             (
-                node.short_name,
-                node.long_name,
-                node.last_lat if is_usable(node.last_lat, node.last_lon) else None,
-                node.last_lon if is_usable(node.last_lat, node.last_lon) else None,
-                node.role,
-                bool(node.is_mqtt_gateway),
+                short_name,
+                # The long name is not read. It is named here, as the
+                # argument `public_nodes` drops on purpose, so the call
+                # site still says out loud that it is not going out.
+                None,
+                latitude if is_usable(latitude, longitude) else None,
+                longitude if is_usable(latitude, longitude) else None,
+                role,
+                bool(is_gateway),
             )
-            for node in rows.all()
+            for short_name, latitude, longitude, role, is_gateway in rows
         ),
         settings.embed_position_step,
     )
-    answer: list[dict[str, object]] = [
+    return [
         {
             "short_name": node.short_name,
             "lat": node.latitude,
@@ -221,8 +281,6 @@ async def embed_nodes(
         }
         for node in nodes
     ]
-    _node_cache = (now, answer)
-    return answer
 
 
 # --- the public tiles --------------------------------------------------

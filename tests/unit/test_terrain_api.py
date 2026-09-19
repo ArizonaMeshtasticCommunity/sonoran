@@ -5,6 +5,7 @@ check the guards first: a bad name, and a tile outside the region this
 service covers.
 """
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -218,3 +219,119 @@ class TestAnUnwritableCache:
     def test_a_good_write_reports_success(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         assert write_page(settings, "N34W112", b"\x00" * PAGE_BYTES) is True
+
+
+class TestTheOutboundFetchIsBounded:
+    """A public request must not start unbounded outbound work.
+
+    `/api/terrain/page/{tile}` is served to anybody. The region check
+    stops it being a general proxy for the tile source, but inside the
+    region an uncached tile still starts an outbound fetch with its own
+    timeout and a CPU-bound decode in a worker thread.
+
+    The per-tile lock covers the *same* tile being asked for twice. It
+    never covered different tiles, and the region holds 56 of them, so
+    a cold cache and a few callers could put every one in flight at
+    once — on a three-core box that also runs the ingest.
+    """
+
+    def test_only_so_many_tiles_are_fetched_at_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ten different tiles, two slots. Never three at a time.
+
+        Without the semaphore this is 10, which is the finding. The
+        assertion is on the high-water mark rather than the total: every
+        tile is still fetched, just not all together.
+        """
+        from sonoran.terrain import store as terrain_store
+
+        settings = _settings(tmp_path, terrain_allow_download=True)
+        live = 0
+        peak = 0
+
+        async def fake_download(_settings: Settings, name: str) -> bytes:
+            nonlocal live, peak
+            live += 1
+            peak = max(peak, live)
+            try:
+                # Hold the slot long enough that every caller has
+                # certainly arrived and asked.
+                await asyncio.sleep(0.02)
+            finally:
+                live -= 1
+            return b"\x00" * PAGE_BYTES
+
+        monkeypatch.setattr(terrain_store, "download_page", fake_download)
+
+        tiles = [f"N3{n}W112" for n in range(10)]
+
+        async def go() -> list[bytes | None]:
+            return list(
+                await asyncio.gather(*(terrain_store.load_page(settings, tile) for tile in tiles))
+            )
+
+        pages = asyncio.run(go())
+
+        assert peak <= settings.terrain_download_concurrency, (
+            f"{peak} tiles were downloaded at once; "
+            f"the limit is {settings.terrain_download_concurrency}"
+        )
+        # And the work still got done: a bound is not a drop.
+        assert all(page is not None for page in pages)
+        assert len(pages) == len(tiles)
+
+    def test_the_same_tile_is_still_fetched_only_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The per-tile lock must survive the change.
+
+        The semaphore is a second gate, not a replacement. Ten callers
+        asking for one tile is still one download.
+        """
+        from sonoran.terrain import store as terrain_store
+
+        settings = _settings(tmp_path, terrain_allow_download=True)
+        calls = 0
+
+        async def fake_download(_settings: Settings, name: str) -> bytes:
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.01)
+            return b"\x00" * PAGE_BYTES
+
+        monkeypatch.setattr(terrain_store, "download_page", fake_download)
+
+        async def go() -> None:
+            await asyncio.gather(*(terrain_store.load_page(settings, "N34W112") for _ in range(10)))
+
+        asyncio.run(go())
+        assert calls == 1, f"the same tile was downloaded {calls} times"
+
+    def test_the_timeout_is_not_two_minutes(self) -> None:
+        """A public request must not be able to hold a fetch for 120 s.
+
+        The number is not sacred; the order of magnitude is. A caller
+        that can make this process wait two minutes, on a connection
+        and a worker thread, from an unauthenticated endpoint, is the
+        thing being fixed.
+        """
+        settings = Settings(_env_file=None)
+        assert settings.terrain_timeout_seconds <= 60.0
+
+    def test_downloading_can_still_be_turned_off_entirely(self, tmp_path: Path) -> None:
+        """The strongest posture, and the one this deployment should hold.
+
+        `tools/prefetch_terrain.py` fills the cache and
+        `TERRAIN_ALLOW_DOWNLOAD=false` then makes the API incapable of
+        an outbound request. The bound above is for a box that has not
+        done that yet.
+        """
+        from sonoran.terrain import store as terrain_store
+
+        settings = _settings(tmp_path, terrain_allow_download=False)
+
+        async def go() -> bytes | None:
+            return await terrain_store.load_page(settings, "N34W112")
+
+        assert asyncio.run(go()) is None

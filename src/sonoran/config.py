@@ -66,6 +66,24 @@ class Settings(BaseSettings):
     web_base_path: str = ""
     web_api_base_url: str = ""
 
+    # How long the whole-table statistics are held before they are
+    # counted again.
+    #
+    # `/api/stats`, `/api/stats/hardware` and `/api/stats/portnums` are
+    # the only answers in the API with no time window: they count every
+    # row ever kept, so their cost grows with retention and not with
+    # what the reader asked for. The dashboard asks for all three on
+    # every load.
+    #
+    # Thirty seconds is chosen against what the figures are for. They
+    # are a sense of scale on a dashboard, and a mesh does not change
+    # its totals in a way anybody reads at second resolution.
+    #
+    # Zero turns the hold off and counts on every request, which is
+    # what a deployment with a small database or a spare core can
+    # afford.
+    stats_cache_seconds: float = 30.0
+
     # The timezone every time on the page is shown in.
     #
     # Arizona does not observe daylight saving, so it sits on MST all
@@ -94,7 +112,28 @@ class Settings(BaseSettings):
     # Coverage planner terrain. Pages are made once and kept on disk.
     terrain_cache_dir: str = "/var/lib/sonoran/terrain"
     terrain_source_url: str = "https://elevation-tiles-prod.s3.amazonaws.com"
-    terrain_timeout_seconds: float = 120.0
+    # How long one outbound tile fetch may take.
+    #
+    # This was 120 seconds. A public request for an uncached in-region
+    # tile makes the API hold a worker thread and an outbound
+    # connection for that long, and a slow tile source is then a slow
+    # API for everybody. Thirty seconds is well past a healthy fetch of
+    # a few megabytes and short enough that a stuck one lets go.
+    terrain_timeout_seconds: float = 30.0
+    # How many tiles may be fetched from the source at once.
+    #
+    # The cache on disk is bounded by the region, but the work in
+    # flight was not: every uncached in-region tile asked for at the
+    # same time was its own connection, its own timeout, and its own
+    # CPU-bound decode in a worker thread. The region holds 56 tiles,
+    # so a first-warm or a cleared cache could put 56 of those in
+    # flight at once on a three-core box.
+    #
+    # Two at a time fills a cold cache at a sensible rate and leaves
+    # the thread pool to the rest of the API. A request that would be
+    # the third waits its turn, which is the right answer: the page
+    # treats a missing tile as sea level and asks again.
+    terrain_download_concurrency: int = 2
     # Set this to false after tools/prefetch_terrain.py has filled the
     # cache. The API then makes no outbound request at all.
     terrain_allow_download: bool = True
