@@ -765,11 +765,21 @@ censored. The solver handles censoring correctly — measured against
 planted truth it recovers a bias to within 0.6 dB at 48 percent
 censoring — and it cannot survive a censored observation that is not
 true: false silence drives the fitted bias down almost linearly with its
-share while the reported-only mean stays at zero. `summary.mean_db` in
-`calibration.json` is that reported-only mean, it is already written on
-every run, and it is the one number that says whether the censored side
-or the reported side is doing it. Read it before changing anything. See
-`docs/ISSUES.md` 2.4.2.
+share while the reported-only mean stays at zero.
+
+`summary.mean_db` is that reported-only mean, and it has now been read:
+-13.57 dB. So the -44.62 splits into -13.57 dB of real error on the
+links the mesh measured and -31.05 dB opened by rows that record
+silence. Inverting the intercept score equation puts the mean censoring
+bound at -42.3 dB, and only about 6 percent of silence that deep is
+credible against the links we did measure. Two things follow and both
+are load-bearing: **do not lower `MAX_CANDIDATES` to make the bias look
+better** — it moves the bias 30 dB while the reported mean does not
+move at all, so it is a dial and not a measurement — and **do not raise
+the trust guard**. Fix the evidence instead; the same mesh without the
+false silence fits at -14.46 dB, inside the guard, with nothing
+weakened. The full decomposition, the falsification table and the path
+forward are in `docs/ISSUES.md` 2.4.2.
 
 ## 10. Reference documents
 

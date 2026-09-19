@@ -247,6 +247,9 @@ Three live readings of the same fault:
 | 2026-08-22 | 771 | — | -46.3 dB | 12.7 dB | 0 |
 | 2026-09-18 | 420 | 362 (86%) | -44.62 dB | 11.17 dB | 0 |
 
+The 2026-09-18 run is the one with a full reading. Its `summary` is
+`count 420, mean_db -13.57, spread_db 17.52, censored 362`.
+
 The solver is not the fault. `fit_offsets` is a correct EM for a Tobit
 model: a censored link is filled with the conditional mean of the
 truncated normal it must have come from, the offsets are refitted, and
@@ -270,38 +273,175 @@ reached the neighbour list, gives:
 
 The true bias in every row is zero. The fitted bias tracks the share of
 false silence almost linearly, and the reported-only mean stays near
-zero throughout. That is the live signature: 86 percent censored, a
-scatter on the reported links that is ordinary for a LoRa SNR against a
-terrain model, and a mesh-wide bias no propagation error explains.
+zero throughout.
 
-Two structural reasons the censored side is that large, and neither is
-evidence about a radio:
+**The split.** `summary.mean_db` is the mean residual over the reported
+links alone, and it is also what the intercept would be with the
+censored rows dropped, because with nothing else in the design the two
+coincide. So the decomposition needs no model at all:
+
+| Term | dB | Share |
+|---|---|---|
+| Fitted `model_bias_db` | -44.62 | 100% |
+| Reported side, `summary.mean_db` | -13.57 | 30% |
+| Gap opened by the censored mass | -31.05 | 70% |
+
+Roughly a third of the rejected bias is a real error on the links the
+mesh actually measured. The other two thirds is opened by rows that
+record silence.
+
+**What the bounds must have been.** Nothing stored says how far above
+the sensitivity the model put a silent link, and that is the number the
+whole question turns on. It can be recovered. At EM convergence the
+line `bias = mean(filled - rows @ offsets)` is exactly the Tobit score
+equation for the intercept:
+
+    sum_reported (y - mu)  =  sum_censored  sigma * lambda(z),
+    z = (bound - mu) / sigma,   lambda(z) = phi(z) / Phi(z)
+
+Everything in it is live except the bounds. With 58 reported links at
+-13.57, 362 censored, `mu = -44.62` and `sigma = NOISE_SIGMA_DB = 8`:
+
+    reported pull   sum(y - mu) = 1800.9 dB
+    censored push   mean lambda =   0.622   ->   mean z = 0.29
+    implied mean censoring bound        = -42.29 dB
+
+**The model put a typical silent link 42.3 dB above sensitivity.**
+
+**How much of that silence is credible.** Judge it against the 58 links
+the mesh did measure. If a silent link is drawn from the same
+`N(-13.57, 17.52^2)`, then `P(residual <= -42.3) = 5.1%`. The observed
+silence is 86 percent. So about 6 percent of it is credible and roughly
+94 percent — some 340 of the 362 rows — is not.
+
+That 6 percent carries a caveat, and it must be carried with it.
+Reported links are survivors, so their distribution is truncated above,
+and a fairer distribution for the silent ones would sit lower. Judged
+instead by the fit's own converged distribution, `P(r <= -42.3)` is
+nearer 58 percent — but that is circular, because the fit only believes
+that distribution because it assumed the silence was real. The two
+answers differ by an order of magnitude. **That gap is the assumption
+`AGENTS.md` 9.21 said to validate, and it is still not validated.** The
+only non-circular evidence available is the 58 measured links, and they
+say 6 percent.
+
+**The alternatives, falsified.** The planted-truth harness rules out
+every single-cause explanation:
+
+| Hypothesis | Censored | Fitted bias | Verdict |
+|---|---|---|---|
+| Shallow margins, silence all genuine (2 dB) | 78% | -10.58 dB | bias cannot reach -44.6 |
+| Shallow margins, silence all genuine (5 dB) | 73% | -11.15 dB | same |
+| Shallow margins, silence all genuine (10 dB) | 61% | -11.90 dB | same |
+| Deep margins (42 dB), silence all genuine | 9% | -14.24 dB | censoring cannot reach 86% |
+| Reported-side error alone, -44.62 dB | 56% | -44.30 dB | the 58 links average -13.57, not -44.6 |
+
+A bound just below zero cannot hold a mean at -44.6 dB, and a model
+confident enough to place links 42 dB above sensitivity cannot have 86
+percent of them fail honestly. Only a mixed cause works.
+
+**The mixed cause reproduces the run.** Sweeping the margin
+distribution, the false-silence share and the link noise, the closest
+match is margins `N(36, 10^2)` dB, 84 percent false silence and 13 dB
+of link noise:
+
+| | live | synthetic |
+|---|---|---|
+| censored | 86% | 85% |
+| reported mean | -13.57 dB | -11.82 dB |
+| reported spread | 17.52 dB | 13.53 dB |
+| fitted bias | -44.62 dB | -43.95 dB |
+| post-fit spread | 11.17 dB | 12.17 dB |
+
+A one-parameter sweep brackets the false-silence share at 78 to 84
+percent. The loose end is the reported spread: the live reported links
+are **more** scattered than the synthetic ones, which says the reported
+side is noisier than modelled, not less.
+
+**Two structural reasons the censored side is that large**, and neither
+is evidence about a radio:
 
 - `MAX_CANDIDATES` takes up to 40 silent candidates for each listener,
-  against however few neighbours it actually named. 362 censored links
-  over roughly ten listeners is that cap, not a measurement.
+  against however few neighbours it actually named. 362 censored at a
+  cap of 40 needs at least 10 listeners, and at exactly 10 the cap binds
+  for 9 of them — 360 of the 362. The 58 reported links over those 10
+  listeners is 5.8 named neighbours each. Each listener is charged with
+  about 40 silences for every 5.8 things it actually said. The cap, not
+  the mesh, is setting the censored count.
 - The NeighborInfo module is off on most nodes, and where it is on the
   list it publishes is bounded and ages out. A node that heard a
   neighbour and did not list it is charged with silence.
 
-**The one measurement that settles it** is already written down and has
-not been read: `summary.mean_db` in `calibration.json` is the mean
-residual over the reported links alone, and the job logs it as "model
-out by %.1f dB". Near zero with a fitted bias near -45 says the censored
-side is doing it, which is the table above. Also near -45 says the
-reported side is wrong on its own, and then the suspects are different:
-a LoRa SNR reading saturates near +12 dB, so a strong close link reads
-far lower than the model predicts, and the same harness shows a cap at
-+12 dB alone producing a -20 dB bias with nothing censored at all.
-`noise_floor_dbm` also assumes thermal noise, and a band with
-interference in it puts every derived power below the truth.
+**Lowering the cap is not a fix.** It is a dial. Same mesh, same truth,
+same radios; only how many candidates the job bothers to enumerate:
 
-Do not raise the trust guard. `store.calibration_offsets` and
+| `MAX_CANDIDATES` | Links | Censored | Reported mean | Fitted bias |
+|---|---|---|---|---|
+| 40 | 443 | 89% | -12.69 dB | -52.24 dB |
+| 30 | 347 | 86% | -12.69 dB | -50.25 dB |
+| 20 | 247 | 81% | -12.69 dB | -46.29 dB |
+| 10 | 147 | 68% | -12.69 dB | -36.26 dB |
+| 5 | 97 | 52% | -12.69 dB | -26.65 dB |
+| 2 | 67 | 30% | -12.69 dB | -21.59 dB |
+
+The reported mean never moves. The mesh-wide bias moves 30 dB on a
+parameter about enumeration effort, which is the definition of a number
+that is not a measurement. Worse, tuning the cap walks the bias under
+the 20 dB guard and starts an unvalidated fit moving the public map.
+That is strictly worse than today, where it is refused and says so.
+
+**Do not lower `MAX_CANDIDATES` to make the bias look better, and do
+not raise the trust guard.** `store.calibration_offsets` and
 `Calibration.is_trusted` both refused this fit and both were right.
+`applied_count: 0` is the system working.
+
+**The payoff for fixing the evidence instead.** With the false silence
+removed, the same synthetic mesh fits at **-14.46 dB** — inside the
+plus or minus 20 dB guard. Calibration would begin applying, and
+nothing would have been weakened to let it.
+
+**The path forward**, in this order. Instrumentation first, because the
+one input nobody can see is the one the answer turns on.
+
+1. **Instrument, then decide.** The censoring bounds had to be
+   recovered by inverting the score equation above. Write them down
+   instead: add the distribution of `threshold - predicted` over the
+   censored links to `summary` — count, mean, median, p10 and p90 — and
+   the listener count. One run then replaces every inference here with
+   a measurement, and breaks the circularity in the 6 percent.
+2. **Make silence provable before it counts.** Censor only where
+   absence is informative: the listener's NeighborInfo module is on, its
+   list is not saturated, and the candidate actually transmitted inside
+   the window. A link the listener could not have listed is not a link
+   it failed to hear.
+3. **Charge the listener's receive gain**, which is 2.4.3. Correctness,
+   and it belongs in the same work, but it is not the cause and must
+   not lead.
+4. **Then** take the remaining -13.57 dB on its own. A LoRa SNR reading
+   saturates near +12 dB, so a strong close link reads far lower than
+   the model predicts, and the harness shows that cap alone producing a
+   -20 dB bias with nothing censored at all. `noise_floor_dbm` also
+   assumes thermal noise, and a band with interference in it puts every
+   derived power below the truth.
+
+**What the excluded nodes do not change.** `coarse_sites` lists 31
+nodes held back at 13, 14 and 15 precision bits — 2900 m, 1459 m and
+729 m of deviation — and `config/nodes.yaml` holds no real entries.
+`read_peers` drops a coarse node from the fit entirely, so those 31 are
+neither listeners nor candidates. That is deliberate and right: a
+silence about a node that may be 2.9 km from where it says means
+nothing. It changes no number above. The score-equation inversion uses
+only the four summary figures; the cap arithmetic is arithmetic on the
+live counts; the credibility figure comes from the links that did get
+in. It explains the small sample — 10 listeners and 420 links on a mesh
+this size — and giving those 31 real positions would grow the evidence
+without changing any conclusion here. It also confirms 2.4.3 exactly:
+with no override entries, every node takes the stock antenna gain.
 
 ### 2.4.3 The fit charges no receive antenna gain at the listener
 
-**State:** Open. Found while reading 2.4.2, not measured live.
+**State:** Open. Found while reading 2.4.2. Quantified against the
+2026-09-18 run.
 
 `jobs/calibrate.py::_fill` recovers a path loss with
 `listener_eirp - link.dbm` and then predicts the far end with
@@ -309,12 +449,32 @@ Do not raise the trust guard. `store.calibration_offsets` and
 antenna the listener received on, although the coverage job does exactly
 that for its handheld through `params.received_dbm`.
 
-The sign is the opposite of the live bias — a missing receive gain makes
-the model pessimistic, not optimistic — so this is not the cause of
-2.4.2. The size is small too: 2.15 dBi for a stock node, more only where
-an operator has written a real antenna down. It is still a term the
-model is missing at one end of every link it reads, and it belongs in
-the same piece of work.
+**The term is exactly 2.15 dB, and it is uniform.** Every entry in
+`radio/hardware.py` carries `STOCK_ANTENNA_GAIN_DBI`, which is 2.15 —
+the figures that vary in that table are transmit powers, not gains.
+`DEFAULT_CABLE_LOSS_DB` is 0.0, and `config/nodes.yaml` holds no real
+entries, so no node takes a written antenna. A uniform gain is an exact
+translation of every residual and every censoring bound alike, which was
+confirmed on the harness: the fitted bias moved by -2.15 dB and not a
+hundredth more.
+
+**It moves the bias the wrong way.** Charging the gain makes the model
+predict more signal, so measurement sits further below it:
+
+| | now | with the gain charged |
+|---|---|---|
+| Reported side | -13.57 dB | -15.72 dB |
+| Fitted bias | -44.62 dB | -46.77 dB |
+
+It is 16 percent of the reported-side error **in the direction that
+deepens it**. It also admits slightly more censored rows, because
+`elif predicted > threshold` takes more candidates once `predicted` is
+correctly higher.
+
+So nobody should later read this entry and mistake it for the cause of
+2.4.2. It explains none of the -13.57 and makes the headline figure
+marginally worse. It is a real defect, worth fixing for correctness,
+and it is step 3 of the path in 2.4.2 rather than the lead.
 
 ### 2.5 The planner draws 90 m terrain only
 
