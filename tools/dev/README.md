@@ -131,6 +131,30 @@ traceroute pages, the filters, the map, and the graphs. What does not:
 
 Rebuild the file after a change to see the change in it.
 
+## Walking the pages
+
+Two tools, and they catch different things.
+
+    node tools/dev/check_pages.js    # every page, fail on a JavaScript error
+    node tools/dev/e2e.js            # twelve journeys, fail when one breaks
+
+`check_pages.js` catches a page that throws. It cannot catch a page that
+loads happily and does nothing useful: a search box wired to no handler,
+a button that expands nothing, a picker that reloads the same rows. So
+`e2e.js` clicks.
+
+Each journey asserts the thing a person came for, and asserts it so that
+a broken feature fails rather than passes. That is harder than it looks.
+The first draft of the search journey asserted `rows > 0` after typing a
+term, and passed against a search that filtered nothing at all — the
+nodes search applies on Enter, so typing alone changed nothing and 300
+rows stayed 300 rows. It now presses Enter, requires the list to get
+shorter, and requires a nonsense term to return no rows at all.
+
+Both take `SONORAN_URL` to walk an instance other than the preview.
+Both exit non-zero on failure, and `e2e.js` also fails on any console
+error it did not expect.
+
 ## Checking the engine against the browser
 
 The coverage engine is one WebAssembly file. The planner page runs it in
