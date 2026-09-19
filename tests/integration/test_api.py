@@ -1193,3 +1193,95 @@ def test_a_malformed_sender_is_a_422_not_a_500(migrated_engine, timescale_url: s
     with TestClient(app) as client:
         assert client.get("/api/chat/conversation/nonsense/4242").status_code == 422
         assert client.get("/api/chat?from=nonsense").status_code == 422
+
+
+# --- user input must not reach the query's grammar ----------------------
+
+
+def _seed_wildcards(engine) -> None:  # type: ignore[no-untyped-def]
+    """Names and bodies that a LIKE pattern would confuse."""
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM node WHERE node_num BETWEEN 9500 AND 9599"))
+        connection.execute(
+            text("DELETE FROM text_message WHERE from_node_num BETWEEN 9500 AND 9599")
+        )
+        connection.execute(
+            text(
+                "INSERT INTO node (node_num, node_id, long_name, short_name, "
+                "first_seen, last_heard, updated_at) VALUES "
+                "(9501, '!0000251d', 'Ridge Top', 'RT', :now, :now, :now), "
+                "(9502, '!0000251e', 'Ridge_Top', 'R_T', :now, :now, :now), "
+                "(9503, '!0000251f', 'RidgeXTop', 'RXT', :now, :now, :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO text_message (from_node_num, to_node_num, channel, "
+                "body, packet_id, seen_at, emoji) VALUES "
+                "(9501, 0, 'LongFast', 'plain body', 7001, :now, false), "
+                "(9502, 0, 'LongFast', '100% sure', 7002, :now, false)"
+            ),
+            {"now": now},
+        )
+
+
+def test_a_node_search_treats_an_underscore_as_a_character(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """`Ridge_Top` must not also find `RidgeXTop`."""
+    _seed_wildcards(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        found = client.get("/api/nodes?q=Ridge_Top&limit=50").json()
+    names = {row["long_name"] for row in found}
+    assert "Ridge_Top" in names
+    assert "RidgeXTop" not in names
+
+
+def test_a_bare_percent_does_not_match_every_node(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """`%` used to be a full scan anybody could ask a public endpoint for."""
+    _seed_wildcards(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        everything = client.get("/api/nodes?limit=500").json()
+        wildcard = client.get("/api/nodes?q=%25&limit=500").json()
+    assert len(wildcard) < len(everything)
+
+
+def test_a_percent_in_a_message_search_is_a_character(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Searching for `100%` finds the message that says 100%."""
+    _seed_wildcards(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        hits = client.get("/api/chat?q=100%25&limit=50").json()
+    bodies = [row["body"] for row in hits]
+    assert "100% sure" in bodies
+    assert "plain body" not in bodies
+
+
+def test_a_malformed_node_id_is_422_on_every_filter(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """It was a 500 on four of these, depending which endpoint you asked."""
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    paths = (
+        "/api/packets?from=nonsense",
+        "/api/packets?to=nonsense",
+        "/api/traceroutes?from=nonsense",
+        "/api/traceroutes?to=nonsense",
+        "/api/chat?from=nonsense",
+        "/api/graph/link?a=nonsense&b=nonsense",
+    )
+    with TestClient(app) as client:
+        for path in paths:
+            assert client.get(path).status_code == 422, path
+
+
+def test_the_daily_snapshot_days_parameter_is_bounded(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """`days=-1` became `LIMIT -1`, which Postgres rejects with a 500."""
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        assert client.get("/api/stats/snapshots/daily?days=-1").status_code == 422
+        assert client.get("/api/stats/snapshots/daily?days=0").status_code == 422
+        assert client.get("/api/stats/snapshots/daily?days=9999").status_code == 422
+        assert client.get("/api/stats/snapshots/daily?days=30").status_code == 200

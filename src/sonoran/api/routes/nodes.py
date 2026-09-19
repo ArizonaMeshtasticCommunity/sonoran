@@ -7,7 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import ColumnElement, Select, and_, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.api.dependencies import get_session, parse_node_id
+from sonoran.api.dependencies import (
+    LIKE_ESCAPE,
+    contains,
+    get_session,
+    parse_node_id,
+    require_node_num,
+)
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
 from sonoran.api.schemas import NodeSummary
 from sonoran.coverage.store import calibration_offsets
@@ -67,14 +73,6 @@ def _summary(node: Node) -> NodeSummary:
         is_mqtt_gateway=node.is_mqtt_gateway,
         has_position=is_usable(node.last_lat, node.last_lon),
     )
-
-
-def _require_node_num(value: str) -> int:
-    """Parse a node ID or raise the documented API error."""
-    try:
-        return parse_node_id(value)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _portnum_name(value: int) -> str:
@@ -279,10 +277,10 @@ def _apply_node_filters(
 ) -> Select[tuple[Node]]:
     """Apply the documented node list filters to a statement."""
     if q:
-        match = f"%{q}%"
+        match = contains(q)
         predicates: list[ColumnElement[bool]] = [
-            Node.long_name.ilike(match),
-            Node.short_name.ilike(match),
+            Node.long_name.ilike(match, escape=LIKE_ESCAPE),
+            Node.short_name.ilike(match, escape=LIKE_ESCAPE),
         ]
         try:
             predicates.append(Node.node_num == parse_node_id(q))
@@ -324,7 +322,7 @@ async def list_nodes(
 @router.get("/{node_id}", response_model=NodeSummary)
 async def get_node(node_id: str, session: AsyncSession = Depends(get_session)) -> NodeSummary:
     """Return one node by documented node ID form."""
-    node = await session.get(Node, _require_node_num(node_id))
+    node = await session.get(Node, require_node_num(node_id))
     if node is None:
         raise HTTPException(status_code=404, detail="node not found")
     return _summary(node)
@@ -344,7 +342,7 @@ async def node_detail(
     activity counts, and its recent messages. One request returns all of
     them so the page makes one round trip.
     """
-    node_num = _require_node_num(node_id)
+    node_num = require_node_num(node_id)
     node = await session.get(Node, node_num)
     if node is None:
         raise HTTPException(status_code=404, detail="node not found")
@@ -397,7 +395,7 @@ async def signal_history(
     packet after other nodes relayed it, so its signal reading belongs
     to the last hop and says nothing about the link to this node.
     """
-    node_num = _require_node_num(node_id)
+    node_num = require_node_num(node_id)
     since = datetime.now(UTC) - timedelta(hours=hours)
     rows = (
         await session.scalars(
@@ -436,7 +434,7 @@ async def node_config(
 ) -> list[dict[str, object]]:
     """Return the latest reported configuration objects for one node."""
     rows = await session.scalars(
-        select(NodeConfig).where(NodeConfig.node_num == _require_node_num(node_id))
+        select(NodeConfig).where(NodeConfig.node_num == require_node_num(node_id))
     )
     return [
         {"type": item.config_type, "value": item.config_json, "updated_at": item.updated_at}
@@ -455,7 +453,7 @@ async def node_radio(
     calibration job. `sources` says where each value came from, so a
     reader can tell a measurement from a guess.
     """
-    node_num = _require_node_num(node_id)
+    node_num = require_node_num(node_id)
     node = await session.scalar(select(Node).where(Node.node_num == node_num))
     if node is None:
         raise HTTPException(status_code=404, detail="node not found")
@@ -497,7 +495,7 @@ async def heard_by(
 ) -> list[dict[str, object]]:
     """Return gateways that observed packets from one node."""
     since = datetime.now(UTC) - timedelta(hours=hours)
-    return await _heard_by(session, _require_node_num(node_id), since)
+    return await _heard_by(session, require_node_num(node_id), since)
 
 
 @router.get("/{node_id}/packets")
@@ -509,7 +507,7 @@ async def node_packets(
     """Return recent packets from one node."""
     rows = await session.scalars(
         select(Packet)
-        .where(Packet.from_node_num == _require_node_num(node_id))
+        .where(Packet.from_node_num == require_node_num(node_id))
         .order_by(Packet.first_seen_at.desc())
         .limit(limit)
     )
@@ -534,7 +532,7 @@ async def telemetry(
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
     """Return telemetry points for one node and metric family."""
-    node_num = _require_node_num(node_id)
+    node_num = require_node_num(node_id)
     model = TELEMETRY_MODELS.get(family)
     if model is None:
         raise HTTPException(status_code=422, detail="invalid telemetry family")
@@ -553,7 +551,7 @@ async def telemetry(
 @router.get("/{node_id}/graph")
 async def graph(node_id: str, request: Request) -> dict[str, str]:
     """Return mesh-graph links for one node."""
-    node = format_node_id(_require_node_num(node_id))
+    node = format_node_id(require_node_num(node_id))
     base_url = request.app.state.settings.mesh_graph_base_url.rstrip("/")
     return {
         "node_graph": f"{base_url}/graph/node/{node}?clickable=true",
@@ -566,4 +564,4 @@ async def neighbors(
     node_id: str, session: AsyncSession = Depends(get_session)
 ) -> list[dict[str, object]]:
     """Return the latest stored neighbor links for one node."""
-    return await _latest_neighbors(session, _require_node_num(node_id), limit=100)
+    return await _latest_neighbors(session, require_node_num(node_id), limit=100)

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.api.dependencies import get_session, parse_node_id
+from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.traces import (
     Hop,
@@ -136,9 +136,9 @@ async def list_traceroutes(
     """Return recent traceroutes newest first."""
     statement = select(Traceroute).order_by(Traceroute.seen_at.desc()).limit(limit)
     if from_node:
-        statement = statement.where(Traceroute.from_node_num == parse_node_id(from_node))
+        statement = statement.where(Traceroute.from_node_num == require_node_num(from_node))
     if to_node:
-        statement = statement.where(Traceroute.to_node_num == parse_node_id(to_node))
+        statement = statement.where(Traceroute.to_node_num == require_node_num(to_node))
     base_url = request.app.state.settings.mesh_graph_base_url
     rows = (await session.scalars(statement)).all()
     names = await resolve_names(session, [num for row in rows for num in _node_nums(row)])
@@ -158,7 +158,7 @@ async def traceroute_by_packet(
     of the traceroute.
     """
     try:
-        from_num = parse_node_id(from_node)
+        from_num = require_node_num(from_node)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     trace = await session.scalar(

@@ -9,7 +9,12 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.channels import classify, group_order
-from sonoran.api.dependencies import get_session, parse_node_id
+from sonoran.api.dependencies import (
+    LIKE_ESCAPE,
+    contains,
+    get_session,
+    require_node_num,
+)
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.db.models import TextMessage
 
@@ -190,11 +195,7 @@ def _apply_filters(
         # A malformed node ID is a bad request, not a server fault.
         # `parse_node_id` raises ValueError, which reaches the client as
         # a 500 unless it is caught here.
-        try:
-            from_num = parse_node_id(from_node)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        statement = statement.where(TextMessage.from_node_num == from_num)
+        statement = statement.where(TextMessage.from_node_num == require_node_num(from_node))
     if since:
         statement = statement.where(TextMessage.seen_at >= since)
     if before:
@@ -224,7 +225,7 @@ async def chat(
     if not reactions:
         statement = statement.where(TextMessage.emoji.is_(False))
     if q:
-        statement = statement.where(TextMessage.body.ilike(f"%{q}%"))
+        statement = statement.where(TextMessage.body.ilike(contains(q), escape=LIKE_ESCAPE))
     rows = list((await session.scalars(statement)).all())
     return await _as_messages(session, rows)
 
@@ -318,7 +319,9 @@ async def tagged(
             await session.scalars(
                 select(TextMessage)
                 .where(
-                    TextMessage.body.ilike(f"%#{word}%"),
+                    # `_TAG` allows an underscore, which is a LIKE
+                    # wildcard: `#foo_bar` matched `#fooXbar`.
+                    TextMessage.body.ilike(contains(f"#{word}"), escape=LIKE_ESCAPE),
                     TextMessage.seen_at >= since,
                     TextMessage.emoji.is_(False),
                 )
@@ -363,10 +366,7 @@ async def conversation(
     This used to match on `packet_pk`, which is never written, so it
     could not find a message at all.
     """
-    try:
-        from_num = parse_node_id(from_node)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from_num = require_node_num(from_node)
     message = await session.scalar(
         select(TextMessage)
         .where(

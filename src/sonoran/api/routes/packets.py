@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.api.dependencies import get_session, parse_node_id
+from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
 from sonoran.db.models import (
     AirQualityMetrics,
@@ -103,9 +103,9 @@ async def list_packets(
     if portnum is not None:
         statement = statement.where(Packet.portnum == _parse_portnum(portnum))
     if from_node:
-        statement = statement.where(Packet.from_node_num == parse_node_id(from_node))
+        statement = statement.where(Packet.from_node_num == require_node_num(from_node))
     if to_node:
-        statement = statement.where(Packet.to_node_num == parse_node_id(to_node))
+        statement = statement.where(Packet.to_node_num == require_node_num(to_node))
     if channel:
         statement = statement.where(Packet.channel == channel)
     if since:
@@ -177,7 +177,7 @@ async def get_packet(
 ) -> dict[str, object]:
     """Return one packet and its MQTT observations."""
     try:
-        from_num = parse_node_id(from_node)
+        from_num = require_node_num(from_node)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     packet = await session.scalar(

@@ -3,12 +3,12 @@
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.channels import channel_filter
-from sonoran.api.dependencies import get_session, parse_node_id
+from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
 from sonoran.api.traces import SNR_SCALE, UNKNOWN_SNR, forward_path, is_reply
 from sonoran.db.models import (
@@ -47,14 +47,6 @@ def _hop_snrs(trace: Traceroute, wanted: int) -> list[float | None]:
         else:
             out.append(value / SNR_SCALE)
     return out
-
-
-def _require_node_num(value: str) -> int:
-    """Parse a node ID or raise the documented API error."""
-    try:
-        return parse_node_id(value)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/nodes")
@@ -341,7 +333,7 @@ async def track(
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
     """Return recent position history for one node."""
-    node_num = _require_node_num(node_id)
+    node_num = require_node_num(node_id)
     start = datetime.now(UTC) - timedelta(hours=hours)
     statement = (
         select(PositionMetrics)

@@ -13,14 +13,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from sonoran.api.channels import CORE_TIER, UNKNOWN_CHANNEL, channel_filter, classify
-from sonoran.api.dependencies import get_session, parse_node_id
+from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import BROADCAST_NODE_NUM, format_node_id, name_of, resolve_names
 from sonoran.api.traces import (
     SNR_SCALE,
@@ -438,10 +438,7 @@ async def graph_link(
     Every report names the packet that carried it, so the packet itself
     can be opened from here.
     """
-    try:
-        first, second = parse_node_id(a), parse_node_id(b)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    first, second = require_node_num(a), require_node_num(b)
     since = datetime.now(UTC) - timedelta(hours=hours)
     reports = await _link_reports(session, first, second, since, channel)
     names = await resolve_names(session, (first, second))

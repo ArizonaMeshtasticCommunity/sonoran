@@ -119,11 +119,12 @@ async def portnums(session: AsyncSession = Depends(get_session)) -> list[dict[st
 
 @router.get("/snapshots/daily")
 async def daily_snapshots(
-    days: int = 30, session: AsyncSession = Depends(get_session)
+    days: int = Query(default=30, ge=1, le=365),
+    session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
     """Return daily snapshots newest first."""
     rows = await session.scalars(
-        select(DailySnapshot).order_by(DailySnapshot.day.desc()).limit(min(days, 365))
+        select(DailySnapshot).order_by(DailySnapshot.day.desc()).limit(days)
     )
     return [
         {
