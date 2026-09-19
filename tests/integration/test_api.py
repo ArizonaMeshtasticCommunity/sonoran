@@ -1503,3 +1503,82 @@ def test_the_public_node_list_sends_no_long_name_or_exact_position(  # type: ign
     router = next(node for node in nodes if node["short_name"] == "RTR")
     assert router["lat"] != 33.45
     assert abs(router["lat"] - 33.45) < 0.02
+
+
+# --- the traffic window count ------------------------------------------
+#
+# It read the packet behind each observation with a correlated subquery,
+# one index probe per row, on a public endpoint the map polls every
+# fifteen seconds (ISSUES.md 2.9). It is now a join against the window's
+# distinct packet keys, deduplicated first. These pin the two cases that
+# make such a join wrong if it is written carelessly.
+
+
+def _seed_traffic_counts(engine) -> None:  # type: ignore[no-untyped-def]
+    """One packet duplicated, one observation whose packet is missing."""
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM packet_seen WHERE from_node_num BETWEEN 9600 AND 9699")
+        )
+        connection.execute(text("DELETE FROM packet WHERE from_node_num BETWEEN 9600 AND 9699"))
+        # The canonical row is the EARLIEST. Its hop_start matches the
+        # observation's hop_limit, so the observation is direct. The
+        # duplicate, written later, says otherwise and must not be read.
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, want_ack, "
+                "first_seen_at, hop_start, hop_limit, channel) VALUES "
+                "(9601, 5100, 3, false, :early, 3, 3, 'LongFast'), "
+                "(9601, 5100, 3, false, :late,  9, 3, 'LongFast'), "
+                "(9601, 5101, 3, false, :early, 3, 3, 'LongFast')"
+            ),
+            {"early": now - timedelta(minutes=2), "late": now - timedelta(minutes=1)},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                "mqtt_topic, seen_at, hop_limit, channel) VALUES "
+                # direct: canonical hop_start 3 == hop_limit 3, and the
+                # gateway is not the sender
+                "(9601, 5100, 9602, 'test', :now, 3, 'LongFast'), "
+                # a self-upload is never a radio link (AGENTS.md 9.5.1)
+                "(9601, 5101, 9601, 'test', :now, 3, 'LongFast'), "
+                # no packet row at all: unknown, so not direct
+                "(9601, 5199, 9603, 'test', :now, 3, 'LongFast')"
+            ),
+            {"now": now - timedelta(seconds=30)},
+        )
+
+
+def test_the_traffic_count_reads_the_canonical_duplicate(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """A duplicated packet must be counted once, from its earliest row."""
+    _seed_traffic_counts(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/map/traffic?minutes=15&channel=LongFast&limit=2000").json()
+    # Other tests seed this channel too, so assert on these rows rather
+    # than on the window totals. That is also the sharper question: the
+    # duplicate packet row must not multiply the one observation that
+    # points at it.
+    mine = [event for event in body["events"] if event["packet_id"] == 5100]
+    assert len(mine) == 1, mine
+    assert mine[0]["direct"] is True, mine[0]
+
+    # A node uploading its own packet is never a radio link.
+    own = [event for event in body["events"] if event["packet_id"] == 5101]
+    assert len(own) == 1, own
+    assert own[0]["direct"] is False, own[0]
+
+
+def test_an_observation_with_no_packet_is_not_direct(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Unknown is not the same as direct. A left join must not invent one."""
+    _seed_traffic_counts(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/map/traffic?minutes=15&channel=LongFast").json()
+    orphan = [e for e in body["events"] if e["packet_id"] == 5199]
+    assert orphan, "the orphan observation was dropped from the events"
+    assert orphan[0]["direct"] is False

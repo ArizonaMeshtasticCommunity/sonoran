@@ -521,7 +521,30 @@ replies capture the field during ingest.
 
 ### 2.9 `/api/map/traffic` counts the window one row at a time
 
-**State:** Open.
+**State:** Fixed. The window count is now three steps that each run
+once: the distinct packet keys the window touches, the canonical packet
+row for each of those keys, and one join. The keys come first so the
+packet scan is bounded by the window rather than by the lookback, and
+the deduplication is what makes the join safe — without it a duplicated
+packet row (1.1) would multiply the observation counted against it.
+
+Benchmarked on a real TimescaleDB with 5% duplicated packet rows:
+
+| Observations in the window | Old | New | |
+|---|---|---|---|
+| 20,000 | 33.0 ms | 12.3 ms | 2.7x |
+| 100,000 | 167.9 ms | 86.5 ms | 1.9x |
+
+Both answers identical at every size, including the duplicates. Roughly
+twice as fast rather than an order of magnitude: Postgres caches the
+repeated index probe well, so the correlated read was never as bad as
+its shape suggests. The win grows with the window, which is what the
+endpoint is polled across.
+
+The larger reduction is still available and not taken here: the live map
+design proposes a `counts=false` parameter so a caller that does not
+need the window totals skips this work entirely. That belongs with the
+frontend change that would use it.
 
 The window count reads the packet row behind each observation with a
 correlated subquery, so a wide window over a busy mesh runs one index

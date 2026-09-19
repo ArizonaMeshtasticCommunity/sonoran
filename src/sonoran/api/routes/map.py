@@ -192,16 +192,47 @@ async def traffic(
     # count and the per-event read below order by first_seen_at and take
     # it. Without the order the two picked different rows and the summary
     # could disagree with the flags on the events under it.
-    hop_start_of = (
-        select(Packet.hop_start)
-        .where(
-            Packet.from_node_num == PacketSeen.from_node_num,
-            Packet.packet_id == PacketSeen.packet_id,
-            Packet.first_seen_at >= since - PACKET_LOOKBACK,
+    #
+    # This was a correlated read, one index probe for every observation
+    # in the window. The map refreshes it every fifteen seconds from a
+    # public endpoint, so a wide window over a busy mesh paid that probe
+    # hundreds of thousands of times. See ISSUES.md 2.9.
+    #
+    # It is now three steps that each run once: the distinct packet keys
+    # the window actually touches, the canonical packet row for each of
+    # those keys, and one join. The keys come first so the packet scan is
+    # bounded by the window rather than by the lookback.
+    window = (
+        PacketSeen.seen_at >= since,
+        channel_filter(PacketSeen.channel, channel),
+    )
+    window_keys = (
+        select(PacketSeen.from_node_num, PacketSeen.packet_id)
+        .where(*window)
+        .distinct()
+        .cte("window_keys")
+    )
+    # DISTINCT ON takes the first row of each group in the given order,
+    # so ordering by first_seen_at picks the earliest — the row the
+    # dedup keeps, and the same one the per-event read below takes.
+    # Deduplicating here is what makes the join safe: without it a
+    # duplicated packet row (ISSUES.md 1.1) would multiply the
+    # observation counted against it.
+    canonical = (
+        select(
+            Packet.from_node_num.label("from_node_num"),
+            Packet.packet_id.label("packet_id"),
+            Packet.hop_start.label("hop_start"),
         )
-        .order_by(Packet.first_seen_at)
-        .limit(1)
-        .scalar_subquery()
+        .join(
+            window_keys,
+            (Packet.from_node_num == window_keys.c.from_node_num)
+            & (Packet.packet_id == window_keys.c.packet_id),
+        )
+        .where(Packet.first_seen_at >= since - PACKET_LOOKBACK)
+        .distinct(Packet.from_node_num, Packet.packet_id)
+        .order_by(Packet.from_node_num, Packet.packet_id, Packet.first_seen_at)
+        .cte("canonical_packet")
     )
     window_count, window_direct = (
         await session.execute(
@@ -213,12 +244,17 @@ async def traffic(
                 # its own voice, which is never a radio link and must not
                 # count as direct. See AGENTS.md 9.5.1.
                 func.count().filter(
-                    hop_start_of == PacketSeen.hop_limit,
+                    canonical.c.hop_start == PacketSeen.hop_limit,
                     PacketSeen.from_node_num != PacketSeen.gateway_node_num,
                 ),
             )
             .select_from(PacketSeen)
-            .where(PacketSeen.seen_at >= since, channel_filter(PacketSeen.channel, channel))
+            .outerjoin(
+                canonical,
+                (canonical.c.from_node_num == PacketSeen.from_node_num)
+                & (canonical.c.packet_id == PacketSeen.packet_id),
+            )
+            .where(*window)
         )
     ).one()
 
