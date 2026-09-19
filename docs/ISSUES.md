@@ -633,6 +633,64 @@ Setting one is a judgement about which failure is preferable, on a host
 shared with another account, and it belongs to whoever operates the box.
 The measurements above are here so that decision starts from numbers.
 
+### 3.7 CI's `test` job fails intermittently on a migration
+
+**State:** Open. Mechanism understood, fix not verified.
+
+`tests/integration/test_migrations.py::test_revision_downgrade_and_upgrade`
+fails in GitHub Actions with:
+
+    psycopg.errors.InternalError_: tuple concurrently updated
+
+It hit `main` itself and three pull requests in one evening, and passed on
+several others, so it is intermittent rather than a regression. Coverage
+passes in the same run (82.79%), so the job fails only on this test.
+
+The likely mechanism: the test runs four `downgrade`/`upgrade` cycles
+against a session-scoped TimescaleDB container. TimescaleDB runs
+background workers that touch the same catalog rows the DDL is rewriting,
+and a catalog tuple updated by two backends at once produces exactly this
+error. Starting the test container with
+`-c timescaledb.max_background_workers=0` would remove the competing
+writer.
+
+**Not applied, because it could not be verified.** The flake does not
+reproduce locally: 12 consecutive runs of the module pass, and CI's exact
+whole-suite command with coverage passes with 656 passed / 3 skipped. A
+mitigation whose failing state has never been observed here is a guess,
+and a guess that silences an intermittent failure is worse than the
+failure, because it removes the signal without proving the cause. It
+needs one run that fails with the setting in place, or the same failure
+reproduced on a runner.
+
+### 3.8 The land cover cache has never been filled
+
+**State:** Open, and it is a decision rather than a task. See issue #3.
+
+`has_landcover` is `false` on every published run, so no prediction
+charges the clutter loss of ITU-R P.2108.
+
+`tools/prefetch_landcover.py` works. Measured end to end against the real
+ESA WorldCover bucket, one page at a time:
+
+| | |
+|---|---|
+| Pages for the configured region | 64 |
+| Distinct source GeoTIFFs | 9, about 60 MB each |
+| Time per page | 28 s |
+| Bytes kept per page | 1,440,000 |
+| Total time | roughly 30 minutes |
+| Total kept | about 88 MB |
+
+The tool needs the `landcover` extra (`rasterio`, which brings GDAL) and a
+writable `LANDCOVER_CACHE_DIR`; it does not need credentials.
+
+Why it is a decision and not simply a chore: filling the cache changes
+what every subsequent prediction says, and those predictions are what the
+public embed publishes. On a shared box it also installs GDAL into an
+account other people use. Both of those belong to whoever operates the
+deployment, not to whoever happens to notice the flag is false.
+
 ## 4. Operational notes
 
 ### 4.1 Text storage is on
