@@ -1820,7 +1820,73 @@ function graphTabs(page, all) {
  * It draws what the coverage job already computed and predicts nothing
  * itself, so it needs no workers and no engine.
  */
+/** Fill in the embed snippet and say plainly whether it will work.
+ *
+ * Three separate things can each stop an embed dead, and none of them
+ * is visible to somebody who has just pasted an iframe into their site:
+ * the feature can be switched off, the page can be published at an
+ * address this deployment does not know, and the list of sites allowed
+ * to frame it can be empty — which means nobody, not everybody.
+ *
+ * So the snippet is always shown, because it is what they came for, and
+ * whatever would stop it working is stated above it.
+ */
+function fillEmbedBox(page) {
+  const box = $('[data-embed-box]', page);
+  if (!box) return;
+  const embed = CONFIG.embed || {};
+  const base = (CONFIG.apiBase || '').replace(/\/$/, '') || window.location.origin;
+  const url = `${base}${embed.path || '/embed/coverage'}`;
+
+  $('[data-embed-snippet]', box).value =
+    `<iframe src="${url}"
+        width="100%" height="520"
+        style="border:0" loading="lazy"
+        title="azmsh.net mesh coverage"></iframe>`;
+  const open = $('[data-embed-open]', box);
+  open.href = url;
+
+  const status = $('[data-embed-status]', box);
+  const ancestors = embed.frameAncestors || [];
+  let note = '';
+  if (!embed.enabled) {
+    note = 'The public embed is switched off, so this address answers 404 for '
+      + 'everybody. Someone who operates the server turns it on, and has to allow '
+      + 'the embed paths at the reverse proxy at the same time.';
+  } else if (!ancestors.length) {
+    note = 'The embed is on, but no site is allowed to frame it, so it will refuse '
+      + 'to load anywhere it is pasted. The sites that may frame it are named on the '
+      + 'server; an empty list means nobody rather than everybody.';
+  } else {
+    note = `Framing is allowed from: ${ancestors.join(', ')}. Pasting it anywhere else `
+      + 'will load a blank box.';
+  }
+  status.textContent = note;
+  status.hidden = false;
+  box.classList.toggle('embed-off', !embed.enabled || !ancestors.length);
+
+  const copy = $('[data-embed-copy]', box);
+  if (!copy.dataset.wired) {
+    copy.dataset.wired = '1';
+    copy.addEventListener('click', async () => {
+      const field = $('[data-embed-snippet]', box);
+      try {
+        await navigator.clipboard.writeText(field.value);
+      } catch {
+        // Clipboard access needs a secure context and a permission that
+        // a browser may simply refuse. Selecting the text still lets
+        // somebody copy it themselves, which is better than a button
+        // that silently did nothing.
+        field.select();
+      }
+      copy.textContent = 'Copied';
+      setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
+    });
+  }
+}
+
 PAGES.coverage = async (page) => {
+  fillEmbedBox(page);
   await window.SonoranCoverage.show(page);
 };
 

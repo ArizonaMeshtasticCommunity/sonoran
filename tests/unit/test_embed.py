@@ -699,3 +699,52 @@ def test_the_public_tile_route_takes_no_site_set() -> None:
     # And it still must not read a set from the summary it was handed.
     assert "summary.site_sets" not in script
     assert "state.siteSet" not in script
+
+
+# --- the dashboard tells the operator whether an embed will work -------
+
+
+def _dashboard_config(**overrides: object) -> dict:
+    """Return the config block the dashboard page is served with."""
+    import json
+    import re
+
+    from fastapi.testclient import TestClient
+
+    from sonoran.api.app import create_app
+    from sonoran.config import Settings
+
+    app = create_app(Settings(_env_file=None, **overrides))  # type: ignore[arg-type]
+    with TestClient(app) as client:
+        body = client.get("/").text
+    found = re.search(r"window\.SONORAN = (\{.*?\});", body, re.S)
+    assert found, "the dashboard did not carry a config block"
+    return json.loads(found.group(1))
+
+
+def test_the_dashboard_says_when_the_embed_is_off() -> None:
+    """The snippet is useless without this, and nothing else reveals it."""
+    config = _dashboard_config(embed_enabled=False)
+    assert config["embed"]["enabled"] is False
+
+
+def test_the_dashboard_says_when_the_embed_is_on() -> None:
+    config = _dashboard_config(embed_enabled=True)
+    assert config["embed"]["enabled"] is True
+
+
+def test_the_dashboard_reports_who_may_frame_the_embed() -> None:
+    """An empty list means nobody, which is the opposite of what it looks like."""
+    config = _dashboard_config(embed_enabled=True, embed_frame_ancestors=["https://azmsh.net"])
+    assert config["embed"]["frameAncestors"] == ["https://azmsh.net"]
+
+    empty = _dashboard_config(embed_enabled=True)
+    assert empty["embed"]["frameAncestors"] == []
+
+
+def test_the_dashboard_config_carries_no_secret() -> None:
+    """It is served to every visitor of the dashboard."""
+    config = _dashboard_config(embed_enabled=True)
+    flat = str(config).lower()
+    for word in ("password", "secret", "key", "token", "dsn"):
+        assert word not in flat, word

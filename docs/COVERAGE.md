@@ -696,6 +696,30 @@ alone, from empty grids, so no site is counted twice.
 `/embed/coverage` is a page for somebody else's website. It is off
 until `EMBED_ENABLED` is true.
 
+### 10.0 Getting the snippet
+
+The coverage page carries a **"Put this map on another website"** box
+that builds the `<iframe>` and copies it.
+
+It always shows the snippet, and says above it whatever would stop that
+snippet working. Three separate things can each stop an embed dead, and
+none of them is visible to somebody who has just pasted an iframe into
+their site and got a blank box:
+
+| State | What the box says |
+|---|---|
+| `EMBED_ENABLED` false | the address answers 404 for everybody, and the proxy has to allow the embed paths at the same time as the flag is set |
+| enabled, `EMBED_FRAME_ANCESTORS` empty | it is on, but no site may frame it, so it refuses to load wherever it is pasted — **an empty list means nobody, not everybody** |
+| enabled, ancestors set | which sites may frame it, and that anywhere else loads a blank box |
+
+The snippet is dimmed rather than hidden in the first two states. Hiding
+it would answer a different question from the one somebody opening that
+box is asking.
+
+The dashboard learns all three from its own config block, which carries
+`embed.enabled`, `embed.path` and `embed.frameAncestors` and no secret.
+A test asserts that block contains no password, key, token or DSN.
+
 It is its own document. The dashboard carries `serial=(self)` so the
 config checker can read a node over USB, and framing that page would
 take Web Serial onto a third party site.

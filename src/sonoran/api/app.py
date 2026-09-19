@@ -278,6 +278,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "tileAttribution": settings.map_tile_attribution,
             "mapCenter": [settings.map_default_lat, settings.map_default_lon],
             "mapZoom": settings.map_default_zoom,
+            # What the coverage page needs to hand somebody an embed
+            # snippet, and to tell them the truth about whether it will
+            # work. Three things can each stop an embed dead, and all
+            # three are invisible from the browser: the feature can be
+            # off, the page can be published at an address this
+            # deployment does not know, and the list of sites allowed to
+            # frame it can be empty, which means nobody.
+            "embed": {
+                "enabled": settings.embed_enabled,
+                "path": "/embed/coverage",
+                "frameAncestors": list(settings.embed_frame_ancestors),
+            },
         }
         html = html.replace("__SONORAN_CONFIG__", as_script_json(config))
         html = html.replace("__SONORAN_ASSET_VERSION__", app.state.asset_version)

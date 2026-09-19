@@ -1005,3 +1005,20 @@ div.check { cursor: default; }
 }
 .coverage-flag.warn { border-color: var(--warn); color: var(--warn); }
 .coverage-flag.good { border-color: var(--good); color: var(--good); }
+
+/* The embed snippet, on the coverage page. */
+.embed-box { border: 1px solid var(--line); border-radius: .6rem; background: var(--panel); margin-bottom: 1rem; }
+.embed-box > summary { cursor: pointer; padding: .7rem 1rem; font-weight: 600; }
+.embed-box[open] > summary { border-bottom: 1px solid var(--line); }
+.embed-body { padding: .9rem 1rem 1rem; display: flex; flex-direction: column; gap: .7rem; }
+.embed-what { margin: 0; color: var(--muted); font-size: .88rem; }
+.embed-field { display: flex; flex-direction: column; gap: .35rem; font-size: .85rem; color: var(--muted); }
+.embed-field textarea {
+  font: var(--mono); font-size: .8rem; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: .4rem;
+  padding: .6rem; resize: vertical; width: 100%; box-sizing: border-box;
+}
+.embed-actions { display: flex; align-items: center; gap: .9rem; margin: 0; }
+/* An embed that cannot work yet still shows its snippet, dimmed, because
+   the snippet is what somebody came here for. The notice above says why. */
+.embed-box.embed-off .embed-field textarea { opacity: .6; }

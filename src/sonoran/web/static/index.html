@@ -291,6 +291,33 @@
             <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
           </label>
 
+          <!--
+            The embed snippet.
+
+            Kept below the map rather than in the controls row: it is a
+            thing you do once when you are setting a site up, not a
+            control you reach for while reading the map.
+          -->
+          <details class="embed-box" data-embed-box>
+            <summary>Put this map on another website</summary>
+            <div class="embed-body">
+              <p class="embed-what">
+                The public embed draws the same predicted coverage, from routers and
+                repeaters only, at reduced position precision. It never shows client
+                nodes, node names, or message content.
+              </p>
+              <p class="notice" data-embed-status hidden></p>
+              <label class="embed-field">
+                <span>Paste this where you want the map</span>
+                <textarea data-embed-snippet rows="4" readonly spellcheck="false"></textarea>
+              </label>
+              <p class="embed-actions">
+                <button type="button" class="more" data-embed-copy>Copy</button>
+                <a class="linky" data-embed-open target="_blank" rel="noopener">Open the embed</a>
+              </p>
+            </div>
+          </details>
+
           <div class="map-shell">
             <div id="coverage-map"></div>
             <div class="coverage-legend" data-coverage-legend hidden>
