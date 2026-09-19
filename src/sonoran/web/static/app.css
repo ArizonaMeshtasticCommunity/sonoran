@@ -150,6 +150,41 @@
 
 * { box-sizing: border-box; }
 
+/*
+ * The four safe-area insets, read once.
+ *
+ * `env()` cannot be used inside a `calc()` in every place it is wanted
+ * without repeating the fallback, and a missing fallback is the usual
+ * way this pattern ships broken. These four custom properties carry the
+ * `0px` fallback, so every rule below can treat them as plain lengths.
+ *
+ * They are 0 on every rectangular display and non-zero on a notched one
+ * — but only because the viewport meta carries `viewport-fit=cover`.
+ * See index.html, and
+ * https://developer.mozilla.org/en-US/docs/Web/CSS/env
+ */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+html {
+  /*
+   * No font boosting. The document declares `width=device-width`, so it
+   * is already laid out at the screen width and the inflation algorithm
+   * has nothing to correct; left on `auto` it enlarges some blocks and
+   * not others, which is how one column of a table ends up a size
+   * larger than the column beside it. `100%` rather than `none`,
+   * because `none` interferes with user zoom in some engines and user
+   * zoom is a WCAG 2.2 SC 1.4.4 obligation.
+   * https://developer.mozilla.org/en-US/docs/Web/CSS/text-size-adjust
+   */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   font: var(--font);
@@ -159,7 +194,20 @@ body {
 
 /* Layout */
 
-.shell { display: flex; min-height: 100vh; }
+/*
+ * `svh`, not `vh`.
+ *
+ * Per CSS Values and Units Level 4, `vh` is defined against the LARGE
+ * viewport: the viewport as it would be with the browser's retractable
+ * chrome retracted. On a phone with the address bar showing, `100vh` is
+ * therefore taller than the screen, which is the whole reason a
+ * `100vh` column overflows in mobile Safari. `svh` is the small
+ * viewport, sized as though that chrome were expanded, so it always
+ * fits and — unlike `dvh` — it does not resize while the page is
+ * scrolled, which would make Leaflet re-measure on every frame.
+ * https://www.w3.org/TR/css-values-4/#large-viewport-size
+ */
+.shell { display: flex; min-height: 100svh; }
 
 .sidebar {
   width: 15rem;
@@ -167,12 +215,13 @@ body {
   background: var(--panel);
   border-right: 1px solid var(--line);
   padding: 1.25rem 1rem;
+  padding-left: calc(1rem + var(--safe-left));
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: 100svh;
   overflow-y: auto;
 }
 
@@ -204,6 +253,33 @@ body {
 }
 .sidebar nav a:hover .icon, .sidebar nav a.current .icon { opacity: 1; }
 
+/*
+ * The phone nav button.
+ *
+ * `hidden` in the markup and unhidden by app.js at phone width, so a
+ * browser that never runs the script keeps all thirteen links on the
+ * page rather than losing the navigation behind a button that cannot
+ * open. The 60rem block below is where it becomes visible.
+ */
+.nav-toggle {
+  display: none;
+  align-items: center;
+  gap: .55rem;
+  width: 100%;
+  /* Apple's Human Interface Guidelines give 44x44 pt as the default
+     control size for iOS, and Material Design 3 gives 48x48 dp. Both
+     are guidance rather than conformance; WCAG 2.2 SC 2.5.8 Target Size
+     (Minimum) asks for 24x24 CSS px and this clears all three. */
+  min-height: 3rem;
+  text-align: left;
+}
+.nav-toggle .icon { width: 1.25rem; height: 1.25rem; fill: currentColor; flex: 0 0 auto; }
+.nav-toggle-label { font-weight: 600; }
+/* Which page you are on, said on the closed button, so the nav does not
+   have to be opened to answer it. */
+.nav-toggle-here { color: var(--accent); margin-left: auto; font-size: .85rem; }
+.nav-toggle-here:empty { display: none; }
+
 .sidebar .status { margin-top: auto; font-size: .78rem; color: var(--muted); }
 .sidebar .status .dot {
   display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
@@ -212,7 +288,20 @@ body {
 .sidebar .status .dot.stale { background: var(--warn); }
 .sidebar .status .dot.down { background: var(--bad); }
 
-.content { flex: 1 1 auto; padding: 1.5rem 2rem 4rem; min-width: 0; }
+.content {
+  flex: 1 1 auto;
+  padding: 1.5rem 2rem 4rem;
+  /* The page fills the display under `viewport-fit=cover`, so the two
+     side edges and the bottom clear the notch, the rounded corners and
+     the home indicator. Zero on a rectangular screen. */
+  padding-right: calc(2rem + var(--safe-right));
+  padding-bottom: calc(4rem + var(--safe-bottom));
+  min-width: 0;
+}
+/* The left edge belongs to whoever is against it. Beside the sidebar
+   that is the sidebar, which carries its own inset above; stacked under
+   it on a phone that is the content, which takes one in the 60rem
+   block below. */
 
 /*
  * Keyboard focus, everywhere.
@@ -283,6 +372,44 @@ input, select, button {
 }
 input::placeholder { color: var(--muted); }
 button { cursor: pointer; }
+
+/*
+ * A focused control must not be smaller than 16 px on a touch screen.
+ *
+ * Safari on iOS zooms the whole page in when a form control under 16 px
+ * takes focus, and it does not zoom back out. The base font here is
+ * 15 px and `font: inherit` carries that into every control, so every
+ * select and every search box on the dashboard did it; the planner form
+ * inherits a 0.76 rem label and its twenty-one fields were 12.16 px,
+ * which is the worst case on the site. A viewer who taps "Latitude"
+ * ends up on a page two and a half times too wide with the rest of the
+ * form off the side.
+ *
+ * The only conformant fix is the font size. Pinning the viewport with
+ * `maximum-scale=1` or `user-scalable=no` also stops it and fails W3C
+ * ACT rule b4f0c3 / WCAG 2.2 SC 1.4.4 Resize text (Level AA), so it is
+ * never an option here.
+ * https://css-tricks.com/16px-or-larger-text-prevents-ios-form-zoom/
+ *
+ * `hover: none` rather than a width query: an iPad in landscape is
+ * 1024 px wide and zooms exactly like a phone. Nothing on a pointer
+ * device changes, so the desktop layout is untouched.
+ */
+@media (hover: none) {
+  input, select, textarea { font-size: max(16px, 1em); }
+}
+
+/*
+ * No double-tap-to-zoom delay, and no loss of pinch zoom.
+ *
+ * `manipulation` is an alias for `pan-x pan-y pinch-zoom`: panning and
+ * pinch zoom stay, and only the non-standard double-tap gesture goes,
+ * which is what lets the browser stop holding `click` back. Pinch zoom
+ * survives, so this does not touch the SC 1.4.4 obligation the way
+ * `user-scalable=no` would.
+ * https://developer.mozilla.org/en-US/docs/Web/CSS/touch-action
+ */
+a, button, summary, [role="tab"], .chip, .legend-key { touch-action: manipulation; }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #06121e; font-weight: 600; }
 button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
@@ -295,8 +422,25 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 
 /* Panels */
 
-.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
-.grid.two { grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr)); }
+/*
+ * `min(<track>, 100%)`, not a bare track floor.
+ *
+ * `minmax(24rem, 1fr)` is a hard 384 px floor, so at a 320 CSS px
+ * viewport the dashboard, the map feeds, the config check and the
+ * statistics page all laid out 384 px wide inside a 320 px window and
+ * the whole document scrolled sideways. That is WCAG 2.2 SC 1.4.10
+ * Reflow (Level AA): content must present "without requiring scrolling
+ * in two dimensions ... at a width equivalent to 320 CSS pixels". A
+ * panel of stat tiles is not one of the criterion's two-dimensional
+ * exceptions — a data table is, and those are already in `.table-wrap`.
+ * https://www.w3.org/TR/WCAG22/#reflow
+ *
+ * `min(24rem, 100%)` keeps 24 rem as the wrapping threshold everywhere
+ * there is 24 rem to be had, and collapses to the container below that.
+ * The desktop grid is unchanged.
+ */
+.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr)); }
 
 /*
  * Two rows of two, not three and a stray.
@@ -322,7 +466,7 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
  * of different-sized boxes. `auto-fill` keeps the empty track, and every
  * card is the width the two-up cards already were.
  */
-.channel-group .grid.two { grid-template-columns: repeat(auto-fill, minmax(26rem, 1fr)); }
+.channel-group .grid.two { grid-template-columns: repeat(auto-fill, minmax(min(26rem, 100%), 1fr)); }
 
 .panel {
   background: var(--panel);
@@ -406,8 +550,66 @@ th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--
    dashboard's role column read "Cli". */
 td.wrap { max-width: 28rem; }
 th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
-/* A heading with a `hint` has a sentence behind it. See `table()`. */
+/* A heading with a `hint` has a sentence behind it. See `table()`. The
+   sentence itself is written out under the table by `revealHints`; the
+   dotted underline says there is more to read, for a pointer that will
+   also get the tooltip. */
 th.hinted { text-decoration: underline dotted; text-underline-offset: .3em; cursor: help; }
+
+/*
+ * What the columns and figures mean, in the page rather than in a
+ * tooltip.
+ *
+ * Closed by default, so a desktop reader who already knows the words
+ * sees one line. It sits outside `.table-wrap` on purpose: the table is
+ * excepted from WCAG 2.2 SC 1.4.10 Reflow and may scroll in two
+ * dimensions, and this must not, so it reflows to 320 CSS px with the
+ * rest of the page. See `revealHints` in app.js.
+ */
+.hint-notes { margin: .6rem 0 0; font-size: .82rem; }
+.hint-notes > summary {
+  color: var(--muted); cursor: pointer;
+  /* A `summary` is the tap target that opens this, so it gets a hit
+     region rather than the 17 px a line of 0.82 rem text would give it.
+     WCAG 2.2 SC 2.5.8 Target Size (Minimum) asks 24x24 CSS px. */
+  padding: .35rem 0; min-height: 1.75rem;
+  display: flex; align-items: center; gap: .4rem;
+  /*
+   * `display: flex` on a `summary` takes the user-agent disclosure
+   * marker away in Chrome and Safari, and a line of grey text that
+   * happens to be clickable is not an affordance anybody finds. This
+   * whole block exists so a phone can reach the sentences, so the thing
+   * that says it opens has to be drawn rather than inherited.
+   */
+  list-style: none;
+}
+.hint-notes > summary::-webkit-details-marker { display: none; }
+.hint-notes > summary::before {
+  content: ""; flex: 0 0 auto;
+  width: .4rem; height: .4rem;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); transition: transform .15s ease;
+}
+.hint-notes[open] > summary::before { transform: rotate(45deg); }
+.hint-notes > summary:hover { color: var(--text); }
+.hint-notes .kv {
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: .35rem .9rem; margin: .35rem 0 .2rem;
+}
+.hint-notes dt { color: var(--text); font-weight: 600; }
+.hint-notes dd { color: var(--muted); line-height: 1.5; }
+/* The exact protocol values a column holds, on their own line under the
+   sentence that explains the column. */
+.hint-notes .hint-exact { display: block; margin-top: .2rem; font: var(--mono); }
+/*
+ * One column at phone width. `max-content` for the term beside a
+ * sentence gives a two-character-wide description column on a 320 px
+ * screen, which is a Reflow failure in everything but name.
+ */
+@media (max-width: 34rem) {
+  .hint-notes .kv { grid-template-columns: minmax(0, 1fr); gap: .1rem; }
+  .hint-notes dd { margin-bottom: .5rem; }
+}
 tbody tr:hover { background: var(--panel-2); }
 td.wrap { white-space: normal; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -449,7 +651,10 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 /* Map */
 
 .map-shell { position: relative; border: 1px solid var(--line); border-radius: .6rem; overflow: hidden; }
-#map { height: min(70vh, 40rem); background: var(--panel-2); }
+/* `svh` and not `vh`: see the note on `.shell`. `vh` is the LARGE
+   viewport, so on a phone with the address bar showing it is taller
+   than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
+#map { height: min(70svh, 40rem); background: var(--panel-2); }
 /*
  * A panel that floats over the map.
  *
@@ -564,8 +769,24 @@ body.watch-mode { overflow: hidden; }
  * everything above 620, and still below Leaflet's control container at
  * 800, which keeps the way out on top where it belongs.
  */
+/*
+ * Watch mode fills the display, so its chrome owns the screen edges.
+ *
+ * `body.watch-mode .map-shell.watch` is `position: fixed; inset: 0`, and
+ * with `viewport-fit=cover` on the viewport meta that reaches under the
+ * notch, the rounded corners and the home indicator. The strip at the
+ * top and the panel at the bottom are the two things watch mode says
+ * may never hide, so they are the two that must clear them. Each inset
+ * is 0 on a rectangular screen, which leaves the desktop offsets
+ * exactly as they were.
+ * https://webkit.org/blog/7929/designing-websites-for-iphone-x/
+ */
 .watch-bar {
-  position: absolute; top: .5rem; left: .5rem; right: .5rem; z-index: 640;
+  position: absolute;
+  top: calc(.5rem + var(--safe-top));
+  left: calc(.5rem + var(--safe-left));
+  right: calc(.5rem + var(--safe-right));
+  z-index: 640;
   display: flex; flex-wrap: wrap; align-items: center;
   justify-content: space-between; gap: .4rem .9rem;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -601,11 +822,15 @@ body.watch-mode { overflow: hidden; }
 /* The Leaflet controls move clear of the strip above them. The strip
    wraps with the window, so the offset is its measured height and not a
    guess that would be wrong at the widths where space is tightest. */
-.map-shell.watch .leaflet-top { top: calc(var(--watch-bar-h, 3rem) + .6rem); }
+.map-shell.watch .leaflet-top { top: calc(var(--watch-bar-h, 3rem) + .6rem + var(--safe-top)); }
+.map-shell.watch .leaflet-right { right: var(--safe-right); }
+.map-shell.watch .leaflet-left { left: var(--safe-left); }
 
 .watch-panel {
-  bottom: .6rem; left: .6rem; z-index: 630;
-  width: 26rem; max-width: calc(100% - 1.2rem);
+  bottom: calc(.6rem + var(--safe-bottom));
+  left: calc(.6rem + var(--safe-left));
+  z-index: 630;
+  width: 26rem; max-width: calc(100% - 1.2rem - var(--safe-left) - var(--safe-right));
   padding: .4rem .5rem .5rem;
   gap: .3rem;
 }
@@ -614,7 +839,8 @@ body.watch-mode { overflow: hidden; }
 /* Anchored top and bottom rather than given a height, so it always
    clears the strip above it whatever that strip wrapped to. */
 .watch-panel[data-height="expanded"] {
-  width: 44rem; height: auto; top: calc(var(--watch-bar-h, 3rem) + 1.2rem);
+  width: 44rem; height: auto;
+  top: calc(var(--watch-bar-h, 3rem) + 1.2rem + var(--safe-top));
 }
 
 .watch-tabs { display: flex; align-items: center; gap: .3rem; flex: none; }
@@ -639,9 +865,27 @@ body.watch-mode { overflow: hidden; }
   background: repeating-linear-gradient(to right, var(--line) 0 3px, transparent 3px 6px);
   background-size: 100% 2px; background-repeat: no-repeat; background-position: center;
 }
+/*
+ * The panel-height button was 20.8 x 44 CSS px.
+ *
+ * WCAG 2.2 SC 2.5.8 Target Size (Minimum) (Level AA) asks that a
+ * 24 x 24 CSS px square fit inside the target. It did not, and the
+ * spacing exception did not save it either: the 24 px circle centred on
+ * it overlapped the Leaflet map container, which is itself a target, so
+ * the circle "intersect[ed] another target". This is the one target on
+ * the whole dashboard that failed the criterion, on a phone and at
+ * 320 px alike. The icon is unchanged; the hit region grew.
+ * https://www.w3.org/TR/WCAG22/#target-size-minimum
+ *
+ * It is also the single-pointer alternative to dragging `.watch-grip`,
+ * which is what keeps the resize inside WCAG 2.2 SC 2.5.7 Dragging
+ * Movements (Level AA), so it is the last control that may be hard to
+ * hit.
+ */
 .watch-step {
   background: none; border: none; padding: .15rem; color: var(--muted);
   display: grid; place-items: center;
+  min-width: 2.75rem; min-height: 2.75rem;
 }
 .watch-step:hover { color: var(--text); }
 .watch-step .icon { width: 1rem; height: 1rem; }
@@ -699,9 +943,10 @@ body.watch-mode { overflow: hidden; }
 .watch-ticker { display: none; }
 
 .watch-legend {
-  position: absolute; z-index: 650; right: .6rem;
-  top: calc(var(--watch-bar-h, 3rem) + 1.2rem);
-  width: 24rem; max-width: calc(100% - 1.2rem);
+  position: absolute; z-index: 650;
+  right: calc(.6rem + var(--safe-right));
+  top: calc(var(--watch-bar-h, 3rem) + 1.2rem + var(--safe-top));
+  width: 24rem; max-width: calc(100% - 1.2rem - var(--safe-left) - var(--safe-right));
   max-height: calc(100% - var(--watch-bar-h, 3rem) - 2.4rem);
   overflow: auto; padding: .7rem .8rem; cursor: pointer;
   background: color-mix(in srgb, var(--panel) 95%, transparent);
@@ -723,11 +968,14 @@ body.watch-mode { overflow: hidden; }
 @media (max-width: 79.9rem) {
   .map-shell.watch .watch-panel,
   .map-shell.watch .watch-panel[data-height="expanded"] {
-    left: .6rem; right: .6rem; width: auto;
+    left: calc(.6rem + var(--safe-left));
+    right: calc(.6rem + var(--safe-right));
+    width: auto;
     /* A full-width sheet reaches the corner the OpenStreetMap
        attribution sits in, and that attribution is a condition of the
-       tiles. It stops above it. See AGENTS.md 9.9.1. */
-    bottom: 1.5rem;
+       tiles. It stops above it. See AGENTS.md 9.9.1. The home indicator
+       sits in the same corner on a notched phone, hence the inset. */
+    bottom: calc(1.5rem + var(--safe-bottom));
   }
 }
 
@@ -756,12 +1004,36 @@ body.watch-mode { overflow: hidden; }
   .map-shell.watch .watch-bar .controls {
     flex-wrap: nowrap; overflow-x: auto; width: 100%; margin-left: 0;
     padding-bottom: .15rem; scrollbar-width: none;
+    /*
+     * Say that it scrolls, the same way `.table-wrap` does.
+     *
+     * The row held eight controls in 390 px with the scrollbar hidden,
+     * so "Live traceroutes" was cut off at the edge with nothing to
+     * suggest there was anything past it — the same bug the tables had
+     * before the gradients went on. Two `local` gradients scroll away
+     * with the content and two `scroll` shadows sit at the edges, so a
+     * shadow shows only on the side that has more to give. No listener
+     * and no measurement.
+     */
+    background:
+      linear-gradient(to right, rgb(0 0 0 / .55), rgb(0 0 0 / 0)) left center / .9rem 100% no-repeat scroll,
+      linear-gradient(to left, rgb(0 0 0 / .55), rgb(0 0 0 / 0)) right center / .9rem 100% no-repeat scroll;
   }
+  /*
+   * No `tabindex` here, unlike `.table-wrap`. This row is full of
+   * buttons and selects, so a keyboard already reaches every part of it
+   * and the browser scrolls each one into view as it is focused. The
+   * axe rule that covers this — `scrollable-region-focusable`, which
+   * maps to WCAG 2.2 SC 2.1.1 Keyboard (Level A) — is satisfied either
+   * by a focusable container or by focusable content inside it, and a
+   * container stop here would be a tab stop that does nothing.
+   * https://dequeuniversity.com/rules/axe/4.10/scrollable-region-focusable
+   */
   .map-shell.watch .watch-bar .controls > * { flex: none; }
   .map-shell.watch .watch-status { font-size: .72rem; gap: .1rem .6rem; }
   /* The OpenStreetMap attribution is a condition of the tiles and must
      stay readable, so the panel stops above it. See AGENTS.md 9.9.1. */
-  .map-shell.watch .watch-panel { bottom: 1.5rem; }
+  .map-shell.watch .watch-panel { bottom: calc(1.5rem + var(--safe-bottom)); }
 }
 
 /*
@@ -859,7 +1131,10 @@ body.watch-mode { overflow: hidden; }
 /* A chart that has nothing to draw says so, and a sentence does not
    need 15rem of empty box under it. See `chartEmpty` in app.js. */
 .chart.chart-empty { height: auto; }
-.chart.tall { height: min(82vh, 52rem); }
+/* `svh` and not `vh`: see the note on `.shell`. `vh` is the LARGE
+   viewport, so on a phone with the address bar showing it is taller
+   than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
+.chart.tall { height: min(82svh, 52rem); }
 
 /* Chat */
 
@@ -935,8 +1210,15 @@ body.watch-mode { overflow: hidden; }
 @media (max-width: 60rem) {
   /*
    * A finger is not a pointer. The base control is about 34 px tall,
-   * which is under the 44 px a touch target wants, and the nav becomes
-   * a wrapped row of thirteen links on this breakpoint.
+   * which clears WCAG 2.2 SC 2.5.8 Target Size (Minimum) at 24x24 CSS
+   * px but sits under both vendor recommendations: Apple's Human
+   * Interface Guidelines give 44x44 pt as the iOS default control size,
+   * and Material Design 3 gives 48x48 dp, which its own density page
+   * writes as "48x48 CSS pixels" for the web. 2.75 rem is 44 px, so
+   * this meets Apple's figure and stays a little under Material's.
+   * Both are guidance, not conformance.
+   * https://developer.apple.com/design/human-interface-guidelines/accessibility
+   * https://m3.material.io/foundations/designing/structure
    */
   input, select, button, .sidebar nav a {
     min-height: 2.75rem;
@@ -955,9 +1237,36 @@ body.watch-mode { overflow: hidden; }
   .sidebar nav a { align-items: center; }
 
   .shell { flex-direction: column; }
-  .sidebar { width: auto; flex: none; height: auto; position: static; }
-  .sidebar nav { flex-direction: row; flex-wrap: wrap; }
-  .content { padding: 1rem; }
+  .sidebar {
+    width: auto; flex: none; height: auto; position: static;
+    gap: .6rem;
+    padding: calc(.75rem + var(--safe-top)) calc(1rem + var(--safe-right)) .75rem calc(1rem + var(--safe-left));
+  }
+  /*
+   * The nav goes behind the button.
+   *
+   * Thirteen links wrapped to seven rows here, which with the wordmark
+   * and the status line was about 1230 CSS px of chrome above the page
+   * heading on an iPhone 14 — the whole first screen, on every page.
+   * Open, the list is a single column of 44 px rows rather than the
+   * wrapped grid, because a wrapped grid of thirteen is a shape the eye
+   * has to search and a column is a list it can read.
+   */
+  .nav-toggle { display: flex; }
+  /* The wordmark is a banner at 11 rem wide and about 120 px tall. It
+     is the same mark at a third of the scroll. */
+  .brand-mark { max-width: 7rem; }
+  .sidebar nav { flex-direction: column; gap: .15rem; }
+  .sidebar nav[hidden] { display: none; }
+  /* The status line follows the nav rather than being pushed to the
+     bottom of a column that is no longer full height. */
+  .sidebar .status { margin-top: 0; }
+  .content {
+    padding: 1rem;
+    padding-left: calc(1rem + var(--safe-left));
+    padding-right: calc(1rem + var(--safe-right));
+    padding-bottom: calc(3rem + var(--safe-bottom));
+  }
   /*
    * An overlay that is not watch mode's own panel goes static and sits
    * under the map on a narrow screen. Watch mode keeps its panel floating
@@ -966,6 +1275,35 @@ body.watch-mode { overflow: hidden; }
    * ticker.
    */
   .map-overlay:not(.watch-panel) { position: static; width: auto; margin-top: .6rem; }
+}
+
+/*
+ * A phone on its side: the header goes on one line.
+ *
+ * WCAG 2.2 SC 1.3.4 Orientation (Level AA) says the content must not
+ * restrict itself to one orientation, and it does not — but stacked,
+ * the wordmark, the menu button and the status line took about 150 of
+ * the 340 CSS px an iPhone 14 has in landscape, which is 44 percent of
+ * the screen before the page begins. The same three things fit across
+ * the width there, so they go across it.
+ *
+ * Keyed on the height rather than on `orientation`, because the thing
+ * that is scarce is vertical room. A short window on a desktop gets the
+ * same treatment and wants it for the same reason.
+ * https://www.w3.org/TR/WCAG22/#orientation
+ */
+@media (max-width: 60rem) and (max-height: 32rem) {
+  .sidebar {
+    flex-direction: row; align-items: center; gap: .75rem;
+    padding-top: calc(.4rem + var(--safe-top)); padding-bottom: .4rem;
+    flex-wrap: wrap;
+  }
+  .brand { flex: 0 0 auto; }
+  .brand-mark { max-width: 5.5rem; }
+  .nav-toggle { flex: 1 1 10rem; width: auto; min-height: 2.75rem; }
+  .sidebar .status { flex: 0 0 auto; margin: 0; }
+  /* Open, the list still needs the full width under the row. */
+  .sidebar nav { flex: 1 1 100%; }
 }
 
 /* Detail pages */
@@ -1011,7 +1349,10 @@ body.watch-mode { overflow: hidden; }
   .planner-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
-#planner-map { height: min(62vh, 34rem); background: var(--panel-2); }
+/* `svh` and not `vh`: see the note on `.shell`. `vh` is the LARGE
+   viewport, so on a phone with the address bar showing it is taller
+   than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
+#planner-map { height: min(62svh, 34rem); background: var(--panel-2); }
 
 .planner-form h3 { margin: 1.1rem 0 .5rem; }
 .planner-form h3:first-child { margin-top: 0; }
@@ -1045,8 +1386,27 @@ body.watch-mode { overflow: hidden; }
 .legend-key.clear { color: var(--accent); border-color: var(--line); }
 .legend-note { color: var(--muted); font-size: .78rem; }
 
-/* The summary sits beside the panel title and may wrap; the title must not. */
+/*
+ * The summary sits beside the panel title and may wrap; the title must
+ * not — until there is no room for it on one line.
+ *
+ * The mesh graph writes its whole count into that first span, and
+ * "MediumFast - 3 nodes, 2 links, last 24 h" is 331 CSS px of
+ * unbreakable text. At a 320 px viewport it alone pushed the document
+ * to 364 px and the page scrolled in two dimensions, which is WCAG 2.2
+ * SC 1.4.10 Reflow (Level AA). A heading is not a data table and gets
+ * no two-dimensional exception; the Reflow Understanding document is
+ * explicit that "a preceding heading" beside an excepted table is
+ * itself not excepted.
+ * https://www.w3.org/TR/WCAG22/#reflow
+ *
+ * `nowrap` is kept where it earns its keep and dropped where it cannot
+ * fit, so the desktop heading still holds one line.
+ */
 .panel > h3 > span:first-child { white-space: nowrap; }
+@media (max-width: 47.9rem) {
+  .panel > h3 > span:first-child { white-space: normal; }
+}
 .panel > h3 .head-note { text-align: right; text-transform: none; letter-spacing: 0; }
 
 /* The line kinds on the map legend. */
@@ -1114,7 +1474,10 @@ div.check { cursor: default; }
 
 /* Coverage map */
 
-#coverage-map { height: min(70vh, 40rem); width: 100%; }
+/* `svh` and not `vh`: see the note on `.shell`. `vh` is the LARGE
+   viewport, so on a phone with the address bar showing it is taller
+   than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
+#coverage-map { height: min(70svh, 40rem); width: 100%; }
 
 /* Vertical rhythm down the coverage page.
  *
@@ -1287,7 +1650,28 @@ div.check { cursor: default; }
   background: var(--panel-2); border: 1px solid var(--line); border-radius: .4rem;
   padding: .6rem; resize: vertical; width: 100%; box-sizing: border-box;
 }
-.embed-actions { display: flex; align-items: center; gap: .9rem; margin: 0; }
+/* The shorthand `font` above resets the size after the touch rule near
+   the top of this file has set it, so the snippet box needs the 16 px
+   floor restated. `readonly` does not exempt it: the field still takes
+   focus, and iOS zooms on focus, not on editing. */
+@media (hover: none) {
+  .embed-field textarea { font-size: 16px; }
+}
+/*
+ * "Open the embed" is 22.5 CSS px tall, so it is an undersized target
+ * and has to earn the WCAG 2.2 SC 2.5.8 spacing exception: a 24 px
+ * circle centred on it must not reach another target. It reached the
+ * Leaflet map container about one pixel below — the only thing between
+ * them was the `details` box closing. A bottom margin settles it, and
+ * a 24 px minimum height on the row's own controls settles it for good
+ * whatever sits underneath next.
+ * https://www.w3.org/TR/WCAG22/#target-size-minimum
+ */
+.embed-actions {
+  display: flex; align-items: center; gap: .9rem;
+  margin: 0 0 .35rem;
+}
+.embed-actions > * { min-height: 24px; display: inline-flex; align-items: center; }
 /* An embed that cannot work yet still shows its snippet, dimmed, because
    the snippet is what somebody came here for. The notice above says why. */
 .embed-box.embed-off .embed-field textarea { opacity: .6; }

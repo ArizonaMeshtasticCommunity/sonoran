@@ -739,10 +739,32 @@ def test_the_watch_chrome_sits_above_the_animation_canvas() -> None:
     control container at 800, which keeps the way out of watch mode on
     top where it belongs.
     """
+    import re
+
     css = _read("app.css")
-    assert "right: .5rem; z-index: 640;" in css
-    assert "left: .6rem; z-index: 630;" in css
-    assert "position: absolute; z-index: 650; right: .6rem;" in css
+
+    def z_index(selector: str) -> int:
+        """The `z-index` of one rule, read from the rule rather than from
+        a line of text.
+
+        These were three literal one-line matches, which broke the moment
+        the offsets became `calc()` expressions over the safe-area insets
+        and had to go on separate lines. The numbers are the invariant;
+        how they are spelt is not.
+        """
+        match = re.search(re.escape(selector) + r"\s*\{(.*?)\}", css, re.S)
+        assert match, f"no rule for {selector}"
+        found = re.search(r"z-index:\s*(\d+)", match.group(1))
+        assert found, f"{selector} has no z-index"
+        return int(found.group(1))
+
+    # Above the animation pane at 620, and below Leaflet's control
+    # container at 800, which holds the way out of watch mode.
+    for selector in (".watch-bar", ".watch-panel", ".watch-legend"):
+        assert 620 < z_index(selector) < 800, selector
+    # And the strip stays above the panel, which stays above nothing else
+    # in the overlay: the legend is the topmost of the three.
+    assert z_index(".watch-legend") > z_index(".watch-bar") > z_index(".watch-panel")
     assert "pane.style.zIndex = '620';" in _read("map-live.js")
 
 

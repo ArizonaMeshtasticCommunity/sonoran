@@ -271,14 +271,26 @@ class TestTheNavIcon:
 
         return Path("src/sonoran/web/static/index.html").read_text(encoding="utf-8")
 
+    def _nav(self) -> str:
+        """The nav element, found by its tag rather than by one attribute.
+
+        This used to split on the literal `<nav aria-label=`, so adding
+        an `id` to the element for the phone menu button to point
+        `aria-controls` at broke both tests below with an IndexError
+        rather than with anything about icons.
+        """
+        import re
+
+        match = re.search(r"<nav\b[^>]*>(.*?)</nav>", self._html(), re.S)
+        assert match, "no nav element found"
+        return match.group(1)
+
     def test_every_nav_link_uses_the_icon_class(self) -> None:
         """`.sprite` is `display: none`. It hides the sprite sheet, and it
         hid the coverage icon for as long as the link carried it."""
         import re
 
-        html = self._html()
-        nav = html.split("<nav aria-label=", 1)[1].split("</nav>", 1)[0]
-        links = re.findall(r"<a href=\"#[^\"]+\"[^>]*>(.*?)</a>", nav, re.S)
+        links = re.findall(r"<a href=\"#[^\"]+\"[^>]*>(.*?)</a>", self._nav(), re.S)
         assert links, "no nav links found"
         for link in links:
             assert 'class="icon"' in link, link.strip()[:80]
@@ -289,9 +301,27 @@ class TestTheNavIcon:
 
         html = self._html()
         defined = set(re.findall(r'<symbol id="(i-[a-z-]+)"', html))
-        nav = html.split("<nav aria-label=", 1)[1].split("</nav>", 1)[0]
-        used = set(re.findall(r'<use href="#(i-[a-z-]+)"', nav))
+        used = set(re.findall(r'<use href="#(i-[a-z-]+)"', self._nav()))
         assert used, "no nav icons found"
+        assert used <= defined, f"missing symbols: {sorted(used - defined)}"
+
+    def test_the_menu_button_names_symbols_that_exist(self) -> None:
+        """The phone nav button swaps its own icon in JavaScript.
+
+        `wireNav` writes `#i-menu` and `#i-menu-close` straight into the
+        `use` element, so neither name appears in the markup beside the
+        other icons and the test above cannot see them. A symbol that is
+        only ever named from a script is exactly the one that goes
+        missing quietly: the button simply draws nothing.
+        """
+        import re
+        from pathlib import Path
+
+        defined = set(re.findall(r'<symbol id="(i-[a-z-]+)"', self._html()))
+        script = Path("src/sonoran/web/static/app.js").read_text(encoding="utf-8")
+        block = script.split("function wireNav(")[1].split("\n}\n")[0]
+        used = set(re.findall(r"'#(i-[a-z-]+)'", block))
+        assert used, "the menu button names no icon"
         assert used <= defined, f"missing symbols: {sorted(used - defined)}"
 
 

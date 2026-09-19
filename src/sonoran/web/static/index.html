@@ -2,7 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      The viewport declaration carries no `user-scalable` and no
+      `maximum-scale`, so the page may always be pinched to 200 percent
+      and beyond. W3C ACT rule b4f0c3 "Meta viewport allows for zoom",
+      which maps to WCAG 2.2 SC 1.4.4 Resize text (Level AA), expects
+      exactly that: `user-scalable` must not be `no`, and `maximum-scale`
+      must not be below 2. Never add either to stop iOS zooming a focused
+      input. The conformant answer to that is a 16 px control, and app.css
+      sets one. See https://www.w3.org/WAI/standards-guidelines/act/rules/b4f0c3/
+
+      `viewport-fit=cover` fills the display rather than letterboxing the
+      page inside the safe area. That is what the manifest's
+      `"display": "standalone"` asks for on a home-screen install, and it
+      is the switch that makes `env(safe-area-inset-*)` report a real
+      figure at all: without it every inset is 0 and every rule that reads
+      one is dead code. app.css pads the four screen edges from those
+      insets. See https://webkit.org/blog/7929/designing-websites-for-iphone-x/
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sonoran</title>
     <meta name="theme-color" content="#17100b" />
     <!--
@@ -46,6 +64,9 @@
     <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z"/></symbol>
     <symbol id="i-fullscreen-exit" viewBox="0 0 24 24"><path d="M14,14H19V16H16V19H14V14M5,14H10V19H8V16H5V14M8,5H10V10H5V8H8V5M19,8V10H14V5H16V8H19Z"/></symbol>
     <symbol id="i-expand" viewBox="0 0 24 24"><path d="M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z"/></symbol>
+    <!-- The phone nav button. Open, and closed. -->
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/></symbol>
+    <symbol id="i-menu-close" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></symbol>
     </svg>
     <!--
       Every page carries the same thirteen nav links before its content.
@@ -69,7 +90,29 @@
             <span>azmsh.net</span>
           </div>
         </div>
-        <nav aria-label="Dashboard pages">
+        <!--
+          Thirteen links, and on a phone they were the whole first screen.
+
+          At phone width the sidebar becomes a block at the top of the
+          document, and the nav wrapped to seven rows. Measured on an
+          iPhone 14 that is about 1230 CSS px of navigation above the
+          page heading, on every page, so "Packet firehose" and its
+          filter were both below the fold before a single packet was
+          read. The links are now behind this button below 60rem, which
+          is the breakpoint that already restacks the shell.
+
+          A button with `aria-expanded`, not a `details`: the open state
+          has to be forced back on when the window widens past the
+          breakpoint, and that is one line against an attribute and a
+          fight against the `details` user-agent rules.
+        -->
+        <button type="button" class="nav-toggle" data-nav-toggle hidden
+                aria-expanded="false" aria-controls="site-nav">
+          <svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg>
+          <span class="nav-toggle-label">Menu</span>
+          <span class="nav-toggle-here" data-nav-here></span>
+        </button>
+        <nav id="site-nav" aria-label="Dashboard pages">
           <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a>
           <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
           <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg>Planner</a>

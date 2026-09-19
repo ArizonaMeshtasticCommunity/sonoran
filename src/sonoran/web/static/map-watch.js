@@ -102,7 +102,20 @@ const SonoranWatch = (() => {
     if (!control) return;
     const button = control.getContainer().firstChild;
     button.setAttribute('aria-pressed', String(on));
-    button.title = on ? 'Leave watch mode (F)' : 'Watch mode (F)';
+    /*
+     * The accessible name has to move with the title.
+     *
+     * `aria-label` is set once when the control is built and was never
+     * updated here, so in watch mode the tooltip read "Leave watch
+     * mode" while a screen reader still said "Watch mode" — and
+     * `aria-label` wins, so the spoken name was the wrong one in the
+     * state where getting out matters. The keystroke stays out of the
+     * name: "(F)" is of no use to a finger and a screen reader reads it
+     * aloud on every pass.
+     */
+    const label = on ? 'Leave watch mode' : 'Watch mode';
+    button.title = `${label} (F)`;
+    button.setAttribute('aria-label', label);
     $('use', button).setAttribute('href', on ? '#i-fullscreen-exit' : '#i-fullscreen');
   }
 

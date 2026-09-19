@@ -306,10 +306,30 @@ function table(columns, rows, emptyMessage = 'No data.') {
   /*
    * A column may carry a `hint`: one plain sentence for the reader who
    * does not know the word in the heading. "Gateway", "hops" and a
-   * `!hex` node ID are all exact and none of them explains itself. The
-   * hint goes in the title, the same place `roleCell` puts the wire
-   * value, and the heading takes a dotted underline so there is
-   * something to hover.
+   * `!hex` node ID are all exact and none of them explains itself.
+   *
+   * The hint used to live only in the `title` attribute. On a phone
+   * there is no hover, so it could not be read at all — and the hint
+   * exists for the newcomer, who is exactly the reader most likely to
+   * be on a phone. The HTML Living Standard says so in as many words:
+   * "Relying on the title attribute is currently discouraged as many
+   * user agents do not expose the attribute in an accessible manner
+   * ... which excludes keyboard-only users and touch-only users, such
+   * as anyone with a modern phone or tablet."
+   * https://html.spec.whatwg.org/multipage/dom.html#the-title-attribute
+   *
+   * So the sentence is now carried in `data-hint` as well, and
+   * `revealHints` renders every hint under the table as visible text in
+   * a `details` that anybody can open with one tap. The `title` stays
+   * as a convenience for a pointer, but it is no longer the only copy.
+   *
+   * Not a tooltip component: a tooltip on hover or focus would land the
+   * page in WCAG 2.2 SC 1.4.13 Content on Hover or Focus (Level AA) and
+   * its dismissible/hoverable/persistent obligations, for information
+   * that is better simply written down. Not an inline note in the cell
+   * either — that widens the column, and the table is the one part of
+   * the page WCAG 2.2 SC 1.4.10 Reflow excepts, so it is the one place
+   * extra width costs a reader the most.
    */
   const head = el('tr', {}, columns.map((column) => {
     const classes = [column.num ? 'num' : '', column.hint ? 'hinted' : ''];
@@ -328,6 +348,8 @@ function table(columns, rows, emptyMessage = 'No data.') {
       return el('th', {
         class: classes.join(' ').trim() || null,
         title: column.hint || null,
+        'data-hint': column.hint || null,
+        'data-label': column.label,
         text: column.label,
       });
     }
@@ -337,6 +359,8 @@ function table(columns, rows, emptyMessage = 'No data.') {
     if (active) classes.push('sorted');
     return el('th', {
       class: classes.join(' ').trim() || null,
+      'data-hint': column.hint || null,
+      'data-label': column.label,
       'aria-sort': active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none',
     }, el('button', {
       type: 'button',
@@ -381,6 +405,11 @@ function expandingTable(columns, rows, emptyMessage, options = {}) {
   button.addEventListener('click', () => {
     const open = button.getAttribute('aria-expanded') === 'true';
     replace(wrap, table(columns, open ? rows.slice(0, limit) : rows, emptyMessage));
+    // Opening the table brings rows with it, and those rows may hold
+    // exact values the shorter list never showed. The notes under it
+    // have to be rebuilt from what is now there, or they under-report.
+    markScrollableTables(wrap.parentElement || wrap);
+    revealHints(wrap.parentElement || wrap);
     button.setAttribute('aria-expanded', open ? 'false' : 'true');
     button.textContent = open ? closed : `Show fewer ${noun}`;
   });
@@ -388,11 +417,21 @@ function expandingTable(columns, rows, emptyMessage, options = {}) {
     el('span', { class: 'muted', text: `${rows.length - limit} more` }))];
 }
 
+/* A summary tile. Its `hint` travels the same way a column's does: in
+ * `data-hint` for `revealHints` to write out under the grid, and in
+ * `title` as a pointer convenience rather than as the only copy.
+ * See the note in `table()`. */
 function statTile(label, value, delta, hint) {
   return el('div', { class: 'panel' },
     el('div', { class: 'stat' },
       el('span', { class: 'value', text: value }),
-      el('span', { class: hint ? 'label hinted' : 'label', title: hint || null, text: label }),
+      el('span', {
+        class: hint ? 'label hinted' : 'label',
+        title: hint || null,
+        'data-hint': hint || null,
+        'data-label': label,
+        text: label,
+      }),
       delta ? el('span', { class: 'delta', text: delta }) : null));
 }
 
@@ -664,7 +703,7 @@ const { ROLES, roleLabel, portnumLabel, portnumWire } = window.SonoranLabels;
 const KNOWN_ROLES = new Set(ROLES.map((role) => role.key));
 const roleColour = (role) => colour(`role-${role}`, PALETTE.muted);
 
-/** A role as a table cell: readable, with the wire value on hover.
+/** A role as a table cell: readable, with the wire value beside it.
  *
  * These cells printed the protocol enum, and the column is narrow enough
  * on the dashboard that `CLIENT_MUTE` was cut to `CLIENT_` — which is
@@ -673,23 +712,34 @@ const roleColour = (role) => colour(`role-${role}`, PALETTE.muted);
  *
  * `roleLabel` already existed and was already used by the map legend and
  * the node chips. The tables simply never called it.
+ *
+ * The exact wire value then lived only in `title`, which on a phone is
+ * nowhere: there is no hover, so "Client mute" could not be turned back
+ * into `CLIENT_MUTE` by anybody holding a touchscreen. `data-exact`
+ * carries it into the DOM, and `revealHints` lists every distinct value
+ * a column actually holds under the table, in plain sight and one tap
+ * away. Per row it costs an attribute; the column keeps its width, which
+ * is the whole reason the label is there.
  */
 function roleCell(role) {
   if (!role) return el('span', { class: 'muted', text: '-' });
-  return el('span', { title: role, text: roleLabel(role) });
+  return el('span', { title: role, 'data-exact': role, text: roleLabel(role) });
 }
 
-/** A port number as a table cell: readable, with the wire value on hover.
+/** A port number as a table cell: readable, with the wire value beside it.
  *
- * Same bargain as `roleCell`. `TELEMETRY_APP` is the exact thing the
- * firmware sent and it is not a phrase anybody says out loud, so the
- * cell reads "Telemetry" and carries `TELEMETRY_APP` in its title. The
- * packet page still prints the enum in full, because that page exists
- * to show the record rather than to summarise it.
+ * Same bargain as `roleCell`, and the same fix. `TELEMETRY_APP` is the
+ * exact thing the firmware sent and it is not a phrase anybody says out
+ * loud, so the cell reads "Telemetry" and the exact value goes to
+ * `revealHints` through `data-exact`. The packet page still prints the
+ * enum in full, because that page exists to show the record rather than
+ * to summarise it.
  */
 function portnumCell(portnum) {
   if (portnum == null || portnum === '') return el('span', { class: 'muted', text: '-' });
-  return el('span', { title: String(portnum), text: portnumLabel(portnum) });
+  return el('span', {
+    title: String(portnum), 'data-exact': String(portnum), text: portnumLabel(portnum),
+  });
 }
 
 /**
@@ -4226,6 +4276,141 @@ function markScrollableTables(root = document) {
   }
 }
 
+/*
+ * Write every hover-only sentence out where a finger can reach it.
+ *
+ * The dashboard explained itself entirely through the `title`
+ * attribute: a column hint on `th`, a tile hint on `.stat .label`, and
+ * the exact protocol value behind every role and packet type. A
+ * `title` tooltip needs a pointer to hover, so on a phone none of it
+ * existed — and the hints are written for the reader who does not know
+ * the word yet, who is the reader least likely to be at a desk. The
+ * HTML Living Standard names that failure directly: relying on `title`
+ * "excludes keyboard-only users and touch-only users, such as anyone
+ * with a modern phone or tablet".
+ * https://html.spec.whatwg.org/multipage/dom.html#the-title-attribute
+ *
+ * The answer is a disclosure, not a tooltip polyfill:
+ *
+ *  - It is ordinary text in the document, so it works with a finger, a
+ *    keyboard, a screen reader and a printer, and it needs no hover and
+ *    no focus. A hover tooltip would instead have to satisfy WCAG 2.2
+ *    SC 1.4.13 Content on Hover or Focus (Level AA) — dismissible,
+ *    hoverable, persistent — for a sentence that can simply be shown.
+ *  - It sits OUTSIDE `.table-wrap`, so it reflows to 320 CSS px like
+ *    the rest of the page. Inside the table it would inherit the
+ *    table's two-dimensional scroll, and WCAG 2.2 SC 1.4.10 Reflow only
+ *    excepts the table itself — the Understanding document is explicit
+ *    that a heading or control beside an excepted table is not excepted
+ *    with it. https://www.w3.org/TR/WCAG22/#reflow
+ *  - It is closed by default, so nothing about the desktop page moves.
+ *
+ * The exact wire values come with it. A role column shows "Client mute"
+ * because `CLIENT_MUTE` truncates into a lie, and the exact value then
+ * had nowhere to live on a phone; here each distinct value the column
+ * actually holds is listed once, which costs a line rather than a
+ * column's width.
+ *
+ * Nothing here changes a value, a label or a unit. It only moves a
+ * sentence that already existed from a tooltip into the page.
+ */
+function revealHints(root = document) {
+  for (const wrap of $$('.table-wrap', root)) {
+    const table = $('table', wrap);
+    const notes = [];
+    for (const th of table ? $$('th', table) : []) {
+      const hint = th.dataset.hint;
+      const label = th.dataset.label || th.textContent.trim();
+      const exact = exactValues(table, th);
+      if (!hint && !exact.length) continue;
+      notes.push({ label, hint, exact });
+    }
+    fitNotes(wrap, notes, 'columns');
+  }
+  /*
+   * The same for the summary tiles. Four numbers on the dashboard, each
+   * with a sentence saying what it counts, and AGENTS.md 9.5.1 is the
+   * reason those sentences matter: "Uploads" is not a count of gateways
+   * and the tile that says so was readable only on hover.
+   */
+  for (const grid of $$('.grid', root)) {
+    const notes = [];
+    for (const label of $$('.stat .label[data-hint]', grid)) {
+      notes.push({ label: label.dataset.label || label.textContent.trim(),
+        hint: label.dataset.hint, exact: [] });
+    }
+    fitNotes(grid, notes, 'figures');
+  }
+}
+
+/** Every distinct exact value one column holds, in the order first seen. */
+function exactValues(table, th) {
+  const row = th.parentElement;
+  const index = [...row.children].indexOf(th);
+  const out = [];
+  const seen = new Set();
+  for (const body of $$('tbody tr', table)) {
+    const cell = body.children[index];
+    const marked = cell && $('[data-exact]', cell);
+    if (!marked) continue;
+    const exact = marked.dataset.exact;
+    const text = marked.textContent.trim();
+    // Nothing to explain when the cell already prints the wire value.
+    if (!exact || exact === text || seen.has(exact)) continue;
+    seen.add(exact);
+    out.push({ text, exact });
+  }
+  return out;
+}
+
+/**
+ * Put the notes after `target`, or take an old block away.
+ *
+ * The block is rebuilt on each render because the rows behind it are,
+ * but an open disclosure stays open: a reader who opened it to work
+ * through a table must not have it shut under them every live refresh.
+ */
+function fitNotes(target, notes, noun) {
+  const existing = target.nextElementSibling?.classList.contains('hint-notes')
+    ? target.nextElementSibling : null;
+  if (!notes.length) {
+    if (existing) existing.remove();
+    return;
+  }
+  const open = existing ? existing.open : false;
+  const list = el('dl', { class: 'kv' });
+  for (const note of notes) {
+    list.append(el('dt', { text: note.label }));
+    const body = el('dd', {});
+    if (note.hint) body.append(el('span', { text: note.hint }));
+    if (note.exact.length) {
+      body.append(el('span', { class: 'hint-exact' },
+        el('span', { class: 'muted', text: 'Exact values here: ' }),
+        ...note.exact.map((value, index) =>
+          el('span', { text: `${index ? ', ' : ''}${value.text} = ${value.exact}` }))));
+    }
+    list.append(body);
+  }
+  const block = el('details', { class: 'hint-notes' },
+    el('summary', { text: `What these ${noun} mean` }), list);
+  block.open = open;
+  if (!existing) {
+    target.after(block);
+    return;
+  }
+  /*
+   * Only when it actually changed.
+   *
+   * A live page re-renders every few seconds, and the columns almost
+   * never differ between two of them. Replacing the node anyway would
+   * take the focus out of it each time — a reader who had tabbed to the
+   * summary, or opened it and started reading, would be put back on the
+   * body on the next tick.
+   */
+  if (existing.textContent === block.textContent) return;
+  existing.replaceWith(block);
+}
+
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
@@ -4239,6 +4424,7 @@ async function render(name) {
   } finally {
     loading = false;
     markScrollableTables(page);
+    revealHints(page);
   }
 }
 
@@ -4304,6 +4490,7 @@ async function route() {
 
   for (const page of $$('[data-page]')) page.classList.toggle('active', page.dataset.page === known);
   for (const link of $$('[data-nav]')) link.classList.toggle('current', link.dataset.nav === known);
+  markNavHere(known);
   await render(known);
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
@@ -4431,6 +4618,78 @@ function wire() {
   const external = $('[data-graph-external]');
   if (CONFIG.graphBaseUrl) external.href = CONFIG.graphBaseUrl;
   else external.hidden = true;
+
+  wireNav();
+}
+
+/*
+ * The thirteen nav links, behind a button on a phone.
+ *
+ * Stacked at phone width the nav wrapped to seven rows, and with the
+ * wordmark and the status line above and below it that was about
+ * 1230 CSS px of navigation before the page heading — on every page.
+ * The firehose filter and the first packet were both below the fold
+ * before anything had been read.
+ *
+ * The button is `hidden` in the markup and unhidden here, so a browser
+ * that never runs this script keeps every link on the page rather than
+ * losing the navigation behind a control that cannot open. The
+ * breakpoint is the 60rem one the shell already restacks at, read
+ * through `matchMedia` so the CSS and the script cannot drift.
+ */
+function wireNav() {
+  const toggle = $('[data-nav-toggle]');
+  const nav = $('#site-nav');
+  if (!toggle || !nav) return;
+  const narrow = matchMedia('(max-width: 60rem)');
+
+  const setOpen = (open) => {
+    toggle.setAttribute('aria-expanded', String(open));
+    nav.hidden = !open;
+    $('use', toggle).setAttribute('href', open ? '#i-menu-close' : '#i-menu');
+  };
+
+  const apply = () => {
+    // Wide: no button, and the nav is always there. Narrow: the button
+    // appears and the nav starts closed.
+    toggle.hidden = !narrow.matches;
+    setOpen(!narrow.matches);
+  };
+
+  toggle.addEventListener('click', () => {
+    setOpen(toggle.getAttribute('aria-expanded') !== 'true');
+  });
+  // Choosing a page is the end of the menu's job.
+  nav.addEventListener('click', (event) => {
+    if (narrow.matches && event.target.closest('a')) setOpen(false);
+  });
+  /*
+   * Escape closes it and gives the focus back to the control that
+   * opened it, so a keyboard is never left in a list that has gone.
+   *
+   * The listener goes on the pair rather than on the nav. Opening the
+   * menu leaves the focus on the button, which is not inside the nav,
+   * so a listener on the nav alone never saw the key — Escape did
+   * nothing at all until the first Tab. `.sidebar` holds both.
+   */
+  const region = toggle.closest('.sidebar') || document;
+  region.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !narrow.matches) return;
+    if (toggle.getAttribute('aria-expanded') !== 'true') return;
+    setOpen(false);
+    toggle.focus();
+  });
+  narrow.addEventListener('change', apply);
+  apply();
+}
+
+/* The page the nav button says you are on, so the answer does not need
+   the menu opened for it. */
+function markNavHere(known) {
+  const here = $('[data-nav-here]');
+  if (!here) return;
+  const link = $(`[data-nav="${known}"]`);
+  here.textContent = link ? link.textContent.trim() : '';
 }
 
 addEventListener('hashchange', route);

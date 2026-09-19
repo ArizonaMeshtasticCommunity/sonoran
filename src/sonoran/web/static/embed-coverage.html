@@ -2,6 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!--
+      No `user-scalable` and no `maximum-scale`, so the map may always be
+      zoomed. W3C ACT rule b4f0c3, for WCAG 2.2 SC 1.4.4 Resize text
+      (Level AA), expects both to be absent or permissive.
+      https://www.w3.org/WAI/standards-guidelines/act/rules/b4f0c3/
+
+      No `viewport-fit=cover` here, unlike the dashboard. This document
+      is only ever drawn inside somebody else's frame, so it has no
+      screen edge of its own and every safe-area inset in it would be
+      zero. The frame's own page owns the notch.
+    -->
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mesh coverage</title>
     <!--
@@ -34,6 +45,13 @@
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; }
+      /* The document declares `width=device-width`, so the text
+         inflation algorithm has nothing to correct and only makes the
+         legend and the heading disagree about their scale. `100%`
+         rather than `none`, which interferes with user zoom in some
+         engines and user zoom is a SC 1.4.4 obligation.
+         https://developer.mozilla.org/en-US/docs/Web/CSS/text-size-adjust */
+      html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
       body { margin: 0; background: var(--bg); color: var(--text); font: var(--font); }
       #map { height: 100%; width: 100%; background: var(--panel); }
       .leaflet-container { background: var(--panel); font: var(--font); }
@@ -83,6 +101,27 @@
         border: 1px solid var(--line);
         border-radius: .3rem;
         padding: .2rem .35rem;
+        touch-action: manipulation;
+      }
+      /*
+       * The preset picker was 12.48 CSS px, and that is a worse bug
+       * here than on the dashboard.
+       *
+       * Safari on iOS zooms the page in when a form control under 16 px
+       * takes focus. This document is always inside somebody else's
+       * frame, so the page that gets zoomed is THEIR page: a visitor
+       * taps the modem preset on a club's website and the club's
+       * article is suddenly two and a half times too wide. 16 px is the
+       * only conformant fix — pinning the viewport would fail W3C ACT
+       * rule b4f0c3 / WCAG 2.2 SC 1.4.4 Resize text (Level AA).
+       * https://css-tricks.com/16px-or-larger-text-prevents-ios-form-zoom/
+       *
+       * The height comes with it, which also takes the control past the
+       * 24x24 CSS px of WCAG 2.2 SC 2.5.8 Target Size (Minimum) with
+       * room to spare rather than the 1.4 px it had.
+       */
+      @media (hover: none) {
+        .head select { font-size: 16px; padding: .35rem .45rem; }
       }
       .credit {
         position: absolute;
