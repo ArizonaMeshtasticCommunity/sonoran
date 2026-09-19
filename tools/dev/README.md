@@ -146,10 +146,18 @@ a button that expands nothing, a picker that reloads the same rows. So
 Each journey asserts the thing a person came for, and asserts it so that
 a broken feature fails rather than passes. That is harder than it looks.
 The first draft of the search journey asserted `rows > 0` after typing a
-term, and passed against a search that filtered nothing at all — the
-nodes search applies on Enter, so typing alone changed nothing and 300
-rows stayed 300 rows. It now presses Enter, requires the list to get
-shorter, and requires a nonsense term to return no rows at all.
+term, and passed against a search that filtered nothing at all: at the
+time the nodes search applied on Enter, so typing alone changed nothing
+and 300 rows stayed 300 rows. It now presses Enter, requires the list to
+get shorter, and requires a nonsense term to return no rows at all. The
+box searches as it is typed now, after a pause, and Enter still applies
+it at once, so the journey holds either way.
+
+One journey needs data the preview does not build. `coverage switches
+preset` counts the presets a published run offers, and the coverage map
+is a deliberate `sonoran-coverage-once` that takes minutes, so a fresh
+preview offers none and that journey fails. Run the job first, or read
+that one against a deployment.
 
 Both take `SONORAN_URL` to walk an instance other than the preview.
 Both exit non-zero on failure, and `e2e.js` also fails on any console
@@ -185,7 +193,7 @@ the same about the terrain transform.
 - **Map tiles.** The map needs `tile.openstreetmap.org`. The nodes and
   the links draw without the tiles, on an empty background.
 - **Daily activity.** The chart reads `daily_snapshot`, which the jobs
-  service writes. The chart is empty.
+  service writes. The panel says so rather than drawing an empty box.
 - **Terrain.** The coverage planner needs terrain tiles. Run
   `uv run python tools/prefetch_terrain.py` first. See
   [docs/PLANNER.md](../../docs/PLANNER.md).

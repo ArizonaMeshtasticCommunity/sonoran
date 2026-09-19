@@ -132,8 +132,12 @@ def test_the_word_is_uploaded_never_heard_by() -> None:
     # The legend says it in as many words, under the traffic count.
     assert "Uploads, not listeners." in _read("app.js")
     # And the map's own summary counts uploads and packets, never
-    # listeners.
-    assert "observations in ${traffic.window_minutes} min" in _read("app.js")
+    # listeners. It used to print the endpoint's word, "observations",
+    # which is the same rows said in a way a reader cannot check. The
+    # summary tile and the firehose column say "uploads", so this does
+    # too, and the assertion follows the word rather than pinning the
+    # old one.
+    assert "uploads in ${traffic.window_minutes} min" in _read("app.js")
 
 
 def test_only_a_direct_observation_is_drawn_flat() -> None:

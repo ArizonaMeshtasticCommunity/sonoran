@@ -47,6 +47,11 @@
     <symbol id="i-fullscreen-exit" viewBox="0 0 24 24"><path d="M14,14H19V16H16V19H14V14M5,14H10V19H8V16H5V14M8,5H10V10H5V8H8V5M19,8V10H14V5H16V8H19Z"/></symbol>
     <symbol id="i-expand" viewBox="0 0 24 24"><path d="M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z"/></symbol>
     </svg>
+    <!--
+      Every page carries the same thirteen nav links before its content.
+      The link is off the screen until it takes focus. See `.skip-link`.
+    -->
+    <a class="skip-link" href="#main">Skip to the page</a>
     <div class="shell">
       <aside class="sidebar">
         <!--
@@ -55,7 +60,10 @@
           text stays, so the page never shows a broken image.
         -->
         <div class="brand">
-          <img class="brand-mark" data-brand-mark src="static/logo.png?v=__SONORAN_ASSET_VERSION__" alt="Sonoran" />
+          <!-- The heading stays in the accessibility tree when the mark
+               loads, so the mark itself is decorative. See `reveal` in
+               app.js. -->
+          <img class="brand-mark" data-brand-mark src="static/logo.png?v=__SONORAN_ASSET_VERSION__" alt="" />
           <div class="brand-text" data-brand-text>
             <h1>Sonoran</h1>
             <span>azmsh.net</span>
@@ -81,7 +89,7 @@
         </p>
       </aside>
 
-      <main class="content">
+      <main class="content" id="main" tabindex="-1">
         <!-- Dashboard -->
         <section class="page" data-page="dashboard">
           <div class="page-head">
@@ -99,13 +107,19 @@
               <h3>Recently heard nodes</h3>
               <div class="table-wrap" data-recent-nodes></div>
             </div>
-            <div class="panel">
-              <h3>Latest messages</h3>
-              <ul class="feed" data-recent-chat></ul>
-            </div>
+            <!--
+              The two long tables share a row, and the two short panels
+              share the one below. Ordered the other way the grid put a
+              fifteen-row table beside an eight-message feed, and the feed
+              had to be stretched to match it.
+            -->
             <div class="panel">
               <h3>Busiest nodes (24 h)</h3>
               <div class="table-wrap" data-top-talkers></div>
+            </div>
+            <div class="panel">
+              <h3>Latest messages</h3>
+              <ul class="feed" data-recent-chat></ul>
             </div>
             <div class="panel">
               <h3>Packet types (24 h)</h3>

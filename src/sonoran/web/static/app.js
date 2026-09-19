@@ -491,6 +491,7 @@ const AXIS = {
 };
 
 addEventListener('resize', () => {
+  markScrollableTables();
   for (const instance of charts.values()) {
     if (!instance.isDisposed()) instance.resize();
   }
@@ -1481,13 +1482,14 @@ PAGES.map = async (page) => {
     mapState.lastPackets = packets;
     const direct = traffic.direct_count || 0;
     /*
-     * "observations" is the right word for the endpoint's count and the
-     * summary already got that right. What it lacked was the packet
-     * count beside it, which is the number of things that actually
-     * happened: uploads, not listeners. See AGENTS.md 9.5.1.
+     * The count is of uploads, not of listeners, and the packet count
+     * beside it is the number of things that actually happened. See
+     * AGENTS.md 9.5.1. This line said "observations", which is the
+     * endpoint's word for the same rows; the summary tile and the
+     * firehose column both say "uploads", so this one does too.
      */
     $('[data-traffic-summary]', page).textContent =
-      `${count(traffic.event_count)} observations in ${traffic.window_minutes} min, `
+      `${count(traffic.event_count)} uploads in ${traffic.window_minutes} min, `
       + `${count(direct)} direct, from ${count(packets.length)} packets.`
       + (traffic.truncated ? ` Newest ${count(traffic.returned_count)} shown.` : '')
       + (fresh ? ` ${count(fresh)} new.` : '');
@@ -3439,6 +3441,40 @@ async function setStatus(state, message) {
   $('[data-status-text]').textContent = message;
 }
 
+/*
+ * A table that scrolls sideways has to be reachable from a keyboard.
+ *
+ * `.table-wrap` has always scrolled, and the CSS now draws a shadow on
+ * whichever side has more to show. That covers a pointer. A keyboard has
+ * no way into a scrolling box that holds no focusable element, so the
+ * coverage gaps table simply ended at "Best measured link" for anybody
+ * not using a mouse, and the nodes table ended at the node ID on a
+ * phone. A scrollable region needs `tabindex` and a name.
+ *
+ * Only when it actually overflows: a tab stop that scrolls nowhere is a
+ * stop for nothing. The name comes from the panel heading above it when
+ * there is one, so a screen reader says which table it has landed in.
+ */
+function markScrollableTables(root = document) {
+  for (const wrap of $$('.table-wrap', root)) {
+    const scrolls = wrap.scrollWidth > wrap.clientWidth + 1;
+    if (!scrolls) {
+      wrap.removeAttribute('tabindex');
+      wrap.removeAttribute('role');
+      wrap.removeAttribute('aria-label');
+      continue;
+    }
+    // The panel heading names it. A few panels carry no heading of their
+    // own — the nodes table is the whole page — so the page heading does.
+    const heading = wrap.closest('.panel')?.querySelector('h3')
+      || wrap.closest('.page')?.querySelector('h2');
+    const name = (heading?.textContent || 'Table').trim();
+    wrap.setAttribute('tabindex', '0');
+    wrap.setAttribute('role', 'region');
+    wrap.setAttribute('aria-label', `${name}, scrolls sideways`);
+  }
+}
+
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
@@ -3451,6 +3487,7 @@ async function render(name) {
     setStatus('down', 'Update failed');
   } finally {
     loading = false;
+    markScrollableTables(page);
   }
 }
 
@@ -3581,7 +3618,10 @@ function wire() {
     const reveal = () => {
       mark.style.display = 'block';
       const text = $('[data-brand-text]');
-      if (text) text.hidden = true;
+      // Off the screen, not out of the tree. `hidden` here took the only
+      // h1 on the page away and left an image in its place, so on every
+      // deployment that ships a logo the document had no heading at all.
+      if (text) text.classList.add('sr-only');
     };
     if (mark.complete && mark.naturalWidth > 0) reveal();
     else mark.addEventListener('load', reveal);

@@ -145,8 +145,6 @@ body {
 .brand { display: flex; align-items: baseline; gap: .5rem; }
 .brand h1 { font-size: 1.3rem; margin: 0; letter-spacing: .02em; }
 .brand-text { display: flex; align-items: baseline; gap: .5rem; }
-/* `display: flex` beats the browser rule for [hidden], so restate it. */
-.brand-text[hidden] { display: none; }
 .brand-text span { color: var(--muted); font-size: .75rem; }
 /* The script reveals the mark only after the file loads. */
 .brand-mark { display: none; width: 100%; max-width: 11rem; height: auto; }
@@ -181,6 +179,50 @@ body {
 .sidebar .status .dot.down { background: var(--bad); }
 
 .content { flex: 1 1 auto; padding: 1.5rem 2rem 4rem; min-width: 0; }
+
+/*
+ * Keyboard focus, everywhere.
+ *
+ * Three rules in this file gave a focus ring to three buttons. Every
+ * other control fell back to the browser's own ring, which on this warm
+ * dark background is a thin dark blue line that is very hard to find.
+ * A sighted keyboard user has to know where the focus is, and the nav
+ * alone is thirteen stops.
+ *
+ * `:focus-visible` rather than `:focus`, so a mouse click does not draw
+ * a ring nobody asked for.
+ */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Text for a screen reader, off the screen but in the tree. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px;
+  padding: 0; border: 0; overflow: hidden; clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * Skip to the page.
+ *
+ * Every page carries the same thirteen nav links before its content, so
+ * a keyboard or screen-reader user walks all thirteen on every visit.
+ * The link is off the screen until it takes focus.
+ */
+.skip-link {
+  position: absolute; left: .5rem; top: -4rem; z-index: 1200;
+  background: var(--panel-2); border: 1px solid var(--accent);
+  border-radius: .4rem; padding: .5rem .8rem; color: var(--text);
+  text-decoration: none;
+}
+.skip-link:focus { top: .5rem; }
 
 .page { display: none; }
 .page.active { display: block; }
@@ -222,6 +264,32 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr)); }
 
+/*
+ * Two rows of two, not three and a stray.
+ *
+ * `auto-fit` gave the dashboard three columns at this width and left
+ * the fourth panel alone on a row of its own, two thirds empty. It also
+ * squeezed "Recently heard nodes" until the heading read "HE". The
+ * statistics page had the opposite half of the same problem: two charts
+ * in a three-column track, with the third track blank beside them.
+ */
+@media (min-width: 62rem) {
+  .page[data-page="dashboard"] .grid.two,
+  .page[data-page="stats"] .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/*
+ * Chat cards are one width.
+ *
+ * `auto-fit` collapses a track with nothing in it, so a group holding
+ * one channel stretched that card the whole width of the page while the
+ * group above it held two cards at half the width. Five of the seven
+ * groups on the seeded mesh hold one channel, so the page was a ladder
+ * of different-sized boxes. `auto-fill` keeps the empty track, and every
+ * card is the width the two-up cards already were.
+ */
+.channel-group .grid.two { grid-template-columns: repeat(auto-fill, minmax(26rem, 1fr)); }
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -235,7 +303,10 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
   text-transform: uppercase;
   letter-spacing: .08em;
   color: var(--muted);
-  display: flex; justify-content: space-between; align-items: center; gap: .5rem;
+  /* The note beside a heading goes under it rather than into it when
+     the panel is narrow. On a phone the two ran together. */
+  display: flex; flex-wrap: wrap; justify-content: space-between;
+  align-items: center; gap: .15rem .5rem;
 }
 .panel.span-2 { grid-column: 1 / -1; }
 
@@ -263,7 +334,34 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 
 /* Tables and lists */
 
-.table-wrap { overflow-x: auto; }
+/*
+ * A table wider than its panel.
+ *
+ * Nine columns do not fit a phone, and several do not fit a panel on a
+ * desktop either: the coverage gaps table lost "Best measured link" to
+ * the edge and the nodes table lost four columns on a 390 px screen.
+ * The box already scrolled. Nothing said so, so the columns past the
+ * edge were simply gone.
+ *
+ * The two fixed gradients are painted with `local`, so they scroll away
+ * with the content; the two `scroll` shadows stay at the edges and are
+ * therefore covered at the start and the end. That is the whole trick:
+ * a shadow appears only on the side that has more to show, with no
+ * measurement and no listener.
+ *
+ * `markScrollableTables` in app.js adds the keyboard part, because a
+ * region that scrolls must be reachable without a pointer.
+ */
+.table-wrap {
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--panel), rgb(34 24 17 / 0)) left center / 2rem 100% no-repeat local,
+    linear-gradient(to left, var(--panel), rgb(34 24 17 / 0)) right center / 2rem 100% no-repeat local,
+    linear-gradient(to right, rgb(0 0 0 / .62), rgb(0 0 0 / 0)) left center / 1.1rem 100% no-repeat scroll,
+    linear-gradient(to left, rgb(0 0 0 / .62), rgb(0 0 0 / 0)) right center / 1.1rem 100% no-repeat scroll;
+}
+/* A scrollable region is a tab stop, so it needs a ring like any other. */
+.table-wrap[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 table { border-collapse: collapse; width: 100%; font-size: .88rem; }
 th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
 /* A clipped cell must look clipped. Without this a value cut mid-word
@@ -281,6 +379,15 @@ dl.kv dt { color: var(--muted); }
 dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 
 .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
+/*
+ * The dashboard feed sizes to what it holds.
+ *
+ * `max-height` cut the last message across the middle, which looks like
+ * a message that ended there. The live feeds on the map keep the cap,
+ * because those hold forty rows and grow while you watch; this one gets
+ * eight from the endpoint and then stops.
+ */
+.page[data-page="dashboard"] .feed { max-height: none; overflow-y: visible; }
 .feed li { border-left: 2px solid var(--line); padding: .1rem .6rem; }
 .feed li .meta { color: var(--muted); font-size: .78rem; display: flex; gap: .5rem; flex-wrap: wrap; }
 
@@ -708,6 +815,27 @@ body.watch-mode { overflow: hidden; }
 .loading { color: var(--muted); }
 
 @media (max-width: 60rem) {
+  /*
+   * A finger is not a pointer. The base control is about 34 px tall,
+   * which is under the 44 px a touch target wants, and the nav becomes
+   * a wrapped row of thirteen links on this breakpoint.
+   */
+  input, select, button, .sidebar nav a {
+    min-height: 2.75rem;
+  }
+  /*
+   * The four summary tiles went one to a row on a phone, so eight
+   * hundred pixels of counting stood between the nav and the first
+   * panel. Two by two is the same four numbers in a quarter of the
+   * scroll. Only these tiles: the coverage and gaps tiles carry a
+   * sentence each and need the width.
+   */
+  .grid[data-summary] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid[data-summary] .stat { padding: .85rem .9rem; }
+  .grid[data-summary] .stat .value { font-size: 1.6rem; }
+  input, select, button { padding-block: .55rem; }
+  .sidebar nav a { align-items: center; }
+
   .shell { flex-direction: column; }
   .sidebar { width: auto; flex: none; height: auto; position: static; }
   .sidebar nav { flex-direction: row; flex-wrap: wrap; }
