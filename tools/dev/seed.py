@@ -248,6 +248,13 @@ LINKS = [
     (0x0A51A001, 0x0A51B001, 8.25),
     (0x0A51A001, 0x0A51B003, 6.0),
     (0x0A51A001, 0x0A51B004, 7.75),
+    # A001 is the busy one on purpose. The node page caps its long
+    # tables at five rows and offers the rest behind a button, and a
+    # preview where no node has more than five neighbours never draws
+    # that button, so the behaviour goes unchecked.
+    (0x0A51A001, 0x0A51B002, 2.75),
+    (0x0A51A001, 0x0A51B005, -1.5),
+    (0x0A51A001, 0x0A51B006, 5.25),
     (0x0A51A002, 0x0A51B002, 9.5),
     (0x0A51A002, 0x0A51C001, 3.25),
     (0x0A51A002, 0x0A51A004, -2.5),

@@ -257,6 +257,35 @@ function table(columns, rows, emptyMessage = 'No data.') {
   return el('table', {}, el('thead', {}, head), el('tbody', {}, body));
 }
 
+/** Render a table that shows a few rows, then opens to the rest in place.
+ *
+ * Same bargain as `expandingList`: a node page carries several of these
+ * at once, and a hundred-row neighbour table pushes everything below it
+ * off the screen. Five rows and a count says how big it is; the button
+ * says the rest is one click away rather than hidden.
+ */
+function expandingTable(columns, rows, emptyMessage, options = {}) {
+  const limit = options.limit ?? 5;
+  const noun = options.noun || 'rows';
+  if (!rows || !rows.length) return [empty(emptyMessage)];
+  const wrap = el('div', { class: 'table-wrap' },
+    table(columns, rows.slice(0, limit), emptyMessage));
+  if (rows.length <= limit) return [wrap];
+
+  const closed = `View all ${rows.length} ${noun}`;
+  const button = el('button', {
+    class: 'more', type: 'button', 'aria-expanded': 'false', text: closed,
+  });
+  button.addEventListener('click', () => {
+    const open = button.getAttribute('aria-expanded') === 'true';
+    replace(wrap, table(columns, open ? rows.slice(0, limit) : rows, emptyMessage));
+    button.setAttribute('aria-expanded', open ? 'false' : 'true');
+    button.textContent = open ? closed : `Show fewer ${noun}`;
+  });
+  return [wrap, el('p', { class: 'more-wrap' }, button,
+    el('span', { class: 'muted', text: `${rows.length - limit} more` }))];
+}
+
 function statTile(label, value, delta) {
   return el('div', { class: 'panel' },
     el('div', { class: 'stat' },
@@ -1994,11 +2023,11 @@ function neighborPanel(neighbors, windowHours) {
     el('h3', {}, 'Neighbours',
       el('span', { class: 'muted',
         text: `${count(neighbors.length)} in ${windowHours} h` })),
-    el('div', { class: 'table-wrap' }, table([
+    expandingTable([
       { label: 'Node', cell: (row) => nodeChip(row) },
       { label: 'SNR', num: true, cell: (row) => snrCell(row.snr) },
       { label: 'Last RX', num: true, cell: (row) => `${ago(row.last_rx_time || row.time)} ago` },
-    ], neighbors, 'This node reports no neighbors.')));
+    ], neighbors, 'This node reports no neighbors.', { noun: 'neighbours' }));
 }
 
 function heardByPanel(gateways) {
@@ -2009,14 +2038,14 @@ function heardByPanel(gateways) {
       'A gateway usually receives a packet after other nodes relayed it. '
       + 'Signal figures below come only from packets that arrived direct, '
       + 'with no hop used.'),
-    el('div', { class: 'table-wrap' }, table([
+    expandingTable([
       { label: 'Gateway', cell: (row) => nodeChip(row) },
       { label: 'Relayed', num: true, cell: (row) => count(row.relayed_count) },
       { label: 'Direct', num: true, cell: (row) => count(row.direct_count) },
       { label: 'Avg SNR', num: true, cell: (row) => snrCell(row.avg_snr) },
       { label: 'Best SNR', num: true, cell: (row) => snrCell(row.best_snr) },
       { label: 'Last', num: true, cell: (row) => `${ago(row.last_heard)} ago` },
-    ], gateways, 'No gateway heard this node in the window.')));
+    ], gateways, 'No gateway heard this node in the window.', { noun: 'gateways' }));
 }
 
 function weatherPanel(detail) {
@@ -2134,14 +2163,23 @@ async function loadNodeDetail(nodeId) {
       el('span', { class: 'muted', text: 'from neighbour reports' })),
     el('div', { class: 'chart', 'data-signal-chart': '' }));
 
+  /*
+   * Short panels first, long ones after.
+   *
+   * Neighbours and Heard by are tables that grow with the mesh, and
+   * putting them among the first cells pushed the identity, the device
+   * and the activity of the node — the things somebody opening the page
+   * came for — below the fold on a busy node. Both are capped at five
+   * rows now and say how many more there are.
+   */
   replace(body, el('div', { class: 'grid two' },
     identityPanel(node),
-    weatherPanel(detail),
     devicePanel(detail),
     activityPanel(detail),
+    weatherPanel(detail),
+    messagesPanel(detail),
     neighborPanel(detail.neighbors, detail.window_hours),
     heardByPanel(detail.heard_by),
-    messagesPanel(detail),
     signalPanel));
 
   await drawSignalChart($('[data-signal-chart]', body), nodeId, hours);
