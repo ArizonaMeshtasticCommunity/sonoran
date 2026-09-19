@@ -210,6 +210,23 @@ def blit_max(target: Levels, grid: Grid, patch: Levels, patch_grid: Grid) -> int
     return int(np.count_nonzero(better))
 
 
+def shift(levels: Levels, offset_db: float) -> Levels:
+    """Return the levels moved by a number of dB, keeping the gaps.
+
+    This is how the engine's field becomes one direction of a link: the
+    offset carries the antenna gain, the clutter at the transmitting
+    end, and the difference between the two transmit powers.
+
+    **A cell nothing reached stays unreached.** Moving it would turn a
+    hole in the coverage into a very weak signal, and a very weak signal
+    is something a reader can argue with while a hole is not.
+    """
+    if round(offset_db) == 0:
+        return levels
+    moved = np.clip(levels.astype(np.int16) + round(offset_db), MIN_LEVEL, MAX_LEVEL)
+    return np.where(levels == NO_COVERAGE, NO_COVERAGE, moved).astype(np.uint8)
+
+
 def combine_min(first: Levels, second: Levels) -> Levels:
     """Return the weaker of two grids, cell by cell.
 

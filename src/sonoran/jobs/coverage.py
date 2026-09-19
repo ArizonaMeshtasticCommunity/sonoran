@@ -51,6 +51,7 @@ from sonoran.coverage.grid import (
     data_bounds,
     levels_from_raster,
     region_grid,
+    shift,
     to_level,
     union_bounds,
 )
@@ -386,13 +387,10 @@ def _site_levels(
 def _shift(levels: Levels, offset_db: float) -> Levels:
     """Return the levels moved by a number of dB, keeping the gaps.
 
-    A cell nothing reached stays unreached. Moving it would turn a hole
-    in the coverage into a very weak signal.
+    The rule is `coverage/grid.py::shift`, which is the module that
+    holds every rule about how a raster meets the ground.
     """
-    if round(offset_db) == 0:
-        return levels
-    moved = np.clip(levels.astype(np.int16) + round(offset_db), MIN_LEVEL, MAX_LEVEL)
-    return np.where(levels == NO_COVERAGE, NO_COVERAGE, moved).astype(np.uint8)
+    return shift(levels, offset_db)
 
 
 # One engine instance for each worker process.
@@ -483,6 +481,51 @@ def _worker_site(settings: Settings, site: Site) -> SiteResult | None:
     """Predict one site in a worker process."""
     assert _WORKER_INSTANCE is not None
     return _to_plain(_site_levels(_WORKER_INSTANCE, settings, site))
+
+
+def predict_sites(
+    settings: Settings,
+    sites: Sequence[Site],
+    workers: int,
+    nice: int | None = None,
+) -> list[SiteResult | None]:
+    """Predict each site and give back **its own raster**, in order.
+
+    This is the seam for a caller that wants a few point lookups rather
+    than a map. The siting half of the coverage gaps feature is that
+    caller: it asks a few dozen "is this node inside" questions, and a
+    region grid of Arizona is 88 MB for each one of them. See
+    `docs/design/coverage-gaps.md` 6.5.
+
+    Every engine rule lives here and not in the caller, because there is
+    one right way to do each of them and `AGENTS.md` 9.16 to 9.16.5
+    records what happened each time there was a second way:
+
+    - One `SplatModule` and one `SplatInstance` for a process, reused
+      for every site and closed in a `finally`.
+    - Worker processes started with the spawn context, never fork.
+    - The worker niced, because the engine has no IO to yield on and
+      holds its core solid.
+
+    `nice` defaults to the coverage job's own priority. A caller that
+    runs on a different clock may name its own.
+
+    A site the engine refused comes back as None. That is a working
+    answer, and a caller must report it as "not judged" rather than as
+    "no coverage".
+    """
+    if nice is None:
+        nice = settings.coverage_worker_nice
+    if workers < 1:
+        with SplatModule().instance() as instance:
+            return [_to_plain(_site_levels(instance, settings, site)) for site in sites]
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_worker_start,
+        initargs=(nice,),
+        mp_context=_pool_context(),
+    ) as pool:
+        return list(pool.map(partial(_worker_site, settings), sites, chunksize=1))
 
 
 def predict_preset(

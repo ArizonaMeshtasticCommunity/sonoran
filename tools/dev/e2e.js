@@ -196,6 +196,34 @@ async function main() {
     return 'unknown surfaced, preset switch holds';
   });
 
+  await journey(context, 'gaps sites against an area', async (page) => {
+    await open(page, 'gaps', 6000);
+    const panel = page.locator('.gap-siting');
+    must((await panel.count()) > 0, 'the siting half is not on the page');
+    const text = await panel.innerText();
+    /* A siting suggestion that does not say what it cannot know is a
+       lie of omission, so the limits list is the first assertion. */
+    must(/cannot know/i.test(text), 'the siting limits are not shown');
+    must(/dBm of transmit power/.test(text), 'the assumed radio is not printed');
+    const rows = await page.locator('.gap-siting table tbody tr').count();
+    if (!rows) return 'no area to site against, and the page says so';
+    /* The tail of the ranking opens in place and the count is real. */
+    const more = page.locator('.gap-siting button.linky').first();
+    if ((await more.count()) > 0) {
+      const before = rows;
+      await more.click();
+      await page.waitForTimeout(800);
+      const after = await page.locator('.gap-siting table tbody tr').count();
+      must(after > before, `the ranking did not open (${before} -> ${after})`);
+    }
+    /* A row opens to what the engine or the screen actually said. */
+    await page.locator('.gap-siting table tbody tr').first().click();
+    await page.waitForTimeout(600);
+    const opened = await page.locator('.gap-siting .gap-detail').count();
+    must(opened > 0, 'a candidate row did not open');
+    return `${rows} candidates, a row opens`;
+  });
+
   await journey(context, 'watch mode opens and Escape leaves', async (page) => {
     await open(page, 'map', 6000);
     const enter = page.locator('[aria-label="Watch mode"]').first();

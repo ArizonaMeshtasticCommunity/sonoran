@@ -478,6 +478,17 @@
 
     drawMap(rows);
 
+    /* The siting half, in its own file. It is handed this page's preset
+       and this page's map, so the two halves always answer about one
+       radio setting and share one picture. A siting answer for Long
+       fast beside a node list for Medium fast would be two radios that
+       cannot hear each other on one screen. */
+    if (window.SonoranSiting) {
+      window.SonoranSiting.show(page, summary.preset, state.map).catch((error) => {
+        console.warn('gaps siting failed', error);
+      });
+    }
+
     if (!state.loaded) {
       const picker = $('[data-gaps-preset]', page);
       if (picker) {

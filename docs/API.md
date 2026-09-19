@@ -462,6 +462,106 @@ is a real problem for its owner, so a mobile node stays in the list.
 upload.** The first belongs to the last hop into the gateway and the
 second is the node's own voice. See `AGENTS.md` 9.5 and 9.5.1.
 
+### The siting half
+
+Two more endpoints answer the other question: **where would one new node
+help the most of them**. They read a second written file,
+`{COVERAGE_CACHE_DIR}/gaps/siting-{preset}.json`, which
+`jobs/gaps_siting.py` writes **inside the coverage cycle** and never on
+a clock of its own. That job runs the SPLAT engine, so it must not be
+free to start during a coverage build. See `docs/GAPS.md` 10.
+
+**The per node half is a measurement and this half is a prediction.**
+They are served from two files, drawn in two shapes and two colours, and
+a reader who mixes them up will go and buy a mast.
+
+```
+GET /api/gaps/areas?channel=LongFast
+GET /api/gaps/candidates?channel=LongFast&area=0&limit=200
+```
+
+`GET /api/gaps/areas` returns the neighbourhoods, the demand points
+inside each one, the radio every candidate was read with, what the run
+cost, and the caveats. An area holds at least `GAPS_MIN_CLUSTER` places
+that want help within `GAPS_CLUSTER_LINK_KM` of each other. Fewer than
+that is a node, not an area, and `/api/gaps/nodes` already holds it.
+
+```json
+{
+  "available": true,
+  "preset": "LongFast",
+  "demand_point_count": 11,
+  "demand_node_count": 14,
+  "areas": [
+    {"area": 0, "point_count": 5, "node_count": 5, "width_km": 8.4,
+     "centroid": [33.5940, -112.4830], "bounds": [33.565, -112.51, 33.63, -112.445],
+     "node_ids": ["!0a51e001"], "points": [{"latitude": 33.63, "longitude": -112.51,
+                                            "node_count": 1, "node_ids": ["!0a51e001"]}]}
+  ],
+  "assumed_radio": {"tx_power_dbm": 30.0, "antenna_gain_dbi": 2.15,
+                    "cable_loss_db": 0.0, "antenna_height_m": 9.0,
+                    "radius_km": 25.0, "rx_height_m": 1.5},
+  "coverage": {"stamp": "20260919T061200Z", "available": true, "is_diagnostic": false},
+  "cost": {"predictions": 3, "max_predictions": 24, "workers": 1,
+           "engine_seconds": 9.6, "core_seconds": 9.6},
+  "caveats": [{"key": "land_is_invisible", "text": "We cannot tell whether anybody owns ..."}]
+}
+```
+
+`GET /api/gaps/candidates` returns the places, best first inside each
+area:
+
+```json
+{
+  "available": true,
+  "preset": "LongFast",
+  "area": 0,
+  "matched_count": 34,
+  "candidates": [
+    {"kind": "ground", "area": 0, "latitude": 33.5758, "longitude": -112.5792,
+     "elevation_m": 1230, "prominence_m": 127, "node_id": null,
+     "method": "splat", "state": "ok",
+     "screen_score": 5, "screen_unknown": 0,
+     "newly_usable": 5, "newly_usable_nodes": ["!0a51e001"],
+     "already_usable": 0, "baseline_unknown": 0,
+     "run_stamp": "20260919T061200Z", "reason": "confirmed_by_engine",
+     "sentence": "The engine predicts that a node here would bring 5 of the places ..."}
+  ]
+}
+```
+
+Three fields carry the whole meaning of a row:
+
+- **`kind`** is `existing_node` or `ground`. An `existing_node` is a
+  node already standing there, read with the candidate radio instead of
+  its own: "if the node at this address went to 1 W on a 9 m mast". It
+  needs no land and no permission, which is why it wins a tie.
+- **`method`** is `terrain_screen` or `splat`. A `terrain_screen` row is
+  a cheap **ranking** and not a prediction: free space loss, the
+  terminal clutter correction at both ends, and one knife edge. The
+  engine did not run there. Only a `splat` row carries `newly_usable`.
+- **`state`** is `ok`, `bad` or **`unknown`**, as everywhere in this
+  feature. `unknown` means the ground under the candidate, or under
+  every path from it, is terrain we do not hold. **`newly_usable` is
+  then `null` and never `0`**: "we did not judge it" and "it would help
+  nobody" are different answers.
+
+`newly_usable` counts the demand points this candidate would bring
+inside usable coverage **that the published run does not already
+reach**. `already_usable` counts the ones it reaches that were already
+covered, and `baseline_unknown` counts the ones we cannot say were
+outside before, because the published run holds no level for any node
+standing there.
+
+**What this half cannot know travels with every answer**, in `caveats`,
+and the page prints it without rewording it. Land ownership, access,
+power, backhaul, a roof, a road, whether a building stands between the
+site and a street, and whether the person who lives there wants a node
+on it are all invisible here. So is the whole population with no node
+yet: the demand set can only hold people who already bought a radio and
+got it partly working, so it will always favour places that already half
+work. **A siting suggestion that does not say so is a lie of omission.**
+
 ## 3B. The public embed
 
 These serve a page for somebody else's website. They are all 404 until

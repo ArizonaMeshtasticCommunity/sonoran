@@ -273,6 +273,83 @@ NODES = [
         700,
         True,
     ),
+    # A neighbourhood of struggling nodes, so that the siting half of
+    # the coverage gaps page has something true to show in a preview.
+    #
+    # Two struggling nodes fifty kilometres apart are two nodes. The
+    # siting half only speaks about an **area**, which is at least
+    # `GAPS_MIN_CLUSTER` places wanting help within
+    # `GAPS_CLUSTER_LINK_KM` of each other, so a preview with only ORPH
+    # and FLKY in it showed the page working and answering "no area".
+    # That is a true answer and it is not the answer worth looking at.
+    #
+    # They stand in the valley east of the White Tank Mountains, which
+    # is real ground with a real ridge six to eight kilometres west of
+    # it rising about 780 m above the valley floor. The positions are
+    # made up, as every position in this file is. The terrain is not:
+    # the candidate the screen and the engine pick out is a hill that
+    # exists, and that is the point of putting them here rather than in
+    # the middle of a flat basin.
+    #
+    # Each of them is an MQTT gateway whose traffic reaches us only
+    # through its own internet link, which is `radio_isolated`. That is
+    # the honest reason to want a node nearby: nothing on the air can
+    # hear any of them.
+    (
+        0x0A51E001,
+        "WTV1",
+        "White Tank Valley North",
+        "STATION_G2",
+        "CLIENT_BASE",
+        33.6300,
+        -112.5100,
+        470,
+        True,
+    ),
+    (
+        0x0A51E002,
+        "WTV2",
+        "White Tank Valley Mid",
+        "RAK4631",
+        "CLIENT_BASE",
+        33.6100,
+        -112.4900,
+        462,
+        True,
+    ),
+    (
+        0x0A51E003,
+        "WTV3",
+        "Citrus Road Gateway",
+        "HELTEC_V3",
+        "CLIENT_BASE",
+        33.5900,
+        -112.4700,
+        455,
+        True,
+    ),
+    (
+        0x0A51E004,
+        "WTV4",
+        "Deer Valley West Gateway",
+        "TBEAM",
+        "CLIENT_BASE",
+        33.5650,
+        -112.4450,
+        448,
+        True,
+    ),
+    (
+        0x0A51E005,
+        "WTV5",
+        "Perryville Gateway",
+        "RAK4631",
+        "CLIENT_BASE",
+        33.5750,
+        -112.5000,
+        460,
+        True,
+    ),
 ]
 
 # The two nodes the gap signals are seeded to demonstrate.
@@ -284,7 +361,13 @@ NODES = [
 # is a consequence of the rows and not of a label.
 GAP_ISOLATED = 0x0A51D001
 GAP_INTERMITTENT = 0x0A51D002
-GAP_DEMO = (GAP_ISOLATED, GAP_INTERMITTENT)
+
+# The neighbourhood the siting half is seeded to find. Every one of them
+# is an MQTT gateway nothing on the air has heard, which is the demand
+# an area is made of.
+GAP_CLUSTER = (0x0A51E001, 0x0A51E002, 0x0A51E003, 0x0A51E004, 0x0A51E005)
+
+GAP_DEMO = (GAP_ISOLATED, GAP_INTERMITTENT, *GAP_CLUSTER)
 
 # The positions in a NODES row.
 NUM, SHORT, LONG, HW, ROLE, LAT, LON, ALT, GATEWAY = range(9)
@@ -764,6 +847,75 @@ async def main() -> None:
                             "ch": PRIMARY_PRESET,
                             "snr": snr,
                             "hl": hop_limit,
+                            "t": seen_at,
+                        },
+                    )
+
+        # The neighbourhood the siting half sites against.
+        #
+        # Five gateways in the valley east of the White Tank Mountains,
+        # each uploading its own traffic and nothing else. Every one of
+        # them is therefore `radio_isolated`, which makes each of them a
+        # place that wants help, and five places within a few kilometres
+        # of each other make one area.
+        #
+        # They are written by hand for the same reason ORPH and FLKY
+        # are: the random traffic loop would give each of them one to
+        # three real gateways and leave the whole neighbourhood looking
+        # healthy. See `GAP_DEMO`.
+        for member in GAP_CLUSTER:
+            for hours_ago in range(0, 24):
+                seen_at = NOW - timedelta(hours=hours_ago, minutes=11)
+                hop_start = 3
+                for _ in range(2):
+                    gap_packet_id += 1
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO packet_key (from_node_num, packet_id, first_seen_at)
+                            VALUES (:f, :p, :t) ON CONFLICT DO NOTHING
+                            """
+                        ),
+                        {"f": member, "p": gap_packet_id, "t": seen_at},
+                    )
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO packet (from_node_num, packet_id, to_node_num,
+                                portnum, channel, hop_start, hop_limit, want_ack,
+                                rx_time, first_seen_at)
+                            VALUES (:f, :p, :to, :port, :ch, :hs, :hs, false, :rx, :t)
+                            """
+                        ),
+                        {
+                            "f": member,
+                            "p": gap_packet_id,
+                            "to": BROADCAST,
+                            "port": PORT_TELEMETRY,
+                            "ch": PRIMARY_PRESET,
+                            "hs": hop_start,
+                            "rx": int(seen_at.timestamp()),
+                            "t": seen_at,
+                        },
+                    )
+                    # Its own upload, and no other. Nothing on the air
+                    # has heard any of them.
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO packet_seen (from_node_num, packet_id,
+                                gateway_node_num, mqtt_topic, channel, rx_rssi, rx_snr,
+                                hop_limit, seen_at)
+                            VALUES (:f, :p, :f, :topic, :ch, -90, 6.75, :hs, :t)
+                            ON CONFLICT DO NOTHING
+                            """
+                        ),
+                        {
+                            "f": member,
+                            "p": gap_packet_id,
+                            "topic": f"msh/US/AZ/2/e/{PRIMARY_PRESET}/" + node_id(member),
+                            "ch": PRIMARY_PRESET,
+                            "hs": hop_start,
                             "t": seen_at,
                         },
                     )

@@ -70,6 +70,44 @@ def write_preset(settings: Settings, preset: str, document: dict[str, object]) -
     return path
 
 
+def siting_path(settings: Settings, preset: str) -> Path | None:
+    """Return the file of one preset's siting answer, or None.
+
+    The siting half is kept in its own file, beside the per node one and
+    never inside it. The two are written by different jobs on different
+    clocks: the per node assessment is SQL and runs every half hour,
+    while the siting half runs the engine and joins the coverage cycle.
+    One file holding both would be rewritten by whichever job finished
+    last, and half of it would always be stale.
+    """
+    if not PRESET_PATTERN.fullmatch(preset):
+        return None
+    return gaps_dir(settings) / f"siting-{preset}.json"
+
+
+def write_siting(settings: Settings, preset: str, document: dict[str, object]) -> Path | None:
+    """Write one preset's siting answer. Return where it went, or None."""
+    path = siting_path(settings, preset)
+    if path is None:
+        logger.warning("refusing to write a siting answer for the name %r", preset)
+        return None
+    _write_atomically(path, document)
+    return path
+
+
+def read_siting(settings: Settings, preset: str) -> dict[str, object] | None:
+    """Return one preset's siting answer, or None.
+
+    None is a working state. The siting half runs inside the coverage
+    cycle, so a box that has never finished a coverage run has no answer
+    yet and the page says so.
+    """
+    path = siting_path(settings, preset)
+    if path is None:
+        return None
+    return _read(path)
+
+
 def write_index(settings: Settings, document: dict[str, object]) -> Path:
     """Write the list of presets that have an assessment.
 

@@ -790,12 +790,35 @@ A second feature answers "who is struggling", from measurement, and the
 two are drawn apart on purpose: putting a measured list inside a
 predicted map is how a reader starts to read one as the other.
 
-See `docs/GAPS.md` for what it measures, and
-`docs/design/coverage-gaps.md` for the whole design, including the area
-half that is not built.
+See `docs/GAPS.md` for what it measures and what it predicts, and
+`docs/design/coverage-gaps.md` for the whole design.
 
 A run writes one extra artefact for it, `coverage-at-nodes.json`, beside
 the manifest. It holds the level this run predicted at each node it
 considered, sampled out of the region grids while they were still in
 memory. A finished run keeps no level grid, so it is the only way the
 exact dBm at a node can be read back. See `docs/GAPS.md` 5.
+
+### 12.1 The siting half shares this engine and this clock
+
+The other half of that feature answers "where would one new node help
+the most people". It runs the engine, so it runs **inside
+`_coverage_cycle`, after this job**, and never as a task of its own.
+The scheduler runs tasks with `asyncio.gather`, and the engine has no
+IO to yield on: a second engine user on its own clock would be free to
+take the last core of a small box during a coverage build.
+
+It asks for a much narrower prediction than the map does. The radius is
+`GAPS_CANDIDATE_RADIUS_KM`, 25 km rather than 60, because a 1 W node at
+9 m talking to a 1.5 m handheld does not reach 60 km and the cost grows
+with the square of the radius. It builds **no region grid at all**: each
+candidate's own raster is sampled at a few dozen points and dropped, so
+the 88 MB in 9.2 is never paid for a candidate.
+
+The whole step is capped at `GAPS_MAX_PREDICTIONS`, 24 by default, which
+is about 77 core-seconds at the 18.4 core-seconds a site measured in
+9.1. On the development machine it measured 1.6 core-seconds a
+prediction. Either way it is under two minutes on one niced worker,
+against an interval of six hours. `jobs/coverage.py::predict_sites` is
+the seam it goes through, so every engine rule stays in one module. See
+`docs/GAPS.md` 10.

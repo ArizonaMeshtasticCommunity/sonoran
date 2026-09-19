@@ -67,8 +67,22 @@ FREQUENCY_MIN_MHZ = 30.0
 FREQUENCY_MAX_MHZ = 3000.0
 
 
-def _j(nu: float) -> float:
-    """Return the knife edge diffraction approximation, P.2108 (1).
+def knife_edge_db(nu: float) -> float:
+    """Return the knife edge diffraction loss for a Fresnel parameter.
+
+    This is J(v), the approximation P.2108-1 equation (1) gives and that
+    ITU-R P.526 uses for a single rounded or sharp obstacle. It is the
+    same function whether the obstacle is a row of buildings at one end
+    of a path or a ridge in the middle of it, so it is written once
+    here.
+
+    `nu` is the usual Fresnel-Kirchhoff parameter:
+
+        nu = h * sqrt(2 * (d1 + d2) / (lambda * d1 * d2))
+
+    where `h` is how far the obstacle stands above the straight line
+    between the two antennas. A negative `h`, which is a clear path,
+    gives a negative `nu` and no loss.
 
     The recommendation notes that J(-0.78) is about zero and sets the
     function to zero below that, which is the lower limit the
@@ -78,6 +92,11 @@ def _j(nu: float) -> float:
         return 0.0
     shifted = nu - 0.1
     return 6.9 + 20.0 * math.log10(math.sqrt(shifted * shifted + 1.0) + shifted)
+
+
+def _j(nu: float) -> float:
+    """Return the knife edge approximation. The name P.2108 uses."""
+    return knife_edge_db(nu)
 
 
 def terminal_loss_db(

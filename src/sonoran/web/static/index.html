@@ -409,9 +409,24 @@
             <div class="gap-legend">
               <span><i class="bad"></i>A fault we can measure</span>
               <span><i class="unknown"></i>Not enough evidence</span>
+              <span><i class="area"></i>An area worth siting against</span>
+              <span><i class="candidate"></i>A place a node could go</span>
               <span class="muted">No line is drawn between nodes: no signal on this page names both ends of one link.</span>
             </div>
             <p class="sub" data-gaps-map-note style="margin:.5rem 0 0"></p>
+          </div>
+
+          <!-- The siting half. It is a PREDICTION and the measured half
+               above is not, so it gets its own panel, its own shape on
+               the map, and its own list of what it cannot know. -->
+          <div class="panel span-2 gap-siting">
+            <h3 data-siting-heading>Where a node would help</h3>
+            <p class="sub" style="margin:0 0 .6rem">The struggling nodes are grouped into neighbourhoods, and each neighbourhood is offered places a 1&nbsp;W node could stand: a node that is already there on a taller mast, or high ground taken from the terrain. <strong>This half is predicted, not measured.</strong></p>
+            <p class="gap-lead" data-siting-lead></p>
+            <p class="gap-window" data-siting-note></p>
+            <div class="table-wrap" data-siting-table></div>
+            <h4 style="margin:1rem 0 .4rem">What a siting suggestion cannot know</h4>
+            <ul class="gap-limits" data-siting-limits></ul>
           </div>
 
           <div class="panel">
@@ -873,6 +888,12 @@
       the dashboard. See AGENTS.md 9.14.2.
     -->
     <script src="static/gaps.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!--
+      The siting half of that page. gaps.js hands it the preset and the
+      map, so it loads after gaps.js and before app.js for the same
+      reason gaps.js does.
+    -->
+    <script src="static/siting.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The live map animation and watch mode, before app.js for the same
       reason: a reload straight to #map calls the map page immediately.

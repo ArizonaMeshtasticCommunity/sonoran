@@ -22,7 +22,11 @@
  * in turn and say which, rather than failing with a stack trace.
  */
 function loadChromium() {
-  const places = ['playwright', '/opt/node22/lib/node_modules/playwright'];
+  const places = [
+    'playwright',
+    '/opt/node22/lib/node_modules/playwright',
+    '/opt/homebrew/lib/node_modules/@playwright/test',
+  ];
   for (const place of places) {
     try {
       return require(place).chromium;
@@ -54,6 +58,7 @@ const PAGES = [
   '/#firehose',
   '/#traceroutes',
   '/#stats',
+  '/#gaps',
   '/embed/coverage',
 ];
 

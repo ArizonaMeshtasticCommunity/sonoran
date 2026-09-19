@@ -581,7 +581,15 @@ def test_the_gaps_routes_are_get_only(tmp_path: Path) -> None:
     """The public API is read-only."""
     app = create_app(Settings(_env_file=None, coverage_cache_dir=str(tmp_path)))
     found = [(path, methods) for path, methods in _routes(app) if "gaps" in path]
-    assert {path for path, _ in found} == {"/api/gaps", "/api/gaps/nodes"}
+    assert {path for path, _ in found} == {
+        "/api/gaps",
+        "/api/gaps/nodes",
+        # The siting half. Read only as well, and listed here so that a
+        # route added to this feature has to be named in a test before
+        # it can be served.
+        "/api/gaps/areas",
+        "/api/gaps/candidates",
+    }
     for path, methods in found:
         assert methods <= {"GET"}, path
 

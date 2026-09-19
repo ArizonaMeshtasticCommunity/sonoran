@@ -56,6 +56,9 @@ sonoran-coverage-once = "sonoran.jobs.coverage:run"
 # One gap assessment, now, instead of waiting for the timer. The same
 # bargain as sonoran-coverage-once.
 sonoran-gaps-once = "sonoran.jobs.gaps:run"
+# One siting answer, now. It runs the engine, so the schedule puts it
+# inside the coverage cycle rather than beside it.
+sonoran-gaps-siting-once = "sonoran.jobs.gaps_siting:run"
 
 [build-system]
 requires = ["hatchling"]

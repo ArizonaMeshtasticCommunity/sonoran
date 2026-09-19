@@ -18,12 +18,15 @@ router to keep it that way.
 """
 
 import time
+from collections.abc import Callable
+from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
 
 from sonoran.config import Settings
 from sonoran.gaps import store
 from sonoran.gaps.signals import BAD, OK, UNKNOWN
+from sonoran.gaps.siting import SITING_CAVEATS
 from sonoran.radio.presets import preset_for_channel
 
 router = APIRouter(prefix="/api/gaps", tags=["gaps"])
@@ -43,8 +46,26 @@ CACHE_SECONDS = 30.0
 # The filter values a request may ask for.
 STATES = (BAD, OK, UNKNOWN)
 
-# preset -> (when it was read, what the file looked like, the document)
+# key -> (when it was read, what the file looked like, the document)
+#
+# The key is the preset for the per node assessment and `siting:` plus
+# the preset for the siting answer. The two files are written by
+# different jobs on different clocks, so they are held apart.
 _cache: dict[str, tuple[float, tuple[int, int], dict[str, object]]] = {}
+
+
+def _read_siting(settings: Settings, preset: str) -> dict[str, object] | None:
+    """Return one preset's siting answer, cached the same way.
+
+    The siting answer is rewritten once a coverage cycle, which is every
+    six hours by default, so the file check does nearly all of the work
+    and the timer does almost none.
+    """
+    return _read_file(
+        f"siting:{preset}",
+        store.siting_path(settings, preset),
+        lambda: store.read_siting(settings, preset),
+    )
 
 
 def _read(settings: Settings, preset: str) -> dict[str, object] | None:
@@ -63,27 +84,39 @@ def _read(settings: Settings, preset: str) -> dict[str, object] | None:
     because the job writes to a temporary name and renames over the old
     file. A rename gives a new inode and a new timestamp.
     """
-    path = store.preset_path(settings, preset)
+    return _read_file(
+        preset,
+        store.preset_path(settings, preset),
+        lambda: store.read_preset(settings, preset),
+    )
+
+
+def _read_file(
+    key: str,
+    path: Path | None,
+    load: Callable[[], dict[str, object] | None],
+) -> dict[str, object] | None:
+    """Return one artefact, from the cache when the cache is still true."""
     if path is None:
         return None
     try:
         stat = path.stat()
     except OSError:
         # Gone, or unreadable. Say so at once rather than from memory.
-        _cache.pop(preset, None)
+        _cache.pop(key, None)
         return None
 
     mark = (stat.st_mtime_ns, stat.st_size)
     now = time.monotonic()
-    held = _cache.get(preset)
+    held = _cache.get(key)
     if held is not None and held[1] == mark and now - held[0] < CACHE_SECONDS:
         return held[2]
 
-    document = store.read_preset(settings, preset)
+    document = load()
     if document is None:
-        _cache.pop(preset, None)
+        _cache.pop(key, None)
         return None
-    _cache[preset] = (now, mark, document)
+    _cache[key] = (now, mark, document)
     return document
 
 
@@ -219,6 +252,100 @@ async def gaps_nodes(
         "matched_count": len(rows),
         "limit": limit,
         "nodes": rows[:limit],
+    }
+
+
+@router.get("/areas")
+async def gaps_areas(
+    request: Request,
+    channel: str | None = None,
+) -> dict[str, object]:
+    """Return the neighbourhoods that hold the struggling nodes.
+
+    **This half is a measurement and the candidates are a prediction.**
+    They are served from one file because they were computed together,
+    and the page must never draw them in the same colour.
+
+    An area is a group of at least `GAPS_MIN_CLUSTER` places that want
+    help, joined by single linkage. A group of one or two is not an
+    area; it is a node, and `/api/gaps/nodes` already holds it.
+
+    `available: false` is a working state. The siting half runs inside
+    the coverage cycle, so a deployment that has never finished a
+    coverage run has no answer yet.
+    """
+    settings: Settings = request.app.state.settings
+    preset, reason = _resolve(channel, settings)
+    if preset is None:
+        return _no_siting(reason or "no_assessment", settings)
+    document = _read_siting(settings, preset)
+    if document is None:
+        return _no_siting("no_siting_run", settings)
+    return {key: value for key, value in document.items() if key not in ("candidates",)} | {
+        "presets": _presets(settings)
+    }
+
+
+@router.get("/candidates")
+async def gaps_candidates(
+    request: Request,
+    channel: str | None = None,
+    area: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, object]:
+    """Return the places a node could go, best first inside each area.
+
+    Every row carries `method`. `terrain_screen` is a cheap ranking and
+    **not a prediction**; `splat` is the engine, and only those rows
+    carry `newly_usable`. Nothing here may be read as a promise: the
+    caveats travel with the answer and name what a siting suggestion
+    cannot know at all.
+
+    `newly_usable` is **null** and never zero for a candidate whose
+    state is `unknown`. A candidate standing on ground we hold no
+    terrain for has not been judged, and "no benefit" is a different
+    answer.
+    """
+    settings: Settings = request.app.state.settings
+    preset, reason = _resolve(channel, settings)
+    if preset is None:
+        return _no_siting(reason or "no_assessment", settings)
+    document = _read_siting(settings, preset)
+    if document is None:
+        return _no_siting("no_siting_run", settings)
+
+    listed = document.get("candidates")
+    rows = [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
+    if area is not None:
+        rows = [row for row in rows if row.get("area") == area]
+    return {
+        "available": True,
+        "preset": preset,
+        "area": area,
+        "generated_at": document.get("generated_at"),
+        "assumed_radio": document.get("assumed_radio"),
+        "coverage": document.get("coverage"),
+        "caveats": document.get("caveats", []),
+        "matched_count": len(rows),
+        "limit": limit,
+        "candidates": rows[:limit],
+    }
+
+
+def _no_siting(reason: str, settings: Settings) -> dict[str, object]:
+    """Return the working "no siting answer yet" response.
+
+    The caveats are served even when there is nothing to site, because
+    they are what the feature cannot know and that does not depend on
+    whether it has run.
+    """
+    return {
+        "available": False,
+        "reason": reason,
+        "presets": _presets(settings),
+        "areas": [],
+        "candidates": [],
+        "caveats": [{"key": key, "text": text} for key, text in SITING_CAVEATS],
     }
 
 

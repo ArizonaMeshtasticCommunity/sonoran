@@ -398,6 +398,46 @@ And the walk changes the grid as it goes, so a repaired cell can be the
 neighbour that repairs a later one. That is why the walk cannot be
 vectorised or run in parallel.
 
+### 9.13.1 A terrain page is written south-up and east-first
+
+`srtm2sdf_transform` ends in `window[::-1, ::-1]`, so a page is **not**
+in the order every other grid in this project uses. Row 0 is the
+**south** edge and column 0 is the **east** edge, which is the order
+`WriteSDF` walks. `coverage/grid.py::Grid` is the opposite on both axes:
+row 0 is north and column 0 is west.
+
+Anything that reads an elevation back out of a cached page goes through
+`terrain/srtm.py::page_cell`, which is the only reading of that order:
+
+    row    = round((latitude  - floor(latitude))  * PAGE_SIZE)
+    column = PAGE_SIZE - 1 - round((longitude - floor(longitude)) * PAGE_SIZE)
+
+One axis the wrong way round puts every candidate on the wrong hill and
+nothing raises anything: the numbers are still plausible elevations.
+`test_the_page_cell_order_is_read_back_exactly_as_it_was_written` builds
+a grid whose every cell names its own position, runs the transform, and
+reads it back, so the writer and the reader are pinned together.
+
+**A tile is named for its south-west corner, which is not the rounding
+anybody expects at a negative longitude.** `floor(-112.07)` is **-113**,
+so a node at 112.07 W stands in `N33W113` and not in `N33W112`. Use
+`tile_name_of`. A test that wrote its fake terrain into the wrong tile
+read the whole window as "we hold no terrain here", which is a working
+state, so the test failed later and somewhere else.
+
+### 9.13.2 `preset_by_key` and `preset_for_channel` take different spellings
+
+`ModemPreset` carries two names. `key` is `LONG_FAST`, the internal
+name. `name` is `LongFast`, the channel name the firmware uses, and it
+is what `node.last_channel`, `neighbor_metrics.channel` and the gaps
+index all store.
+
+`preset_by_key("LongFast")` returns None. It does not raise, so a caller
+that reads an artefact written with `preset.name` and looks it up by key
+silently produces nothing at all, and an empty result is a working state
+everywhere in this project. Read a channel name with
+`preset_for_channel`, which normalises case and separators as well.
+
 ### 9.14 The planner needs three things the browser blocks by default
 
 Each of these fails silently, which is the trap.
@@ -866,5 +906,6 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/API.md` — the API specification
 - `docs/QA.md` — the QA process
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
-- `docs/GAPS.md` — which nodes the mesh is not carrying well, and what that cannot say
+- `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new
+  node would help, and what neither of those can say
 - `docs/REVIEW.md` — code review findings, and which are still open

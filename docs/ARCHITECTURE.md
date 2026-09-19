@@ -302,6 +302,27 @@ channel, Data message metadata, and receive time.
 - The embed is off until `EMBED_ENABLED` is true.
 - This package must never touch the database.
 
+### 3.6.4 `gaps`
+
+- Job: decide which nodes the mesh is not carrying well, and where one
+  new node would help the most of them. One modem preset at a time,
+  always.
+- `signals.py` is the only place that decides what a per node signal
+  means. `siting.py` is the only place that decides what a demand
+  point, an area, a candidate and the terrain screen mean.
+- `store.py` is where an answer is written and read. Two files for each
+  preset, beside the coverage runs: `{preset}.json` from the per node
+  job and `siting-{preset}.json` from the siting job. They are written
+  by different jobs on different clocks, so one file holding both would
+  always be half stale.
+- Every signal and every candidate has **three** states, and the third
+  is `unknown`. It is never served as a zero and never as a pass.
+- `siting.py` reads terrain out of the cache through
+  `terrain/srtm.py::page_cell` and never re-implements the transform.
+  See `AGENTS.md` 9.13 and 9.13.1.
+- Neither module touches the database. `signals.py` is handed rows, and
+  `siting.py` is handed the written assessment.
+
 ### 3.7 `api`
 
 - Job: serve read-only JSON and static files.
@@ -367,9 +388,20 @@ general proxy for the tile source.
 - `calibrate.py` reads current neighbour reports and writes one computed
   calibration file.
 - `coverage.py` reads that file and publishes one complete static tile
-  run.
-- `scheduler.py` runs a due calibration before coverage. The snapshot
-  remains independent.
+  run. `predict_sites` is its seam for a caller that wants each site's
+  own raster rather than a map, and it holds every engine rule.
+- `gaps.py` measures the per node half of the coverage gaps feature. It
+  is only SQL, so it keeps its own clock.
+- `gaps_siting.py` answers "where would one new node help". It runs the
+  engine, so it runs **inside** the coverage cycle and never beside it.
+- `scheduler.py` runs a due calibration, then coverage, then the siting
+  half, on one clock. The snapshot and the per node gap assessment
+  remain independent, because neither uses the engine.
+
+  **Anything that uses the engine joins `_coverage_cycle`.** Tasks
+  registered in `build_tasks` run under `asyncio.gather`, so a second
+  engine user there would be free to start during a coverage build, and
+  the engine has no IO to yield on.
 
 ### 3.10 `web/static`
 
@@ -378,6 +410,7 @@ general proxy for the tile source.
 - Files: `index.html`, `app.css`, `app.js`, `map-live.js`,
   `map-watch.js`, `planner.js`, `planner-params.js`,
   `planner.worker.js`, `config-check.js`, `meshtastic-static.js`,
+  `gaps.js`, `siting.js`,
   `protobuf-runtime.js`, and `vendor/`.
 - Libraries load from vendored files, not from public CDNs.
   This keeps the site working without third-party availability.

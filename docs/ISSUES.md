@@ -497,11 +497,18 @@ mostly in close country and on narrow passes.
 
 ### 2.6 A site plan cannot be kept
 
-**State:** Open.
+**State:** Open, and now also the missing handoff from the coverage gaps
+siting half.
 
 Nothing about a run is stored or linked. Closing the tab loses it.
 Upstream encodes a whole plan in the URL (`src/permalink.ts`), which
 would suit this project too and needs no storage and no write endpoint.
+
+The siting half of the coverage gaps feature makes this worth doing.
+Every candidate it offers has a position, a power and a height, and the
+one thing a reader wants next is to open that in the planner and pull
+it apart by hand. Today they have to copy three numbers across. See
+`docs/GAPS.md` 10.
 
 ### 2.7 mesh-graph may hold no drawing for a trace
 
@@ -596,6 +603,39 @@ the conservative branch runs and such packets are reported as
 `ambiguous_packets`.
 
 Vendoring the `.proto` text, or at least those field comments, closes it.
+
+### 2.12 The terrain screen barely separates candidates on open ground
+
+**State:** Open. A property of the model, not a bug, and the ranking is
+weaker for it.
+
+The screen in `gaps/siting.py` charges free space loss, the terminal
+clutter at both ends, and one knife edge. Over open ground with line of
+sight it separates almost nothing: measured on the development mesh, 49
+candidates all scored the same 5 of 5 demand points, and the order was
+decided by the tie break rather than by the model. The reason is real
+rather than a mistake. A 1 W node on Long fast has about sixty decibels
+of margin over a short path, and free space loss over a few kilometres
+does not spend it.
+
+The screen is right to be generous: a pre-filter may have false
+positives and may never have false negatives, because a candidate it
+throws away is thrown away in silence. But a ranking that does not rank
+sends an arbitrary three candidates to the engine.
+
+Two things would help and neither is free:
+
+1. Rank on the **worst** served point rather than the median, and on
+   how much terrain clearance the path has rather than on margin alone.
+   Clearance is already computed and thrown away.
+2. Spend part of the engine budget on spread rather than on rank: one
+   prediction on the highest candidate of an area, whatever the screen
+   said about it, so that the tall site is always measured once.
+
+Neither should be done before the thresholds in `docs/GAPS.md` 8 are
+measured on live data. On real terrain with real obstructions the screen
+separates candidates by tens of decibels, which is the case it was
+written for, and the development mesh is flat valley floor.
 
 ## 3. Wanted next
 

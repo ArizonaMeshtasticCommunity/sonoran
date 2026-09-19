@@ -13,7 +13,8 @@ engine and wants to be fresher than a coverage run. **A task that does
 use the engine must join `_coverage_cycle` instead of being added here:
 tasks added here run beside each other under `asyncio.gather`, so a
 second engine user is free to start during a coverage build and take the
-last core of a small box.**
+last core of a small box.** The siting half of the coverage gaps feature
+is exactly that case, and it runs inside `_coverage_cycle`.
 
 A task that raises is logged and tried again at its next turn. One bad
 run must never stop the process: a jobs container that exits stops
@@ -29,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.jobs import calibrate, coverage, gaps, snapshots
+from sonoran.jobs import calibrate, coverage, gaps, gaps_siting, snapshots
 from sonoran.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -64,10 +65,26 @@ def _delay_to_next_utc_day() -> float:
 
 
 async def _coverage_cycle(session: AsyncSession, settings: Settings, run_calibration: bool) -> None:
-    """Run a due calibration before the coverage that consumes it."""
+    """Run one clock's worth of engine work, in order.
+
+    A due calibration runs first, because the coverage run consumes the
+    file it writes. The siting half of the coverage gaps feature runs
+    last, because it reads the run that coverage just published.
+
+    **Everything that uses the engine belongs on this one clock.** The
+    tasks in `build_tasks` run beside each other under `asyncio.gather`,
+    so a second engine user registered there would be free to start
+    during a coverage build. The engine has no IO to yield on, so a
+    worker holds its core until it finishes, and on a three core box
+    that also serves a public dashboard that is the last core.
+    """
     if run_calibration:
         await calibrate.run_once(session, settings)
     await coverage.run_once(session, settings)
+    if settings.gaps_enabled and settings.gaps_siting_enabled:
+        # It reads the artefacts the two jobs above wrote and asks the
+        # database nothing, so it takes no session.
+        await gaps_siting.run_once(settings)
 
 
 async def _run_forever(task: Task) -> None:

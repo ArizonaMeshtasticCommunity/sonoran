@@ -1,9 +1,9 @@
 # Coverage gaps: which nodes the mesh is not carrying well
 
-**State: phase 1 is built.** The per node half. The area half, which
-answers "where would one new node help the most people", is designed and
-not built. `docs/design/coverage-gaps.md` is the whole design; this
-document describes what runs.
+**State: both halves are built.** Section 4 is the per node half, which
+measures. Section 10 is the siting half, which predicts.
+`docs/design/coverage-gaps.md` is the whole design; this document
+describes what runs.
 
 ## 1. What it answers, and what it never claims
 
@@ -335,13 +335,260 @@ notification is a false alarm generator.
 
 ## 9. What is not built
 
-The area half: demand points, clustering, terrain candidate generation,
-the terrain screen, and SPLAT confirmation. Design sections 6, and phases
-2 and 3.
-
-`single_path_hop`, the traceroute signal of design 4.7, is phase 2. It
-would be `unknown` for almost every node today, because traceroutes are
-user initiated and sparse.
+`single_path_hop`, the traceroute signal of design 4.7. It would be
+`unknown` for almost every node today, because traceroutes are user
+initiated and sparse.
 
 `GET /api/gaps/nodes/{node_id}` and the "Connection health" panel on the
-node page are phase 1b.
+node page, which is design phase 1b.
+
+The planner permalink of `docs/ISSUES.md` 2.6. Every candidate should
+carry an "open in the planner" link with its position, power and height
+filled in. It is the cheapest real handoff this feature could have and
+it is the natural next thing to build.
+
+## 10. The siting half: where one new node would help
+
+Section 4 measures. **This section predicts, and the page never draws
+the two in the same colour.** It answers the other half of the question
+the owner asked: where would a 1 W node bring the most struggling nodes
+into usable coverage?
+
+| Module | Decides |
+|---|---|
+| `gaps/siting.py` | Demand, clusters, candidates, and the terrain screen. |
+| `jobs/gaps_siting.py` | Running the engine on the top few, and the counts. |
+| `api/routes/gaps.py` | Serving `/api/gaps/areas` and `/api/gaps/candidates`. |
+| `web/static/siting.js` | Drawing it. It paraphrases no finding. |
+
+It reads no database at all. The demand is the per node assessment the
+gaps job already wrote, the baseline is `coverage-at-nodes.json` from
+the last coverage run, and everything else is terrain out of the cache.
+
+### 10.1 The demand, and what it is not
+
+The demand set for one preset is the nodes with a fault we can measure,
+leaving out three kinds:
+
+- a node with no exact position, because a position accurate to
+  kilometres cannot choose a hilltop,
+- a **mobile** node, because a footprint drawn to serve a node that
+  moves serves nobody tomorrow,
+- a node that is already fine, which is inside the predicted usable map
+  **and** heard on the air **and** with margin on its best measured
+  link.
+
+Then the survivors are snapped to a `GAPS_DEMAND_CELL_M` grid and one
+demand point is kept for each occupied cell, carrying its nodes. **Five
+radios in one house must not outvote a ranch five miles out**, and
+without that a single address decides where the mesh builds next.
+
+**The bias to say out loud, and the page does say it.** The demand set
+can only hold people who already own a node and got it partly working.
+It cannot see the valley with nobody in it, or the neighbourhood where
+three people gave up. A siting tool built on it will always favour
+places that already half work.
+
+### 10.2 Areas
+
+Single linkage at `GAPS_CLUSTER_LINK_KM`, over the demand points, with
+numpy and no new dependency. A valley of struggling nodes is a chain and
+not a ball, which is what single linkage is for.
+
+A group of fewer than `GAPS_MIN_CLUSTER` points is dropped. **It is not
+an area; it is a node, and `/api/gaps/nodes` already holds it.** The
+areas are reported worst first, by how many nodes they hold, and capped
+at `GAPS_MAX_CLUSTERS` so that the engine budget below is bounded.
+
+### 10.3 Candidates, in two kinds
+
+**Kind A, a node that is already there.** Every node inside the area
+with an exact position, read with the candidate radio instead of its
+own: "if the node at this address went to 1 W on a 9 m mast". No new
+site, no land, no permission, and it wins a tie against new ground for
+exactly that reason.
+
+**Kind B, a place on the ground.** From terrain, and never from a site
+database, because there is no site database. The area's box is grown by
+`GAPS_SEARCH_RADIUS_KM` and the cells that are the highest of a window
+about a kilometre across, and stand `GAPS_MIN_PROMINENCE_M` above the
+median of that window, are taken. The highest cell of a flat plain is
+still the highest cell and is not a site, which is what the prominence
+test is for. The list is thinned to `GAPS_CANDIDATE_SPACING_KM` and
+capped at `GAPS_CANDIDATES_PER_CLUSTER`, so one ridge cannot fill every
+slot with sixty cells of itself.
+
+**There is no candidate grid.** A 5 km grid over the Arizona region is
+about 27,000 candidates, which at the measured cost of the engine is
+roughly six core-days.
+
+**The candidate radio is an assumption and the page prints all four
+numbers**: `GAPS_CANDIDATE_TX_POWER_DBM`, the stock antenna gain, the
+stock cable loss, and `GAPS_CANDIDATE_HEIGHT_M`. A reader who wants a
+different mast opens the planner.
+
+### 10.4 The terrain screen, which may not say no by mistake
+
+Running the engine on every candidate is not affordable, so they are
+screened with a cheap model first. The screen has **one rule**: it may
+pass a candidate the engine then rejects, and it may never reject one
+the engine would have liked. A pre-filter with false negatives throws
+the answer away in silence, and nothing downstream can get it back.
+
+So it charges four things and nothing else: free space loss, the
+`coverage/clutter.py` terminal correction at both ends, **one** knife
+edge for the worst obstruction, and no more. The earth is curved under
+the path at the usual 4/3 radius, because a flat earth would hide every
+obstruction on a long path. The two directions are compared separately
+and the weaker one decides, for this one candidate, before anything is
+combined: `AGENTS.md` 9.24 applies here for the same reason it applies
+to the map.
+
+A candidate is scored by how many demand points it would **newly**
+reach: the places the published run already covers are left out,
+because the question is what a new node would add.
+
+**What the screen does and does not separate, measured.** Over 3.3 km,
+a planted kilometre of rock takes about fifty decibels off the margin,
+which is the discrimination the ranking runs on. It does **not** close
+the link: a 1 W node on Long fast has sixty decibels to spend over a
+short path, and a single knife edge is a famously optimistic model. The
+same wall over 22 km does close it. That is the screen behaving as
+designed rather than a fault, and
+`test_the_screen_rejects_a_path_a_ridge_really_does_close` pins both
+halves of it.
+
+**On open ground the screen separates almost nothing**, because a 1 W
+node with line of sight reaches a handheld at these ranges from
+wherever it stands. Sixty rows that all reach the same five places is a
+ranking with a long flat head, not sixty answers, so the page shows the
+rows the engine predicted and the head of the ranking, and opens the
+rest in place.
+
+### 10.5 The engine, on the top few only
+
+The top `GAPS_SPLAT_PER_CLUSTER` of each area, capped at
+`GAPS_MAX_PREDICTIONS` over the whole run, are predicted with the real
+engine through `jobs/coverage.py::predict_sites`. That function holds
+every engine rule in one place: one instance for a process, spawn and
+never fork, closed in a `finally`, and niced.
+
+**Each candidate is scored by sampling its own raster at the demand
+points.** A region grid of Arizona is 88 MB and the question is a few
+dozen point lookups, so no region grid is built and no candidate
+footprint ever joins the published map. The radius is
+`GAPS_CANDIDATE_RADIUS_KM`, 25 km, and not the 60 km the coverage map
+uses: a 1 W node at 9 m talking to a 1.5 m handheld does not reach
+60 km and the cost grows with the square of the radius.
+
+A candidate the engine refused is `unknown` and never "no benefit".
+
+### 10.6 The three states, again
+
+| State | Means |
+|---|---|
+| `ok` | It was judged, and it would bring somebody in. |
+| `bad` | It was judged, and it would bring nobody in. |
+| `unknown` | It was **not** judged: the ground under it, or under every path from it, is terrain we do not hold. |
+
+**`newly_usable` is `null` when the state is `unknown`, and never
+zero.** "We did not judge it" and "it would help nobody" are different
+answers and the page draws them differently: a dashed pin and an em
+dash for the first, a solid count for the second.
+
+### 10.7 What one run costs
+
+Measured on the development mesh, at the shipped defaults, with
+`GAPS_WORKERS=1`:
+
+| | |
+|---|---|
+| Areas | 1 |
+| Candidates screened | 49 |
+| Engine predictions | 3, of a ceiling of 24 |
+| Engine time | 4.7 s, which is 1.6 core-seconds a prediction at 25 km |
+| Whole job, both presets, wall | 5.8 s |
+| Peak resident set | 118 MB |
+
+The design's budget came off the coverage run in `docs/COVERAGE.md` 9.1:
+18.4 core-seconds a site at 60 km, which scales by the square of the
+radius to about 3.2 at 25 km, so 24 predictions is about 77
+core-seconds. This machine is faster than the box that figure came from
+and measures 1.6. **Use the larger figure for a deployment**: either
+way the ceiling is under two minutes on one niced worker, against a
+coverage interval of six hours.
+
+Everything before the engine is arithmetic. The clustering is a
+distance matrix over a few hundred points and the screen is numpy over
+cached terrain pages.
+
+### 10.8 Where it runs, and why it is not its own task
+
+**Inside `_coverage_cycle`, after `coverage.run_once`, and never as a
+peer `Task`.**
+
+The scheduler runs tasks with `asyncio.gather`, so a task registered
+beside the others runs on its own clock and is free to start during a
+coverage build. This job uses the engine, and the engine has no IO to
+yield on: a worker holds its core until it finishes. On a three core
+box that also serves a public dashboard and takes MQTT, that is the
+last core.
+
+The per node job of section 6 is the opposite case and correctly keeps
+its own clock, because it is only SQL.
+
+To run one by hand:
+
+```bash
+sonoran-gaps-siting-once
+```
+
+It needs a gap assessment to site against and reads the last published
+coverage run for its baseline. Both missing is a working state and the
+page says which.
+
+### 10.9 What this half cannot know
+
+These are served by the API with every answer and shown permanently on
+the page. They are not a disclaimer. Each one is a fact about a real
+site that terrain cannot hold, and **a recommendation that does not
+carry them is a lie of omission**.
+
+- Whether anybody owns the ground, can reach it, or may put anything on
+  it.
+- Whether there is power, a roof, a pole, a road, or an internet link.
+- Whether a building stands between the site and a street. Clutter is a
+  correction at each end of a path, not a model of what is on the
+  ground. See `docs/COVERAGE.md` 11.3.
+- Whether the person at the other end wants a node on their roof.
+- Anybody who has no node yet. See 10.1.
+- Whether the prediction is right. It runs on nameplate radio figures,
+  because the measured calibration was rejected as too far out to
+  apply. See `AGENTS.md` 9.21.
+
+The tool names terrain. A human names a site.
+
+### 10.10 Seeing it in a preview
+
+`tools/dev/seed.py` puts five MQTT-only gateways in the valley east of
+the White Tank Mountains. They are one area, and the terrain around
+them is real: the ridge six to eight kilometres west of them stands
+about 780 m above the valley floor and comes back as a candidate.
+
+Two struggling nodes fifty kilometres apart are two nodes, which is
+what the seed held before, and the page then correctly answered "no
+area". That is a true answer and not the one worth looking at.
+
+The siting half needs terrain, so fill the cache first, and it needs a
+coverage run for its baseline:
+
+```bash
+uv run python tools/prefetch_terrain.py --lat 33 --lon -113
+uv run python tools/prefetch_terrain.py --lat 33 --lon -112
+uv run sonoran-coverage-once
+uv run sonoran-gaps-once
+uv run sonoran-gaps-siting-once
+```
+
+With no terrain at all every candidate reads `unknown`, which is the
+honest answer and is worth seeing too.

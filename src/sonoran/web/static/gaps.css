@@ -162,3 +162,104 @@
    because no signal on this page names two ends of one. */
 .gap-marker-bad { color: var(--gap-bad); }
 .gap-marker-unknown { color: var(--gap-unknown); }
+
+/*
+ * The siting half.
+ *
+ * It is a **prediction** and everything above it is a measurement, so
+ * nothing here borrows the shapes or the colours of a measured finding.
+ * A struggling node is a circle in the red of a real fault. A place a
+ * node could go is a diamond in a warm ochre that appears nowhere else
+ * on the page, because a suggestion must never be able to read as a
+ * radio somebody owns.
+ */
+
+:root {
+  --gap-candidate: #d8a657;
+}
+
+.gap-siting { border-top: 2px solid var(--gap-candidate); }
+
+/* A candidate pin.
+ *
+ * A diamond, and a hollow one. Two things follow from that and both are
+ * deliberate. A diamond is a different SHAPE from the circle a node is
+ * drawn as, so a reader who cannot tell the two colours apart can still
+ * tell a suggestion from a radio somebody owns. And it is hollow
+ * because a candidate is very often a node that is already standing
+ * there: a filled pin would cover the node underneath it, and the two
+ * facts have to be readable at once. */
+.gap-candidate-pin {
+  display: block;
+  /* Wide enough that the node circle underneath shows inside the
+     diamond rather than being covered by it. The map is drawn with
+     `preferCanvas`, so a circle marker is painted in the overlay pane
+     and a divIcon sits in the marker pane above it. */
+  width: 20px;
+  height: 20px;
+  margin: 2px;
+  transform: rotate(45deg);
+  border: 2px solid var(--gap-candidate);
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .45);
+}
+
+/* Three states here as everywhere. A candidate nothing judged is not
+   drawn as a candidate that helps nobody. */
+.gap-candidate-pin.ok {
+  border-width: 3px;
+  background: transparent;
+}
+.gap-candidate-pin.bad { opacity: .55; }
+.gap-candidate-pin.unknown {
+  border-style: dashed;
+  border-color: var(--gap-unknown);
+}
+
+.gap-legend i.area {
+  border-radius: 0;
+  background: transparent;
+  border: 1px dashed var(--gap-candidate);
+  color: var(--gap-candidate);
+}
+
+.gap-legend i.candidate {
+  border-radius: 0;
+  transform: rotate(45deg);
+  background: var(--gap-candidate);
+  color: var(--gap-candidate);
+}
+
+/* The box round a neighbourhood. It says where the demand is and makes
+   no claim at all about a radio path. */
+.gap-area-box { pointer-events: auto; }
+
+.gap-area-chip {
+  display: inline-block;
+  padding: .1rem .4rem;
+  border-radius: .3rem;
+  border: 1px solid var(--gap-candidate);
+  color: var(--gap-candidate);
+  font-size: .74rem;
+  white-space: nowrap;
+}
+
+/* How a row was arrived at. The engine and a cheap ranking must never
+   look the same, because only one of them is a prediction. */
+.gap-method {
+  font-size: .76rem;
+  cursor: help;
+  border-bottom: 1px dotted var(--line);
+}
+
+.gap-method.splat { color: var(--text); font-weight: 650; }
+.gap-method.terrain_screen { color: var(--muted); font-style: italic; }
+
+.gap-kind { font-size: .78rem; color: var(--muted); cursor: help; }
+
+.gap-siting .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+}
+
+.gap-siting h4 { font-size: .85rem; margin-bottom: .3rem; }

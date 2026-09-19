@@ -291,6 +291,59 @@ class Settings(BaseSettings):
     # handheld that cannot get out is a real problem for its owner.
     gaps_mobile_spread_km: float = 1.0
 
+    # The siting half. It answers "where would one new node help the
+    # most people", and it is the only part of this feature that runs
+    # the coverage engine.
+    #
+    # **It runs inside the coverage cycle and never beside it.** The
+    # scheduler runs tasks with `asyncio.gather`, so a task registered
+    # on its own clock is free to start during a coverage build. On a
+    # three core box that is the last core, while the same box serves a
+    # public dashboard. See `jobs/scheduler.py`.
+    gaps_siting_enabled: bool = True
+    # How far apart two struggling nodes must be before they count as
+    # two places wanting help, in metres. Five radios in one house must
+    # not outvote a ranch five miles out.
+    gaps_demand_cell_m: int = 300
+    # Single linkage distance for grouping demand into neighbourhoods.
+    gaps_cluster_link_km: float = 8.0
+    # Below this many demand points it is a node, not an area, and the
+    # per node list already holds it.
+    gaps_min_cluster: int = 3
+    # The most areas one run reports. It bounds the engine work.
+    gaps_max_clusters: int = 8
+    # How far around a cluster to look for ground, in kilometres.
+    gaps_search_radius_km: float = 15.0
+    # How far a candidate must stand above the median of the kilometre
+    # around it, in metres. The highest cell of a plain is not a site.
+    gaps_min_prominence_m: float = 40.0
+    # The closest two candidates may stand, in kilometres. Without it
+    # one ridge fills every slot with sixty cells of itself.
+    gaps_candidate_spacing_km: float = 1.5
+    # How many candidates of one cluster enter the cheap terrain screen.
+    gaps_candidates_per_cluster: int = 60
+    # How many of them reach the engine.
+    gaps_splat_per_cluster: int = 3
+    # The hard ceiling on engine runs in one cycle. At the measured 3.2
+    # core-seconds for a 25 km prediction this is about 77 core-seconds,
+    # which is under two minutes on one niced worker.
+    gaps_max_predictions: int = 24
+    # The prediction radius for a candidate, in kilometres. Not the
+    # 60 km the coverage map uses: a 1 W node at 9 m talking to a 1.5 m
+    # handheld does not reach 60 km, and the cost grows with the square
+    # of the radius.
+    gaps_candidate_radius_km: float = 25.0
+    # The "1 W node" the owner asked about, in dBm. It is an assumption
+    # and the page prints it.
+    gaps_candidate_tx_power_dbm: float = 30.0
+    # A roof or attic node, in metres. The height `CLIENT_BASE` is
+    # defined for. Also an assumption, also printed.
+    gaps_candidate_height_m: float = 9.0
+    # Engine workers for the candidate step, and their priority. One
+    # niced worker on a three core box that also serves a dashboard.
+    gaps_workers: int = 1
+    gaps_worker_nice: int = 10
+
     # Radio overrides. The file names the antenna, the mast height, and
     # the power of a node, which the mesh itself never reports. It is
     # kept in the repository, so every change to it has an author and a

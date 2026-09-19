@@ -64,6 +64,59 @@ def tile_name(min_north: int, min_west: int) -> str:
     return f"{ns}{abs(min_north):02d}{ew}{abs(lon):03d}"
 
 
+def tile_name_of(latitude: float, longitude: float) -> str:
+    """Return the name of the tile a point stands on.
+
+    A tile is named for its south-west corner, so the name comes from
+    the floor of each coordinate.
+    """
+    south = int(np.floor(latitude))
+    west = int(np.floor(longitude))
+    ns = "N" if south >= 0 else "S"
+    ew = "E" if west >= 0 else "W"
+    return f"{ns}{abs(south):02d}{ew}{abs(west):03d}"
+
+
+def page_cell(latitude: float, longitude: float) -> tuple[int, int]:
+    """Return the (row, column) of a point inside its own page.
+
+    **This is the only place that reads the page's cell order back.**
+    `srtm2sdf_transform` writes it and this reads it, so the two cannot
+    drift apart. `tests/unit/test_srtm.py` pins the pair together with a
+    grid whose every cell names its own position.
+
+    The transform ends in `window[::-1, ::-1]`, where `window` is the
+    reduced tile with the north row and the east column dropped. Row 0
+    of a page is therefore the **south** edge and column 0 is the
+    **east** edge, which is the order `WriteSDF` walks:
+
+        row    = round((latitude  - floor(latitude))  * PAGE_SIZE)
+        column = PAGE_SIZE - 1 - round((longitude - floor(longitude)) * PAGE_SIZE)
+
+    Both are held inside the page. The northernmost 1/1200 of a degree
+    and the easternmost 1/1200 hold no sample of their own, because the
+    transform drops that row and that column, so a point there reads the
+    nearest cell that does exist. That is 90 m away at the very most,
+    which is the resolution of the grid itself.
+    """
+    row = round((latitude - np.floor(latitude)) * PAGE_SIZE)
+    column = PAGE_SIZE - 1 - round((longitude - np.floor(longitude)) * PAGE_SIZE)
+    return (
+        int(min(max(row, 0), PAGE_SIZE - 1)),
+        int(min(max(column, 0), PAGE_SIZE - 1)),
+    )
+
+
+def page_array(data: bytes) -> npt.NDArray[np.int16]:
+    """Return one cached page as a grid, without copying it.
+
+    The bytes are little-endian int16, as `page_from_hgt` wrote them.
+    """
+    if len(data) != PAGE_BYTES:
+        raise ValueError(f"a page is {PAGE_BYTES} bytes, got {len(data)}")
+    return np.frombuffer(data, dtype="<i2").reshape(PAGE_SIZE, PAGE_SIZE)
+
+
 def tile_urls(base_url: str, name: str) -> list[str]:
     """Return the download URLs for a tile, best first.
 
