@@ -456,9 +456,19 @@ Query parameters:
 Each week has `week_start`, `week_end`, `message_count`,
 `check_in_count` (how many different nodes checked in), and `messages`.
 
-### 5.5 `GET /api/chat/conversation/{packet_id}`
+### 5.5 `GET /api/chat/conversation/{from_node}/{packet_id}`
 
-Returns one message with its replies. Replies match on `reply_id`.
+Returns one message with its replies.
+
+The message is addressed the way a packet is, by the node that sent it
+and the packet ID, because a packet ID is only unique per sender.
+`text_message` is indexed on that pair. A malformed `from_node` is a 422;
+an unknown message is a 404.
+
+Replies match on `reply_id`, which carries the parent's packet ID and
+nothing else, so a reply cannot be constrained to this sender. Tapbacks
+carry `reply_id` too and are excluded here; read them from the
+`reactions` field of a message instead.
 
 ## 6. Map endpoints
 

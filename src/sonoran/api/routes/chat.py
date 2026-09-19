@@ -187,7 +187,14 @@ def _apply_filters(
     if channel:
         statement = statement.where(TextMessage.channel == channel)
     if from_node:
-        statement = statement.where(TextMessage.from_node_num == parse_node_id(from_node))
+        # A malformed node ID is a bad request, not a server fault.
+        # `parse_node_id` raises ValueError, which reaches the client as
+        # a 500 unless it is caught here.
+        try:
+            from_num = parse_node_id(from_node)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        statement = statement.where(TextMessage.from_node_num == from_num)
     if since:
         statement = statement.where(TextMessage.seen_at >= since)
     if before:
@@ -341,23 +348,43 @@ async def tagged(
     }
 
 
-@router.get("/conversation/{packet_id}")
+@router.get("/conversation/{from_node}/{packet_id}")
 async def conversation(
-    packet_id: int, session: AsyncSession = Depends(get_session)
+    from_node: str,
+    packet_id: int,
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    """Return a stored message and its replies."""
+    """Return a stored message and its replies.
+
+    A message is addressed the way a packet is, by the node that sent it
+    and the packet ID, because a packet ID is only unique per sender.
+    `text_message` is indexed on exactly that pair.
+
+    This used to match on `packet_pk`, which is never written, so it
+    could not find a message at all.
+    """
+    try:
+        from_num = parse_node_id(from_node)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     message = await session.scalar(
         select(TextMessage)
-        .where(TextMessage.packet_pk == packet_id)
+        .where(
+            TextMessage.from_node_num == from_num,
+            TextMessage.packet_id == packet_id,
+        )
         .order_by(TextMessage.seen_at.desc())
     )
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
+    # A reply names its parent by packet ID alone: that is all the
+    # Meshtastic field carries, so a reply cannot be constrained to this
+    # sender. `_reactions_for` reads them the same way.
     replies = list(
         (
             await session.scalars(
                 select(TextMessage)
-                .where(TextMessage.reply_id == packet_id)
+                .where(TextMessage.reply_id == packet_id, TextMessage.emoji.is_(False))
                 .order_by(TextMessage.seen_at.asc())
             )
         ).all()

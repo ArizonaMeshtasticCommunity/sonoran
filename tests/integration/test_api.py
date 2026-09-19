@@ -1107,3 +1107,89 @@ def test_map_nodes_follow_the_preset(migrated_engine, timescale_url: str) -> Non
 
     # Without the parameter the map holds every positioned node.
     assert {"!000022c5", "!000022c6", "!000022c7"} <= every
+
+
+# --- the conversation endpoint -----------------------------------------
+#
+# It matched on `packet_pk`, which nothing writes, so it could never find
+# a message. Nothing in the dashboard called it, so nothing noticed.
+
+
+def _seed_conversation(engine) -> None:  # type: ignore[no-untyped-def]
+    """Two senders reusing one packet ID, plus a reply and a tapback."""
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM text_message WHERE from_node_num BETWEEN 9400 AND 9499")
+        )
+        # A packet ID is only unique per sender, so both of these are
+        # packet 4242 and only the sender tells them apart.
+        connection.execute(
+            text(
+                "INSERT INTO text_message (from_node_num, to_node_num, channel, "
+                "body, packet_id, seen_at, emoji) VALUES "
+                "(9401, 0, 'LongFast', 'mine', 4242, :now, false), "
+                "(9402, 0, 'LongFast', 'not mine', 4242, :now, false)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO text_message (from_node_num, to_node_num, channel, "
+                "body, packet_id, reply_id, seen_at, emoji) VALUES "
+                "(9403, 0, 'LongFast', 'a reply', 5001, 4242, :later, false), "
+                "(9404, 0, 'LongFast', '\U0001f44d', 5002, 4242, :later, true)"
+            ),
+            {"later": now + timedelta(seconds=30)},
+        )
+
+
+def test_the_conversation_endpoint_finds_a_message(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A message is addressed by its sender and its packet ID."""
+    _seed_conversation(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        response = client.get("/api/chat/conversation/!000024b9/4242")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["message"]["body"] == "mine"
+
+
+def test_the_conversation_endpoint_keeps_two_senders_apart(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """Packet 4242 from one node is not packet 4242 from another."""
+    _seed_conversation(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        mine = client.get("/api/chat/conversation/!000024b9/4242").json()
+        theirs = client.get("/api/chat/conversation/!000024ba/4242").json()
+    assert mine["message"]["body"] == "mine"
+    assert theirs["message"]["body"] == "not mine"
+
+
+def test_the_conversation_endpoint_returns_replies_but_not_tapbacks(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """A tapback is a reply in the wire format and not one to a reader."""
+    _seed_conversation(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/chat/conversation/!000024b9/4242").json()
+    bodies = [reply["body"] for reply in body["replies"]]
+    assert bodies == ["a reply"]
+
+
+def test_an_unknown_conversation_is_a_404(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    _seed_conversation(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        assert client.get("/api/chat/conversation/!000024b9/999999").status_code == 404
+
+
+def test_a_malformed_sender_is_a_422_not_a_500(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A bad node ID is a bad request. It used to raise and become a 500."""
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        assert client.get("/api/chat/conversation/nonsense/4242").status_code == 422
+        assert client.get("/api/chat?from=nonsense").status_code == 422

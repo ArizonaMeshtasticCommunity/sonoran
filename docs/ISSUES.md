@@ -126,7 +126,13 @@ surviving future row cannot invent an hour that has not happened.
 
 ### 2.1 `/api/chat/conversation/{packet_id}` is broken
 
-**State:** Open.
+**State:** Fixed. The route is now
+`/api/chat/conversation/{from_node}/{packet_id}` and matches on
+`from_node_num` and `packet_id`, the pair `text_message` is indexed on.
+Keying on the packet ID alone would have been ambiguous between senders,
+so the sender joined the path rather than the fix stopping at the column.
+Tapbacks are excluded from the reply list. Five integration tests cover
+it; four of them failed before the change.
 
 It matches on `packet_pk`, which is always NULL, so it can never find a
 message. `text_message` now has `packet_id`, so the fix is to key on
