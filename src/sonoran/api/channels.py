@@ -37,15 +37,42 @@ def _normalise(name: str) -> str:
 # Two lists of the same nine names would drift.
 PRESETS: dict[str, str] = {_normalise(preset.name): preset.name for preset in _PRESET_TABLE}
 
-# Topic groups matched by a word in the channel name.
+# Groups decided by the exact channel name, tested before the word match.
+#
+# A near-miss spelling deliberately falls through to Custom instead of
+# joining its group. That is not pedantry: a lowercase `trivia` sitting
+# in Custom beside the real `Trivia` is how the operators discovered
+# somebody had typed the name wrong and quietly created a second channel
+# that nobody else was on. Filing the typo next to the original would
+# have hidden exactly the thing worth seeing.
+EXACT_GROUPS: dict[str, str] = {
+    "Trivia": "Games",
+}
+
+# Topic groups matched by a word anywhere in the channel name, ignoring
+# case and separators. These are subjects a channel can be about however
+# its operator spelled it.
 TOPICS: dict[str, tuple[str, ...]] = {
     "Weather": ("weather", "wx"),
+    "Traffic": ("traffic", "roads"),
     "Emergency": ("emergency", "emcomm", "ares", "races"),
     "Telemetry": ("telemetry", "sensor"),
 }
 
 PRESET_GROUP = "Presets"
 CUSTOM_GROUP = "Custom"
+
+# The group for a channel this deployment claims as its own but which
+# matches no topic.
+#
+# `core_channels` names them. They are the channels the operators run
+# themselves, so they are where local experiments land, and they belong
+# above Custom rather than mixed into it.
+#
+# A core channel that DOES match a topic keeps that topic: the tier says
+# whether a channel is part of this mesh, the group says what it is
+# about, and the two are not the same question.
+OWN_GROUP = "Testing"
 
 # Channels also fall into two tiers, which is what the pickers show.
 #
@@ -90,6 +117,15 @@ def classify(channel: str | None, core: tuple[str, ...] = ()) -> dict[str, str]:
         }
 
     tier = CORE_TIER if key in {_normalise(name) for name in core} else EXTRA_TIER
+    exact = EXACT_GROUPS.get(channel)
+    if exact is not None:
+        return {
+            "channel": channel,
+            "label": channel,
+            "group": exact,
+            "preset": "",
+            "tier": tier,
+        }
     for group, words in TOPICS.items():
         if any(word in key for word in words):
             return {
@@ -103,7 +139,7 @@ def classify(channel: str | None, core: tuple[str, ...] = ()) -> dict[str, str]:
     return {
         "channel": channel,
         "label": channel,
-        "group": CUSTOM_GROUP,
+        "group": OWN_GROUP if tier == CORE_TIER else CUSTOM_GROUP,
         "preset": "",
         "tier": tier,
     }
@@ -126,5 +162,18 @@ def channel_filter(
 
 def group_order(group: str) -> int:
     """Return the sort position of one group. Lower sorts first."""
-    order = [PRESET_GROUP, "Weather", "Emergency", "Telemetry", CUSTOM_GROUP]
+    # Custom sorts last on purpose. It is where a channel nobody has
+    # classified yet arrives, so it reads as the inbox at the foot of the
+    # page: a new name showing up there is the signal to file it above.
+    order = [
+        PRESET_GROUP,
+        "Weather",
+        "Games",
+        "Traffic",
+        "Emergency",
+        "Telemetry",
+        OWN_GROUP,
+    ]
+    if group == CUSTOM_GROUP:
+        return len(order) + 1
     return order.index(group) if group in order else len(order)

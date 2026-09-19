@@ -276,7 +276,21 @@ LINKS = [
 # together.
 PRIMARY_PRESET = "MediumFast"
 SECONDARY_PRESET = "LongFast"
-CHANNELS = [PRIMARY_PRESET, PRIMARY_PRESET, PRIMARY_PRESET, "azmsh", "MediumSlow", "AZ-Weather"]
+# `Trivia` and `trivia` are both here on purpose. They are two channels
+# to the database and one subject to a human, and the chat page files the
+# lowercase one under Custom so a name typed wrong stays visible. Seeding
+# both is what makes that behaviour checkable in a preview.
+CHANNELS = [
+    PRIMARY_PRESET,
+    PRIMARY_PRESET,
+    PRIMARY_PRESET,
+    "azmsh",
+    "MediumSlow",
+    "AZ-Weather",
+    "Traffic",
+    "Trivia",
+    "trivia",
+]
 
 MESSAGES = [
     "Morning net check-in from the south valley.",

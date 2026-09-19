@@ -341,7 +341,15 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .channel-head { display: flex; align-items: baseline; gap: .5rem; justify-content: space-between; }
 .channel-head .title { font-weight: 650; font-size: 1rem; color: var(--text); text-transform: none; letter-spacing: 0; }
 
-.messages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .6rem; max-height: 24rem; overflow-y: auto; }
+.messages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .6rem; }
+.more-wrap { display: flex; align-items: baseline; gap: .5rem; margin: .75rem 0 0; }
+.more {
+  background: var(--panel-2); border: 1px solid var(--line); color: inherit;
+  border-radius: .4rem; padding: .3rem .6rem; font: inherit; font-size: .85rem;
+  cursor: pointer;
+}
+.more:hover { border-color: var(--accent); }
+.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .messages li { display: flex; flex-direction: column; gap: .15rem; }
 .messages .who { display: flex; gap: .45rem; align-items: baseline; font-size: .8rem; }
 .messages .who .name { font-weight: 600; }

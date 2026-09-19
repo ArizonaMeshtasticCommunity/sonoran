@@ -194,6 +194,38 @@ function replace(target, ...children) {
 const empty = (message) => el('p', { class: 'empty', text: message });
 const failure = (error) => el('p', { class: 'error', text: error.message || String(error) });
 
+/** Render a list that shows a few rows, then opens to the rest in place.
+ *
+ * These lists used to be a fixed-height box with its own scrollbar. A
+ * panel that scrolls inside a page that also scrolls hides how much is
+ * in it, and the wheel stops working the moment the pointer leaves the
+ * box. Showing a few rows and counting the rest says the same thing
+ * without trapping anything.
+ *
+ * A list no longer than `limit` gets no button, because there would be
+ * nothing behind it.
+ */
+function expandingList(items, render, options = {}) {
+  const limit = options.limit ?? 5;
+  const noun = options.noun || 'messages';
+  const list = el('ul', { class: options.class || 'messages' },
+    items.slice(0, limit).map(render));
+  if (items.length <= limit) return [list];
+
+  const closed = `View all ${items.length} ${noun}`;
+  const button = el('button', {
+    class: 'more', type: 'button', 'aria-expanded': 'false', text: closed,
+  });
+  button.addEventListener('click', () => {
+    const open = button.getAttribute('aria-expanded') === 'true';
+    replace(list, (open ? items.slice(0, limit) : items).map(render));
+    button.setAttribute('aria-expanded', open ? 'false' : 'true');
+    button.textContent = open ? closed : `Show fewer ${noun}`;
+  });
+  return [list, el('p', { class: 'more-wrap' }, button,
+    el('span', { class: 'muted', text: `${items.length - limit} more` }))];
+}
+
 /** Render one node as a clickable identity chip. */
 function nodeChip(node) {
   if (!node) return el('span', { class: 'muted', text: 'unknown' });
@@ -2010,7 +2042,7 @@ function messagesPanel(detail) {
     el('h3', {}, 'Messages sent',
       el('span', { class: 'muted', text: `${count(detail.messages.count)} in ${detail.window_hours} h` })),
     messages.length
-      ? el('ul', { class: 'messages' }, messages.map((message) => messageItem(message, { showChannel: true })))
+      ? expandingList(messages, (message) => messageItem(message, { showChannel: true }), { limit: 5 })
       : empty('This node sent no stored messages in the window.'));
 }
 
@@ -2127,7 +2159,7 @@ function channelSection(section) {
       el('span', { class: 'title', text: section.label }),
       el('span', { class: 'muted', text: `${count(section.count)} messages - last ${ago(section.last_seen)} ago` })),
     section.messages.length
-      ? el('ul', { class: 'messages' }, section.messages.map((message) => messageItem(message)))
+      ? expandingList(section.messages, (message) => messageItem(message), { limit: 5 })
       : empty('No messages in the window.'));
 }
 
@@ -2169,7 +2201,7 @@ PAGES.meshnet = async (page) => {
         el('span', { class: 'range', text: `${DATE.format(new Date(week.week_start))} - ${DATE.format(new Date(new Date(week.week_end).getTime() - 1))}` }),
         el('span', { class: 'count', text: `${count(week.check_in_count)} nodes checked in, ${count(week.message_count)} messages` })),
       el('div', {},
-        el('ul', { class: 'messages', style: 'max-height:none' },
+        el('ul', { class: 'messages' },
           week.messages.map((message) => messageItem(message, { showChannel: true })))))));
 };
 

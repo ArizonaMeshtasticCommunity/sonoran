@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -236,6 +236,7 @@ async def channels(session: AsyncSession = Depends(get_session)) -> list[dict[st
 
 @router.get("/overview")
 async def overview(
+    request: Request,
     hours: int = Query(default=168, ge=1, le=8760),
     per_channel: int = Query(default=25, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
@@ -247,6 +248,7 @@ async def overview(
     section for each channel, below the heading of its group.
     """
     since = datetime.now(UTC) - timedelta(hours=hours)
+    core = tuple(request.app.state.settings.core_channels)
     counts = (
         await session.execute(
             select(
@@ -279,7 +281,7 @@ async def overview(
             ).all()
         )
         sections.append(
-            classify(row.channel)
+            classify(row.channel, core)
             | {
                 "count": row.count,
                 "last_seen": row.last_seen,

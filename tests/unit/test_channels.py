@@ -118,3 +118,51 @@ class TestTier:
         weather = classify("azmsh-weather", core=("azmsh-weather",))
         assert weather["tier"] == "core"
         assert weather["group"] == "Weather"
+
+
+class TestTopicGroups:
+    """The chat page draws one section per group, in `group_order`."""
+
+    def test_trivia_is_a_game(self) -> None:
+        assert classify("Trivia")["group"] == "Games"
+
+    def test_a_misspelled_trivia_stays_visible_in_custom(self) -> None:
+        """The lowercase variant is a mistake, and hiding it helps nobody.
+
+        A node owner typed `trivia` and made a second channel nobody else
+        was on. It showed up in Custom, which is how anyone noticed.
+        """
+        assert classify("trivia")["group"] == "Custom"
+        assert classify("Trivia")["group"] == "Games"
+
+    def test_traffic_has_its_own_group(self) -> None:
+        assert classify("Traffic")["group"] == "Traffic"
+
+    def test_a_core_channel_with_no_topic_is_testing(self) -> None:
+        """The channels the operators run themselves are not Custom."""
+        assert classify("azmsh", core=("azmsh",))["group"] == "Testing"
+
+    def test_an_unclaimed_channel_is_still_custom(self) -> None:
+        assert classify("azmsh")["group"] == "Custom"
+
+    def test_a_brand_new_channel_lands_in_custom(self) -> None:
+        assert classify("SomeoneJustMadeThisUp")["group"] == "Custom"
+
+
+class TestGroupOrder:
+    def test_presets_sort_first(self) -> None:
+        assert group_order("Presets") == 0
+
+    def test_custom_sorts_last(self) -> None:
+        """Custom is the inbox: a new name there is the signal to file it."""
+        groups = ["Presets", "Weather", "Games", "Traffic", "Emergency", "Telemetry", "Testing"]
+        for group in groups:
+            assert group_order(group) < group_order("Custom"), group
+
+    def test_testing_sorts_below_every_topic(self) -> None:
+        for group in ("Presets", "Weather", "Games", "Traffic", "Emergency", "Telemetry"):
+            assert group_order(group) < group_order("Testing"), group
+
+    def test_an_unknown_group_does_not_collide_with_custom(self) -> None:
+        """A group added later must not silently take Custom's place."""
+        assert group_order("SomethingAddedLater") != group_order("Custom")

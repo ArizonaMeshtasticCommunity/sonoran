@@ -409,12 +409,34 @@ Returns the list of channels that have text messages, with counts.
 Returns every detected channel with its recent messages. The chat page
 draws one section per channel, below the heading of its group.
 
-Each section has `channel`, `label`, `group`, `preset`, `count`,
-`last_seen`, and `messages`.
+Each section has `channel`, `label`, `group`, `preset`, `tier`,
+`count`, `last_seen`, and `messages`.
 
-The group is `Presets` when the channel name is a default LoRa preset
-name, such as `LongFast` or `MediumFast`. Other groups are `Weather`,
-`Emergency`, `Telemetry`, and `Custom`.
+Groups are drawn in this order:
+
+| Group | What lands there |
+|---|---|
+| `Presets` | The channel name is a default LoRa preset name, such as `LongFast` or `MediumFast`. |
+| `Weather` | A weather word in the name (`weather`, `wx`). |
+| `Games` | The name is exactly `Trivia`. |
+| `Traffic` | A traffic word in the name (`traffic`, `roads`). |
+| `Emergency` | `emergency`, `emcomm`, `ares`, `races`. |
+| `Telemetry` | `telemetry`, `sensor`. |
+| `Testing` | A channel named in `CORE_CHANNELS` that matches no topic above. |
+| `Custom` | Everything else. Sorted last, deliberately. |
+
+`Custom` is the inbox. A channel nobody has classified yet arrives
+there, so a name appearing in it is the signal to file it above — or to
+go and ask whoever made it. `Games` is matched on the exact name for the
+same reason: a lowercase `trivia` beside `Trivia` is two channels to the
+radio and a typo to a human, and filing it under `Games` would have
+hidden the fact that somebody had made a channel by accident.
+
+`tier` is a separate question from `group`: it is `core` for any preset
+and for the channels `CORE_CHANNELS` claims, `extra` otherwise. The
+group says what a channel is about; the tier says whether it is part of
+this mesh or something running beside it. A core channel keeps whatever
+topic group it matched.
 
 Query parameters: `hours` (default 168), `per_channel` (default 25).
 
