@@ -364,9 +364,13 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 .table-wrap[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 table { border-collapse: collapse; width: 100%; font-size: .88rem; }
 th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
-/* A clipped cell must look clipped. Without this a value cut mid-word
-   reads as a shorter value that happens to exist. */
-td { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
+/* Long free text wraps rather than stretching the table. Everything
+   else keeps its width and lets .table-wrap scroll, which is what that
+   wrapper is for: a cell that clips inside a narrow panel reads as a
+   shorter value, and the reader has no way to see the rest. A `td`
+   rule with overflow:hidden took that scroll away and made the
+   dashboard's role column read "Cli". */
+td.wrap { max-width: 28rem; }
 th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
 /* A heading with a `hint` has a sentence behind it. See `table()`. */
 th.hinted { text-decoration: underline dotted; text-underline-offset: .3em; cursor: help; }
