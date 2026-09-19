@@ -8,7 +8,7 @@ import os
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 
 TIMESCALE_IMAGE = "timescale/timescaledb-ha:pg17"
@@ -76,8 +76,53 @@ def timescale_url() -> Iterator[str]:
     url = container.get_connection_url()
     # testcontainers returns a psycopg2 URL. We use psycopg (v3).
     url = url.replace("postgresql+psycopg2://", "postgresql+psycopg://")
+    _stop_background_workers(url)
     yield url
     container.stop()
+
+
+def _stop_background_workers(url: str) -> None:
+    """Stop TimescaleDB's background jobs for the life of this container.
+
+    `test_migrations.py` drops and recreates every table and hypertable.
+    The background scheduler runs retention and other jobs against those
+    same objects, and a chunk that disappears between a statement being
+    planned and executed produces failures that look like anything but
+    their cause:
+
+        tuple concurrently updated
+        could not open relation with OID 23397
+        relation "_timescaledb_internal._hyper_1_8_chunk" does not exist
+          ... while running REVOKE SELECT ON ALL TABLES IN SCHEMA public
+
+    That last one is the clearest: `ON ALL TABLES` expands to every
+    chunk, and one of them was taken away underneath it.
+
+    These fail in CI and not here, because the interleaving depends on
+    timing. Over one evening the migration test failed 8 of 21 CI runs,
+    on pull requests that changed a single markdown file and a single
+    JavaScript file. Disposing the other pooled connection removed one
+    of two competing backends; this removes the other.
+
+    Nothing under test uses a background job. The API reads, the ingest
+    writes, and retention in production is a deployment concern, not a
+    property any of these tests assert.
+    """
+    from sqlalchemy import create_engine
+
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb"))
+            # The function moved schema between TimescaleDB versions.
+            for schema in ("_timescaledb_functions", "_timescaledb_internal"):
+                try:
+                    connection.execute(text(f"SELECT {schema}.stop_background_workers()"))
+                    return
+                except Exception:
+                    continue
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture(scope="session")
