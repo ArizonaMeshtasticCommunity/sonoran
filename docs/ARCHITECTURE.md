@@ -458,6 +458,19 @@ configuration, so a change of deployment does not break the page:
   another origin.
 - `frame-src` holds the mesh-graph origin from `MESH_GRAPH_BASE_URL`.
 
+Each of those, and the `frame-ancestors` of the embed, is built by
+`safe_origin` in `sonoran/embed/sanitise.py`. That is the only origin
+check in the project and nothing may build one another way: `urlsplit`
+keeps a semicolon inside a network location, a semicolon starts a new
+CSP directive, and a browser honours a directive's first occurrence, so
+a setting could inject a policy that overrode ours. An origin that is
+refused is left out and logged, because the browser blocks it silently.
+
+The branch that decides which policy to send reads
+`starlette.routing.get_route_path(scope)`, not `scope["path"]`, so a
+deployment under `WEB_BASE_PATH` behind a proxy that does not strip the
+prefix still gets one. It used to get none at all.
+
 Two more sources are fixed, and both exist for the coverage planner:
 
 - `script-src` holds `'wasm-unsafe-eval'`. Without it the browser

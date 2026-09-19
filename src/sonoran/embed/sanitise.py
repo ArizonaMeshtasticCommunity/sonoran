@@ -34,12 +34,12 @@ from sonoran.roles import INFRASTRUCTURE_ROLES
 # gateway below: "what a stranger may see" is not "what may transmit".
 PUBLIC_ROLES = INFRASTRUCTURE_ROLES
 
-# What a host may look like in a framing origin.
+# What a host may look like in an origin that reaches a header.
 #
 # `urlsplit` is not a validator. It keeps a space or a semicolon inside
 # the network location, and the answer here is put straight into a
-# `Content-Security-Policy` header, where `frame-ancestors` is the last
-# directive. A semicolon therefore starts a new one:
+# `Content-Security-Policy` header, where a semicolon starts a new
+# directive:
 #
 #     EMBED_FRAME_ANCESTORS='https://azmsh.net;script-src *'
 #
@@ -47,6 +47,45 @@ PUBLIC_ROLES = INFRASTRUCTURE_ROLES
 # A wildcard host is refused for the same reason: `https://*` lets any
 # site frame the page.
 HOST = re.compile(r"[A-Za-z0-9.\-]+(:\d{1,5})?")
+
+
+def safe_origin(url: str) -> str | None:
+    """Return the scheme and host of a URL, or None when it is not one.
+
+    **This is the one origin check in the project.** Every value from
+    configuration that reaches a security header goes through it: the
+    frame ancestors below, and the image, connect and frame sources in
+    `api/app.py`.
+
+    It used not to be. `api/app.py` had its own `_origin`, which
+    returned `f"{scheme}://{netloc}"` with no check on the characters
+    at all, and this module's docstring claimed every origin was put
+    through "the same check the rest of the security headers use" —
+    which was simply false. A `MAP_TILE_URL` whose host carried a
+    semicolon injected a whole directive, and it landed **before** the
+    real one:
+
+        MAP_TILE_URL=https://tiles.example.com;script-src 'unsafe-inline' *;x/...
+
+        default-src 'self'; img-src 'self' data: https://tiles.example.com;
+        script-src 'unsafe-inline' *;                 <-- injected, wins
+        ...
+        script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval';   <-- ours
+
+    A browser honours the first occurrence of a directive, so that
+    replaced the script policy of the dashboard with a wildcard and
+    `'unsafe-inline'`.
+
+    A refusal is silent in the browser — a blocked tile host draws
+    nothing and says nothing — so a caller that reads configuration
+    should say so in the log. `api/app.py` does. See `AGENTS.md` 9.9.
+    """
+    parts = urlsplit(url.strip())
+    if parts.scheme not in {"http", "https"}:
+        return None
+    if not HOST.fullmatch(parts.netloc):
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 @dataclass(frozen=True)
@@ -129,16 +168,16 @@ def public_nodes(
 def frame_ancestors(origins: Sequence[str]) -> str:
     """Return the `frame-ancestors` value for the embed.
 
-    Every origin is put through the same check the rest of the security
-    headers use, so a value that is not an origin cannot widen the
-    policy. An empty or unusable list gives `'none'`, which is what the
-    dashboard has. It never gives `*`.
+    Every origin goes through `safe_origin`, which is now genuinely the
+    same check the rest of the security headers use — the claim this
+    docstring used to make while `api/app.py` checked nothing. A value
+    that is not an origin cannot widen the policy. An empty or unusable
+    list gives `'none'`, which is what the dashboard has. It never
+    gives `*`.
     """
     safe: list[str] = []
     for origin in origins:
-        parts = urlsplit(origin.strip())
-        if parts.scheme in {"http", "https"} and HOST.fullmatch(parts.netloc):
-            value = f"{parts.scheme}://{parts.netloc}"
-            if value not in safe:
-                safe.append(value)
+        value = safe_origin(origin)
+        if value is not None and value not in safe:
+            safe.append(value)
     return " ".join(safe) if safe else "'none'"

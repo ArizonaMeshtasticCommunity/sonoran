@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.cache import TimedCache
-from sonoran.api.dependencies import get_session, parse_node_id
+from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
@@ -229,10 +229,7 @@ async def reliability(
     node_id: str, session: AsyncSession = Depends(get_session)
 ) -> dict[str, object]:
     """Return packet and gateway counts for one node."""
-    try:
-        node_num = parse_node_id(node_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    node_num = require_node_num(node_id)
     packet_count = await session.scalar(
         select(func.count()).select_from(Packet).where(Packet.from_node_num == node_num)
     )

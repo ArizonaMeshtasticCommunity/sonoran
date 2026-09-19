@@ -294,6 +294,51 @@ blocks the feature with no visible error:
   the page renders empty.
 - `frame-src` needs the mesh-graph origin.
 
+A value that comes from settings and reaches a header is a value
+somebody can choose, so it goes through **one** check:
+`safe_origin` in `sonoran/embed/sanitise.py`. Never build an origin any
+other way.
+
+`urlsplit` is not a validator. It keeps a semicolon and a space inside
+a network location, and a semicolon in a `Content-Security-Policy`
+starts a new directive. `api/app.py` had its own `_origin` that checked
+nothing, so a crafted `MAP_TILE_URL` injected a directive — and it
+landed **before** the real one, which is what matters, because a
+browser honours a directive's first occurrence:
+
+    script-src 'unsafe-inline' *                        <-- injected
+    script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'  <-- ours, ignored
+
+`sanitise.py` had the right check all along, for `frame-ancestors`, and
+its docstring claimed the other headers used it too. They did not. If
+you add a fourth source, use `safe_origin` and add a case to
+`test_every_directive_appears_once`, which checks the whole header
+rather than one directive so it covers a source nobody remembered.
+
+A refused origin is logged, because the browser gives no sign: a tile
+host missing from `img-src` draws nothing and says nothing.
+
+### 9.9.2 The header decision must use the routed path
+
+`scope["path"]` carries the mount prefix when `WEB_BASE_PATH` is set and
+the proxy does not strip it. The security middleware matched on it, so
+under that deployment **neither** branch matched:
+
+- The embed took `X-Frame-Options: DENY` and would not frame. Closed,
+  so only a trap.
+- The dashboard was served with **no `Content-Security-Policy` at all**.
+  Open, and the reason this was a defect rather than an untidiness.
+
+Use `starlette.routing.get_route_path(scope)`, which is the helper the
+router itself uses to match a route, so the header decision and the
+route resolution cannot disagree.
+
+The tests passed throughout, because `TestClient` builds a scope whose
+path excludes `root_path` unless it is told otherwise. A test that
+cannot see the production shape is a test that reports green over it;
+pass `root_path=` to `TestClient` **and** request the prefixed path to
+get the shape a non-stripping proxy sends.
+
 ### 9.9.1 The OpenStreetMap tiles need a Referer
 
 The map showed OpenStreetMap's "blocked" placeholder tile, not the map,

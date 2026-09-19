@@ -748,3 +748,113 @@ def test_the_dashboard_config_carries_no_secret() -> None:
     flat = str(config).lower()
     for word in ("password", "secret", "key", "token", "dsn"):
         assert word not in flat, word
+
+
+# --- the mount prefix ---------------------------------------------------
+#
+# `test_the_embed_uses_paths_below_the_configured_base` above passed
+# throughout the defect, because TestClient's scope path excludes
+# `root_path` unless it is told otherwise. That is a green test over a
+# production difference: the middleware read `scope["path"]`, which
+# carries the prefix when `WEB_BASE_PATH` is set and the proxy does not
+# strip it.
+#
+# These drive a client shaped like that proxy: the request path carries
+# the prefix and `root_path` names it, which is what an ASGI server
+# behind a non-stripping reverse proxy hands the application.
+
+
+def _proxied(base: str, **extra: object) -> TestClient:
+    """A client that does not strip the mount prefix, as a proxy may not."""
+    app = create_app(Settings(_env_file=None, web_base_path=base, **extra))
+    return TestClient(app, root_path=base)
+
+
+def test_the_embed_is_framable_below_a_base_path() -> None:
+    """The trap. It failed closed, so nothing was ever reported.
+
+    Before the fix `_is_embed("/mesh/embed/coverage")` was false, the
+    embed took `X-Frame-Options: DENY`, and it would not frame on
+    anybody's site — with the dashboard's policy on it instead of its
+    own.
+    """
+    client = _proxied(
+        "/mesh",
+        embed_enabled=True,
+        embed_frame_ancestors=["https://azmsh.net"],
+    )
+    response = client.get("/mesh/embed/coverage")
+
+    assert response.status_code == 200
+    assert "X-Frame-Options" not in response.headers, (
+        "the embed was refused to every framer by the header it must not carry"
+    )
+    policy = response.headers["Content-Security-Policy"]
+    assert "frame-ancestors https://azmsh.net" in policy
+    # And it carries the embed's own permissions, not the dashboard's.
+    assert "serial=()" in response.headers["Permissions-Policy"]
+
+
+def test_the_embed_api_is_framable_below_a_base_path() -> None:
+    """The data the embed reads takes the same policy as the document."""
+    client = _proxied(
+        "/mesh",
+        embed_enabled=True,
+        embed_frame_ancestors=["https://azmsh.net"],
+    )
+    response = client.get("/mesh/api/embed/coverage")
+
+    assert response.status_code == 200
+    assert "X-Frame-Options" not in response.headers
+
+
+def test_the_dashboard_still_has_a_policy_below_a_base_path() -> None:
+    """This half failed **open**, which is why it is a fix.
+
+    The dashboard branch matched on `scope["path"]` too, so under a
+    non-stripping proxy neither branch matched and `/` and `/static`
+    were served with no `Content-Security-Policy` at all.
+    """
+    client = _proxied("/mesh")
+    response = client.get("/mesh/")
+
+    assert response.status_code == 200
+    policy = response.headers.get("Content-Security-Policy", "")
+    assert policy, "the dashboard was served with no Content-Security-Policy"
+    assert "frame-ancestors 'none'" in policy
+    assert response.headers["X-Frame-Options"] == "DENY"
+
+
+def test_the_dashboard_still_refuses_to_be_framed_below_a_base_path() -> None:
+    """Turning the embed on must not open the dashboard, at any mount."""
+    client = _proxied(
+        "/mesh",
+        embed_enabled=True,
+        embed_frame_ancestors=["https://azmsh.net"],
+    )
+    response = client.get("/mesh/")
+
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    # The dashboard keeps Web Serial; the embed must never carry it.
+    assert "serial=(self)" in response.headers["Permissions-Policy"]
+
+
+def test_a_stripping_proxy_still_works() -> None:
+    """The other deployment shape must not regress.
+
+    A proxy that does strip the prefix hands the application a path with
+    no prefix on it. Both shapes have to give the same answer.
+    """
+    app = create_app(
+        Settings(
+            _env_file=None,
+            web_base_path="/mesh",
+            embed_enabled=True,
+            embed_frame_ancestors=["https://azmsh.net"],
+        )
+    )
+    with TestClient(app) as client:
+        response = client.get("/embed/coverage")
+    assert response.status_code == 200
+    assert "X-Frame-Options" not in response.headers

@@ -8,13 +8,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
+from starlette.routing import get_route_path
 
 from sonoran import __version__
 from sonoran.api.html import as_script_json
@@ -31,7 +31,7 @@ from sonoran.api.routes.terrain import router as terrain_router
 from sonoran.api.routes.traceroutes import router as traceroutes_router
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.embed.sanitise import frame_ancestors
+from sonoran.embed.sanitise import frame_ancestors, safe_origin
 from sonoran.logging import configure_logging, get_logger
 from sonoran.radio.overrides import load_overrides
 
@@ -49,17 +49,42 @@ def _asset_version() -> str:
     return digest.hexdigest()[:12]
 
 
-def _origin(url: str) -> str | None:
-    """Return the scheme and host of a URL, or None when it has neither."""
-    parts = urlsplit(url)
-    if parts.scheme in {"http", "https"} and parts.netloc:
-        return f"{parts.scheme}://{parts.netloc}"
-    return None
+def _origin(url: str, *, setting: str = "") -> str | None:
+    """Return the scheme and host of a configured URL, or None.
+
+    One line of real work, and the line is `safe_origin`. This function
+    used to do the check itself — `f"{scheme}://{netloc}"`, with no test
+    on the characters — and `urlsplit` keeps a semicolon and a space
+    inside a network location. The result went straight into the
+    `Content-Security-Policy`, where a semicolon starts a new directive
+    and a browser honours a directive's **first** occurrence. So a
+    crafted `MAP_TILE_URL` put its own `script-src` in front of ours.
+
+    `sonoran/embed/sanitise.py` already had the right check for
+    `frame-ancestors`, and its docstring claimed the rest of the
+    headers used it too. They did not. Now they do, and this is the
+    only place the four sources are built from.
+
+    A refusal is reported, because in the browser it is silent: a tile
+    host missing from `img-src` draws nothing and logs nothing the
+    operator sees, which is the trap in `AGENTS.md` 9.9.
+    """
+    origin = safe_origin(url)
+    if origin is None and url.strip():
+        logger.warning(
+            "%s is not a usable origin and was left out of the "
+            "Content-Security-Policy: %r. The browser will block it with no "
+            "visible error. Give a plain scheme and host, such as "
+            "https://example.net:8080.",
+            setting or "a configured URL",
+            url,
+        )
+    return origin
 
 
 def _frame_source(graph_url: str) -> str:
     """Return a safe CSP source for the configured graph service."""
-    return _origin(graph_url) or "'self'"
+    return _origin(graph_url, setting="MESH_GRAPH_BASE_URL") or "'self'"
 
 
 def _image_sources(tile_url: str, graph_url: str) -> str:
@@ -70,8 +95,8 @@ def _image_sources(tile_url: str, graph_url: str) -> str:
     too.
     """
     sources = ["'self'", "data:"]
-    for candidate in (tile_url, graph_url):
-        origin = _origin(candidate)
+    for candidate, setting in ((tile_url, "MAP_TILE_URL"), (graph_url, "MESH_GRAPH_BASE_URL")):
+        origin = _origin(candidate, setting=setting)
         if origin is not None and origin not in sources:
             sources.append(origin)
     return " ".join(sources)
@@ -137,7 +162,7 @@ def _connect_sources(api_base_url: str) -> str:
     nothing the user can see.
     """
     sources = ["'self'", FIRMWARE_RELEASES_ORIGIN]
-    origin = _origin(api_base_url)
+    origin = _origin(api_base_url, setting="WEB_API_BASE_URL")
     if origin is not None and origin not in sources:
         sources.append(origin)
     return " ".join(sources)
@@ -159,7 +184,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # carries anyway. The full URL still goes to same-origin requests.
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         settings = request.app.state.settings
-        embed = settings.embed_enabled and _is_embed(request.scope["path"])
+        # The path below the mount, never the raw scope path.
+        #
+        # `scope["path"]` carries the mount prefix when `WEB_BASE_PATH`
+        # is set and the proxy does not strip it. `get_route_path` takes
+        # `root_path` off, and it is the same helper Starlette's own
+        # router uses to match a route — so the header decision and the
+        # route resolution agree by construction rather than by two
+        # copies of the arithmetic.
+        path = get_route_path(request.scope)
+        embed = settings.embed_enabled and _is_embed(path)
         if embed:
             # `X-Frame-Options` has no allow list a modern browser reads
             # beyond SAMEORIGIN, so a third party frame needs the header
@@ -183,7 +217,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "frame-src 'none'; "
                 f"frame-ancestors {frame_ancestors(settings.embed_frame_ancestors)}"
             )
-        elif request.scope["path"].startswith("/static") or request.scope["path"] == "/":
+        elif path.startswith("/static") or path == "/":
             frame_source = _frame_source(settings.mesh_graph_base_url)
             image_sources = _image_sources(settings.map_tile_url, settings.mesh_graph_base_url)
             connect_sources = _connect_sources(settings.web_api_base_url)
@@ -209,6 +243,23 @@ def _is_embed(path: str) -> bool:
 
     Only the embed document and the data it reads. Everything else on
     this origin keeps the policy the dashboard has.
+
+    **The path must already have `root_path` taken off it.** The caller
+    uses `get_route_path`. Reading `scope["path"]` raw was wrong in both
+    directions when `WEB_BASE_PATH` was set and the proxy did not strip
+    the prefix:
+
+    - The embed got `X-Frame-Options: DENY` and could not be framed. It
+      fails closed, so it was a trap rather than a hole.
+    - The dashboard branch also stopped matching, so `/` and `/static`
+      were served with **no Content-Security-Policy at all**. That one
+      fails open, and it is the reason this is a fix and not a
+      tidy-up.
+
+    `tests/unit/test_embed.py` passed throughout, because TestClient's
+    scope path excludes `root_path` unless it is told otherwise: a green
+    test over a production difference. It now drives a client shaped
+    like the proxy that does not strip.
     """
     return path == "/embed/coverage" or path.startswith("/embed/") or path.startswith("/api/embed/")
 
