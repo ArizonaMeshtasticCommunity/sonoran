@@ -54,6 +54,19 @@ jobs:
           --health-retries 20
     env:
       DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:test@localhost:5432/sonoran
+      # Revision 0001 creates the three least-privilege roles and has no
+      # default password for them: a missing, empty or placeholder value
+      # stops the migration with the variable named. That is the point —
+      # a deployment must not come up on a password published in this
+      # repository — and it applies to CI like anywhere else.
+      #
+      # These are throwaway values for a throwaway container that lives
+      # for the length of this job and is never reachable from outside
+      # it. They must not be `change_me` or `CHANGE_ME`, which the
+      # migration refuses by name.
+      AZMSH_INGEST_PASSWORD: ci-ingest-not-a-real-password
+      AZMSH_API_PASSWORD: ci-api-not-a-real-password
+      AZMSH_JOBS_PASSWORD: ci-jobs-not-a-real-password
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

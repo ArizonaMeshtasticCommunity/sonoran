@@ -58,11 +58,18 @@ You need Docker and Docker Compose.
 ```bash
 # 1. Configure
 cp .env.example .env
-#    Edit .env and set at least:
-#      POSTGRES_PASSWORD          the stack does not start without it
-#      MQTT_HOST/USERNAME/PASSWORD your broker
-#      CHANNEL_KEYS               base64 channel keys (default public key is set)
-#      MESH_GRAPH_BASE_URL        the public URL of the mesh-graph service
+#    Edit .env. Every CHANGE_ME in it must be replaced. The migration
+#    that creates the three database roles refuses to run while a role
+#    password is missing or still CHANGE_ME, so an unedited copy stops
+#    at the first `docker compose up` with the variable named.
+#      POSTGRES_PASSWORD            the superuser; the stack does not start without it
+#      AZMSH_INGEST_PASSWORD        \
+#      AZMSH_API_PASSWORD            > the three role logins. Each must match
+#      AZMSH_JOBS_PASSWORD          /  the password in its DATABASE_URL_* below.
+#      DATABASE_URL/_API/_JOBS      one URL per process role
+#      MQTT_HOST/USERNAME/PASSWORD  your broker
+#      CHANNEL_KEYS                 base64 channel keys (default public key is set)
+#      MESH_GRAPH_BASE_URL          the public URL of the mesh-graph service
 
 # 2. Start everything (migrations run first, automatically)
 docker compose up -d --build
@@ -79,6 +86,7 @@ them all with a comment on each. The ones you are most likely to change:
 | Variable | Purpose |
 |----------|---------|
 | `DATABASE_URL`, `DATABASE_URL_API`, `DATABASE_URL_JOBS` | One database URL per role |
+| `AZMSH_INGEST_PASSWORD`, `AZMSH_API_PASSWORD`, `AZMSH_JOBS_PASSWORD` | The login password of each role. The migration creates the roles with these and has no default |
 | `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPICS` | The broker |
 | `CHANNEL_KEYS` | Full base64 AES keys, comma-separated |
 | `CORE_CHANNELS` | The channels this mesh claims as its own |

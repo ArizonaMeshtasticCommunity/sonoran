@@ -26,12 +26,12 @@ from sonoran.db.session import make_engine, make_session_factory
 from sonoran.jobs import calibrate, coverage
 from sonoran.radio.overrides import load_overrides
 from sonoran.radio.resolve import MAX_CALIBRATION_DB
+from tests.integration.conftest import role_url
 
 
 def _jobs_url(timescale_url: str) -> str:
     """Make an async URL for the migration-created jobs role."""
-    _, address = timescale_url.split("@", maxsplit=1)
-    return f"postgresql+asyncpg://azmsh_jobs:change_me@{address}"
+    return role_url(timescale_url, "azmsh_jobs")
 
 
 def _settings(timescale_url: str, tmp_path: Path, **extra: object) -> Settings:

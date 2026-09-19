@@ -16,6 +16,7 @@ from sonoran.decode.envelope import parse_envelope
 from sonoran.ingest.pipeline import process_message
 from sonoran.mqtt.client import RawMqttMessage
 from sonoran.mqtt.topics import parse_topic
+from tests.integration.conftest import role_url
 
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "recorded_azmsh_nodeinfo.json"
 
@@ -45,8 +46,7 @@ def test_replay_works_with_the_write_only_ingest_role(
     migrated_engine: object,
 ) -> None:
     """The ingest path does not need SELECT privileges."""
-    _, address = timescale_url.split("@", maxsplit=1)
-    url = f"postgresql+asyncpg://azmsh_ingest:change_me@{address}"
+    url = role_url(timescale_url, "azmsh_ingest")
     asyncio.run(_replay_write_only(url))
 
 

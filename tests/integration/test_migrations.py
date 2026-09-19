@@ -197,3 +197,143 @@ def test_downgrade_and_upgrade(timescale_url: str) -> None:  # type: ignore[no-u
         ).fetchall()
     assert EXPECTED_TABLES <= {row[0] for row in rows}
     engine.dispose()
+
+
+# --- the role passwords ------------------------------------------------
+#
+# Revision 0001 used to default all three to `change_me`, and
+# `.env.example` shipped that value in all three DSNs while never naming
+# the variables that set the real ones. `tools/db_restore.sh` tells an
+# operator to copy that file, so the documented first run gave a working
+# deployment whose three least-privilege roles all had a password
+# published in this repository. Nothing reported a fault, because from
+# the outside there was not one.
+
+
+def _fresh_database(timescale_url: str, name: str) -> str:
+    """Make an empty database in the running container and return its URL.
+
+    The migration only creates roles on a database it has not already
+    migrated, so a test about what it refuses needs ground of its own.
+    """
+    from sqlalchemy import create_engine
+
+    admin = create_engine(timescale_url)
+    with admin.connect() as conn:
+        autocommit = conn.execution_options(isolation_level="AUTOCOMMIT")
+        autocommit.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+        autocommit.execute(text(f'CREATE DATABASE "{name}"'))
+    admin.dispose()
+    base, _ = timescale_url.rsplit("/", maxsplit=1)
+    return f"{base}/{name}"
+
+
+def test_a_missing_role_password_stops_the_migration(
+    timescale_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No password, no migration. It used to be `change_me` and carry on.
+
+    The refusal happens before any role statement runs, so a deployment
+    that is missing one variable does not half-create its roles.
+    """
+    url = _fresh_database(timescale_url, "azmsh_missing_pw_test")
+    monkeypatch.delenv("AZMSH_INGEST_PASSWORD", raising=False)
+    monkeypatch.setenv("DATABASE_URL_MIGRATE", url)
+
+    config = Config("alembic.ini")
+    with pytest.raises(Exception) as caught:
+        command.upgrade(config, "head")
+    message = str(caught.value)
+    assert "AZMSH_INGEST_PASSWORD" in message, message
+
+    # Nothing of the schema was written. The migration refused rather
+    # than leaving a database half built.
+    from sqlalchemy import create_engine
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        ).fetchall()
+    assert not (EXPECTED_TABLES & {row[0] for row in rows})
+    engine.dispose()
+
+
+def test_the_placeholder_password_stops_the_migration(
+    timescale_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copy of .env.example that was not edited must not deploy."""
+    url = _fresh_database(timescale_url, "azmsh_placeholder_pw_test")
+    monkeypatch.setenv("AZMSH_INGEST_PASSWORD", "change_me")
+    monkeypatch.setenv("DATABASE_URL_MIGRATE", url)
+
+    config = Config("alembic.ini")
+    with pytest.raises(Exception) as caught:
+        command.upgrade(config, "head")
+    assert "AZMSH_INGEST_PASSWORD" in str(caught.value)
+
+
+def test_an_awkward_password_is_a_value_and_not_grammar(timescale_url: str) -> None:
+    """A quote in a password reaches PostgreSQL as a character.
+
+    The password is interpolated into a `CREATE ROLE` statement, so this
+    is the one place an operator's own choice of characters meets the
+    parser. It is checked against a real server rather than by reading
+    the escape, and on a role of its own: the three real roles already
+    exist in this cluster and `IF NOT EXISTS` would skip them, so a test
+    that used them would assert nothing at all.
+    """
+    import importlib.util
+    from pathlib import Path
+    from urllib.parse import quote
+
+    from sqlalchemy import create_engine
+
+    spec = importlib.util.spec_from_file_location(
+        "sonoran_initial_migration_it",
+        Path("src/sonoran/db/migrations/versions/0001_initial.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    initial = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(initial)
+
+    # Every character that has ever broken one of these statements.
+    password = "pa'ss\"w\\ord$$x -- ;"
+    literal = initial._sql_literal(password)
+    role = "azmsh_quote_test"
+
+    admin = create_engine(timescale_url)
+    try:
+        with admin.connect() as conn:
+            autocommit = conn.execution_options(isolation_level="AUTOCOMMIT")
+            autocommit.execute(text(f"DROP ROLE IF EXISTS {role}"))
+            # The same shape the migration uses: a dollar-quoted block
+            # with the literal placed inside it.
+            autocommit.execute(
+                text(
+                    f"DO {initial.ROLE_BLOCK_TAG} BEGIN "
+                    f"CREATE ROLE {role} LOGIN PASSWORD {literal}; "
+                    f"END {initial.ROLE_BLOCK_TAG};"
+                )
+            )
+            # The role exists, and exactly one of it. A statement that
+            # had been closed early would have left other objects too.
+            count = conn.execute(
+                text("SELECT count(*) FROM pg_roles WHERE rolname LIKE 'azmsh_quote%'")
+            ).scalar_one()
+            assert count == 1
+
+        # And the password is the one that was asked for, character for
+        # character. This is the assertion the escape exists to make
+        # true: log in with it.
+        _, address = timescale_url.split("@", maxsplit=1)
+        as_role = create_engine(f"postgresql+psycopg://{role}:{quote(password, safe='')}@{address}")
+        with as_role.connect() as conn:
+            assert conn.execute(text("SELECT current_user")).scalar_one() == role
+        as_role.dispose()
+    finally:
+        with admin.connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT").execute(
+                text(f"DROP ROLE IF EXISTS {role}")
+            )
+        admin.dispose()

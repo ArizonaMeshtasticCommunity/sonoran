@@ -36,6 +36,44 @@ them disagree.
 The database roles are enforced by PostgreSQL grants.
 The grants are part of the first migration.
 
+### 2.1 Each process holds one credential
+
+A grant only holds what a process cannot reach. `env_file: .env` hands
+a service the whole file, and `.env` holds the superuser password, the
+superuser migration DSN, three role DSNs and three role passwords. A
+service given all of them has the split on paper: anything that reads
+`os.environ` — a crash reporter, a debug dump, a shell in a running
+container — hands over the superuser, and the api is the process on the
+public internet.
+
+`extra="ignore"` in `sonoran/config.py` means the application ignores
+the values it has no field for. That is not the protection. The value
+is still in the process environment, and the environment is what leaks.
+
+So `docker-compose.yml` merges `x-no-credentials` into every service,
+which blanks all eight, and each service then grants back the one it
+uses:
+
+| Service | Holds |
+|---------|-------|
+| api | `DATABASE_URL_API` |
+| ingest | `DATABASE_URL` and `CHANNEL_KEYS` |
+| jobs | `DATABASE_URL_JOBS` |
+| migrate | `DATABASE_URL_MIGRATE` and the three `AZMSH_*_PASSWORD` |
+| mesh-graph | four MQTT variables, and no `.env` at all |
+
+**A credential added to `.env` later must be added to
+`x-no-credentials` too**, or it is shared with every service by
+default. The list is a denylist because an allowlist would have to
+enumerate every one of the sixty-odd settings each service reads, and
+that list would rot. The denylist is short, it is only credentials, and
+this paragraph is the maintenance rule that goes with it.
+
+`mesh-graph` is the exception and gets an allowlist, because it is the
+one service in the stack that is not our code. It is also pinned by
+digest rather than tracking `latest`, so an upstream push is not a
+deploy here.
+
 ## 3. Module contracts
 
 ### 3.1 `config`

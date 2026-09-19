@@ -35,6 +35,57 @@ Created in the first migration:
 | `azmsh_api` | SELECT on all tables | api process |
 | `azmsh_jobs` | SELECT, INSERT on `daily_snapshot`. DELETE where retention fallback needs it | jobs process |
 
+### 2.1 The role passwords
+
+Each role is created with the password in its own environment variable:
+`AZMSH_INGEST_PASSWORD`, `AZMSH_API_PASSWORD`, `AZMSH_JOBS_PASSWORD`.
+
+There is no default. Revision 0001 stops, naming the variable, when one
+is missing, empty, or still the `CHANGE_ME` placeholder that
+`.env.example` carries. The refusal happens before any role statement
+runs, so a deployment that is short one variable does not half-create
+its roles.
+
+It used to default all three to `change_me`, and `.env.example` shipped
+that value inside all three DSNs while never naming these variables at
+all. `tools/db_restore.sh` tells an operator to copy that file. So the
+documented first run produced a working deployment whose three
+least-privilege roles were each reachable with a password published in
+this repository, and nothing reported a fault, because from the outside
+there was not one.
+
+Each password must match the one in the matching `DATABASE_URL`,
+`DATABASE_URL_API` or `DATABASE_URL_JOBS`. These create the login;
+those use it. Set them in pairs:
+
+| Set this | To the same value as the password in |
+|----------|--------------------------------------|
+| `AZMSH_INGEST_PASSWORD` | `DATABASE_URL` |
+| `AZMSH_API_PASSWORD` | `DATABASE_URL_API` |
+| `AZMSH_JOBS_PASSWORD` | `DATABASE_URL_JOBS` |
+
+If they disagree the migration still succeeds — it creates the role with
+the `AZMSH_*` value — and the service then fails to authenticate. The
+symptom is a container that will not start with `password
+authentication failed for user "azmsh_api"`, which names the pair to
+look at.
+
+**If the migration stops and says a variable is missing**, add the three
+to `.env`, matching the passwords already inside the three
+`DATABASE_URL*` values, and run it again. Nothing has been written: the
+refusal happens before the first role statement.
+
+**Changing a password on a database whose roles already exist** is not
+this migration's job. Revision 0001 creates a role only when it is
+absent, so editing these variables afterwards changes nothing. Use
+`ALTER ROLE azmsh_api PASSWORD '…'` as the superuser and update the
+matching `DATABASE_URL_API` in the same change.
+
+The split is only worth what the deployment keeps apart. `docker-compose.yml`
+gives each service its own DSN and blanks every other credential, so
+the api container does not hold the ingest role's password or the
+superuser's. See `x-no-credentials` there.
+
 ## 3. Core tables
 
 ### 3.1 `node`

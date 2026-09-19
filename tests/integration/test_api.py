@@ -7,12 +7,12 @@ from sqlalchemy import text
 
 from sonoran.api.app import create_app
 from sonoran.config import Settings
+from tests.integration.conftest import role_url
 
 
 def _api_url(timescale_url: str) -> str:
     """Make an async URL for the migration-created API role."""
-    _, address = timescale_url.split("@", maxsplit=1)
-    return f"postgresql+asyncpg://azmsh_api:change_me@{address}"
+    return role_url(timescale_url, "azmsh_api")
 
 
 def _seed(migrated_engine) -> int:  # type: ignore[no-untyped-def]

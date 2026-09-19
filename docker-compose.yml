@@ -15,6 +15,44 @@ x-logging: &logging
     max-size: "20m"
     max-file: "3"
 
+# Every credential in `.env`, blanked.
+#
+# `env_file: .env` hands a service the whole file, and `.env` holds the
+# Postgres superuser password, the superuser migration DSN, one DSN for
+# each of the three least-privilege roles, and the login password of
+# each of those roles. A service that receives all of them has the
+# three-role split on paper only: anything that reads `os.environ` — a
+# crash reporter, a debug dump, a shell in a running container — hands
+# over the superuser.
+#
+# `extra="ignore"` in `sonoran/config.py` means the application already
+# ignores the values it has no field for. That is not the point. The
+# value is still in the process environment, and the environment is
+# what leaks.
+#
+# So each service merges this and then grants back exactly the one
+# credential it uses. The empty strings are deliberate: `environment`
+# overrides `env_file`, and blanking is how a key is taken back off a
+# service without splitting `.env` into one file per role.
+#
+# A credential added to `.env` later must be added here too, or it is
+# shared with every service by default. See docs/ARCHITECTURE.md.
+x-no-credentials: &no-credentials
+  DATABASE_URL: ""
+  DATABASE_URL_API: ""
+  DATABASE_URL_JOBS: ""
+  DATABASE_URL_MIGRATE: ""
+  POSTGRES_PASSWORD: ""
+  AZMSH_INGEST_PASSWORD: ""
+  AZMSH_API_PASSWORD: ""
+  AZMSH_JOBS_PASSWORD: ""
+  # The Meshtastic channel keys decrypt traffic off the air. Only the
+  # ingest process decrypts anything: `sonoran/ingest/pipeline.py` is
+  # the one reader of `settings.channel_keys` in the whole package.
+  # The api and the jobs held them because the file was handed over
+  # whole, not because anything asked.
+  CHANNEL_KEYS: ""
+
 services:
   timescaledb:
     image: timescale/timescaledb-ha:pg17
@@ -59,6 +97,11 @@ services:
       retries: 3
       start_period: 30s
     env_file: .env
+    # The API is the process on the public internet, and it reads the
+    # SELECT-only role and nothing else. See `x-no-credentials`.
+    environment:
+      <<: *no-credentials
+      DATABASE_URL_API: ${DATABASE_URL_API:?set DATABASE_URL_API in .env}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -81,8 +124,22 @@ services:
     logging: *logging
     command: ["alembic", "upgrade", "head"]
     env_file: .env
+    # The one service that holds the superuser, because it is the one
+    # service that creates the roles and changes the schema.
+    #
+    # The three role passwords are here and nowhere else. Revision 0001
+    # reads them to create the roles and refuses to run without them,
+    # so a deployment cannot come up on a default password. They are
+    # passed through rather than demanded with `:?` so that the
+    # migration is the single place that reports the fault, with the
+    # variable named — a `:?` here would stop unrelated commands such
+    # as `docker compose up -d timescaledb` as well.
     environment:
-      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@timescaledb:5432/azmsh
+      <<: *no-credentials
+      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@timescaledb:5432/azmsh
+      AZMSH_INGEST_PASSWORD: ${AZMSH_INGEST_PASSWORD:-}
+      AZMSH_API_PASSWORD: ${AZMSH_API_PASSWORD:-}
+      AZMSH_JOBS_PASSWORD: ${AZMSH_JOBS_PASSWORD:-}
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -93,6 +150,13 @@ services:
     logging: *logging
     command: ["sonoran-ingest"]
     env_file: .env
+    # INSERT and UPDATE on the payload tables, and nothing else.
+    # See `x-no-credentials`.
+    environment:
+      <<: *no-credentials
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      # The one process that decrypts anything off the air.
+      CHANNEL_KEYS: ${CHANNEL_KEYS:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -105,6 +169,10 @@ services:
     logging: *logging
     command: ["sonoran-jobs"]
     env_file: .env
+    # The jobs role, and nothing else. See `x-no-credentials`.
+    environment:
+      <<: *no-credentials
+      DATABASE_URL_JOBS: ${DATABASE_URL_JOBS:?set DATABASE_URL_JOBS in .env}
     volumes:
       # The coverage job reads terrain and land cover, and writes the
       # coverage tiles the API serves. All three are shared with the
@@ -119,10 +187,37 @@ services:
         condition: service_healthy
 
   mesh-graph:
-    image: ghcr.io/ianmcorvidae/mesh-graph:latest
+    # Third party code, pinned by digest.
+    #
+    # `latest` means whatever its author last pushed becomes the code
+    # running on this box at the next pull, with no review here and no
+    # record of which build ran. The tag is kept in the reference so a
+    # reader can see what it tracks, but the digest is what Docker
+    # resolves, so the tag cannot be moved underneath us.
+    # `docs/PLAN.md` already named pinning this tag as the mitigation
+    # for the risk; this is that.
+    #
+    # It does mean a security fix upstream does not arrive on its own.
+    # That is the trade taken on purpose: this image now holds four MQTT
+    # variables and a SQLite file, so an unreviewed change to it is the
+    # larger of the two risks. Updating is one line and belongs in its
+    # own commit:
+    #
+    #   docker manifest inspect ghcr.io/ianmcorvidae/mesh-graph:latest
+    image: ghcr.io/ianmcorvidae/mesh-graph:latest@sha256:7126a91d0952e1f0cb1a456ba661cdb8562aa95781bfc6a507f5d375ba2510c2
     restart: unless-stopped
     logging: *logging
-    env_file: .env
+    # No `env_file`. This is the one service in the stack that is not
+    # our code, and `.env` holds the Postgres superuser password, four
+    # database DSNs, the three role passwords and the Meshtastic channel
+    # keys. None of that has anything to do with drawing a traceroute.
+    #
+    # Its command below reads four variables. It is given four.
+    environment:
+      MQTT_HOST: ${MQTT_HOST:?set MQTT_HOST in .env}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
     entrypoint: ["sh", "-c"]
     volumes:
       - meshgraph_data:/data

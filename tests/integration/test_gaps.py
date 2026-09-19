@@ -24,6 +24,7 @@ from sonoran.coverage import store as coverage_store
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.gaps import store
 from sonoran.jobs import coverage, gaps
+from tests.integration.conftest import role_url
 
 # A node number range of this file's own, so two test files cannot
 # collide in a shared database.
@@ -32,8 +33,7 @@ BASE = 930000
 
 def _jobs_url(timescale_url: str) -> str:
     """Make an async URL for the migration-created jobs role."""
-    _, address = timescale_url.split("@", maxsplit=1)
-    return f"postgresql+asyncpg://azmsh_jobs:change_me@{address}"
+    return role_url(timescale_url, "azmsh_jobs")
 
 
 def _settings(timescale_url: str, tmp_path: Path, **extra: object) -> Settings:
