@@ -1709,3 +1709,80 @@ def test_position_filter_matches_the_gaps_rule(migrated_engine, timescale_url: s
     ids = {row["node_id"] for row in none_rows}
     assert f"!{9703:08x}" in ids, "a node with no coordinates is not 'no position'"
     assert f"!{9706:08x}" in ids, "null island is not 'no position'"
+
+
+# --- the filter panel: facets and the gaps filter ----------------------
+
+
+def test_facets_count_with_their_own_filter_lifted(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Counting a facet with itself applied answers the wrong question.
+
+    It would show the chosen value holding everything and the others
+    holding nothing, which tells a reader only that the filter is on.
+    What they are asking is "if I picked this instead, how many".
+    """
+    _seed_node_list(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        loose = client.get("/api/nodes/facets").json()
+        tight = client.get("/api/nodes/facets?role=ROUTER").json()
+    roles = {entry["value"]: entry["count"] for entry in loose["role"]}
+    still = {entry["value"]: entry["count"] for entry in tight["role"]}
+    assert still == roles, "the role facet narrowed itself"
+    assert any(entry["value"] == "CLIENT" for entry in tight["role"]), (
+        "a role you could switch to disappeared from its own facet"
+    )
+
+
+def test_facets_narrow_the_other_groups(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Every other facet must answer within the filters in force."""
+    _seed_node_list(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        loose = client.get("/api/nodes/facets").json()
+        tight = client.get("/api/nodes/facets?role=ROUTER").json()
+    total = sum(entry["count"] for entry in loose["position"])
+    narrowed = sum(entry["count"] for entry in tight["position"])
+    assert narrowed < total, f"position did not narrow under a role filter ({narrowed} vs {total})"
+
+
+def test_gaps_without_a_preset_is_refused(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A node can need help on one preset and be fine on another.
+
+    Answering "needs help" without saying on which mesh would be the
+    merge AGENTS.md 9.7 forbids everywhere else.
+    """
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        answer = client.get("/api/nodes?gaps=bad")
+    assert answer.status_code == 422
+    assert "gaps_preset" in answer.json()["detail"]
+
+
+def test_an_unassessed_preset_is_not_an_empty_answer(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """No assessment is a different fact from no nodes.
+
+    Returning an empty list would say "no node needs help", which is an
+    answer we do not have.
+    """
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        answer = client.get("/api/nodes?gaps=bad&gaps_preset=NoSuchPreset")
+    assert answer.status_code == 409
+    assert "no gap assessment" in answer.json()["detail"]
+
+
+def test_the_summary_returns_what_the_filters_need(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The channel picker offered nothing because the list never said.
+
+    `channel` was filterable before it was returned, so the control that
+    built its options from the rows could never list one.
+    """
+    _seed_node_list(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        rows = client.get("/api/nodes?limit=500").json()
+    assert rows, "the fixture seeded nothing"
+    for field in ("channel", "is_licensed", "position_confidence"):
+        assert field in rows[0], f"the list filters on {field} but does not return it"
+    assert rows[0]["position_confidence"] in {"exact", "coarse", "none"}

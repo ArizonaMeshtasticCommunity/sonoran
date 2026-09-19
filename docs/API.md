@@ -67,6 +67,13 @@ Filters:
 - `first_seen_hours` — only nodes first seen in the last N hours.
 - `before`, `limit`, `offset` — pagination.
 
+- `gaps` — `bad`, `ok` or `unknown`, from the gaps assessment. **Requires
+  `gaps_preset`**: a node can need help on one modem preset and be fine
+  on another, so a state without a preset is the merge AGENTS.md 9.7
+  forbids. Without it, 422. For a preset with no assessment written,
+  **409** — which is a different fact from "no nodes are in that state",
+  and must not be served as an empty list.
+
 Ordering:
 
 - `sort` — one of `last_heard`, `first_seen`, `name`, `node_id`, `hw`,
@@ -78,6 +85,21 @@ Ordering:
 is what the column shows. Nulls sort last in both directions: a node
 with no role is not the smallest role. Every order is made total with
 the node number, so a node cannot arrive on two pages or on none.
+
+### 3.1.1 `GET /api/nodes/facets`
+
+Returns the values each filter could take and how many nodes sit behind
+each one, so a picker can show the choice before it is made.
+
+Takes the same filters as the list. **Each group is counted with its own
+filter lifted and the rest in force.** Counting a group with itself
+applied would show the chosen value holding everything and the others
+holding nothing, which tells a reader only that the filter is on; what
+they are asking is "if I picked this instead, how many would I have".
+
+Groups: `hw`, `role`, `channel`, `position`, `gateway`, `licensed`, and
+`gaps` — the last carrying a preset with each state, because that state
+has no meaning without one.
 
 **Paging is by offset and the list is alive.** A node heard between two
 requests can shift the boundary, so a row may be seen twice or missed

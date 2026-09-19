@@ -1,10 +1,10 @@
 """Read-only node endpoints."""
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import ColumnElement, Select, and_, func, not_, or_, select, true
+from sqlalchemy import ColumnElement, Select, and_, case, func, not_, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import (
@@ -16,6 +16,7 @@ from sonoran.api.dependencies import (
 )
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
 from sonoran.api.schemas import NodeSummary
+from sonoran.config import Settings
 from sonoran.coverage.store import calibration_offsets
 from sonoran.db.models import (
     AirQualityMetrics,
@@ -30,6 +31,8 @@ from sonoran.db.models import (
     PowerMetrics,
     TextMessage,
 )
+from sonoran.gaps import store as gaps_store
+from sonoran.gaps.signals import position_confidence
 from sonoran.meshtastic import portnums_pb2
 from sonoran.positions import MIN_SITE_PRECISION_BITS, NULL_ISLAND_MARGIN, is_usable
 from sonoran.radio.resolve import resolve_profile
@@ -72,6 +75,14 @@ def _summary(node: Node) -> NodeSummary:
         last_heard=node.last_heard,
         is_mqtt_gateway=node.is_mqtt_gateway,
         has_position=is_usable(node.last_lat, node.last_lon),
+        channel=node.last_channel,
+        is_licensed=node.is_licensed,
+        # The same three words the gaps assessment uses, from the same
+        # rule, so a reader who sees "coarse" on one page and "coarse"
+        # on the other is being told the same thing.
+        position_confidence=position_confidence(
+            node.last_lat, node.last_lon, node.last_position_precision_bits, MIN_SITE_PRECISION_BITS
+        )[0],
     )
 
 
@@ -382,6 +393,7 @@ def _apply_node_filters(
 
 @router.get("", response_model=list[NodeSummary])
 async def list_nodes(
+    request: Request,
     response: Response,
     q: str | None = None,
     hw: str | None = None,
@@ -393,6 +405,8 @@ async def list_nodes(
     position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
     licensed: bool | None = None,
     first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
+    gaps: str | None = Query(default=None, pattern="^(bad|ok|unknown)$"),
+    gaps_preset: str | None = None,
     sort: str = Query(default="last_heard"),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
     offset: int = Query(default=0, ge=0, le=100_000),
@@ -435,13 +449,191 @@ async def list_nodes(
 
     filters = (q, hw, role, gateway, active_hours, before, channel, position, licensed)
     statement = _apply_node_filters(select(Node), *filters, first_seen_hours)
-    total = await session.scalar(
-        _apply_node_filters(select(func.count()).select_from(Node), *filters, first_seen_hours)
+    counted = _apply_node_filters(
+        select(func.count()).select_from(Node), *filters, first_seen_hours
     )
+
+    # The gaps state is per preset, because a node can need help on one
+    # mesh and be fine on another. Merging them would be the thing
+    # AGENTS.md 9.7 forbids everywhere else, wearing a filter's clothes.
+    if gaps:
+        if not gaps_preset:
+            raise HTTPException(
+                status_code=422,
+                detail="gaps needs gaps_preset: a node can need help on one preset and not another",
+            )
+        wanted = _gaps_node_nums(request, gaps_preset, gaps)
+        if wanted is None:
+            # Not an empty result. Nothing has been assessed, and saying
+            # "no nodes" would be an answer we do not have.
+            raise HTTPException(
+                status_code=409,
+                detail=f"no gap assessment has been written for {gaps_preset} yet",
+            )
+        statement = statement.where(Node.node_num.in_(wanted))
+        counted = counted.where(Node.node_num.in_(wanted))
+
+    total = await session.scalar(counted)
     response.headers["X-Total-Count"] = str(total or 0)
 
     rows = (await session.scalars(statement.order_by(*ordering).offset(offset).limit(limit))).all()
     return [_summary(node) for node in rows]
+
+
+def _gaps_node_nums(request: Request, preset: str, state: str) -> set[int] | None:
+    """Return the nodes the gaps assessment puts in one state, or None.
+
+    None means no assessment has been written for that preset, which is
+    a different answer from "no nodes are in that state" and must not be
+    served as an empty filter that silently matches nothing.
+
+    This reads the artefact the gaps job already wrote, through the same
+    store its own routes use. It recomputes nothing and asks the
+    database for nothing.
+    """
+    settings: Settings = request.app.state.settings
+    assessment = gaps_store.read_preset(settings, preset)
+    if assessment is None:
+        return None
+    wanted: set[int] = set()
+    nodes = cast(list[dict[str, object]], assessment.get("nodes") or [])
+    for node in nodes:
+        if node.get("worst_state") == state:
+            try:
+                wanted.add(parse_node_id(str(node["node_id"])))
+            except (KeyError, ValueError):
+                continue
+    return wanted
+
+
+@router.get("/facets")
+async def node_facets(
+    request: Request,
+    q: str | None = None,
+    hw: str | None = None,
+    role: str | None = None,
+    gateway: bool | None = None,
+    active_hours: int | None = Query(default=None, ge=1, le=720),
+    before: datetime | None = None,
+    channel: str | None = None,
+    position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
+    licensed: bool | None = None,
+    first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    """Return the values each filter could take, and how many nodes each holds.
+
+    A picker that lists forty hardware models and says nothing about
+    them makes a reader guess which ones this mesh actually has. With a
+    count beside each value the choice is visible before it is made,
+    and a value with no nodes behind it can be left out rather than
+    offered and then disappointing.
+
+    **The counts are of the other filters, not of this one.** Narrowing
+    to one role and then reading the role counts would show that role
+    holding everything and the rest holding nothing, which says only
+    that the filter is applied. So each facet is counted with its own
+    filter lifted and the rest in force, which is the number a reader
+    is actually asking for: "if I also picked this, how many would I
+    have".
+    """
+
+    async def counts(column: Any, lifted: str) -> list[dict[str, object]]:
+        # Each facet is counted with its own filter lifted and the rest
+        # in force. Counting a facet with itself applied would show the
+        # chosen value holding everything and the others holding
+        # nothing, which tells a reader only that the filter is on.
+        statement = _apply_node_filters(
+            select(column, func.count()).select_from(Node),
+            None if lifted == "q" else q,
+            None if lifted == "hw" else hw,
+            None if lifted == "role" else role,
+            None if lifted == "gateway" else gateway,
+            None if lifted == "active_hours" else active_hours,
+            before,
+            None if lifted == "channel" else channel,
+            None if lifted == "position" else position,
+            None if lifted == "licensed" else licensed,
+            None if lifted == "first_seen_hours" else first_seen_hours,
+        ).group_by(column)
+        rows = (await session.execute(statement)).all()
+        return [
+            {"value": value, "count": total}
+            for value, total in sorted(rows, key=lambda row: (-row[1], str(row[0])))
+            if value is not None
+        ]
+
+    positions = _apply_node_filters(
+        select(
+            case(
+                (not_(_usable_position()), "none"),
+                (
+                    and_(
+                        Node.last_position_precision_bits.is_not(None),
+                        Node.last_position_precision_bits < MIN_SITE_PRECISION_BITS,
+                    ),
+                    "coarse",
+                ),
+                else_="exact",
+            ).label("state"),
+            func.count(),
+        ).select_from(Node),
+        q,
+        hw,
+        role,
+        gateway,
+        active_hours,
+        before,
+        channel,
+        None,
+        licensed,
+        first_seen_hours,
+    ).group_by("state")
+
+    # The gaps states, per preset, because a node can need help on one
+    # mesh and be fine on another. Offering "needs help" without saying
+    # on which would be the merge AGENTS.md 9.7 forbids.
+    settings: Settings = request.app.state.settings
+    gaps_options: list[dict[str, object]] = []
+    index = gaps_store.read_index(settings) or {}
+    for entry in cast(list[dict[str, object]], index.get("presets") or []):
+        preset = str(entry.get("preset") or "")
+        if not preset:
+            continue
+        for state in ("bad", "unknown"):
+            wanted = _gaps_node_nums(request, preset, state)
+            if not wanted:
+                continue
+            total = await session.scalar(
+                _apply_node_filters(
+                    select(func.count()).select_from(Node),
+                    q,
+                    hw,
+                    role,
+                    gateway,
+                    active_hours,
+                    before,
+                    channel,
+                    position,
+                    licensed,
+                    first_seen_hours,
+                ).where(Node.node_num.in_(wanted))
+            )
+            if total:
+                gaps_options.append({"preset": preset, "state": state, "count": total})
+
+    return {
+        "gaps": gaps_options,
+        "hw": await counts(Node.hw_model, "hw"),
+        "role": await counts(Node.role, "role"),
+        "channel": await counts(Node.last_channel, "channel"),
+        "position": [
+            {"value": state, "count": total}
+            for state, total in (await session.execute(positions)).all()
+        ],
+        "gateway": await counts(Node.is_mqtt_gateway, "gateway"),
+        "licensed": await counts(Node.is_licensed, "licensed"),
+    }
 
 
 @router.get("/{node_id}", response_model=NodeSummary)

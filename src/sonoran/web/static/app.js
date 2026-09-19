@@ -2849,17 +2849,202 @@ function nodeQuery(page, offset = 0) {
   const search = value('[data-node-search]').trim();
   const active = value('[data-node-active]');
   const role = value('[data-node-role]');
-  const channel = value('[data-node-channel]');
-  const position = value('[data-node-position]');
   const gateway = $('[data-node-gateway]', page).getAttribute('aria-pressed') === 'true';
   if (search) params.set('q', search);
   if (active) params.set('active_hours', active);
   if (role) params.set('role', role);
-  if (channel) params.set('channel', channel);
-  if (position) params.set('position', position);
   if (gateway) params.set('gateway', 'true');
+  // The panel wins where both can say the same thing, because it is the
+  // one that shows what it chose.
+  for (const [key, chosen] of nodeFilters) params.set(key, chosen);
   return `api/nodes?${params}`;
 }
+
+/** The same filters, for the endpoint that counts them. */
+function nodeFacetQuery(page) {
+  const params = new URLSearchParams(nodeQuery(page).split('?')[1]);
+  for (const key of ['limit', 'offset', 'sort', 'order']) params.delete(key);
+  return `api/nodes/facets?${params}`;
+}
+
+/* Everything the filter panel can narrow on.
+ *
+ * `key` is the query parameter, `facet` the group of counts the server
+ * returns for it. A filter with neither is one the panel draws itself.
+ */
+const NODE_FILTERS = [
+  { key: 'role', facet: 'role', label: 'Role', words: roleLabel },
+  { key: 'hw', facet: 'hw', label: 'Hardware' },
+  { key: 'channel', facet: 'channel', label: 'Channel' },
+  {
+    key: 'position',
+    facet: 'position',
+    label: 'Position',
+    hint: 'How exactly the node has said where it is. A coarse position cannot anchor a '
+      + 'prediction, which is why the siting half of Gaps cannot see one.',
+    words: (value) => ({ exact: 'Exact', coarse: 'Coarse', none: 'None reported' }[value] || value),
+  },
+  {
+    key: 'gateway',
+    facet: 'gateway',
+    label: 'Uploads to MQTT',
+    hint: 'A gateway uploads packets it hears. It is not a device role.',
+    words: (value) => (value === 'true' ? 'Yes' : 'No'),
+  },
+  {
+    key: 'licensed',
+    facet: 'licensed',
+    label: 'Amateur licence',
+    words: (value) => (value === 'true' ? 'Claimed' : 'Not claimed'),
+  },
+];
+
+/* Filters the server has no facet for, because they are ranges rather
+ * than sets of values. */
+const NODE_RANGES = [
+  {
+    key: 'active_hours',
+    label: 'Heard within',
+    options: [['', 'Any time'], ['1', 'An hour'], ['24', 'A day'], ['168', 'A week'], ['720', 'A month']],
+  },
+  {
+    key: 'first_seen_hours',
+    label: 'First seen within',
+    hint: 'When the mesh first heard this node at all, which is how you find the new ones.',
+    options: [['', 'Any time'], ['24', 'A day'], ['168', 'A week'], ['720', 'A month']],
+  },
+];
+
+/* What the panel currently holds, before Apply. */
+const nodeFilters = new Map();
+
+/** Draw the panel from the counts the server just gave us. */
+function drawNodeFilters(page, facets) {
+  const grid = $('[data-node-filter-grid]', page);
+  const groups = [];
+
+  for (const filter of NODE_FILTERS) {
+    const values = (facets && facets[filter.facet]) || [];
+    if (!values.length) continue;
+    const chosen = nodeFilters.get(filter.key);
+    groups.push(el('fieldset', { class: 'filter-group' },
+      el('legend', { title: filter.hint || null, class: filter.hint ? 'hinted' : null },
+        filter.label),
+      el('div', { class: 'filter-options' },
+        // "Any" is a choice, and it is the one that undoes this filter.
+        optionButton(page, filter, '', 'Any', null, chosen == null),
+        ...values.map((entry) => {
+          const value = String(entry.value);
+          const words = filter.words ? filter.words(value) : value;
+          return optionButton(page, filter, value, words, entry.count, chosen === value);
+        }))));
+  }
+
+  /*
+   * Gaps is one control rather than two, because a state without a
+   * preset is not a question this data can answer: a node can need help
+   * on one mesh and be fine on another. Offering them separately would
+   * let somebody build a combination the server has to refuse.
+   */
+  const gapsOptions = (facets && facets.gaps) || [];
+  if (gapsOptions.length) {
+    const chosen = nodeFilters.get('gaps');
+    const chosenPreset = nodeFilters.get('gaps_preset');
+    groups.push(el('fieldset', { class: 'filter-group' },
+      el('legend', {
+        class: 'hinted',
+        title: 'Measured by the Gaps page, one modem preset at a time. "Cannot tell" is not '
+          + 'a clean bill of health: it means there was not enough evidence to say.',
+      }, 'Connection health'),
+      el('div', { class: 'filter-options' },
+        optionButton(page, { key: 'gaps' }, '', 'Any', null, chosen == null),
+        ...gapsOptions.map((entry) => {
+          const words = `${entry.state === 'bad' ? 'Needs help' : 'Cannot tell'} on ${entry.preset}`;
+          const picked = chosen === entry.state && chosenPreset === entry.preset;
+          const button = el('button', {
+            type: 'button',
+            class: `filter-option${picked ? ' chosen' : ''}`,
+            'aria-pressed': String(picked),
+          }, el('span', { text: words }), el('span', { class: 'filter-count', text: count(entry.count) }));
+          button.addEventListener('click', () => {
+            nodeFilters.set('gaps', entry.state);
+            nodeFilters.set('gaps_preset', entry.preset);
+            drawNodeFilters(page, nodeFacets);
+          });
+          return button;
+        }))));
+  }
+
+  for (const range of NODE_RANGES) {
+    const chosen = nodeFilters.get(range.key) || '';
+    groups.push(el('fieldset', { class: 'filter-group' },
+      el('legend', { title: range.hint || null, class: range.hint ? 'hinted' : null }, range.label),
+      el('div', { class: 'filter-options' },
+        ...range.options.map(([value, words]) =>
+          optionButton(page, range, value, words, null, chosen === value)))));
+  }
+
+  replace(grid, groups);
+  $('[data-node-filter-summary]', page).textContent =
+    nodeFilters.size ? `${nodeFilters.size} chosen, not yet applied` : 'Nothing chosen';
+}
+
+/** One value of one filter, with how many nodes sit behind it. */
+function optionButton(page, filter, value, words, total, chosen) {
+  const button = el('button', {
+    type: 'button',
+    class: `filter-option${chosen ? ' chosen' : ''}`,
+    'aria-pressed': String(Boolean(chosen)),
+  }, el('span', { text: String(words) }),
+  total == null ? null : el('span', { class: 'filter-count', text: count(total) }));
+  button.addEventListener('click', () => {
+    if (!value) {
+      nodeFilters.delete(filter.key);
+      // Gaps travels as a pair; dropping the state must drop the preset
+      // with it or the query keeps a parameter nothing is asking for.
+      if (filter.key === 'gaps') nodeFilters.delete('gaps_preset');
+    } else {
+      nodeFilters.set(filter.key, value);
+    }
+    drawNodeFilters(page, nodeFacets);
+  });
+  return button;
+}
+
+/** The chips under the controls: what is in force, and how to drop it. */
+function drawNodeChips(page) {
+  const chips = $('[data-node-chips]', page);
+  const applied = [...nodeFilters.entries()].filter(([key]) => key !== 'gaps_preset');
+  chips.hidden = applied.length === 0;
+  if (!applied.length) return replace(chips, []);
+  const words = (key, value) => {
+    if (key === 'gaps') {
+      const preset = nodeFilters.get('gaps_preset');
+      return `${value === 'bad' ? 'Needs help' : 'Cannot tell'} on ${preset}`;
+    }
+    const filter = [...NODE_FILTERS, ...NODE_RANGES].find((entry) => entry.key === key);
+    if (!filter) return `${key}: ${value}`;
+    const options = filter.options && filter.options.find((option) => option[0] === value);
+    const shown = options ? options[1] : (filter.words ? filter.words(value) : value);
+    return `${filter.label}: ${shown}`;
+  };
+  replace(chips, [
+    el('span', { class: 'muted', text: 'Showing only' }),
+    ...applied.map(([key, value]) => {
+      const chip = el('button', { class: 'chip chip-drop', type: 'button',
+        title: `Remove the ${key} filter` },
+      el('span', { text: words(key, value) }), el('span', { 'aria-hidden': 'true', text: ' \u00d7' }));
+      chip.addEventListener('click', () => {
+        nodeFilters.delete(key);
+        if (key === 'gaps') nodeFilters.delete('gaps_preset');
+        render('nodes');
+      });
+      return chip;
+    }),
+  ]);
+}
+
+let nodeFacets = null;
 
 /** How many filters are narrowing the list, for the summary line. */
 function nodeFilterCount(page) {
@@ -2911,8 +3096,15 @@ async function loadNodes(page, { reset = false } = {}) {
       roleSelect.append(el('option', { value: role, text: roleLabel(role) }));
     }
   }
-  fillNodeChannels(page);
   describeNodeList(page);
+  drawNodeChips(page);
+  // The counts describe the filters in force, so they are fetched with
+  // the rows rather than once when the panel opens.
+  getList(nodeFacetQuery(page)).then((answer) => {
+    if (token !== nodeSearchToken) return;
+    nodeFacets = answer.rows;
+    if (!$('[data-node-filters]', page).hidden) drawNodeFilters(page, nodeFacets);
+  }).catch(() => { nodeFacets = null; });
 
   const onSort = (key, order) => {
     nodeSort = { key, order };
@@ -2976,14 +3168,6 @@ async function loadNodes(page, { reset = false } = {}) {
     });
     target.append(el('p', { class: 'more-wrap' }, more));
   }
-}
-
-/** Offer the channels this mesh actually uses, once they are known. */
-function fillNodeChannels(page) {
-  const select = $('[data-node-channel]', page);
-  if (!select || select.options.length > 1) return;
-  const seen = [...new Set(nodeRows.map((row) => row.last_channel).filter(Boolean))].sort();
-  for (const channel of seen) select.append(el('option', { value: channel, text: channel }));
 }
 
 /** Say what is on screen, and never mistake the page for the answer.
@@ -4151,9 +4335,25 @@ function wire() {
     render('map');
   });
   $('[data-node-apply]').addEventListener('click', () => render('nodes'));
-  for (const select of ['[data-node-channel]', '[data-node-position]']) {
-    $(select).addEventListener('change', () => render('nodes'));
-  }
+  /* The filter panel. */
+  const filterPanel = $('[data-node-filters]');
+  const filterToggle = $('[data-node-filter-open]');
+  filterToggle.addEventListener('click', () => {
+    const open = filterPanel.hidden;
+    filterPanel.hidden = !open;
+    filterToggle.setAttribute('aria-expanded', String(open));
+    if (open) drawNodeFilters($('[data-page="nodes"]'), nodeFacets);
+  });
+  $('[data-node-filter-apply]').addEventListener('click', () => {
+    filterPanel.hidden = true;
+    filterToggle.setAttribute('aria-expanded', 'false');
+    render('nodes');
+  });
+  $('[data-node-filter-clear]').addEventListener('click', () => {
+    nodeFilters.clear();
+    drawNodeFilters($('[data-page="nodes"]'), nodeFacets);
+    render('nodes');
+  });
 
   /*
    * The starting points. Each one sets a whole query, because the
@@ -4175,9 +4375,11 @@ function wire() {
       // into a query nobody asked for.
       $('[data-node-search]', page).value = '';
       $('[data-node-role]', page).value = start.role || '';
-      $('[data-node-channel]', page).value = '';
-      $('[data-node-position]', page).value = start.position || '';
       $('[data-node-active]', page).value = start.active === undefined ? '24' : start.active;
+      // A starting point is a whole query, so it clears the panel too
+      // rather than composing with whatever was left in it.
+      nodeFilters.clear();
+      if (start.position) nodeFilters.set('position', start.position);
       $('[data-node-gateway]', page).setAttribute('aria-pressed', start.gateway ? 'true' : 'false');
       nodeSort = start.sort || { key: 'last_heard', order: 'desc' };
       render('nodes');

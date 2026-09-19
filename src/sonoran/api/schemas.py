@@ -18,3 +18,9 @@ class NodeSummary(BaseModel):
     last_heard: datetime | None
     is_mqtt_gateway: bool
     has_position: bool
+    # Added for the filter panel, which has to be able to show what it
+    # filtered on. `channel` was filterable before it was returned, so
+    # the picker that offered it could never list a single option.
+    channel: str | None = None
+    is_licensed: bool = False
+    position_confidence: str = "none"

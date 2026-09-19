@@ -714,16 +714,9 @@
               <select data-node-role aria-label="Device role">
                 <option value="">Any role</option>
               </select>
-              <select data-node-channel aria-label="Channel the node was last heard on">
-                <option value="">Any channel</option>
-              </select>
-              <select data-node-position aria-label="How exactly the position is known">
-                <option value="">Any position</option>
-                <option value="exact">Position exact</option>
-                <option value="coarse">Position coarse</option>
-                <option value="none">No position</option>
-              </select>
               <button type="button" class="toggle" data-node-gateway aria-pressed="false">Gateways</button>
+              <button type="button" class="toggle" data-node-filter-open aria-expanded="false"
+                      aria-controls="node-filters">Filters</button>
               <button type="button" class="primary" data-node-apply>Search</button>
             </div>
           </div>
@@ -735,6 +728,26 @@
             whole query rather than one control, so the useful questions
             are one click rather than three guesses.
           -->
+          <!--
+            The filter panel.
+
+            A disclosure rather than a dialog: it is a set of controls
+            over the table below it, and a dialog would cover the thing
+            being filtered. Every value carries how many nodes are
+            behind it, so a choice is visible before it is made.
+          -->
+          <div class="filter-panel" id="node-filters" data-node-filters hidden>
+            <div class="filter-grid" data-node-filter-grid></div>
+            <p class="filter-actions">
+              <button type="button" class="primary" data-node-filter-apply>Apply</button>
+              <button type="button" class="more" data-node-filter-clear>Clear all</button>
+              <span class="muted" data-node-filter-summary></span>
+            </p>
+          </div>
+
+          <!-- What is in force, and one tap to take any of it off. -->
+          <p class="filter-chips" data-node-chips hidden></p>
+
           <p class="node-starts">
             <span class="muted">Start from</span>
             <button type="button" class="chip" data-node-start="silent-routers">Silent routers</button>
