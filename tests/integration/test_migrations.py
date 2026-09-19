@@ -15,6 +15,32 @@ from sqlalchemy.exc import IntegrityError
 
 from sonoran.db.hypertables import HYPERTABLES
 
+
+@pytest.fixture(autouse=True)
+def _drop_pooled_connections(migrated_engine):  # type: ignore[no-untyped-def]
+    """Leave no other connection open while the schema is rewritten.
+
+    `migrated_engine` is session scoped and every API test in this
+    directory uses it, so by the time these tests run it holds pooled
+    connections to the same database. The tests below drop and recreate
+    every table and hypertable underneath those connections.
+
+    A pooled connection carries cached relation OIDs, and a backend that
+    is merely idle still takes part in catalog locking. That is what
+    produced two intermittent CI failures in this module:
+
+        psycopg.errors.InternalError_: tuple concurrently updated
+        psycopg.errors.InternalError_: could not open relation with OID 23397
+
+    Neither reproduced locally, because the interleaving depends on
+    timing. Disposing the pool removes the second backend rather than
+    hoping to miss it.
+    """
+    migrated_engine.dispose()
+    yield
+    migrated_engine.dispose()
+
+
 EXPECTED_TABLES = {
     "node",
     "packet",

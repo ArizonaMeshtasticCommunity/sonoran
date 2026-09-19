@@ -676,33 +676,44 @@ The measurements above are here so that decision starts from numbers.
 
 ### 3.7 CI's `test` job fails intermittently on a migration
 
-**State:** Open. Mechanism understood, fix not verified.
+**State:** One cause found and removed. Watch whether it is enough.
 
 `tests/integration/test_migrations.py::test_revision_downgrade_and_upgrade`
-fails in GitHub Actions with:
+failed **8 of 21 CI runs** in one evening — 38% — including on a
+pull request that changed one markdown file and one that changed one
+JavaScript file. Two different errors, both from Postgres:
 
     psycopg.errors.InternalError_: tuple concurrently updated
+    psycopg.errors.InternalError_: could not open relation with OID 23397
 
-It hit `main` itself and three pull requests in one evening, and passed on
-several others, so it is intermittent rather than a regression. Coverage
-passes in the same run (82.79%), so the job fails only on this test.
+Neither reproduces locally, which is what kept this open: twelve
+consecutive runs of the module passed, and CI's own whole-suite command
+passed with 656 tests.
 
-The likely mechanism: the test runs four `downgrade`/`upgrade` cycles
-against a session-scoped TimescaleDB container. TimescaleDB runs
-background workers that touch the same catalog rows the DDL is rewriting,
-and a catalog tuple updated by two backends at once produces exactly this
-error. Starting the test container with
-`-c timescaledb.max_background_workers=0` would remove the competing
-writer.
+**The diagnosis came from asking who else was connected**, rather than
+from trying to reproduce the failure. A probe inside the test, reading
+`pg_stat_activity` while the schema was being rewritten, found two other
+backends on the same database:
 
-**Not applied, because it could not be verified.** The flake does not
-reproduce locally: 12 consecutive runs of the module pass, and CI's exact
-whole-suite command with coverage passes with 656 passed / 3 skipped. A
-mitigation whose failing state has never been observed here is a guess,
-and a guess that silences an intermittent failure is worse than the
-failure, because it removes the signal without proving the cause. It
-needs one run that fails with the setting in place, or the same failure
-reproduced on a runner.
+    [('', 'idle', 1), ('TimescaleDB Background Worker Scheduler', 'idle', 1)]
+
+The unnamed one is the session-scoped `migrated_engine`, which every API
+test in that directory uses. These tests drop and recreate every table
+and hypertable underneath its pooled connections. A pooled connection
+carries cached relation OIDs, which is precisely what "could not open
+relation with OID" describes, and an idle backend still takes part in
+catalog locking.
+
+Disposing that pool before each migration test removes it — verified by
+the same probe, which then reports only the scheduler. The suite passed
+five consecutive runs afterwards.
+
+**What is not yet settled.** The TimescaleDB background worker scheduler
+is still connected, and it is the classic cause of "tuple concurrently
+updated" during DDL. It was left alone deliberately: two changes at once
+would make it impossible to say which one worked. If the flake survives
+in CI, that scheduler is the next thing to remove, with
+`-c timescaledb.max_background_workers=0` on the test container.
 
 ### 3.8 The land cover cache has never been filled
 
