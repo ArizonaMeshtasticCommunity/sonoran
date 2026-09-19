@@ -187,3 +187,11 @@ Check these items on every pull request:
 5. After a deploy, check `/health` and the ingest logs.
 6. Run `docker compose config --quiet` before deployment.
 7. Confirm that mesh-graph subscribes to the configured MQTT topic.
+8. Read `docker compose config` — not `--quiet` — and check what each
+   service receives. `docker-compose.override.yml` is read
+   automatically and an `env_file` named there is **added** to the
+   service, so the credential scoping in `docker-compose.yml` can be
+   undone from a file that is not in this repository. The deployment's
+   override did exactly that to `mesh-graph`, which held 8 credentials
+   while the base file granted it 4 MQTT variables. See
+   `docs/ARCHITECTURE.md` 2.1.

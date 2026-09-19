@@ -74,6 +74,57 @@ one service in the stack that is not our code. It is also pinned by
 digest rather than tracking `latest`, so an upstream push is not a
 deploy here.
 
+#### An override's `env_file` is added, not substituted
+
+**This file is not the last word on what a service receives.** A
+deployment may keep a `docker-compose.override.yml`, Compose reads it
+automatically, and an `env_file` named there is added to the service.
+Taking `env_file: .env` out of the base file therefore does **not**
+take `.env` off a service whose override names it.
+
+It is not hypothetical. The live deployment's override gave
+`mesh-graph`
+
+    env_file:
+      - .env
+      - .env.emqx
+
+so the allowlist above was in the base file while the container still
+received the whole of `.env`. Measured inside the running container: 8
+non-empty credentials, including the Postgres superuser password and
+the Meshtastic channel keys.
+
+Reproduced here with `docker-compose config`, against this repository's
+base file and an override of that shape:
+
+| | base only | with the override |
+|---|---:|---:|
+| `mesh-graph` environment keys | 4 | 68 |
+| non-empty credentials | 0 | **8** |
+
+The eight are `POSTGRES_PASSWORD`, `CHANNEL_KEYS`, `DATABASE_URL`,
+`DATABASE_URL_API`, `DATABASE_URL_JOBS` and the three
+`AZMSH_*_PASSWORD`.
+
+The merge was checked the other way round as well, on `api`, which does
+carry `env_file: .env` here. An override adding only `.env.extra` gives
+that service **both** files: 69 keys, with `MQTT_HOST` from `.env` and
+`EMQX_EXTRA` from `.env.extra`. So an override can only widen what a
+service receives. It can never narrow it.
+
+So two rules follow:
+
+1. **Check the resolved configuration, never the file you edited.**
+   `docker compose config` on the deployment prints what each service
+   will actually receive, overrides included. A change to credential
+   scoping is not verified until it has been read there.
+2. **An override that needs an extra env file must name only that
+   file** for the service in question. `.env.emqx` alone, not
+   `.env` and `.env.emqx`.
+
+The deployment's override has been corrected: that service now resolves
+to 0 credentials with all four MQTT variables intact.
+
 ## 3. Module contracts
 
 ### 3.1 `config`

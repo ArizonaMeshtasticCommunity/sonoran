@@ -37,6 +37,17 @@ x-logging: &logging
 #
 # A credential added to `.env` later must be added here too, or it is
 # shared with every service by default. See docs/ARCHITECTURE.md.
+#
+# AND THIS FILE IS NOT THE LAST WORD. Compose reads
+# `docker-compose.override.yml` automatically, and an `env_file` named
+# there is ADDED to the service rather than replacing what is here. An
+# override that lists `.env` hands that service the whole file again,
+# whatever this file says. It happened: the deployment's override gave
+# mesh-graph `env_file: [.env, .env.emqx]`, so the allowlist below sat
+# in this file while the container held 8 credentials.
+#
+# Verify with `docker compose config`, which prints what each service
+# actually receives, overrides included. Never by reading this file.
 x-no-credentials: &no-credentials
   DATABASE_URL: ""
   DATABASE_URL_API: ""
