@@ -38,6 +38,14 @@
     <symbol id="i-traceroutes" viewBox="0 0 24 24"><path d="M18,11H14.82C14.4,9.84 13.3,9 12,9C10.7,9 9.6,9.84 9.18,11H6C5.67,11 4,10.9 4,9V8C4,6.17 5.54,6 6,6H16.18C16.6,7.16 17.7,8 19,8A3,3 0 0,0 22,5A3,3 0 0,0 19,2C17.7,2 16.6,2.84 16.18,4H6C4.39,4 2,5.06 2,8V9C2,11.94 4.39,13 6,13H9.18C9.6,14.16 10.7,15 12,15C13.3,15 14.4,14.16 14.82,13H18C18.33,13 20,13.1 20,15V16C20,17.83 18.46,18 18,18H7.82C7.4,16.84 6.3,16 5,16A3,3 0 0,0 2,19A3,3 0 0,0 5,22C6.3,22 7.4,21.16 7.82,20H18C19.61,20 22,18.93 22,16V15C22,12.07 19.61,11 18,11M19,4A1,1 0 0,1 20,5A1,1 0 0,1 19,6A1,1 0 0,1 18,5A1,1 0 0,1 19,4M5,20A1,1 0 0,1 4,19A1,1 0 0,1 5,18A1,1 0 0,1 6,19A1,1 0 0,1 5,20Z"/></symbol>
     <symbol id="i-gaps" viewBox="0 0 24 24"><path d="M12,2C15.86,2 19,5.14 19,9C19,14.25 12,22 12,22C12,22 5,14.25 5,9C5,5.14 8.14,2 12,2M11,5V11H13V5H11M11,13V15H13V13H11Z"/></symbol>
     <symbol id="i-stats" viewBox="0 0 24 24"><path d="M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.75L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z"/></symbol>
+    <!--
+      Watch mode's own icons. They are symbols in this sprite like every
+      other icon on the page, so the strict Content-Security-Policy needs
+      no exception for them. See AGENTS.md 9.9.
+    -->
+    <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z"/></symbol>
+    <symbol id="i-fullscreen-exit" viewBox="0 0 24 24"><path d="M14,14H19V16H16V19H14V14M5,14H10V19H8V16H5V14M8,5H10V10H5V8H8V5M19,8V10H14V5H16V8H19Z"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M12,18.17L8.83,15L7.42,16.41L12,21L16.59,16.41L15.17,15M12,5.83L15.17,9L16.58,7.59L12,3L7.41,7.59L8.83,9L12,5.83Z"/></symbol>
     </svg>
     <div class="shell">
       <aside class="sidebar">
@@ -139,11 +147,85 @@
                 this brings the whole mesh back when that is wanted.
               -->
               <button type="button" class="toggle" data-map-all-nodes aria-pressed="false">Every node</button>
+              <!--
+                Motion off paints each event as a static tapered arc with
+                a chevron instead of a moving particle. It starts from the
+                system `prefers-reduced-motion` setting and is a toggle
+                rather than a lock: a viewer whose system says reduce may
+                still want the animation here, and a viewer whose system
+                says nothing may want it off. Nothing on this map is
+                encoded in motion alone, so both states read the same.
+              -->
+              <button type="button" class="toggle" data-map-motion data-no-refresh aria-pressed="true">Motion</button>
               <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
             </div>
           </div>
-          <div class="map-shell">
+          <div class="map-shell" data-map-shell>
             <div id="map"></div>
+            <!--
+              Watch mode chrome. It is the same DOM in both fullscreen
+              paths: the Fullscreen API on `.map-shell`, and a CSS class
+              on the body for iOS Safari, which does not grant
+              `requestFullscreen` on an arbitrary element. One layout code
+              path and one set of CSS rules, keyed on `.map-shell.watch`.
+
+              These start hidden and empty. The controls row above and the
+              two feed panels below are moved in here on entry and moved
+              back on exit, so there is one preset picker and one feed
+              renderer rather than two of each that could disagree.
+            -->
+            <div class="watch-bar" data-watch-bar hidden>
+              <p class="watch-status" data-watch-status>
+                <!--
+                  None of these may ever hide, which is why they share the
+                  one strip that is always on screen rather than floating
+                  somewhere the panel can cover. The preset says which mesh
+                  is being watched, and in fullscreen there is no page head
+                  to say it (AGENTS.md 9.7). The counter says how many
+                  packets are drawn out of how many arrived, because a
+                  sampled picture that does not say it is sampled is a lie
+                  the eye cannot catch. The lag says the replay is a replay.
+                -->
+                <span class="watch-preset" data-watch-preset></span>
+                <span data-watch-scope></span>
+                <span data-watch-count></span>
+                <span data-watch-lag></span>
+              </p>
+              <!-- The controls row is moved in here on entry. -->
+            </div>
+            <section class="map-overlay watch-panel" data-watch-panel hidden
+                     data-height="normal" aria-label="Live mesh">
+              <!--
+                Tabs, not two panels side by side. A traceroute arrives
+                about 1.25 times a minute, so a permanently visible
+                traceroute panel is empty most of the time and the eye
+                learns to stop looking at it. The badge does the opposite:
+                it pulls attention exactly when something lands, and it
+                costs a tenth of the screen that side by side would.
+              -->
+              <header class="watch-tabs" role="tablist">
+                <button type="button" role="tab" class="watch-tab" data-watch-tab="traffic"
+                        aria-selected="true">Traffic<span class="watch-badge" data-watch-badge="traffic" hidden></span></button>
+                <button type="button" role="tab" class="watch-tab" data-watch-tab="traces"
+                        aria-selected="false">Traceroutes<span class="watch-badge" data-watch-badge="traces" hidden></span></button>
+                <span class="watch-grip" data-watch-grip
+                      title="Drag to resize, or press E"></span>
+                <button type="button" class="watch-step" data-watch-step
+                        title="Panel height (E)" aria-label="Panel height"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></button>
+              </header>
+              <div class="watch-panes" data-watch-panes>
+                <div class="watch-pane" data-watch-pane="traffic" role="tabpanel"></div>
+                <div class="watch-pane" data-watch-pane="traces" role="tabpanel" hidden></div>
+              </div>
+              <!--
+                Phones get this instead of the panes. Fullscreen on a phone
+                in portrait is a poor watch experience and a nine-column
+                table is worse, so the honest answer is the map, one line
+                of traffic at a time, and the full feed behind a pull-up.
+              -->
+              <p class="watch-ticker" data-watch-ticker></p>
+            </section>
+            <aside class="watch-legend" data-watch-legend hidden aria-label="What the marks mean"></aside>
           </div>
           <!--
             Built from the roles the mesh is actually running. Each entry
@@ -155,12 +237,21 @@
             The map lines are live and go away after a few seconds. These
             lists do not, so anything that flashed past is still here.
           -->
-          <div class="grid two" style="margin-top: 1rem">
-            <div class="panel">
+          <div class="grid two" style="margin-top: 1rem" data-map-panels>
+            <div class="panel" data-map-panel="traffic">
               <h3><span>Live traffic</span> <span class="muted head-note" data-traffic-summary>Loading</span></h3>
               <ul class="feed" data-traffic-feed></ul>
+              <!--
+                The same rows as a table, for the expanded panel height.
+                Every column in it is already in the traffic response and
+                was thrown away by the renderer: hops, the distinct
+                gateway count, the upload count, and the channel. There is
+                no SNR column for a relayed row, because that reading
+                belongs to a different pair of radios (AGENTS.md 9.5).
+              -->
+              <div class="watch-table" data-traffic-table></div>
             </div>
-            <div class="panel">
+            <div class="panel" data-map-panel="traces">
               <h3><span>Traceroutes</span> <span class="muted head-note" data-trace-summary></span></h3>
               <ul class="feed" data-trace-feed></ul>
             </div>
@@ -727,6 +818,14 @@
       the dashboard. See AGENTS.md 9.14.2.
     -->
     <script src="static/gaps.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!--
+      The live map animation and watch mode, before app.js for the same
+      reason: a reload straight to #map calls the map page immediately.
+      Neither file reads an app.js binding at load time — app.js hands
+      each one everything it needs — so the order carries no other risk.
+    -->
+    <script src="static/map-live.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/map-watch.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/app.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The config checker's logic expects three globals, which its own

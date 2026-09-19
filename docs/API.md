@@ -813,6 +813,21 @@ is how many events the limit left, and `truncated` says the window held
 more than that. The events are the newest ones, so a client that draws
 observations as they arrive needs only enough to cover a refresh.
 
+A client must group the events before it draws them. One packet arrives
+as many rows, because `packet_seen` records MQTT uploads and a gateway
+uploads the same packet more than once: one live packet had 22 uploads
+from 15 gateways. Group on (`from.node_id`, `packet_id`), which is the
+packet identity AGENTS.md 9.1 gives, and count **distinct** gateways
+rather than rows. Drawing a mark per row says a node was heard by
+fifteen others, which is the one reading AGENTS.md 9.5.1 exists to
+forbid. The dashboard does this in `web/static/map-live.js`.
+
+The dashboard's map calls this endpoint every 15 s. It calls
+`/api/map/nodes` at most every 120 s and `/api/graph/channels` at most
+every 600 s, because both answer questions that change slowly and were
+previously paid for on every refresh. Those intervals are a client
+concern; nothing here enforces them.
+
 `direct` is true only when the packet used no hop
 (`packet.hop_start = packet_seen.hop_limit`) and the gateway is not the
 sender. It is false when either value is unknown. A gateway that is the

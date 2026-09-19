@@ -286,9 +286,10 @@ general proxy for the tile source.
 
 - Job: the user interface.
 - Static HTML, CSS, and JavaScript files. There is no build step.
-- Files: `index.html`, `app.css`, `app.js`, `planner.js`,
-  `planner-params.js`, `planner.worker.js`, `config-check.js`,
-  `meshtastic-static.js`, `protobuf-runtime.js`, and `vendor/`.
+- Files: `index.html`, `app.css`, `app.js`, `map-live.js`,
+  `map-watch.js`, `planner.js`, `planner-params.js`,
+  `planner.worker.js`, `config-check.js`, `meshtastic-static.js`,
+  `protobuf-runtime.js`, and `vendor/`.
 - Libraries load from vendored files, not from public CDNs.
   This keeps the site working without third-party availability.
 - Libraries: Leaflet for the map, ECharts for the charts and the mesh
@@ -342,6 +343,71 @@ files have loaded. A test pins the order.
 The prediction runs in module web workers, one for each of up to four
 processor cores, each holding its own copy of the engine. See
 `docs/PLANNER.md`.
+
+#### The live map animation
+
+`map-live.js` and `map-watch.js` load before `app.js`, for the reason
+the planner does: the router runs as the last act of `app.js` and a
+reload straight to `#map` calls the map page at once. Neither file
+reads an `app.js` binding at load time — `app.js` passes each one
+everything it needs — so the order carries no other risk. A test pins
+it. The design is `docs/design/live-map-watch-mode.md`.
+
+`map-live.js` is the animation. Three things about it are contracts,
+not implementation details:
+
+- **The unit is the packet, not the upload.** Observations are grouped
+  on (`from.node_id`, `packet_id`), which is the identity `AGENTS.md`
+  9.1 gives. At most three arcs are drawn, to the gateways that burned
+  the fewest hops, and the rest become a `+N` numeral beside the sender
+  and an exact count in the panel. `packet_seen` holds MQTT uploads, so
+  a line per row says "fifteen nodes heard this", which is the reading
+  9.5.1 exists to forbid. Measured on seeded traffic: 2,000
+  observations became 269 packets and 2,701 strokes became 768 arcs.
+- **Flatness is evidence.** Only a `direct` observation and a
+  traceroute hop draw a straight line, because a straight line is the
+  claim that two radios heard each other. Everything else bows by its
+  hop count, an unknown hop count is stippled, and a self-upload draws
+  no arc at all. See 9.5, 9.20.
+- **Speed is not data.** Flight time is a constant 850 ms for every
+  mark. Every gateway stamps its own `rx_time` and node clocks have
+  been 28 hours out (9.3, 9.4), so latency is not measurable and a mark
+  that moved at a distance-dependent speed would be read as one.
+
+It is one `<canvas>` in a Leaflet pane of its own, one
+`requestAnimationFrame` loop, and a pre-allocated pool of 256 mark
+slots, capped at 220 alive. The pane is created as a direct child of
+the map container rather than inside the transformed map pane, so the
+canvas stays pinned and every mark is reprojected each frame; the pane
+sets `filter: none`, because the rule that warms the basemap has
+already inverted one overlay's palette once. The canvas hides between
+`zoomstart` and `zoomend`, when Leaflet transforms its panes and a
+container-pinned canvas does not receive the transform.
+
+Each poll's events are **replayed across the poll interval** rather
+than fired in one frame, ordered on `seen_at` — our own receive clock,
+and the only time value in the system a client may order on. The
+display therefore runs about one interval behind live and says so. The
+status line also prints "drawing N of M packets" whenever the pool
+refuses anything, because the eye cannot count marks.
+
+`app.js` caches `api/graph/channels` for ten minutes and
+`api/map/nodes` for two. Both were refetched on every map refresh,
+four times a minute per open tab, and the channel list runs three
+24-hour `GROUP BY` aggregates.
+
+`map-watch.js` is fullscreen watch mode. It is a state of the map kept
+in the URL fragment (`#map/watch/<tab>/<height>`), not a new page: a
+`Referer` never carries a fragment, so the state survives a reload, is
+shareable, and leaks nothing (9.9.1). It asks for the Fullscreen API on
+`.map-shell` and falls back to a `body.watch-mode` class, because iOS
+Safari does not grant `requestFullscreen` on an arbitrary element; both
+paths end with the same class on the same element, so there is one set
+of CSS rules. It **moves** the controls row and the two feed panels
+into the overlay rather than copying them, so there is one preset
+picker and one feed renderer. The preset name, the node scope, the
+honesty counter, the replay lag and the OpenStreetMap attribution never
+hide.
 
 #### Content Security Policy
 

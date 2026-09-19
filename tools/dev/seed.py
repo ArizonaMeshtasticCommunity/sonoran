@@ -14,6 +14,9 @@ Run it against a migrated development database:
 
     uv run python tools/dev/seed.py
 
+Add `--live` to keep adding packets at the present moment instead, so
+the live map animation has something to draw. See `live` below.
+
 The script empties the tables before it fills them. You can run it
 again as many times as you want.
 """
@@ -23,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import sys
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
@@ -44,6 +48,10 @@ PORT_TRACEROUTE = 70
 PORT_NEIGHBORINFO = 71
 
 BROADCAST = 0xFFFFFFFF
+
+# What the firmware writes for a hop it could not measure. It is
+# INT8_MIN, and it means "not measured", never -32 dB. See AGENTS.md 9.6.
+UNMEASURED_SNR = -128
 
 # Nodes in Arizona. There are clients in Phoenix, Tucson, Flagstaff,
 # and Prescott. There are routers on the high ground between them.
@@ -112,7 +120,7 @@ NODES = [
         33.4255,
         -111.94,
         356,
-        False,
+        True,
     ),
     (
         0x0A51B002,
@@ -123,7 +131,7 @@ NODES = [
         33.4152,
         -111.8315,
         388,
-        False,
+        True,
     ),
     (
         0x0A51B003,
@@ -134,7 +142,7 @@ NODES = [
         33.5387,
         -112.186,
         340,
-        False,
+        True,
     ),
     (
         0x0A51B004,
@@ -145,7 +153,7 @@ NODES = [
         33.3062,
         -111.8413,
         370,
-        False,
+        True,
     ),
     (
         0x0A51B005,
@@ -156,7 +164,7 @@ NODES = [
         32.32,
         -110.9,
         800,
-        False,
+        True,
     ),
     (
         0x0A51B006,
@@ -281,6 +289,22 @@ GAP_DEMO = (GAP_ISOLATED, GAP_INTERMITTENT)
 # The positions in a NODES row.
 NUM, SHORT, LONG, HW, ROLE, LAT, LON, ALT, GATEWAY = range(9)
 
+# The gateways the random traffic loop uploads through. Nine of them.
+#
+# There used to be four, all of them ridge-top routers, and a packet then
+# arrived from one to three gateways. The live map draws at most three
+# arcs per packet and puts the rest behind a "+N" numeral beside the
+# sender, so a preview with four gateways never draws that numeral and
+# never exercises the cap. AGENTS.md 9.5.1 measured a live packet with 22
+# uploads from 15 gateways, so the real shape of this data is a wide fan
+# and a preview that hides it hides the thing the renderer exists for.
+#
+# A rooftop or backyard client running MQTT is the commonest gateway
+# there is, so promoting five of them is the realistic way to widen it.
+#
+# The two gap-demo gateways stay out of this list. Their traffic is
+# written by hand, so what the gaps page shows is a consequence of the
+# rows rather than of a label.
 GATEWAYS = [n for n in NODES if n[GATEWAY] and n[NUM] not in GAP_DEMO]
 
 # The neighbour links, as (node, neighbour, snr).
@@ -842,5 +866,195 @@ async def main() -> None:
     await engine.dispose()
 
 
+# --- Live mode ------------------------------------------------------
+
+
+def _burned(rng: random.Random) -> int:
+    """Return how many hops one upload of a packet burned.
+
+    Weighted so most observations are relayed. AGENTS.md 9.5 measured
+    about 82 percent relayed against 5 percent direct on live traffic, and
+    a preview where nearly every observation is direct draws nearly every
+    line flat. Flatness is the map's claim that two radios heard each
+    other, so a preview that makes everything flat hides the one
+    distinction the geometry exists to draw.
+    """
+    return rng.choices([0, 1, 2, 3], weights=[1, 5, 7, 4])[0]
+
+
+async def live() -> None:
+    """Keep adding packets at the present moment, until interrupted.
+
+    The seeded window is fixed at the moment the seed ran, so a few
+    minutes later the map's live window is empty and the animation has
+    nothing to draw. Worse, the front end only animates a packet it has
+    not seen before, so even a full window animates nothing on a reload.
+    Watching the animation at all therefore needs traffic that keeps
+    arriving, and this is it.
+
+    The fan-out follows the measurement in AGENTS.md 9.5.1 rather than the
+    main seed's one to three: a packet goes to several gateways, and some
+    of them upload it more than once, so a preview exercises the three-arc
+    cap, the "+N" numeral, the distinct-gateway count against the upload
+    count, and the dedupe that keeps a repeat upload from drawing a second
+    stroke over the first.
+
+    Run it beside the preview, never against production:
+
+        SEED_DATABASE_URL=... uv run python tools/dev/seed.py --live
+    """
+    url = os.environ.get(
+        "SEED_DATABASE_URL",
+        "postgresql+asyncpg://postgres:devpassword@127.0.0.1:5432/azmsh",
+    )
+    every = float(os.environ.get("SEED_LIVE_INTERVAL", "1.5"))
+    engine = create_async_engine(url)
+    rng = random.Random()
+    senders = [n[NUM] for n in NODES]
+
+    async with engine.connect() as conn:
+        packet_id = (
+            await conn.execute(text("SELECT coalesce(max(packet_id), 500000) FROM packet"))
+        ).scalar_one()
+
+    print(f"==> live traffic every {every}s from packet id {packet_id}. Ctrl-C to stop.")
+    while True:
+        async with engine.begin() as conn:
+            for _ in range(rng.randint(1, 3)):
+                packet_id += 1
+                seen_at = datetime.now(UTC)
+                sender = rng.choice(senders)
+                portnum = rng.choices(
+                    [
+                        PORT_TEXT,
+                        PORT_POSITION,
+                        PORT_NODEINFO,
+                        PORT_TELEMETRY,
+                        PORT_TRACEROUTE,
+                        PORT_NEIGHBORINFO,
+                    ],
+                    weights=[8, 30, 12, 30, 8, 12],
+                )[0]
+                channel = rng.choice(CHANNELS)
+                hop_start = rng.choice([3, 3, 5, 7])
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO packet_key (from_node_num, packet_id, first_seen_at)
+                        VALUES (:f, :p, :t) ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {"f": sender, "p": packet_id, "t": seen_at},
+                )
+                row = await conn.execute(
+                    text(
+                        """
+                        INSERT INTO packet (from_node_num, packet_id, to_node_num,
+                            portnum, channel, hop_start, hop_limit, want_ack,
+                            rx_time, first_seen_at)
+                        VALUES (:f, :p, :to, :port, :ch, :hs, :hl, false, :rx, :t)
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "f": sender,
+                        "p": packet_id,
+                        "to": BROADCAST,
+                        "port": portnum,
+                        "ch": channel,
+                        "hs": hop_start,
+                        "hl": hop_start - rng.randint(0, 2),
+                        "rx": int(seen_at.timestamp()),
+                        "t": seen_at,
+                    },
+                )
+                packet_pk = row.scalar_one()
+
+                # A wide fan, and some gateways upload twice. One of them
+                # is sometimes the sender itself, which is an upload of its
+                # own voice and not a radio hop: the endpoint reports that
+                # with `has_line` false, and the map draws it as a pulse
+                # with no arc. See AGENTS.md 9.5.1.
+                # Most observations are relayed. AGENTS.md 9.5 measured
+                # about 82 percent relayed against 5 percent direct, and a
+                # preview where every packet is direct draws every line
+                # flat — which is exactly the distinction the new geometry
+                # exists to make, so it would go unchecked.
+                chosen = rng.sample(GATEWAYS, rng.randint(2, len(GATEWAYS)))
+                uploads = [(gw[0], hop_start - _burned(rng)) for gw in chosen]
+                for gateway_num, hop_limit in list(uploads):
+                    if rng.random() < 0.3:
+                        uploads.append((gateway_num, hop_limit))
+                if rng.random() < 0.25:
+                    uploads.append((sender, hop_start))
+                for gateway_num, hop_limit in uploads:
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO packet_seen (packet_pk, from_node_num,
+                                packet_id, gateway_node_num, mqtt_topic, channel,
+                                rx_rssi, rx_snr, hop_limit, seen_at)
+                            VALUES (:pk, :f, :p, :g, :topic, :ch, :rssi, :snr,
+                                :hl, :t) ON CONFLICT DO NOTHING
+                            """
+                        ),
+                        {
+                            "pk": packet_pk,
+                            "f": sender,
+                            "p": packet_id,
+                            "g": gateway_num,
+                            "topic": f"msh/US/AZ/2/e/{channel}/{node_id(sender)}",
+                            "ch": channel,
+                            "rssi": rng.randint(-120, -60),
+                            "snr": round(rng.uniform(-12, 12), 2),
+                            "hl": hop_limit,
+                            "t": datetime.now(UTC),
+                        },
+                    )
+
+            # A traceroute now and then, on the preset the map opens on.
+            #
+            # It is a reply, so it carries `request_id`: the map asks for
+            # completed traceroutes only, because an unanswered request's
+            # hop list is not a path to the node that was asked and
+            # drawing it claims a route nobody proved (AGENTS.md 9.18).
+            #
+            # The readings are quarter dB, and one hop in three is written
+            # as INT8_MIN, which means "not measured" and not -32 dB
+            # (AGENTS.md 9.6). Without those the stippled hop never draws,
+            # and the stipple is how the map says a reading is missing.
+            if rng.random() < 0.18:
+                packet_id += 1
+                route = [n[NUM] for n in rng.sample(GATEWAYS, rng.randint(1, 3))]
+                ends = rng.sample([n[NUM] for n in NODES if n[NUM] not in route], 2)
+                readings = [
+                    UNMEASURED_SNR if rng.random() < 0.33 else rng.randint(-32, 44)
+                    for _ in range(len(route) + 1)
+                ]
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO traceroute (packet_id, request_id, from_node_num,
+                            to_node_num, channel, route, route_back, snr_towards,
+                            snr_back, seen_at)
+                        VALUES (:p, :req, :f, :to, :ch, :route, :back, :snrt, :snrb, :t)
+                        """
+                    ),
+                    {
+                        "p": packet_id,
+                        "req": packet_id - 1,
+                        "f": ends[0],
+                        "to": ends[1],
+                        "ch": PRIMARY_PRESET,
+                        "route": f"[{','.join(str(r) for r in route)}]",
+                        "back": f"[{','.join(str(r) for r in reversed(route))}]",
+                        "snrt": f"[{','.join(str(v) for v in readings)}]",
+                        "snrb": f"[{','.join(str(v) for v in readings)}]",
+                        "t": datetime.now(UTC),
+                    },
+                )
+        await asyncio.sleep(every)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(live() if "--live" in sys.argv else main())

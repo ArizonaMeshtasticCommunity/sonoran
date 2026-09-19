@@ -41,6 +41,35 @@
    */
   --traffic-relayed: #ded2c6;
   /*
+   * One colour for each packet family the live animation draws.
+   *
+   * These are not the `--role-*` values and must not be made to match
+   * them: a role is what a node is, a family is what a packet was, and
+   * the two are drawn in the same frame. The dots are roles, the moving
+   * marks are families.
+   *
+   * Colour is never the only channel. Each family also has a shape, so
+   * the alphabet reads with every colour removed — render the canvas
+   * through a greyscale filter and it must still be readable. The
+   * palette is separated in luminance as well as hue, and the one pair
+   * that shares a luminance (position orange at 62, node info violet at
+   * 62) differs on the blue-yellow axis, which deuteranopia and
+   * protanopia both keep, and also differs in fill. No pair relies on
+   * the red-green axis alone.
+   *
+   * Text is the brightest and the largest: it is the rarest packet and
+   * the only one a person wrote. The bucket is the dimmest, for the same
+   * reason `snrColour` gives an unmeasured signal the dimmest colour.
+   * Unknown is not a grade and must not outrank one.
+   */
+  --pkt-position: #f4703f;
+  --pkt-nodeinfo: #a48fd0;
+  --pkt-telemetry: #46b3e6;
+  --pkt-text: #f6ece2;
+  --pkt-trace: #b6d94c;
+  --pkt-routing: #b59c88;
+  --pkt-other: #7d6857;
+  /*
    * One colour for each Meshtastic device role. The mesh runs many more
    * roles than "router" and "client" and they behave differently, so
    * the map gives each its own colour. Routers and repeaters are the
@@ -233,9 +262,6 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 
 .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
 .feed li { border-left: 2px solid var(--line); padding: .1rem .6rem; }
-.map-overlay .feed { max-height: 12rem; }
-.map-overlay h4 { margin: 0; font-size: .72rem; text-transform: uppercase;
-  letter-spacing: .07em; color: var(--muted); }
 .feed li .meta { color: var(--muted); font-size: .78rem; display: flex; gap: .5rem; flex-wrap: wrap; }
 
 /* Signal quality */
@@ -259,19 +285,24 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 
 .map-shell { position: relative; border: 1px solid var(--line); border-radius: .6rem; overflow: hidden; }
 #map { height: min(70vh, 40rem); background: var(--panel-2); }
+/*
+ * A panel that floats over the map.
+ *
+ * This used to be defined twice with different values and used by
+ * nothing at all. Watch mode is what it was waiting for, so the two
+ * definitions are one and the class now styles something.
+ */
 .map-overlay {
-  position: absolute; top: .6rem; right: .6rem; z-index: 500;
-  background: rgba(13, 18, 25, .92);
+  position: absolute; z-index: 500;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
   border: 1px solid var(--line);
   border-radius: .5rem;
   padding: .6rem .7rem;
-  width: 18rem;
-  max-height: calc(100% - 1.2rem);
-  overflow-y: auto;
   display: flex; flex-direction: column; gap: .4rem;
+  backdrop-filter: blur(6px);
 }
 .map-overlay h4 { margin: 0; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
-.map-overlay .feed { max-height: 14rem; font-size: .8rem; }
+.map-overlay .feed { font-size: .8rem; }
 .leaflet-container { background: var(--panel-2); font: var(--font); }
 /*
  * Make the light basemap fit the dark interface, then warm it with
@@ -295,6 +326,235 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .leaflet-bar a { background: var(--panel); color: var(--text); border-color: var(--line); }
 .leaflet-bar a:hover { background: var(--panel-2); color: var(--text); }
 
+/* Live map animation, and watch mode
+   -----------------------------------------------------------------
+
+   The animation is one canvas in a Leaflet pane of its own, created as a
+   direct child of the map container rather than inside the transformed
+   map pane, so it stays pinned to the container while every mark is
+   reprojected each frame.
+
+   `filter: none` on the pane is not decoration. app.css inverts and warms
+   the basemap, and an earlier version of that rule named the pane rather
+   than the layer and inverted the coverage overlay's signal ramp with it,
+   so the map drew its own legend backwards. A canvas of packet colours
+   under that filter would come out inverted and the bug would look like a
+   palette mistake rather than a CSS inheritance one. */
+.leaflet-sonoranLive-pane { filter: none; pointer-events: none; }
+.live-canvas { position: absolute; inset: 0; pointer-events: none; }
+
+/*
+ * `display: flex` beats the browser's own `[hidden] { display: none }`,
+ * which is a plain element rule at lower specificity. Every part of watch
+ * mode's chrome is a flex box and starts hidden, so without this the
+ * whole overlay draws over the ordinary map page.
+ */
+.watch-bar[hidden], .watch-panel[hidden], .watch-legend[hidden],
+.watch-pane[hidden] { display: none; }
+
+.watch-control a { display: grid; place-items: center; width: 30px; height: 30px; }
+.watch-control a[aria-pressed="true"] { color: var(--accent); }
+.watch-control .icon { width: 1.15rem; height: 1.15rem; }
+
+/*
+ * Watch mode, in one place.
+ *
+ * Both entry paths end with `.watch` on `.map-shell`: the Fullscreen API,
+ * which is preferred because only it hides the browser's own chrome, and
+ * `body.watch-mode`, which is the mandatory fallback because iOS Safari
+ * does not grant `requestFullscreen` on an arbitrary element. Same DOM,
+ * one set of rules, so the two cannot drift apart.
+ */
+body.watch-mode .map-shell.watch {
+  position: fixed; inset: 0; z-index: 900; border-radius: 0; border: none;
+}
+body.watch-mode { overflow: hidden; }
+.map-shell.watch { height: 100%; background: var(--bg); }
+.map-shell.watch #map { height: 100%; }
+
+/*
+ * One strip across the top, holding the two things that may never hide:
+ * what the map is of, and how truthfully it is drawing it.
+ *
+ * The controls row is moved in here from the page head that watch mode
+ * hides. Moved, not copied: two preset pickers could disagree, and the
+ * day they do a viewer reads the wrong mesh.
+ */
+.watch-bar {
+  position: absolute; top: .5rem; left: .5rem; right: .5rem; z-index: 520;
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: .4rem .9rem;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line); border-radius: .5rem;
+  padding: .4rem .6rem; backdrop-filter: blur(6px);
+}
+.watch-bar .controls { gap: .4rem; font-size: .85rem; margin-left: auto; }
+.watch-bar .controls .toggle, .watch-bar .controls select { font-size: .8rem; }
+
+/*
+ * The preset and the node scope say which mesh this is, and there is no
+ * page head in fullscreen to say it (AGENTS.md 9.7). The counter says how
+ * much of the traffic is drawn, and the lag says the replay runs behind
+ * live. A viewer who cannot see these is being told a story rather than
+ * shown a measurement.
+ */
+.watch-status {
+  margin: 0; display: flex; flex-wrap: wrap; gap: .1rem 1rem;
+  font-size: .78rem; color: var(--muted); min-width: 0;
+}
+.watch-status .watch-preset { color: var(--text); font-weight: 600; }
+.watch-status span:empty { display: none; }
+
+/* The Leaflet controls move clear of the strip above them. The strip
+   wraps with the window, so the offset is its measured height and not a
+   guess that would be wrong at the widths where space is tightest. */
+.map-shell.watch .leaflet-top { top: calc(var(--watch-bar-h, 3rem) + .6rem); }
+
+.watch-panel {
+  bottom: .6rem; left: .6rem; z-index: 510;
+  width: 26rem; max-width: calc(100% - 1.2rem);
+  padding: .4rem .5rem .5rem;
+  gap: .3rem;
+}
+.watch-panel[data-height="peek"] { height: 5rem; }
+.watch-panel[data-height="normal"] { height: 14rem; }
+/* Anchored top and bottom rather than given a height, so it always
+   clears the strip above it whatever that strip wrapped to. */
+.watch-panel[data-height="expanded"] {
+  width: 44rem; height: auto; top: calc(var(--watch-bar-h, 3rem) + 1.2rem);
+}
+
+.watch-tabs { display: flex; align-items: center; gap: .3rem; flex: none; }
+.watch-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  border-radius: 0; padding: .2rem .45rem .3rem; color: var(--muted);
+  font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+  display: flex; align-items: center; gap: .35rem;
+}
+.watch-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+/* The badge is what side by side was trying to buy, at a tenth of the
+   screen: it pulls the eye exactly when something lands. */
+.watch-badge {
+  background: var(--accent); color: var(--bg); border-radius: .6rem;
+  padding: 0 .3rem; font-size: .68rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; min-width: 1.05rem; text-align: center;
+}
+/* Drag to resize, and it snaps: free drag is fiddly with a mouse and
+   hostile with a finger, and three words store cleanly in the fragment. */
+.watch-grip {
+  flex: 1; height: 1rem; cursor: ns-resize; touch-action: none;
+  background: repeating-linear-gradient(to right, var(--line) 0 3px, transparent 3px 6px);
+  background-size: 100% 2px; background-repeat: no-repeat; background-position: center;
+}
+.watch-step {
+  background: none; border: none; padding: .15rem; color: var(--muted);
+  display: grid; place-items: center;
+}
+.watch-step:hover { color: var(--text); }
+.watch-step .icon { width: 1rem; height: 1rem; }
+
+.watch-panes { flex: 1; min-height: 0; display: flex; }
+.watch-pane { flex: 1; min-width: 0; overflow: auto; }
+.watch-pane[hidden] { display: none; }
+/* The moved feed panel drops its own frame: it is already inside one. */
+.watch-pane .panel {
+  background: none; border: none; padding: 0; height: 100%;
+  display: flex; flex-direction: column; min-height: 0;
+}
+.watch-pane .panel > h3 { margin: 0 0 .35rem; font-size: .7rem; }
+.watch-pane .feed { max-height: none; flex: 1; min-height: 0; }
+/* The wide table belongs to the expanded height alone, and the list to
+   the other two. Only one is ever on screen — and only in the traffic
+   pane, because the traceroute pane has no table to swap in and hiding
+   its list would leave the tab blank. */
+.watch-table { display: none; }
+.watch-panel[data-height="expanded"] [data-watch-pane="traffic"] .feed { display: none; }
+.watch-panel[data-height="expanded"] .watch-table { display: block; overflow: auto; flex: 1; min-height: 0; }
+.watch-table table { font-size: .74rem; }
+.watch-table th, .watch-table td { padding: .28rem .4rem; white-space: nowrap; }
+.map-shell:not(.watch) .watch-table, .map-shell:not(.watch) .watch-panel { display: none; }
+
+.watch-ticker { display: none; }
+
+.watch-legend {
+  position: absolute; z-index: 530; right: .6rem;
+  top: calc(var(--watch-bar-h, 3rem) + 1.2rem);
+  width: 24rem; max-width: calc(100% - 1.2rem);
+  max-height: calc(100% - var(--watch-bar-h, 3rem) - 2.4rem);
+  overflow: auto; padding: .7rem .8rem; cursor: pointer;
+  background: color-mix(in srgb, var(--panel) 95%, transparent);
+  border: 1px solid var(--line); border-radius: .5rem;
+  display: flex; flex-direction: column; gap: .5rem;
+  backdrop-filter: blur(6px);
+}
+.watch-legend h4 {
+  margin: 0; font-size: .75rem; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--muted);
+}
+.watch-legend p { margin: 0; font-size: .74rem; }
+
+/*
+ * Tablet: the panel becomes a bottom sheet across the width. The
+ * existing responsive rule already turned `.map-overlay` static at 60rem,
+ * and this extends that idea rather than fighting it.
+ */
+@media (max-width: 79.9rem) {
+  .map-shell.watch .watch-panel,
+  .map-shell.watch .watch-panel[data-height="expanded"] {
+    left: .6rem; right: .6rem; width: auto;
+    /* A full-width sheet reaches the corner the OpenStreetMap
+       attribution sits in, and that attribution is a condition of the
+       tiles. It stops above it. See AGENTS.md 9.9.1. */
+    bottom: 1.5rem;
+  }
+}
+
+/*
+ * Phone: the map, one line of traffic, and the full feed behind a
+ * pull-up. Fullscreen on a phone in portrait is a poor watch experience
+ * and a nine-column table is worse, so the table is not attempted at all.
+ * Landscape gets the tablet layout, by width.
+ */
+@media (max-width: 47.9rem) {
+  .map-shell.watch .watch-panel[data-height="peek"] { height: auto; }
+  .map-shell.watch .watch-panel[data-height="peek"] .watch-panes { display: none; }
+  .map-shell.watch .watch-panel[data-height="peek"] .watch-ticker {
+    display: block; margin: 0; font-size: .76rem; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* No table on a phone. Nine columns on a 390 px screen is worse than
+     no table, and the honest answer is the list. */
+  .map-shell.watch .watch-panel[data-height="expanded"] [data-watch-pane="traffic"] .feed { display: flex; }
+  .map-shell.watch .watch-panel[data-height="expanded"] .watch-table { display: none; }
+  /*
+   * One scrolling row rather than four wrapped ones. Wrapped, the
+   * controls took a third of the viewport of the mode whose whole
+   * purpose is that the map fills the screen.
+   */
+  .map-shell.watch .watch-bar .controls {
+    flex-wrap: nowrap; overflow-x: auto; width: 100%; margin-left: 0;
+    padding-bottom: .15rem; scrollbar-width: none;
+  }
+  .map-shell.watch .watch-bar .controls > * { flex: none; }
+  .map-shell.watch .watch-status { font-size: .72rem; gap: .1rem .6rem; }
+  /* The OpenStreetMap attribution is a condition of the tiles and must
+     stay readable, so the panel stops above it. See AGENTS.md 9.9.1. */
+  .map-shell.watch .watch-panel { bottom: 1.5rem; }
+}
+
+/*
+ * Reduced motion.
+ *
+ * The animation reads the same system setting itself and uses it as the
+ * default of a visible toggle rather than a lock. These rules cover the
+ * interface around it, which had no reduced-motion rule anywhere.
+ */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+  .map-overlay, .watch-bar, .watch-status, .watch-legend { backdrop-filter: none; }
+  html { scroll-behavior: auto; }
+}
+
 .legend { display: flex; flex-wrap: wrap; gap: .75rem; font-size: .78rem; color: var(--muted); }
 .legend .swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: 50%; margin-right: .3rem; }
 .legend .swatch.stale { background: var(--role-stale); }
@@ -310,6 +570,26 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .legend .line.dotted { border-top-style: dotted; border-color: var(--role-stale); }
 /* A hop a traceroute really made, that no reply confirmed. */
 .legend .line.faint { border-top-style: dashed; opacity: .45; }
+/*
+ * The three live line kinds. These classes were already in the legend
+ * markup and had no rules at all, so all three drew as the same muted
+ * line and the key told a reader nothing.
+ *
+ * Flat means a measured radio link, so it is solid and bright. A relation
+ * whose route is not recorded is curved on the map, and the nearest a
+ * legend swatch gets to that is a bowed border. Not-measured is stippled,
+ * which is the same mark the map uses for an unknown hop count and for an
+ * unread signal alike.
+ */
+.legend .line.direct { border-top-color: var(--good); border-top-width: 2.5px; }
+.legend .line.relayed {
+  border-top: none; height: .45rem; border-bottom: 2px solid var(--traffic-relayed);
+  border-radius: 50% / 100% 100% 0 0; border-left: none; border-right: none;
+}
+.legend .line.stipple { border-top-style: dotted; border-top-color: var(--role-stale); }
+.legend .line.neighbour { border-top-style: dashed; border-top-color: var(--map-link); opacity: .6; }
+/* A packet family's shape, drawn rather than described. */
+.pkt-swatch { width: 16px; height: 16px; margin-right: .35rem; vertical-align: middle; }
 
 /* Tabs */
 
@@ -409,7 +689,14 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
   .sidebar { width: auto; flex: none; height: auto; position: static; }
   .sidebar nav { flex-direction: row; flex-wrap: wrap; }
   .content { padding: 1rem; }
-  .map-overlay { position: static; width: auto; margin-top: .6rem; }
+  /*
+   * An overlay that is not watch mode's own panel goes static and sits
+   * under the map on a narrow screen. Watch mode keeps its panel floating
+   * because the whole point of the mode is that the map fills the screen,
+   * and it has its own two breakpoints above for the sheet and the
+   * ticker.
+   */
+  .map-overlay:not(.watch-panel) { position: static; width: auto; margin-top: .6rem; }
 }
 
 /* Detail pages */

@@ -73,21 +73,27 @@ const PALETTE = {
   stale: colour('role-stale', '#7d6857'),
 };
 
-/** Say what one traffic observation actually is.
+/** Say what one packet's uploads actually amount to.
  *
  * `direct` is false for a node gatewaying its own packet, because there
  * was no radio hop to measure — but calling that "relayed" says another
  * node carried it, which is the one thing it rules out. The packet page
  * has always distinguished the two.
+ *
+ * A packet is direct when any one gateway heard it with no hop. Failing
+ * that, the fewest hops any gateway burned is the closest this data gets
+ * to how far it travelled, and the ground it crossed is recorded nowhere
+ * (AGENTS.md 9.20), so the count is said and nothing else is claimed.
  */
-function trafficKind(event) {
-  if (event.from.node_id === event.gateway.node_id) return 'its own upload';
-  return event.direct ? 'direct' : 'relayed';
+function trafficKind(packet) {
+  if (packet.any_direct) return 'direct';
+  if (packet.self_upload && packet.gateway_count === 1) return 'its own upload';
+  if (packet.min_hops == null) return 'hops not recorded';
+  return `${packet.min_hops} hop${packet.min_hops === 1 ? '' : 's'}`;
 }
 
-function trafficKindClass(event) {
-  if (event.from.node_id === event.gateway.node_id) return 'tag';
-  return event.direct ? 'tag router' : 'tag';
+function trafficKindClass(packet) {
+  return packet.any_direct ? 'tag router' : 'tag';
 }
 
 /** Return the colour for a signal quality, dimmed when there is none.
@@ -706,10 +712,30 @@ function ensureMap() {
     }).addTo(map);
   }
   mapState.nodes = L.layerGroup().addTo(map);
-  mapState.traffic = L.layerGroup().addTo(map);
-  mapState.traces = L.layerGroup().addTo(map);
   mapState.links = L.layerGroup();
   mapState.map = map;
+  /*
+   * The live traffic and the live traceroutes are no longer Leaflet
+   * layers. They are marks in one canvas, drawn by one animation loop.
+   * See map-live.js for why: the old layer drew a polyline per upload
+   * and faded it with twelve timers, which is hundreds of timers a
+   * second and hundreds of thousands of Leaflet objects an hour.
+   */
+  mapState.live = SonoranLive.create(map, {
+    colour,
+    snrColour,
+    // The backlog and the lag change every frame, so they are written
+    // from the loop rather than once per fetch.
+    onStats: liveCounters,
+  });
+  /*
+   * `window.SonoranMap` is already how this map answers questions from
+   * the console. The animation's own numbers go in the same place, so
+   * the frame budget can be checked without a build step: marks alive,
+   * marks dropped, and the draw time percentiles.
+   */
+  mapState.stats = mapState.live.stats;
+  installWatchMode(map);
   return map;
 }
 
@@ -746,170 +772,71 @@ function portnumLabel(portnum) {
 }
 
 /*
- * The live traffic layer.
+ * The live traffic animation.
  *
- * An observation is drawn as it arrives and then goes away again. The
- * layer used to redraw the whole window on every refresh, which built a
- * standing mat of hundreds of lines and said nothing about what was
- * happening now.
+ * The unit is the packet, not the upload. This is the whole of the
+ * change and it is worth stating plainly. `packet_seen` holds MQTT
+ * uploads, so one packet arrives as many rows: a live packet measured in
+ * AGENTS.md 9.5.1 had 22 uploads from 15 gateways. Drawing a line per
+ * row fired up to 22 strokes out of one node inside one refresh, and the
+ * picture then said "this node was just heard by fifteen nodes", which is
+ * the single reading 9.5.1 exists to forbid. Every one of those strokes
+ * carried an honest tooltip, and nobody hovers a tooltip at fifty events
+ * a second.
  *
- * A direct observation is a real radio link: the sender and the gateway
- * heard each other with no hop between them. It draws as a solid line
- * in its signal colour.
+ * So uploads are grouped into packets, at most three arcs are drawn to
+ * the gateways that burned the fewest hops, and the rest become a
+ * numeral beside the sender and an exact count in the panel.
  *
- * A relayed observation is not a link. The packet reached the gateway
- * through other nodes, so the straight line crosses ground the signal
- * never took. It draws dashed with an arrow head, which says "this
- * packet ended up here" rather than "these two can hear each other".
- * Most observations are relayed. See AGENTS.md 9.5.
+ * Geometry carries the honesty. A flat line claims a radio link, so only
+ * a `direct` observation gets one; a relayed arc bows by its hop count,
+ * and an unknown hop count is stippled. See map-live.js.
  */
 /*
- * How many observations to ask for. Only the ones that arrived since
- * the last refresh are ever drawn, so this needs to cover a refresh and
- * not the window: the counts in the summary come from the endpoint and
- * are of the whole window whatever this is. It is the endpoint maximum,
- * which a refresh has no way of overrunning.
+ * How many observations to ask for. It is the endpoint maximum. The
+ * counts in the summary come from the endpoint and are of the whole
+ * window whatever this is, and `truncated` says when the cap bit.
  */
 const TRAFFIC_LIMIT = 2000;
-const TRAFFIC_VISIBLE_MS = 7000;
-const TRAFFIC_FADE_MS = 2500;
-const DIRECT_OPACITY = 0.95;
-const RELAYED_OPACITY = 0.7;
 
-// Each observation this tab has already flashed, mapped to its own
-// time in ms. The time is what the pruning reads: an observation older
-// than the window can never come back, so its key is safe to forget,
-// and nothing still inside the window is ever dropped.
+// Each packet this tab has already animated, mapped to its own time in
+// ms. The time is what the pruning reads: a packet older than the window
+// can never come back, so its key is safe to forget, and nothing still
+// inside the window is ever dropped. An earlier trim dropped by
+// insertion order, which deleted the newest keys of the first pass and
+// made the map re-draw traffic it had already drawn.
 const trafficSeen = new Map();
 
 /**
- * Build an arrow head partway along a line, pointing at its end.
- *
- * Leaflet draws no arrows, so this is two short segments in a V. The
- * shape is worked out in screen pixels and put back into coordinates,
- * because a chevron built in degrees would lean over as latitude
- * changes. It is sized for the zoom it was drawn at, and these lines
- * live only a few seconds, so a zoom during one leaves it a little off.
- */
-function arrowHead(map, from, to, options) {
-  const start = map.latLngToLayerPoint(from);
-  const end = map.latLngToLayerPoint(to);
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const length = Math.hypot(dx, dy);
-  if (length < 12) return null;
-
-  // Two thirds along, so it does not sit under either node marker.
-  const tip = L.point(start.x + dx * 0.66, start.y + dy * 0.66);
-  const angle = Math.atan2(dy, dx);
-  const size = 9;
-  const spread = 0.45;
-  const wing = (turn) =>
-    map.layerPointToLatLng(
-      L.point(
-        tip.x - size * Math.cos(angle + turn),
-        tip.y - size * Math.sin(angle + turn),
-      ),
-    );
-  return L.polyline([wing(spread), map.layerPointToLatLng(tip), wing(-spread)], options);
-}
-
-/** Draw one observation, hold it, then fade it off the map. */
-function flashTraffic(event) {
-  const direct = event.direct === true;
-  const from = L.latLng(event.from.lat, event.from.lon);
-  const to = L.latLng(event.gateway.lat, event.gateway.lon);
-  const style = {
-    color: direct ? snrColour(event.snr) : PALETTE.relayed,
-    weight: direct ? 2.5 : 1.8,
-    opacity: direct ? DIRECT_OPACITY : RELAYED_OPACITY,
-    dashArray: direct ? null : '6 5',
-  };
-
-  const parts = [L.polyline([from, to], style)];
-  if (!direct) {
-    // The arrow marks the direction the packet travelled, and marks the
-    // line as a path rather than a link.
-    const head = arrowHead(mapState.map, from, to, { ...style, dashArray: null, weight: 2 });
-    if (head) parts.push(head);
-  }
-  for (const part of parts) part.addTo(mapState.traffic);
-
-  /*
-   * A relayed line says how far it is from the truth. An ordinary
-   * packet carries no route, so which nodes it passed through is not
-   * recorded anywhere and cannot be drawn. The hop count is the whole
-   * of what is known, and saying it is better than leaving a straight
-   * line to imply a path that was never taken. Only a traceroute holds
-   * its route, which is what the live traceroute layer draws.
-   */
-  const hops = event.hops_taken == null
-    ? 'relayed, path not recorded'
-    : `relayed over ${event.hops_taken} ${event.hops_taken === 1 ? 'hop' : 'hops'}, `
-      + 'path not recorded';
-
-  // A text node, never a string. Leaflet writes a string tooltip with
-  // innerHTML, and a display name is whatever the node's owner typed
-  // into their radio.
-  parts[0].bindTooltip(
-    document.createTextNode(
-      `${portnumLabel(event.portnum)} from ${event.from.display_name}, ` +
-      `uploaded by ${event.gateway.display_name}` +
-      (direct
-        ? `, direct${event.snr == null ? '' : `, ${round(event.snr, 1)} dB`}`
-        : `, ${hops}, so this line is not the route`) +
-      '. Click for the packet.',
-    ),
-  );
-  for (const part of parts) {
-    part.on('click', () => { location.hash = packetHref(event).slice(1); });
-  }
-
-  const steps = 12;
-  const start = direct ? DIRECT_OPACITY : RELAYED_OPACITY;
-  for (let step = 1; step <= steps; step += 1) {
-    mapLater(() => {
-      for (const part of parts) {
-        if (step === steps) mapState.traffic.removeLayer(part);
-        else part.setStyle({ opacity: start * (1 - step / steps) });
-      }
-    }, TRAFFIC_VISIBLE_MS + (step * TRAFFIC_FADE_MS) / steps);
-  }
-}
-
-/**
- * Flash every observation that has not been shown yet.
+ * Hand the animation every packet it has not drawn yet.
  *
  * The first pass only records what is already in the window, so opening
  * the page does not fire fifteen minutes of traffic at once.
+ *
+ * `packets` is already keyed on (`from.node_id`, `packet_id`), which is
+ * the identity AGENTS.md 9.1 gives. The old key was the observation's
+ * packet ID, gateway and time: the time let a gateway's repeat upload
+ * draw a second line over the first, and two coincident strokes at 0.7
+ * opacity read as one at 0.91, which is a quantity nobody measured.
  */
-function flashNewTraffic(events, firstPass, cutoffMs) {
-  let started = 0;
-  for (const event of events) {
-    // Keyed on the packet and the gateway that uploaded it, never on
-    // the time. One gateway uploads the same packet more than once, and
-    // keying on the time drew a second line over the first: two strokes
-    // at 0.7 opacity read as one at 0.91, which is a quantity nobody
-    // measured. The sending node is part of the key because a packet ID
-    // is only unique per sender (AGENTS.md 9.1).
-    const key = `${event.from.node_id}-${event.packet_id}-${event.gateway.node_id}`;
-    const known = trafficSeen.has(key);
-    trafficSeen.set(key, Date.parse(event.time) || Date.now());
-    if (known || !event.has_line || firstPass) continue;
-    flashTraffic(event);
-    started += 1;
+function releaseTraffic(packets, firstPass, cutoffMs, intervalMs) {
+  const fresh = [];
+  for (const packet of packets) {
+    const known = trafficSeen.has(packet.key);
+    trafficSeen.set(packet.key, packet.timeMs || Date.now());
+    if (known || firstPass) continue;
+    // A packet whose only upload was the sender's own still fires its
+    // emission pulse, so `arcs` being empty is not a reason to skip it.
+    fresh.push(packet);
   }
-  // Forget every observation older than the window. It cannot come back
-  // from the endpoint, so its key is dead weight, and dropping it by
-  // time never touches a key that could still arrive again. The old
-  // trim dropped by insertion order, which deleted the newest keys of
-  // the first pass and made the map re-flash traffic already drawn.
   if (cutoffMs != null) {
     for (const [key, seenAt] of trafficSeen) {
       if (seenAt < cutoffMs) trafficSeen.delete(key);
     }
   }
-  return started;
+  mapState.live.beginBatch();
+  if (fresh.length) mapState.live.push(fresh, intervalMs);
+  return fresh.length;
 }
 
 /*
@@ -954,65 +881,18 @@ function drawLinks(edges, positions) {
  * took, one segment for each.
  */
 const traceSeen = new Set();
-const mapTimers = new Set();
-
-/** Run something later, and remember the timer so it can be cancelled. */
-function mapLater(action, delay) {
-  const timer = setTimeout(() => {
-    mapTimers.delete(timer);
-    action();
-  }, delay);
-  mapTimers.add(timer);
-}
 
 /**
- * Cancel every pending fade and clear both live layers.
+ * Stop the animation and drop everything it holds.
  *
- * The traffic and traceroute layers share the timer set, so a timer
- * left running would try to restyle a line that has been removed.
+ * There is nothing left to cancel one mark at a time: the fades were
+ * chains of setTimeout, thirteen per traffic line and twenty-five per
+ * trace hop, up to five thousand pending. The whole page now runs on one
+ * requestAnimationFrame loop, so stopping is one call.
  */
 function stopMapAnimations() {
-  for (const timer of mapTimers) clearTimeout(timer);
-  mapTimers.clear();
-  if (mapState.traces) mapState.traces.clearLayers();
-  if (mapState.traffic) mapState.traffic.clearLayers();
+  if (mapState.live) mapState.live.clear();
 }
-
-/** Draw one hop, hold it, then fade it out and remove it. */
-function animateHop(hop, trace, delay) {
-  mapLater(() => {
-    const line = L.polyline(
-      [[hop.from.lat, hop.from.lon], [hop.to.lat, hop.to.lon]],
-      { color: snrColour(hop.snr), weight: 3, opacity: 0.95 },
-    ).addTo(mapState.traces);
-    line.bindTooltip(
-      document.createTextNode(
-        `${hop.from.display_name} to ${hop.to.display_name}` +
-        (hop.snr == null ? ', signal not measured' : `, ${round(hop.snr, 1)} dB`) +
-        '. Click for the whole traceroute.',
-      ),
-    );
-    // Clickable while it is on the map. The same trace stays in the
-    // side list afterwards, which is the part that does not expire.
-    if (trace && trace.id != null) line.on('click', () => openTraceroute(trace.id));
-
-    // Fade, then take it off the map. Leaving it would slowly turn the
-    // live layer into the same standing mat of old lines this replaced.
-    const steps = 24;
-    for (let step = 1; step <= steps; step += 1) {
-      mapLater(() => {
-        if (step === steps) mapState.traces.removeLayer(line);
-        else line.setStyle({ opacity: 0.95 * (1 - step / steps) });
-      }, TRACE_HOLD_MS + (step * TRACE_FADE_MS) / steps);
-    }
-  }, delay);
-}
-
-const TRACE_STEP_MS = 220;
-/* A hop is held, then fades. Together these keep a path on the map
- * for about eight seconds, and the longest paths for about ten. */
-const TRACE_HOLD_MS = 3000;
-const TRACE_FADE_MS = 5000;
 
 /*
  * How many old traces to replay when the layer is switched on.
@@ -1045,12 +925,15 @@ function drawTraceroutes(traces, firstPass) {
     if (firstPass) {
       if (seeded >= TRACE_SEED) continue;
       // Stagger the seeded ones so they read as separate paths.
-      drawable.forEach((hop, index) =>
-        animateHop(hop, trace, seeded * 900 + index * TRACE_STEP_MS));
+      mapState.live.pushTrace(drawable, seeded);
       seeded += 1;
       continue;
     }
-    drawable.forEach((hop, index) => animateHop(hop, trace, index * TRACE_STEP_MS));
+    // A traceroute hop is the one mark on this map that is a measured
+    // path, so it is the last thing the animation ever gives up. It stays
+    // flat, and an unmeasured hop is stippled rather than coloured as if
+    // it were weak: INT8_MIN means "not measured" (AGENTS.md 9.6).
+    mapState.live.pushTrace(drawable, started);
     started += 1;
   }
   started += seeded;
@@ -1071,10 +954,55 @@ let linkChannel = '';
  * cannot hear a node on MediumFast, so a picture holding both would
  * show links that cannot exist. See AGENTS.md 9.7.
  */
+/*
+ * The channel list, cached for ten minutes.
+ *
+ * `api/graph/channels?hours=24` runs three 24-hour GROUP BY aggregates,
+ * over `packet_seen`, `neighbor_metrics` and `traceroute`. It answers a
+ * question that changes hourly and the map used to pay for it on every
+ * refresh, which is four times a minute per open tab. Watch mode would
+ * have made that worse.
+ */
+const CHANNELS_TTL_MS = 600000;
+const channelCache = { at: 0, value: null };
+
+async function mapChannels() {
+  const now = Date.now();
+  if (channelCache.value && now - channelCache.at < CHANNELS_TTL_MS) return channelCache.value;
+  const list = await get('api/graph/channels?hours=24').catch(() => null);
+  if (!list) return channelCache.value;
+  channelCache.at = now;
+  channelCache.value = list;
+  return list;
+}
+
+/*
+ * The positioned nodes, cached for two minutes.
+ *
+ * Seven to nine hundred rows that change slowly, refetched on every
+ * refresh. The key carries the preset and the "every node" toggle, so
+ * changing either is an immediate refetch rather than a stale picture.
+ */
+const NODES_TTL_MS = 120000;
+const nodeCache = { at: 0, key: '', value: null };
+
+async function mapNodes(path) {
+  const now = Date.now();
+  if (nodeCache.value && nodeCache.key === path && now - nodeCache.at < NODES_TTL_MS) {
+    return nodeCache.value;
+  }
+  const rows = await get(path).catch(() => null);
+  if (!rows) return nodeCache.key === path ? nodeCache.value : null;
+  nodeCache.at = now;
+  nodeCache.key = path;
+  nodeCache.value = rows;
+  return rows;
+}
+
 async function linkChannelOptions(page) {
   const wrap = $('[data-link-channel-wrap]', page);
   const select = $('[data-link-channel]', page);
-  const list = await get('api/graph/channels?hours=24').catch(() => null);
+  const list = await mapChannels();
   const channels = (list && list.channels) || [];
   if (!channels.length) {
     wrap.hidden = true;
@@ -1111,7 +1039,309 @@ async function linkChannelOptions(page) {
   }
   select.value = linkChannel;
   wrap.hidden = false;
+  /*
+   * Held for the watch status line. In fullscreen there is no page head
+   * and no visible picker label, and a viewer must never forget which
+   * mesh they are watching: a node on LongFast cannot hear a node on
+   * MediumFast, so the picture is only true of one preset. AGENTS.md 9.7.
+   */
+  const chosen = channels.find((item) => item.channel === linkChannel);
+  mapPresetLabel = (chosen && chosen.label) || linkChannel || '';
   return linkChannel;
+}
+
+/* The label of the preset the map is drawn for, for the watch status
+ * line. The picker's own option text carries the counts, which are noise
+ * once the choice is made. */
+let mapPresetLabel = '';
+
+/**
+ * One packet as a feed row.
+ *
+ * The exact numbers are here rather than on the map: `gateway_count` is
+ * distinct gateways and `upload_count` is rows, and the two are different
+ * because one gateway uploads the same packet more than once. A live
+ * packet had 22 uploads from 15 gateways. The list is of uploads, never
+ * of listeners — only a gateway reports, so a node that heard this and is
+ * not a gateway is invisible to this database. See AGENTS.md 9.5.1.
+ */
+function trafficRow(packet) {
+  return el('li', {},
+    el('div', {}, nodeChip(packet.from)),
+    el('div', { class: 'meta' },
+      el('span', { text: gatewayTally(packet) }),
+      // Only a direct observation measures the sender's own link. On a
+      // relayed one the SNR belongs to the last hop into the gateway,
+      // which is a different pair of radios. The packet page has always
+      // done this; the map feed did not, and two pages reading one
+      // endpoint gave two answers.
+      packet.any_direct && packet.direct_snr != null ? snrCell(packet.direct_snr) : null,
+      el('span', { class: trafficKindClass(packet), text: trafficKind(packet) }),
+      // The packet itself, so the whole record is one click away. The map
+      // marks are canvas and carry no tooltip, so this is the route in.
+      el('a', {
+        class: 'linky',
+        href: packetHref(packet),
+        text: portnumLabel(packet.portnum),
+      }),
+      el('span', { text: clock(packet.time) })));
+}
+
+/** "3 gateways, 5 uploads", with the singulars right. */
+function gatewayTally(packet) {
+  const gateways = `${count(packet.gateway_count)} gateway${packet.gateway_count === 1 ? '' : 's'}`;
+  if (packet.upload_count === packet.gateway_count) return gateways;
+  return `${gateways}, ${count(packet.upload_count)} uploads`;
+}
+
+/**
+ * The expanded panel's table.
+ *
+ * Every column was already in the response and thrown away by the
+ * renderer. There is no SNR column for a packet with no direct
+ * observation, and that is not an omission: the reading on a relayed
+ * observation belongs to the last hop into the gateway (AGENTS.md 9.5).
+ */
+function trafficTable(packets) {
+  return table([
+    { label: 'Time', cell: (row) => el('span', { text: clock(row.time) }) },
+    { label: 'Sender', cell: (row) => nodeChip(row.from) },
+    {
+      label: 'Kind',
+      cell: (row) => el('a', { class: 'linky', href: packetHref(row), text: portnumLabel(row.portnum) }),
+    },
+    {
+      label: 'Hops',
+      num: true,
+      cell: (row) => (row.min_hops == null
+        ? el('span', { class: 'muted', text: 'not recorded' })
+        : el('span', { text: String(row.min_hops) })),
+    },
+    { label: 'Gateways', num: true, cell: (row) => el('span', { text: count(row.gateway_count) }) },
+    { label: 'Uploads', num: true, cell: (row) => el('span', { text: count(row.upload_count) }) },
+    {
+      label: 'SNR',
+      num: true,
+      cell: (row) => (row.any_direct && row.direct_snr != null
+        ? snrCell(row.direct_snr)
+        : el('span', { class: 'muted', text: '-' })),
+    },
+    { label: 'Channel', cell: (row) => el('span', { text: row.channel || '-' }) },
+  ], packets, 'No traffic in the window.');
+}
+
+/* --- Watch mode ------------------------------------------------- */
+
+/*
+ * The system setting is the default of the toggle, not a lock.
+ *
+ * A viewer whose system says "reduce" may still want the animation on
+ * this one page, and a viewer whose system says nothing may want it off
+ * on a train. Nothing on this map is encoded in motion alone — direction
+ * has a static form in the taper and the chevron, the hop count is in the
+ * geometry, the packet kind is in the shape — so both states say the
+ * same things.
+ */
+const REDUCED_MOTION = window.matchMedia
+  ? window.matchMedia('(prefers-reduced-motion: reduce)')
+  : { matches: false, addEventListener: () => {} };
+
+function motionButton() {
+  return $('[data-map-motion]');
+}
+
+/** Push the toggle's state into the animation. */
+function applyMotionSetting() {
+  const button = motionButton();
+  if (!button || !mapState.live) return;
+  mapState.live.setReduced(button.getAttribute('aria-pressed') !== 'true');
+}
+
+/**
+ * Build the legend, once, inside watch mode.
+ *
+ * It names what the marks mean in the terms the data supports, and the
+ * shapes are drawn rather than described, because a described shape is
+ * not a shape. The preset is in the status line above and never
+ * collapses, so it is not repeated here.
+ */
+function watchLegend(target) {
+  const swatch = (family) => {
+    const box = el('canvas', { class: 'pkt-swatch', width: '16', height: '16' });
+    const ctx = box.getContext('2d');
+    const paint = colour(family.token, family.fallback);
+    ctx.strokeStyle = paint;
+    ctx.fillStyle = paint;
+    const size = Math.min(family.size, 10);
+    const half = size / 2;
+    if (family.shape === 'disc') { ctx.beginPath(); ctx.arc(8, 8, half, 0, Math.PI * 2); ctx.fill(); }
+    else if (family.shape === 'ring') { ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(8, 8, half, 0, Math.PI * 2); ctx.stroke(); }
+    else if (family.shape === 'square') ctx.fillRect(8 - half, 8 - half, size, size);
+    else if (family.shape === 'capsule') { ctx.beginPath(); ctx.roundRect(8 - half, 6.5, size, 3, 1.5); ctx.fill(); }
+    else if (family.shape === 'diamond') {
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(8, 8 - half); ctx.lineTo(8 + half, 8); ctx.lineTo(8, 8 + half); ctx.lineTo(8 - half, 8);
+      ctx.closePath(); ctx.stroke();
+    } else if (family.shape === 'cross') {
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(8 - half, 8); ctx.lineTo(8 + half, 8); ctx.moveTo(8, 8 - half); ctx.lineTo(8, 8 + half);
+      ctx.stroke();
+    } else {
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(8 - half, 8); ctx.lineTo(8 + half, 8); ctx.stroke();
+    }
+    return box;
+  };
+
+  replace(target,
+    el('h4', { text: 'What the marks mean' }),
+    el('div', { class: 'legend' },
+      el('span', { class: 'legend-note' }, el('span', { class: 'line direct' }),
+        'Flat line: a measured radio link'),
+      el('span', { class: 'legend-note' }, el('span', { class: 'line relayed' }),
+        'Bowed line: a relation whose route is not recorded. Higher bow, more hops'),
+      el('span', { class: 'legend-note' }, el('span', { class: 'line stipple' }),
+        'Stippled: not measured, for a hop count and for a signal alike'),
+      el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }),
+        'Neighbour link, a node naming a node it hears itself')),
+    el('div', { class: 'legend' },
+      SonoranLive.FAMILY_ORDER.map((key) => {
+        const family = SonoranLive.FAMILIES[key];
+        return el('span', { class: 'legend-note' }, swatch(family), family.label);
+      })),
+    /*
+     * The one line of prose the design insists on. "Heard by" is banned
+     * from this feature and the word is "uploaded": `packet_seen` records
+     * MQTT uploads, so every observer this database can hold is a
+     * gateway, and a count of them says nothing about coverage.
+     * See AGENTS.md 9.5.1.
+     */
+    el('p', { class: 'muted', text: 'Uploads, not listeners. Only a gateway reports, so a node that heard a packet and did not upload it is invisible here. A "+N" beside a sender counts the gateways whose arcs are not drawn.' }),
+    el('p', { class: 'muted', text: 'Every mark flies for the same time, whatever the distance. Speed is not data: each gateway stamps its own clock, so latency cannot be measured.' }),
+    el('p', { class: 'muted', text: 'Press ? to close. F leaves watch mode, T switches tab, E changes the panel height.' }));
+}
+
+/*
+ * The two live numbers, written from inside the animation loop.
+ *
+ * Never sample silently. The eye cannot count marks, so when the pool
+ * refuses a packet the real numbers are written down. Anything else is a
+ * picture that is quietly wrong and cannot be caught by looking.
+ *
+ * "Drawing N of M" is only ever said when something really was refused. A
+ * packet still in the replay buffer has not been dropped, and reporting
+ * it as a shortfall would be the same fault pointing the other way.
+ */
+function liveCounters(counts) {
+  const held = mapState.lastPackets ? mapState.lastPackets.length : 0;
+  const drawing = counts.dropped
+    ? `drawing ${count(counts.offered - counts.dropped)} of ${count(counts.offered)} packets`
+    : `${count(held)} packets in the window`
+      + (counts.queued ? `, ${count(counts.queued)} still to replay` : '');
+  /*
+   * The display runs about one poll behind live, because a batch is
+   * spread across the interval that follows it instead of being fired in
+   * one frame. That is the cost of being able to follow what happened and
+   * it must be said rather than hidden: presenting a replay as
+   * instantaneous is the one lie this feature could tell unnoticed.
+   */
+  const lag = counts.lagMs == null
+    ? ''
+    : `replaying, about ${Math.max(1, Math.round(counts.lagMs / 1000))} s behind`;
+  SonoranWatch.status({ count: drawing, lag });
+}
+
+/** Write the status line, and the phone ticker. */
+function updateWatchStatus(page, packets, traffic) {
+  SonoranWatch.status({
+    preset: mapPresetLabel ? `Preset ${mapPresetLabel}` : 'Every preset',
+    scope: mapNodeScope,
+  });
+  liveCounters(mapState.live
+    ? mapState.live.counts()
+    : { offered: 0, drawn: 0, dropped: 0, queued: 0, lagMs: null });
+  void traffic;
+  void page;
+
+  /*
+   * The phone ticker. One event every two seconds, because a nine-column
+   * table on a phone is worse than no table and pretending otherwise
+   * would be the dishonest option. It only runs in watch mode, so the
+   * page keeps to the two timers it is meant to have.
+   */
+  clearInterval(mapState.tickerTimer);
+  mapState.tickerTimer = null;
+  const newest = packets.slice(-12).reverse();
+  if (!newest.length || !SonoranWatch.isOn()) {
+    SonoranWatch.ticker('');
+    return;
+  }
+  let at = 0;
+  const show = () => {
+    const packet = newest[at % newest.length];
+    at += 1;
+    SonoranWatch.ticker(
+      `${clock(packet.time)}  ${packet.from.display_name}  `
+      + `${portnumLabel(packet.portnum)}  ${trafficKind(packet)}  ${gatewayTally(packet)}`);
+  };
+  show();
+  mapState.tickerTimer = setInterval(show, 2000);
+}
+
+/** Give watch mode the handles it needs, once. */
+function installWatchMode(map) {
+  const page = $('[data-page="map"]');
+  const shell = $('[data-map-shell]', page);
+  SonoranWatch.install({
+    map,
+    page,
+    shell,
+    isMapActive: () => currentPage === 'map',
+    legend: watchLegend,
+    onResize: () => map.invalidateSize(),
+    /*
+     * The tab and the height live in the fragment, and writing the
+     * fragment must not cost a request: a tab switch is a change of what
+     * is tabulated, not of what is fetched. `route()` reads this flag and
+     * skips the re-render when only the watch words changed.
+     */
+    writeFragment: (next) => {
+      watchFragmentWrite = true;
+      location.hash = next;
+    },
+  });
+
+  const button = motionButton();
+  if (button) {
+    button.setAttribute('aria-pressed', String(!REDUCED_MOTION.matches));
+    button.addEventListener('click', () => {
+      const pressed = button.getAttribute('aria-pressed') === 'true';
+      button.setAttribute('aria-pressed', String(!pressed));
+      applyMotionSetting();
+    });
+  }
+  if (REDUCED_MOTION.addEventListener) {
+    REDUCED_MOTION.addEventListener('change', (event) => {
+      if (!button) return;
+      button.setAttribute('aria-pressed', String(!event.matches));
+      applyMotionSetting();
+    });
+  }
+  applyMotionSetting();
+
+  /*
+   * A tab that has been hidden for a while holds a replay buffer that is
+   * no longer about now. Playing it out on return would manufacture
+   * exactly the burst this whole change exists to remove, so it is thrown
+   * away and the next poll starts clean.
+   */
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !mapState.live) return;
+    const held = mapState.live.discardQueue();
+    if (held) console.info(`live map: discarded ${held} buffered packets on return`);
+  });
 }
 
 PAGES.map = async (page) => {
@@ -1135,12 +1365,12 @@ PAGES.map = async (page) => {
    * both of its nodes on the map.
    */
   const allNodes = $('[data-map-all-nodes]', page).getAttribute('aria-pressed') === 'true';
-  const nodes = await get(
+  const nodes = await mapNodes(
     'api/map/nodes'
     + (channel && !allNodes
       ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}`
       : ''),
-  ).catch(() => null);
+  );
   if (!nodes) return;
   const [traffic, edges, traces] = await getAll([
     showTraffic
@@ -1174,42 +1404,50 @@ PAGES.map = async (page) => {
       .map((row) => [row.node_id, [row.lat, row.lon]]));
 
   if (showTraffic && traffic) {
-    if (!map.hasLayer(mapState.traffic)) map.addLayer(mapState.traffic);
+    /*
+     * One aggregation pass, two consumers. The animation takes the
+     * packets it has not drawn; the panel shows the newest of all of
+     * them with the exact counts. The counts live in the panel on
+     * purpose: a panel row can be read and an 850 ms particle cannot.
+     */
+    const packets = SonoranLive.aggregate(traffic.events);
     // A refresh of slack past the window covers any late upload, so a
     // key is only forgotten once nothing can bring it back.
     const cutoff = Date.now() - (Number(minutes) * 60000 + LIVE_INTERVAL_MS);
-    const flashed = flashNewTraffic(traffic.events, !mapState.trafficPrimed, cutoff);
+    const fresh = releaseTraffic(
+      packets, !mapState.trafficPrimed, cutoff, LIVE_INTERVAL_MS);
     mapState.trafficPrimed = true;
+    mapState.lastPackets = packets;
     const direct = traffic.direct_count || 0;
+    /*
+     * "observations" is the right word for the endpoint's count and the
+     * summary already got that right. What it lacked was the packet
+     * count beside it, which is the number of things that actually
+     * happened: uploads, not listeners. See AGENTS.md 9.5.1.
+     */
     $('[data-traffic-summary]', page).textContent =
-      `${count(traffic.event_count)} observations in ${traffic.window_minutes} min, ` +
-      `${count(direct)} direct.` + (flashed ? ` ${count(flashed)} drawing.` : '');
+      `${count(traffic.event_count)} observations in ${traffic.window_minutes} min, `
+      + `${count(direct)} direct, from ${count(packets.length)} packets.`
+      + (traffic.truncated ? ` Newest ${count(traffic.returned_count)} shown.` : '')
+      + (fresh ? ` ${count(fresh)} new.` : '');
     replace($('[data-traffic-feed]', page),
-      traffic.events.length
-        ? traffic.events.slice(0, 40).map((event) => el('li', {},
-            el('div', {}, nodeChip(event.from)),
-            el('div', { class: 'meta' },
-              el('span', { text: `via ${event.gateway.display_name}` }),
-              // Only a direct observation measures the sender's own
-              // link. On a relayed one the SNR belongs to the last hop,
-              // which is a different pair of radios. The tooltip on the
-              // map line has always known this; the row did not, and
-              // two places reading one feed gave two answers.
-              event.direct && event.snr != null ? snrCell(event.snr) : null,
-              el('span', { class: trafficKindClass(event), text: trafficKind(event) }),
-              // The packet itself, so the whole record is one click away.
-              el('a', {
-                class: 'linky',
-                href: packetHref(event),
-                text: portnumLabel(event.portnum),
-              }),
-              el('span', { text: clock(event.time) }))))
+      packets.length
+        ? packets.slice().reverse().slice(0, 40).map(trafficRow)
         : [empty('No traffic in the window.')]);
+    replace($('[data-traffic-table]', page),
+      packets.length
+        ? trafficTable(packets.slice().reverse().slice(0, 40))
+        : empty('No traffic in the window.'));
+    updateWatchStatus(page, packets, traffic);
+    SonoranWatch.bump('traffic', fresh);
   } else {
-    map.removeLayer(mapState.traffic);
+    mapState.live.clear();
     mapState.trafficPrimed = false;
+    mapState.lastPackets = [];
     $('[data-traffic-summary]', page).textContent = 'The traffic layer is off.';
     replace($('[data-traffic-feed]', page));
+    replace($('[data-traffic-table]', page));
+    updateWatchStatus(page, [], null);
   }
 
   if (showLinks && edges) {
@@ -1223,9 +1461,13 @@ PAGES.map = async (page) => {
   }
 
   if (showTraces && traces) {
-    if (!map.hasLayer(mapState.traces)) map.addLayer(mapState.traces);
-    const started = drawTraceroutes(traces.traces, !mapState.tracesPrimed);
+    const seeding = !mapState.tracesPrimed;
+    const started = drawTraceroutes(traces.traces, seeding);
     mapState.tracesPrimed = true;
+    // The seeded paths of the first pass are old news, so they do not
+    // earn a badge. Only a trace that arrived while somebody was looking
+    // the other way does.
+    if (!seeding) SonoranWatch.bump('traces', started);
     $('[data-trace-summary]', page).textContent =
       `${count(traces.trace_count)} in the last ${traces.window_minutes} min` +
       (started ? `, ${count(started)} drawing.` : '. New ones draw as they arrive.');
@@ -1250,8 +1492,6 @@ PAGES.map = async (page) => {
               el('span', { text: clock(trace.time) }))))
         : [empty('No traceroutes in the window.')]);
   } else {
-    stopMapAnimations();
-    if (map.hasLayer(mapState.traces)) map.removeLayer(mapState.traces);
     mapState.tracesPrimed = false;
     $('[data-trace-summary]', page).textContent = 'The traceroute layer is off.';
     replace($('[data-trace-feed]', page));
@@ -2978,11 +3218,28 @@ async function render(name) {
   }
 }
 
+/*
+ * Set when watch mode writes its own state into the fragment.
+ *
+ * Switching a tab or changing a panel height changes what is tabulated,
+ * not what is fetched, so it must not cost a request. The fragment is
+ * still where the state lives — it survives a reload, it is shareable,
+ * and a `Referer` never carries it (AGENTS.md 9.9.1) — but the router has
+ * to be told that this particular change is not a navigation.
+ */
+let watchFragmentWrite = false;
+
 async function route() {
   const parts = (location.hash.slice(1) || 'dashboard').split('/');
   const [name, nodeId] = parts;
 
   const known = Object.hasOwn(PAGES, name) ? name : 'dashboard';
+
+  if (watchFragmentWrite && known === currentPage) {
+    watchFragmentWrite = false;
+    return;
+  }
+  watchFragmentWrite = false;
 
   /*
    * A pair is only a pair when both halves arrived.
@@ -3004,15 +3261,37 @@ async function route() {
   }
   if (known === 'traceroute') currentTrace = decodeURIComponent(parts[1] || '') || null;
   currentNodeId = known === 'node' ? decodeURIComponent(nodeId || '') : currentNodeId;
+  const leavingMap = currentPage === 'map' && known !== 'map';
   currentPage = known;
+
+  /*
+   * Leaving the map stops the animation dead.
+   *
+   * There was no page-exit hook at all, so the old fades went on running
+   * over a page nobody was looking at. One loop makes this one call, and
+   * the target is no CPU at all when the map is not the subject.
+   */
+  if (leavingMap && mapState.live) mapState.live.setPageActive(false);
+  if (known === 'map' && mapState.live) mapState.live.setPageActive(true);
+  if (leavingMap) {
+    clearInterval(mapState.tickerTimer);
+    mapState.tickerTimer = null;
+  }
 
   for (const page of $$('[data-page]')) page.classList.toggle('active', page.dataset.page === known);
   for (const link of $$('[data-nav]')) link.classList.toggle('current', link.dataset.nav === known);
   await render(known);
+  // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
+  if (known === 'map') SonoranWatch.restore();
 }
 
 function wire() {
   for (const button of $$('.toggle')) {
+    // A toggle that changes only how the page is drawn carries
+    // `data-no-refresh` and wires itself. The Motion toggle is one: it
+    // changes the animation, not the data, and a refetch for it would be
+    // a request nobody asked for.
+    if (button.hasAttribute('data-no-refresh')) continue;
     button.addEventListener('click', () => {
       const pressed = button.getAttribute('aria-pressed') === 'true';
       button.setAttribute('aria-pressed', String(!pressed));
