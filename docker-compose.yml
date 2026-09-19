@@ -1,7 +1,25 @@
+# A log driver for every service, and a ceiling on what it keeps.
+#
+# The default json-file driver has no limit, so a service that starts
+# logging an error every few milliseconds writes until the disk is full.
+# This box shares a 15 GB filesystem with another account, so filling it
+# is not a local fault: it takes down the other person's work and the
+# database along with it. 20 MB times three files is 60 MB per service,
+# 360 MB for the stack.
+#
+# This is the shape the Sonoran clause asks for: a resource a service
+# can consume without bound is a resource it will eventually consume.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   timescaledb:
     image: timescale/timescaledb-ha:pg17
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_DB: azmsh
       POSTGRES_USER: postgres
@@ -22,7 +40,24 @@ services:
   api:
     build: .
     restart: unless-stopped
+    logging: *logging
     command: ["sonoran-api"]
+    # Ask the application, not the port.
+    #
+    # A container whose process is alive but wedged still accepts a TCP
+    # connection, so `Up` says nothing. /health is served by the app
+    # itself, which is the difference between a probe that asserts
+    # function and one that only proves something is listening.
+    #
+    # ingest and jobs have no HTTP server, so they get no healthcheck
+    # here rather than a decorative one. A real probe for them has to
+    # read a heartbeat they do not yet write; see docs/ISSUES.md.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)\""]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 30s
     env_file: .env
     depends_on:
       migrate:
@@ -43,6 +78,7 @@ services:
 
   migrate:
     build: .
+    logging: *logging
     command: ["alembic", "upgrade", "head"]
     env_file: .env
     environment:
@@ -54,6 +90,7 @@ services:
   ingest:
     build: .
     restart: unless-stopped
+    logging: *logging
     command: ["sonoran-ingest"]
     env_file: .env
     depends_on:
@@ -65,6 +102,7 @@ services:
   jobs:
     build: .
     restart: unless-stopped
+    logging: *logging
     command: ["sonoran-jobs"]
     env_file: .env
     volumes:
@@ -83,6 +121,7 @@ services:
   mesh-graph:
     image: ghcr.io/ianmcorvidae/mesh-graph:latest
     restart: unless-stopped
+    logging: *logging
     env_file: .env
     entrypoint: ["sh", "-c"]
     volumes:

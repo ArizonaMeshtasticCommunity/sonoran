@@ -592,6 +592,47 @@ it. A moving node could show a trail.
 
 ---
 
+### 3.5 ingest and jobs have no liveness probe
+
+**State:** Open.
+
+`timescaledb` and `api` are the only services with a healthcheck, so
+`ingest` and `jobs` can sit wedged behind a `Up` status indefinitely.
+Neither serves HTTP, so a probe has to read something they write.
+
+The honest shape is a heartbeat: ingest touches a file, or records a
+timestamp, each time it stores a packet; jobs does the same at the end of
+a cycle. A probe then asserts the timestamp is recent. Until they write
+one, adding a healthcheck would only assert that a process exists, which
+is the state that already looks healthy and is not.
+
+### 3.6 No memory or CPU ceiling on any service
+
+**State:** Open. Needs a decision, not a guess.
+
+`docker-compose.yml` sets no `mem_limit` and no `cpus`. Measured on the
+shared dev box, which has 3 cores and 3,398 MB of RAM:
+
+| Service | RSS |
+|---|---|
+| timescaledb | 788 MiB |
+| jobs | 259 MiB |
+| mesh-graph | 76 MiB |
+| ingest | 53 MiB |
+| api | 24 MiB |
+
+About 1.2 GB of 3.4 GB at rest. The figure that makes a ceiling awkward
+is the coverage job: `docs/COVERAGE.md` 9.2 records one Arizona region
+grid at 88 MB, a preset holding two and a third while rendering, and an
+unbounded 300-node run killed by the OOM killer at 4.7 GB per worker
+before the engine was fixed to one instance per process.
+
+So a `mem_limit` low enough to protect the box is close enough to the
+coverage job's real peak to risk killing a run that would have finished.
+Setting one is a judgement about which failure is preferable, on a host
+shared with another account, and it belongs to whoever operates the box.
+The measurements above are here so that decision starts from numbers.
+
 ## 4. Operational notes
 
 ### 4.1 Text storage is on
