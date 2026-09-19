@@ -2529,7 +2529,12 @@ function meshGraphTrace(url) {
 let currentLink = null;
 
 PAGES.link = async (page) => {
-  if (!currentLink) return;
+  if (!currentLink) {
+    replace($('[data-link-title]', page), el('h2', { text: 'Link' }));
+    return replace($('[data-link-body]', page),
+      empty('Open a link from the mesh graph or from a node page. '
+        + 'A link is addressed by the two nodes at its ends.'));
+  }
   const [a, b] = currentLink;
   const body = $('[data-link-body]', page);
   replace(body, el('p', { class: 'loading', text: 'Loading' }));
@@ -2574,7 +2579,10 @@ PAGES.link = async (page) => {
 };
 
 PAGES.traceroute = async (page) => {
-  if (!currentTrace) return;
+  if (!currentTrace) {
+    return replace($('[data-trace-body]', page),
+      empty('Open a traceroute from the traceroutes page or from a node page.'));
+  }
   const body = $('[data-trace-body]', page);
   replace(body, el('p', { class: 'loading', text: 'Loading' }));
   const trace = await get(`api/traceroutes/${encodeURIComponent(currentTrace)}`)
@@ -2729,7 +2737,11 @@ function decodedPanels(decoded) {
 }
 
 PAGES.packet = async (page) => {
-  if (!currentPacket) return;
+  if (!currentPacket) {
+    return replace($('[data-packet-body]', page),
+      empty('Open a packet from a message, a node page, or the firehose. '
+        + 'A packet is addressed by the node that sent it and the packet ID.'));
+  }
   const [fromNode, packetId] = currentPacket;
   const body = $('[data-packet-body]', page);
   replace(body, el('p', { class: 'loading', text: 'Loading' }));
@@ -2878,9 +2890,26 @@ async function route() {
   const [name, nodeId] = parts;
 
   const known = Object.hasOwn(PAGES, name) ? name : 'dashboard';
-  if (known === 'packet') currentPacket = [decodeURIComponent(parts[1] || ''), parts[2] || ''];
-  if (known === 'link') currentLink = [decodeURIComponent(parts[1] || ''), decodeURIComponent(parts[2] || '')];
-  if (known === 'traceroute') currentTrace = decodeURIComponent(parts[1] || '');
+
+  /*
+   * A pair is only a pair when both halves arrived.
+   *
+   * These used to be built unconditionally, so `#packet` with nothing
+   * after it produced ['', ''] — an array, and so truthy. The `if
+   * (!currentPacket) return` guard in the page never fired, and the page
+   * asked the API for `packets//`. The link page did the same and took a
+   * 422; the packet page got an answer with no observations in it and
+   * threw on reading .filter of undefined, which leaves the panel blank
+   * with no clue why.
+   */
+  const pair = (one, two) => (one && two ? [one, two] : null);
+  if (known === 'packet') {
+    currentPacket = pair(decodeURIComponent(parts[1] || ''), parts[2] || '');
+  }
+  if (known === 'link') {
+    currentLink = pair(decodeURIComponent(parts[1] || ''), decodeURIComponent(parts[2] || ''));
+  }
+  if (known === 'traceroute') currentTrace = decodeURIComponent(parts[1] || '') || null;
   currentNodeId = known === 'node' ? decodeURIComponent(nodeId || '') : currentNodeId;
   currentPage = known;
 
