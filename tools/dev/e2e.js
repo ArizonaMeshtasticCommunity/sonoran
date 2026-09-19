@@ -139,9 +139,30 @@ async function main() {
 
   await journey(context, 'coverage switches preset', async (page) => {
     await open(page, 'coverage', 5000);
+    /*
+     * A deployment with no published coverage run offers no preset,
+     * because there is nothing to choose between. That is the page
+     * working, not the page broken, and a preview usually looks like
+     * this: the coverage job has never run there.
+     *
+     * So ask the API what it has before deciding what the page owes us.
+     * Asserting `options > 0` unconditionally failed against every fresh
+     * preview and told nobody anything.
+     */
+    const published = await page.evaluate(async () => {
+      const base = (window.SONORAN && window.SONORAN.apiBase) || '';
+      const answer = await fetch(`${base.replace(/\/$/, '')}/api/coverage`);
+      return answer.ok ? (await answer.json()).available === true : false;
+    });
     const select = page.locator('[data-coverage-preset]');
     const options = await select.locator('option').count();
-    must(options > 0, 'no preset was offered');
+    if (!published) {
+      must(options === 0, `no run is published, yet ${options} presets were offered`);
+      const said = await page.locator('[data-page="coverage"]').innerText();
+      must(said.trim().length > 40, 'no run, and the page said nothing about it');
+      return 'no run published; the page says so';
+    }
+    must(options > 0, 'a run is published but no preset was offered');
     if (options > 1) {
       await select.selectOption(await select.locator('option').nth(1).getAttribute('value'));
       await page.waitForTimeout(4000);
