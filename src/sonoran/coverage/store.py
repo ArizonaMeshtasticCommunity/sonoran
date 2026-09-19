@@ -68,6 +68,20 @@ INDEX_NAME = "index.json"
 MANIFEST_NAME = "manifest.json"
 CALIBRATION_NAME = "calibration.json"
 
+# The level each run predicted at each node it considered.
+#
+# A finished run keeps no level grid. `_build_site_set` holds the region
+# grids in RAM, renders colour ramped PNG tiles, and deletes them, and a
+# tile whose coverage is entirely below the threshold is never written
+# at all. So the exact dBm at a point cannot be recovered from disk
+# after a run, and reading it back from an alpha channel at zoom 11
+# gives a boolean where a margin is wanted.
+#
+# The job therefore samples the grids while they are still in memory and
+# writes this beside the manifest. It is tens of kilobytes: a few
+# thousand nodes, two or three presets, two site sets, three layers.
+NODE_LEVELS_NAME = "coverage-at-nodes.json"
+
 # The layers a run writes.
 #
 # `usable` is the honest one and the one a page shows first. It is the
@@ -358,6 +372,44 @@ def read_manifest(settings: Settings) -> dict[str, object] | None:
         document = json.loads((root / MANIFEST_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         logger.warning("cannot read the coverage manifest: %s", error)
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def write_node_levels(root: Path, document: dict[str, object]) -> None:
+    """Write the sampled level of each node into a run being built.
+
+    The file goes into the pending directory, so the run's own rename
+    publishes it. There is no separate write and no second rename, which
+    means a reader can never see this file without the manifest that
+    explains it, or a level from one run beside a stamp from another.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / NODE_LEVELS_NAME).write_text(json.dumps(document, indent=1), encoding="utf-8")
+
+
+def read_node_levels(settings: Settings) -> dict[str, object] | None:
+    """Return the sampled node levels of the current run, or None.
+
+    None when no run has been published, or when the run was made before
+    this file existed. That is a working state: the signal that reads it
+    answers `unknown` and says why, rather than guessing that a node
+    with no entry has no coverage.
+
+    **A node absent from the document is unknown, not zero.** A node
+    outside the region grid is simply not in it. A stored zero is
+    different and is a real answer: `grid.NO_COVERAGE`, meaning the run
+    reached that cell and found nothing there.
+    """
+    root = current_root(settings)
+    if root is None:
+        return None
+    try:
+        document = json.loads((root / NODE_LEVELS_NAME).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        logger.warning("cannot read the coverage node levels: %s", error)
         return None
     return document if isinstance(document, dict) else None
 

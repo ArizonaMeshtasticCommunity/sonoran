@@ -109,6 +109,26 @@ def noise_floor_dbm(preset: ModemPreset, noise_figure_db: float = DEFAULT_NOISE_
     return THERMAL_NOISE_DBM_PER_HZ + 10.0 * math.log10(preset.bandwidth_hz) + noise_figure_db
 
 
+def required_snr_db(preset: ModemPreset, noise_figure_db: float = DEFAULT_NOISE_FIGURE_DB) -> float:
+    """Return the SNR this preset needs to demodulate, in dB.
+
+    The figure is negative. LoRa reads a signal below the noise, which
+    is the whole point of a spreading factor, so a reported SNR of
+    -20 dB on Long fast is a working link and not a broken one. Long
+    fast needs about -25 dB.
+
+    Use it to turn a reported SNR into a margin:
+
+        margin_db = snr_db - required_snr_db(preset)
+
+    The margin is what says whether a link has room to spare. A raw SNR
+    does not, because the same number means different things on two
+    presets. It is derived from the one preset table, so it cannot
+    disagree with the sensitivity the coverage map is drawn against.
+    """
+    return preset.sensitivity_dbm - noise_floor_dbm(preset, noise_figure_db)
+
+
 def received_dbm_from_snr(
     snr_db: float, preset: ModemPreset, noise_figure_db: float = DEFAULT_NOISE_FIGURE_DB
 ) -> float:

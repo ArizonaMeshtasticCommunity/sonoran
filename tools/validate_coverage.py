@@ -35,6 +35,9 @@ from typing import Any
 
 import numpy as np
 
+from sonoran.coverage.store import tile_path
+from sonoran.roles import SITE_SET_INFRASTRUCTURE
+
 # The zoom to sample at.
 #
 # High enough that one pixel is small against a footprint, and low
@@ -95,10 +98,23 @@ def read_png(path: Path) -> np.ndarray | None:
 
 
 class Sampler:
-    """Reads the tiles of one run, holding each one it opens."""
+    """Reads the tiles of one run, holding each one it opens.
 
-    def __init__(self, run: Path, preset: str, layer: str) -> None:
-        self.root = run / preset / layer
+    The path goes through `store.tile_path`, and that is the fix for a
+    real bug rather than tidiness. This class used to build its own root
+    as `run / preset / layer`, leaving out the `site_set` component that
+    `store.tile_path` has required since the site-set work landed. Every
+    read therefore missed, `covered` answered false for every point, and
+    the tool reported that no node anywhere was inside the map. A
+    hand-built path cannot be kept in step with the writer; calling the
+    writer's own function can.
+    """
+
+    def __init__(self, run: Path, preset: str, site_set: str, layer: str) -> None:
+        self.run = run
+        self.preset = preset
+        self.site_set = site_set
+        self.layer = layer
         self.held: dict[tuple[int, int], np.ndarray | None] = {}
 
     def covered(self, latitude: float, longitude: float) -> bool:
@@ -106,7 +122,11 @@ class Sampler:
         x, y = tile_of(latitude, longitude, SAMPLE_ZOOM)
         key = (int(x), int(y))
         if key not in self.held:
-            self.held[key] = read_png(self.root / str(SAMPLE_ZOOM) / str(key[0]) / f"{key[1]}.png")
+            self.held[key] = read_png(
+                tile_path(
+                    self.run, self.preset, self.site_set, self.layer, SAMPLE_ZOOM, key[0], key[1]
+                )
+            )
         tile = self.held[key]
         if tile is None:
             return False
@@ -122,6 +142,10 @@ def main() -> int:
     parser.add_argument("--cache", default="/var/lib/sonoran/coverage")
     parser.add_argument("--preset", default="LongFast")
     parser.add_argument("--layer", default="usable")
+    # One run can publish more than one map of the same preset, and they
+    # are different answers. The infrastructure map is the narrow one and
+    # the one this tool means.
+    parser.add_argument("--site-set", default=SITE_SET_INFRASTRUCTURE)
     arguments = parser.parse_args()
 
     index = Path(arguments.cache) / "index.json"
@@ -131,8 +155,10 @@ def main() -> int:
         print(f"no published run in {arguments.cache}", file=sys.stderr)
         return 1
     run = Path(arguments.cache) / "runs" / stamp
-    sampler = Sampler(run, arguments.preset, arguments.layer)
-    print(f"run {stamp}, layer {arguments.layer} of {arguments.preset}")
+    sampler = Sampler(run, arguments.preset, arguments.site_set, arguments.layer)
+    print(
+        f"run {stamp}, layer {arguments.layer} of {arguments.preset}, site set {arguments.site_set}"
+    )
 
     nodes = fetch_nodes(arguments.meshmonitor)
     placed = [

@@ -235,12 +235,53 @@ NODES = [
         450,
         False,
     ),
+    # The two nodes below exist so that the coverage gaps page has
+    # something true to show in a preview. A feature nobody can see in a
+    # preview is a feature nobody can check.
+    #
+    # Both are MQTT gateways, because only a gateway can ever be found
+    # "present through MQTT and not heard on the air": a node that is
+    # not a gateway could not have reached the database at all unless a
+    # radio heard it. See `sonoran/gaps/signals.py`.
+    (
+        0x0A51D001,
+        "ORPH",
+        "Orphan Hill Gateway",
+        "STATION_G2",
+        "CLIENT_BASE",
+        33.6019,
+        -112.3512,
+        520,
+        True,
+    ),
+    (
+        0x0A51D002,
+        "FLKY",
+        "Flaky Ridge Gateway",
+        "HELTEC_V3",
+        "CLIENT_BASE",
+        33.2044,
+        -111.6031,
+        700,
+        True,
+    ),
 ]
+
+# The two nodes the gap signals are seeded to demonstrate.
+#
+# They are kept out of the random traffic loop on purpose. That loop
+# gives every sender one to three random gateways, which would make
+# every packet radio-evidenced and leave these two looking healthy. Their
+# traffic is written by hand below instead, so that what the page shows
+# is a consequence of the rows and not of a label.
+GAP_ISOLATED = 0x0A51D001
+GAP_INTERMITTENT = 0x0A51D002
+GAP_DEMO = (GAP_ISOLATED, GAP_INTERMITTENT)
 
 # The positions in a NODES row.
 NUM, SHORT, LONG, HW, ROLE, LAT, LON, ALT, GATEWAY = range(9)
 
-GATEWAYS = [n for n in NODES if n[GATEWAY]]
+GATEWAYS = [n for n in NODES if n[GATEWAY] and n[NUM] not in GAP_DEMO]
 
 # The neighbour links, as (node, neighbour, snr).
 LINKS = [
@@ -399,7 +440,7 @@ async def main() -> None:
         # Packets. Each packet gets one observation for each gateway
         # that heard it. See AGENTS.md 9.5.
         packet_id = 100_000
-        senders = [n[NUM] for n in NODES]
+        senders = [n[NUM] for n in NODES if n[NUM] not in GAP_DEMO]
         for minutes_ago in range(0, 24 * 60, 3):
             seen_at = NOW - timedelta(minutes=minutes_ago)
             for _ in range(RNG.randint(1, 3)):
@@ -564,6 +605,169 @@ async def main() -> None:
                     "t": t,
                 },
             )
+
+        # The coverage gaps demonstration traffic.
+        #
+        # Two nodes, two findings, both built out of the one fact that
+        # decides everything on that page: a packet is in this database
+        # either because the node uploaded it itself, or because some
+        # other radio heard it. The first proves nothing about radio.
+        #
+        # ORPH uploads its own traffic and nothing else ever carries it,
+        # so no gateway has heard it over the air. It also publishes
+        # neighbour reports, which proves its own receiver works. That
+        # pair is the strongest finding the feature can make: a node that
+        # hears the mesh and is not heard back.
+        #
+        # FLKY gets out over the air in some hours and not in others,
+        # which is what `rf_intermittent` measures. The ratio is over
+        # hours and not over packets, so the pattern here is what the
+        # page reads.
+        gap_packet_id = 900_000
+        for hours_ago in range(0, 24):
+            seen_at = NOW - timedelta(hours=hours_ago, minutes=7)
+            hop_start = 3
+
+            for _ in range(3):
+                gap_packet_id += 1
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO packet_key (from_node_num, packet_id, first_seen_at)
+                        VALUES (:f, :p, :t) ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {"f": GAP_ISOLATED, "p": gap_packet_id, "t": seen_at},
+                )
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO packet (from_node_num, packet_id, to_node_num,
+                            portnum, channel, hop_start, hop_limit, want_ack,
+                            rx_time, first_seen_at)
+                        VALUES (:f, :p, :to, :port, :ch, :hs, :hs, false, :rx, :t)
+                        """
+                    ),
+                    {
+                        "f": GAP_ISOLATED,
+                        "p": gap_packet_id,
+                        "to": BROADCAST,
+                        "port": PORT_TELEMETRY,
+                        "ch": PRIMARY_PRESET,
+                        "hs": hop_start,
+                        "rx": int(seen_at.timestamp()),
+                        "t": seen_at,
+                    },
+                )
+                # The only upload is its own. This is the whole point.
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO packet_seen (from_node_num, packet_id,
+                            gateway_node_num, mqtt_topic, channel, rx_rssi, rx_snr,
+                            hop_limit, seen_at)
+                        VALUES (:f, :p, :f, :topic, :ch, -92, 6.25, :hs, :t)
+                        ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {
+                        "f": GAP_ISOLATED,
+                        "p": gap_packet_id,
+                        "topic": f"msh/US/AZ/2/e/{PRIMARY_PRESET}/" + node_id(GAP_ISOLATED),
+                        "ch": PRIMARY_PRESET,
+                        "hs": hop_start,
+                        "t": seen_at,
+                    },
+                )
+
+            # FLKY is heard on the air in one hour out of three.
+            heard = hours_ago % 3 == 0
+            for _ in range(2):
+                gap_packet_id += 1
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO packet_key (from_node_num, packet_id, first_seen_at)
+                        VALUES (:f, :p, :t) ON CONFLICT DO NOTHING
+                        """
+                    ),
+                    {"f": GAP_INTERMITTENT, "p": gap_packet_id, "t": seen_at},
+                )
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO packet (from_node_num, packet_id, to_node_num,
+                            portnum, channel, hop_start, hop_limit, want_ack,
+                            rx_time, first_seen_at)
+                        VALUES (:f, :p, :to, :port, :ch, :hs, :hs, false, :rx, :t)
+                        """
+                    ),
+                    {
+                        "f": GAP_INTERMITTENT,
+                        "p": gap_packet_id,
+                        "to": BROADCAST,
+                        "port": PORT_POSITION,
+                        "ch": PRIMARY_PRESET,
+                        "hs": hop_start,
+                        "rx": int(seen_at.timestamp()),
+                        "t": seen_at,
+                    },
+                )
+                # Its own upload is always there. In a good hour a real
+                # gateway carries it as well, one hop out, which is the
+                # evidence that something on the air heard it.
+                uploads = [(GAP_INTERMITTENT, hop_start, 5.0)]
+                if heard:
+                    uploads.append((RNG.choice(GATEWAYS)[NUM], hop_start - 1, -14.5))
+                for gateway, hop_limit, snr in uploads:
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO packet_seen (from_node_num, packet_id,
+                                gateway_node_num, mqtt_topic, channel, rx_rssi,
+                                rx_snr, hop_limit, seen_at)
+                            VALUES (:f, :p, :g, :topic, :ch, -104, :snr, :hl, :t)
+                            ON CONFLICT DO NOTHING
+                            """
+                        ),
+                        {
+                            "f": GAP_INTERMITTENT,
+                            "p": gap_packet_id,
+                            "g": gateway,
+                            "topic": (
+                                f"msh/US/AZ/2/e/{PRIMARY_PRESET}/" + node_id(GAP_INTERMITTENT)
+                            ),
+                            "ch": PRIMARY_PRESET,
+                            "snr": snr,
+                            "hl": hop_limit,
+                            "t": seen_at,
+                        },
+                    )
+
+        # ORPH publishes neighbour reports of its own. A node that
+        # publishes one of these proves its receiver works, which is one
+        # of only two ways this database can ever prove that. Paired with
+        # "no gateway heard it", that is the asymmetry the page reports.
+        for hours_ago in range(0, 12, 3):
+            t = NOW - timedelta(hours=hours_ago)
+            for neighbour, snr in ((0x0A51A001, -6.5), (0x0A51A002, -11.0)):
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO neighbor_metrics (node_num, neighbor_node_num,
+                            channel, snr, last_rx_time,
+                            node_broadcast_interval_secs, time)
+                        VALUES (:a, :b, :ch, :snr, :t, 900, :t)
+                        """
+                    ),
+                    {
+                        "a": GAP_ISOLATED,
+                        "b": neighbour,
+                        "ch": PRIMARY_PRESET,
+                        "snr": snr,
+                        "t": t,
+                    },
+                )
 
         # Neighbour reports. Each link is reported from both ends.
         for hours_ago in range(0, 12, 2):

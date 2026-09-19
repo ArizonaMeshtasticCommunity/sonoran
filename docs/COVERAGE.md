@@ -733,7 +733,6 @@ throw. What it opens is the list above and nothing else. Set
 `EMBED_FRAME_ANCESTORS` to the sites that may frame the page: an empty
 list means nobody may, and a value that is not an origin is dropped
 rather than widened.
-
 ## 11. Limits
 
 1. The map is drawn against one receiver: a handheld with a stock
@@ -759,3 +758,20 @@ rather than widened.
 8. The manifest counts every node left out, by role and by the
    coarseness of its position, and the page shows both. A map that
    drops nine nodes in ten must say so.
+
+## 12. Coverage gaps
+
+The coverage map answers "where does the mesh reach", from prediction.
+A second feature answers "who is struggling", from measurement, and the
+two are drawn apart on purpose: putting a measured list inside a
+predicted map is how a reader starts to read one as the other.
+
+See `docs/GAPS.md` for what it measures, and
+`docs/design/coverage-gaps.md` for the whole design, including the area
+half that is not built.
+
+A run writes one extra artefact for it, `coverage-at-nodes.json`, beside
+the manifest. It holds the level this run predicted at each node it
+considered, sampled out of the region grids while they were still in
+memory. A finished run keeps no level grid, so it is the only way the
+exact dBm at a node can be read back. See `docs/GAPS.md` 5.

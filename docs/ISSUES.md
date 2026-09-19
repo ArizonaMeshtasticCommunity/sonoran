@@ -533,6 +533,47 @@ benchmarked rewrite.
 
 ---
 
+### 2.10 Every coverage gap threshold is unmeasured
+
+`docs/GAPS.md` ships with seven thresholds and **not one of them has been
+measured on live data**. They are starting points that work on the 17
+node seed, which proves the queries run and proves nothing about where a
+line belongs.
+
+`docs/design/coverage-gaps.md` 11.1 names the six measurements to take on
+the live box first:
+
+1. How many packets carry `mesh_packet_metrics.via_mqtt = true` **and**
+   have a `packet_seen` row from a different gateway. If that is near
+   zero the firmware loop protection holds and the exclusion costs
+   nothing. If it is large, `radio_isolated` needs rethinking before it
+   is trusted. Until this is done a `via_mqtt` packet counts as no
+   evidence either way, which is the conservative branch.
+2. How many nodes are MQTT gateways at all. `radio_isolated` applies to
+   nobody else.
+3. How sparse `neighbor_metrics` is: distinct reporters in a week.
+   `hears_but_is_not_heard` and `weak_best_link` both rest on it.
+4. The distribution of `rf_hour_ratio`, so 0.5 is a line somewhere useful
+   and not in the middle of the pack.
+5. The distribution of `best_snr_margin_db`, before 5 dB is fixed.
+6. How many nodes each signal flags. **If a signal flags 300 nodes it is
+   not a finding, it is a definition problem.**
+
+There is no alerting on any of this, and there must not be until those
+numbers exist. It is a report, not a monitor.
+
+### 2.11 The `via_mqtt` semantics cannot be quoted from this repository
+
+`docs/GAPS.md` 2.2 leans on the firmware never re-uploading a packet it
+took from MQTT. The vendored `proto/` directory holds only
+`UPSTREAM_REV.txt` and `update.sh`, so the `via_mqtt` and
+`TransportMechanism` field comments are not in the repository and cannot
+be quoted. This project does not assert what the vendor did not state, so
+the conservative branch runs and such packets are reported as
+`ambiguous_packets`.
+
+Vendoring the `.proto` text, or at least those field comments, closes it.
+
 ## 3. Wanted next
 
 ### 3.0 The broadcast report cannot separate a timer from a reply

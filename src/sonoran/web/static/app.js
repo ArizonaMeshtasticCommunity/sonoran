@@ -1569,6 +1569,14 @@ PAGES.coverage = async (page) => {
   await window.SonoranCoverage.show(page);
 };
 
+/*
+ * The coverage gaps page lives in gaps.js, which loads before this file.
+ * It measures which nodes are not carried well and predicts nothing.
+ */
+PAGES.gaps = async (page) => {
+  await window.SonoranGaps.show(page);
+};
+
 PAGES.planner = async () => {
   await window.SonoranPlanner.show();
 };

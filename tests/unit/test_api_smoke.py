@@ -172,6 +172,9 @@ def test_planner_scripts_load_before_the_router() -> None:
     text = _client().get("/").text
     assert text.index("static/planner.js") < text.index("static/app.js")
     assert text.index("static/planner-params.js") < text.index("static/planner.js")
+    # Every page that registers itself on `window` has the same bargain.
+    assert text.index("static/coverage.js") < text.index("static/app.js")
+    assert text.index("static/gaps.js") < text.index("static/app.js")
 
 
 def test_csp_allows_webassembly() -> None:
@@ -193,12 +196,34 @@ def test_write_methods_rejected() -> None:
 
 
 def test_registered_api_routes_are_read_only() -> None:
-    """No registered API route accepts a write method."""
+    """No registered API route accepts a write method.
+
+    The walk recurses on purpose. `include_router` does not flatten its
+    routes into `app.routes` in this version of FastAPI: it appends one
+    `_IncludedRouter` wrapper whose `path` is None and whose
+    `original_router` holds the real routes. Reading `path` off the top
+    level therefore found exactly one route, `/api/version`, and this
+    test passed while checking almost nothing. The count is asserted
+    below so that it cannot quietly go hollow again.
+    """
     app = create_app(Settings(_env_file=None))
-    for route in app.routes:
+    found: list[tuple[str, set[str]]] = []
+    stack = list(app.routes)
+    while stack:
+        route = stack.pop()
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            stack.extend(included.routes)
+            continue
+        path = getattr(route, "path", None)
         methods = getattr(route, "methods", None)
-        if methods and getattr(route, "path", "").startswith("/api"):
-            assert methods <= {"GET"}
+        if isinstance(path, str) and methods:
+            found.append((path, set(methods)))
+
+    api = [(path, methods) for path, methods in found if path.startswith("/api")]
+    assert len(api) > 20, f"only {len(api)} API routes were enumerated"
+    for path, methods in api:
+        assert methods <= {"GET"}, path
 
 
 def test_the_radio_route_is_registered() -> None:

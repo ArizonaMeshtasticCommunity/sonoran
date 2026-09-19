@@ -297,6 +297,171 @@ value is never outside -15 to +15 dB.
 No node is applied when `model_bias_db` or `residual_spread_db` is
 outside the trusted 20 dB range.
 
+## 3C. Coverage gap endpoints
+
+Which nodes the mesh is not carrying well, measured from the packets the
+database already holds. One modem preset at a time, always: a node on
+Long fast cannot hear a node on Medium fast, so a merged answer would
+invite a reader to fix a gap between two radios that have no way to
+reach each other. See `AGENTS.md` 9.7.
+
+**These endpoints read one written file and compute nothing.**
+`jobs/gaps.py` writes `{COVERAGE_CACHE_DIR}/gaps/{preset}.json` every
+`GAPS_INTERVAL_MINUTES`, and the routes read it and filter it. A request
+that ran the gap queries would be heavier than the endpoint
+`docs/ISSUES.md` 2.9 is already an open warning about.
+
+**Nothing here reaches the public embed, and nothing here ever will.** A
+list of weak nodes with positions is a list of houses with a reason to
+visit them. It is a worse leak than the one `AGENTS.md` 9.25 guards
+against, and `tests/unit/test_gaps.py` enumerates the embed router to
+keep it out. The feature is dashboard only.
+
+### The three states
+
+Every signal returns `bad`, `ok` or **`unknown`**, and the third one is
+not a footnote. A node that reports nothing is usually a node that is
+switched off, not a node in trouble, and the API refuses to tell the two
+apart when the data cannot. `unknown` is never served as a zero and
+never as a pass.
+
+There is **no 0 to 100 score**. A row's colour comes from `worst_state`.
+A score would let two `unknown` signals and one `bad` average into
+amber, and amber reads as "a bit broken" when the truth is "we cannot
+tell".
+
+### The signals
+
+| Signal | `bad` means |
+|---|---|
+| `hears_but_is_not_heard` | Its receiver is proven to work and no gateway has heard it on the air. The strongest finding here, and the only case in which this project says a node cannot be heard. |
+| `radio_isolated` | It is an MQTT gateway and no gateway heard any of its traffic over the air, by any path. Its packets reach us through its own internet link. |
+| `rf_intermittent` | In fewer than `GAPS_RF_RATIO_BAD` of the hours it was awake, anything on the air heard it. |
+| `weak_best_link` | Its best **measured** link has under `GAPS_MARGIN_BAD_DB` of margin above what the preset needs to demodulate. |
+| `sole_observer` | Exactly one gateway has heard it directly. This is a fact about where our gateways are as much as about the mesh. It is not a single point of failure and must not be drawn as one. |
+| `outside_predicted_usable` | The published coverage run predicts no usable coverage where it stands. This is the one signal here that reads a prediction and not a measurement. |
+
+A signal's `evidence` object holds the counts the claim rests on, and
+`sentence` is the claim in words. **Use `sentence`.** It says "none of
+the 31 gateways active in this window heard it over the air", which is a
+measurement. "It is isolated" is a judgement, and the difference is the
+point of the whole feature.
+
+### 3C.1 `GET /api/gaps`
+
+Returns the counts for one preset, and what they cannot tell you.
+
+`channel` is optional and takes a channel name as stored. It goes
+through the preset table: a channel that is not a default preset name
+rides on top of a preset and does not name one, so it returns
+`available: false` with `reason: "not_a_preset"` rather than a guess.
+With no `channel`, the busiest assessed preset is served.
+
+`available: false` with `reason: "no_assessment"` is a working state,
+not an error, exactly as `/api/coverage` treats a missing run.
+
+There is no `hours` parameter. The window is whatever the job measured
+and comes back as `window_hours`; a request cannot ask for another
+window without recomputing, which these endpoints do not do.
+
+```json
+{
+  "available": true,
+  "preset": "LongFast",
+  "label": "Long fast",
+  "window_hours": 168,
+  "generated_at": "2026-09-18T06:12:04+00:00",
+  "gateways_active": 31,
+  "assessed_count": 520,
+  "coverage": {"stamp": "20260918T060000Z", "site_set": "infrastructure",
+               "is_diagnostic": false, "available": true, "threshold_level": 61},
+  "signals": {
+    "radio_isolated": {"bad": 6, "ok": 318, "unknown": 196}
+  },
+  "needs_help_count": 63,
+  "not_enough_evidence_count": 184,
+  "reached_but_unpredicted_count": 48,
+  "caveats": [{"key": "observers_are_gateways_only", "text": "..."}],
+  "presets": [{"preset": "LongFast", "label": "Long fast", "node_count": 704}]
+}
+```
+
+`gateways_active` is how many gateways uploaded anything on this preset
+in the window. It is how strong a `radio_isolated` claim is, which is
+why the page prints it.
+
+`reached_but_unpredicted_count` is **a finding about the map, not about
+the nodes**: nodes something on the air demonstrably reached, standing
+where the model predicts nothing. It says where the prediction is
+pessimistic.
+
+`caveats` is what this feature cannot answer at all. A page shows it
+permanently and never behind a toggle.
+
+### 3C.2 `GET /api/gaps/nodes`
+
+Returns the assessed nodes of one preset, worst first.
+
+The order is set by the job, once, so every reader gets the same one:
+`bad_count`, then a fixed severity order between the signals, then the
+packet count, so a node we know a lot about sorts above one we barely
+know. It is not a score.
+
+| Parameter | |
+|---|---|
+| `channel` | As above. |
+| `signal` | One signal name. An unknown name returns `available: false` with `reason: "not_a_signal"`. |
+| `state` | `bad`, `ok` or `unknown`. With no `signal`, a row matches when any signal holds that state. |
+| `limit` | 1 to 500, default 100. |
+
+```json
+{
+  "available": true,
+  "preset": "LongFast",
+  "matched_count": 63,
+  "nodes": [
+    {
+      "node_id": "!a1b2c3d4",
+      "display_name": "Dobbins Lookout",
+      "role": "CLIENT",
+      "latitude": 33.32, "longitude": -112.06,
+      "position_confidence": "exact",
+      "position_deviation_m": 0.0,
+      "is_mqtt_gateway": true,
+      "mobile": false,
+      "packets": 412, "rf_packets": 0, "ambiguous_packets": 3,
+      "active_hours": 96, "rf_hours": 0, "direct_gateways": 0,
+      "worst_state": "bad",
+      "bad_count": 2,
+      "unknown_count": 3,
+      "signals": {
+        "radio_isolated": {
+          "state": "bad",
+          "reason": "no_gateway_heard_it",
+          "sentence": "None of the 31 gateways active in this window heard it over the air. ...",
+          "value": null,
+          "evidence": {"packets": 412, "rf_packets": 0, "gateways_active": 31}
+        }
+      }
+    }
+  ]
+}
+```
+
+`position_confidence` is `exact`, `coarse` or `none`. A `coarse` node is
+still listed, with its `position_deviation_m`, and its
+`outside_predicted_usable` signal is `unknown`: a deviation of 2.9 km
+cannot be placed on a 90 m grid. A missing precision counts as exact,
+which is the ordinary case for a node heard over the radio. See
+`sonoran/positions.py`.
+
+`mobile` is a modifier and not a fault. A handheld that cannot get out
+is a real problem for its owner, so a mobile node stays in the list.
+
+**No SNR here ever comes from a relayed observation or from a node's own
+upload.** The first belongs to the last hop into the gateway and the
+second is the node's own voice. See `AGENTS.md` 9.5 and 9.5.1.
+
 ## 3B. The public embed
 
 These serve a page for somebody else's website. They are all 404 until

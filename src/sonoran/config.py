@@ -217,6 +217,41 @@ class Settings(BaseSettings):
     # nothing.
     calibration_window_hours: int = 336
 
+    # Coverage gaps. The job measures which nodes are not connected
+    # well, from the packets the database already holds, and writes the
+    # answer beside the coverage run. It predicts nothing.
+    #
+    # Every threshold below is a starting point, not a measurement.
+    # `docs/design/coverage-gaps.md` 11.1 names the six figures to take
+    # off live data before any of them is trusted.
+    gaps_enabled: bool = True
+    # How often the per node assessment is rebuilt. The signals are
+    # only SQL, so freshness is cheap. The job runs on its own clock
+    # and never touches the coverage engine.
+    gaps_interval_minutes: int = 30
+    # The measurement window. It must never exceed retention, or the
+    # window reads ground that has already been deleted.
+    gaps_window_hours: int = 168
+    # Below this many distinct packets a node is `unknown`, never `bad`.
+    # A node that says almost nothing is usually switched off.
+    gaps_min_packets: int = 20
+    # Below this many active hours `rf_intermittent` is `unknown`. A
+    # ratio over three hours says nothing about a week.
+    gaps_min_active_hours: int = 12
+    # The intermittency line: the share of its awake hours in which
+    # something on the air heard a node. Measure it before trusting it.
+    gaps_rf_ratio_bad: float = 0.5
+    # The weak margin line, in dB above what the preset needs to
+    # demodulate. Measure it before trusting it.
+    gaps_margin_bad_db: float = 5.0
+    # How many neighbour reports a node must publish before its own
+    # receiver counts as proven. See `sonoran/gaps/signals.py` 4.2.
+    gaps_min_neighbour_reports: int = 2
+    # How far apart two reported positions must be before a node counts
+    # as mobile, in kilometres. A mobile node is still listed, because a
+    # handheld that cannot get out is a real problem for its owner.
+    gaps_mobile_spread_km: float = 1.0
+
     # Radio overrides. The file names the antenna, the mast height, and
     # the power of a node, which the mesh itself never reports. It is
     # kept in the repository, so every change to it has an author and a

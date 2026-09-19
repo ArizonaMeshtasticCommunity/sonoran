@@ -8,6 +8,13 @@ The snapshot keeps its own clock. Calibration and coverage share one
 clock because coverage depends on calibration. A due calibration runs
 first. Coverage then reads the file it just wrote.
 
+The gap assessment keeps its own clock as well, because it runs no
+engine and wants to be fresher than a coverage run. **A task that does
+use the engine must join `_coverage_cycle` instead of being added here:
+tasks added here run beside each other under `asyncio.gather`, so a
+second engine user is free to start during a coverage build and take the
+last core of a small box.**
+
 A task that raises is logged and tried again at its next turn. One bad
 run must never stop the process: a jobs container that exits stops
 every other task with it.
@@ -22,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.jobs import calibrate, coverage, snapshots
+from sonoran.jobs import calibrate, coverage, gaps, snapshots
 from sonoran.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -140,6 +147,35 @@ def build_tasks(settings: Settings) -> list[Task]:
                     next_delay=lambda: max(settings.calibration_interval_hours, 1) * 3600.0,
                 )
             )
+
+    if settings.gaps_enabled:
+        # Its own clock, on purpose. This job runs no engine: it is SQL
+        # and a few thousand dictionary operations, so it cannot take a
+        # core away from a coverage build. It also wants to run every
+        # half hour rather than every six hours.
+        #
+        # The engine work of the siting half is the opposite case and
+        # must join `_coverage_cycle` instead of standing beside it. A
+        # task registered here is free to run during a coverage build,
+        # and on a three core box that is the last core.
+        async def gaps_run() -> None:
+            engine = make_engine(settings.database_url_jobs)
+            factory = make_session_factory(engine)
+            try:
+                async with factory() as session:
+                    await gaps.run_once(session, settings)
+            finally:
+                await engine.dispose()
+
+        tasks.append(
+            Task(
+                name="gaps",
+                run=gaps_run,
+                next_delay=lambda: max(settings.gaps_interval_minutes, 1) * 60.0,
+            )
+        )
+    else:
+        logger.info("the coverage gaps job is turned off")
 
     return tasks
 

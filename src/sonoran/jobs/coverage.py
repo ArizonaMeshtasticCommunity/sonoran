@@ -51,6 +51,7 @@ from sonoran.coverage.grid import (
     data_bounds,
     levels_from_raster,
     region_grid,
+    to_level,
     union_bounds,
 )
 from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ
@@ -746,6 +747,67 @@ class SiteSetPlan:
     coarse: list[dict[str, object]]
 
 
+# One node the run will sample its finished layers at: its number and
+# where it stands. It is every active positioned node in region, not
+# only the sites, because the question "does the map reach this node"
+# is asked about the nodes being served and not about the transmitters.
+NodePoint = tuple[int, float, float]
+
+
+# How far around a node's cell to look when sampling a finished layer.
+#
+# One cell each way, which is 1/1200 of a degree or about 90 m: the
+# resolution of the grid itself.
+#
+# It is not smoothing, and it is here for a specific reason. The engine
+# marks a cell covered when a radial of its sweep passed through it, and
+# no radial passes through the cell the sweep starts from. **A site
+# therefore samples its own position as `NO_COVERAGE` and reads as
+# standing outside its own footprint**, which is a false accusation
+# about the one node we are most certain of. The cells around it are
+# covered, so one cell of reach removes the artefact and changes nothing
+# else: no node is moved across the threshold by ground it is not
+# standing on, because 90 m is far finer than the 365 m that is the best
+# position precision the public broker ever relays.
+SAMPLE_REACH = 1
+
+
+def _sample_nodes(
+    points: Sequence[NodePoint],
+    grid: Grid,
+    layers: dict[str, Levels],
+) -> dict[str, dict[str, int]]:
+    """Return the level of each layer at each node inside the grid.
+
+    Sampled **after** `_charge_receiver`, so each number is the number
+    the map draws rather than the number before the receiving end was
+    charged.
+
+    A node outside the region grid is left out of the result entirely.
+    **Absent means unknown and must never be written as a zero**: a
+    stored zero says the model predicts nothing where the node stands,
+    and the two are different answers.
+    """
+    sampled: dict[str, dict[str, int]] = {}
+    for node_num, latitude, longitude in points:
+        if not grid.holds(latitude, longitude):
+            continue
+        row = grid.row_of(latitude)
+        column = grid.column_of(longitude)
+        # `holds` tests the bounds inclusively, so a node exactly on the
+        # south or east edge lands one cell past the end of the array.
+        if not (0 <= row < grid.height and 0 <= column < grid.width):
+            continue
+        top = max(0, row - SAMPLE_REACH)
+        bottom = min(grid.height, row + SAMPLE_REACH + 1)
+        left = max(0, column - SAMPLE_REACH)
+        right = min(grid.width, column + SAMPLE_REACH + 1)
+        sampled[str(node_num)] = {
+            layer: int(levels[top:bottom, left:right].max()) for layer, levels in layers.items()
+        }
+    return sampled
+
+
 def _build_site_set(
     settings: Settings,
     plan: SiteSetPlan,
@@ -754,8 +816,16 @@ def _build_site_set(
     root: Path,
     workers: int,
     missing_all: set[str],
+    points: Sequence[NodePoint] = (),
+    node_levels: dict[str, dict[str, object]] | None = None,
 ) -> list[store.PresetSummary]:
-    """Run every preset of one site set and write its tiles."""
+    """Run every preset of one site set and write its tiles.
+
+    `points` and `node_levels` are how the level at each node leaves this
+    function. The grids exist only here, and they are deleted at the foot
+    of the loop, so a caller that wants a number out of them has to be
+    given it from inside. See `store.NODE_LEVELS_NAME`.
+    """
     site_set = plan.key
     groups = plan.groups
     left_out = plan.left_out
@@ -804,6 +874,21 @@ def _build_site_set(
                 root, preset.name, site_set, layer, levels, grid, settings, threshold
             )
 
+        # Sample the level at each node while the grids are still in
+        # memory. `threshold_level` travels with it so that a reader
+        # needs no preset table to decide what counts as usable.
+        if node_levels is not None and points:
+            for_preset = node_levels.setdefault(
+                preset.name, {"threshold_level": to_level(threshold), "site_sets": {}}
+            )
+            sets = for_preset["site_sets"]
+            if isinstance(sets, dict):
+                sets[site_set] = _sample_nodes(
+                    points,
+                    grid,
+                    {"usable": usable, "downlink": downlink, "uplink": uplink},
+                )
+
         summaries.append(
             store.PresetSummary(
                 preset=preset.name,
@@ -835,6 +920,7 @@ def _build(
     held_terrain: set[str],
     stamp: str,
     workers: int,
+    points: Sequence[NodePoint] = (),
 ) -> store.Manifest:
     """Run every site set and every preset, and write the tiles.
 
@@ -870,8 +956,11 @@ def _build(
     rx_loss, missing_landcover = receiver_loss(settings, grid)
 
     set_summaries: list[store.SiteSetSummary] = []
+    node_levels: dict[str, dict[str, object]] = {}
     for plan in plans:
-        summaries = _build_site_set(settings, plan, grid, rx_loss, root, workers, missing_all)
+        summaries = _build_site_set(
+            settings, plan, grid, rx_loss, root, workers, missing_all, points, node_levels
+        )
         set_summaries.append(
             store.SiteSetSummary(
                 key=plan.key,
@@ -885,6 +974,10 @@ def _build(
 
     # The infrastructure set is the top-level answer.
     summaries = set_summaries[0].presets
+
+    # Write the sampled levels into the pending directory, so the run's
+    # own rename publishes them with everything else.
+    store.write_node_levels(root, {"stamp": stamp, "presets": node_levels})
 
     return store.Manifest(
         stamp=stamp,
@@ -1022,10 +1115,22 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     held = await ensure_terrain(settings, sorted(wanted))
     logger.info("%s of %s terrain tiles are held", len(held), len(wanted))
 
+    # Where to sample the finished layers. Every active positioned node
+    # in region, not only the sites: "does the map reach this node" is a
+    # question about the nodes being served. An operator-given position
+    # wins over the broker's, exactly as it does for a site.
+    points: list[NodePoint] = []
+    for node in nodes:
+        given = overrides.position_of(f"!{node.node_num:08x}")
+        latitude, longitude = given if given else (node.last_lat, node.last_lon)
+        if latitude is None or longitude is None:
+            continue
+        points.append((node.node_num, latitude, longitude))
+
     stamp = store.new_stamp()
     workers = worker_count(settings)
     logger.info("predicting with %s worker processes", workers)
-    manifest = await asyncio.to_thread(_build, settings, plans, held, stamp, workers)
+    manifest = await asyncio.to_thread(_build, settings, plans, held, stamp, workers, points)
     store.publish(settings, stamp, manifest)
     return manifest
 

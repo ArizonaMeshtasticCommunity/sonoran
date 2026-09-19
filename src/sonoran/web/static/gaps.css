@@ -1,0 +1,164 @@
+/*
+ * The coverage gaps page.
+ *
+ * Its own file so that app.css stays the shared sheet. It defines only
+ * what this page needs and reuses every token app.css already sets.
+ *
+ * The three states are the whole design. `bad` is a measurement, `ok`
+ * is a measurement, and `unknown` is an admission, so `unknown` gets a
+ * colour of its own that is neither of the other two.
+ *
+ * `unknown` is deliberately NOT amber. Amber sits between green and red
+ * and reads as "a bit broken", which is exactly the wrong thing to say
+ * when the truth is "we cannot tell". It is a cool slate instead: plainly
+ * not a severity, plainly not clear, and impossible to mistake for
+ * either. It is never dimmer than the text around it, because a reader
+ * must not be able to skim past it.
+ */
+
+:root {
+  --gap-bad: var(--bad);
+  --gap-ok: var(--good);
+  --gap-unknown: #8fa6c4;
+  --gap-unknown-line: #4a5a72;
+}
+
+/* One chip in a signal column. */
+.gap-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .3rem;
+  padding: .12rem .45rem;
+  border-radius: .35rem;
+  border: 1px solid var(--line);
+  font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.gap-chip .gap-word { font-weight: 650; }
+.gap-chip .gap-value { color: var(--muted); }
+
+.gap-chip.bad { border-color: var(--gap-bad); color: var(--gap-bad); }
+.gap-chip.ok { border-color: var(--line); color: var(--muted); }
+.gap-chip.unknown {
+  border-color: var(--gap-unknown-line);
+  color: var(--gap-unknown);
+}
+
+/*
+ * The row's colour comes from `worst_state` and never from a number.
+ * There is no score on this page and no averaged amber.
+ */
+.gap-row.bad > td:first-child { border-left: 3px solid var(--gap-bad); }
+.gap-row.unknown > td:first-child { border-left: 3px solid var(--gap-unknown-line); }
+.gap-row.ok > td:first-child { border-left: 3px solid transparent; }
+
+.gap-row > td:first-child { padding-left: .55rem; }
+.gap-row.open { background: var(--panel-2); }
+
+/* The evidence a row opens to. */
+.gap-detail > td {
+  background: var(--panel-2);
+  padding: .8rem 1rem 1rem;
+}
+
+.gap-evidence { display: grid; gap: .7rem; }
+
+.gap-finding {
+  display: grid;
+  gap: .2rem;
+  padding: .5rem .7rem;
+  border-left: 3px solid var(--line);
+  background: var(--panel);
+  border-radius: .25rem;
+}
+
+.gap-finding.bad { border-left-color: var(--gap-bad); }
+.gap-finding.unknown { border-left-color: var(--gap-unknown-line); }
+.gap-finding.ok { border-left-color: var(--line); }
+
+.gap-finding .gap-name { font-weight: 650; font-size: .82rem; }
+.gap-finding .gap-said { color: var(--text); font-size: .82rem; line-height: 1.45; }
+.gap-finding .gap-counts {
+  color: var(--muted);
+  font-size: .74rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+
+.gap-links { display: flex; flex-wrap: wrap; gap: .8rem; font-size: .82rem; }
+
+/*
+ * The stat tiles carry `bad` and `unknown` side by side. The unknown
+ * number is never hidden and never smaller than the bad one: it is
+ * usually the larger of the two and always part of the answer.
+ */
+.gap-tile .gap-pair { display: flex; gap: 1.4rem; align-items: flex-end; }
+.gap-tile .gap-half { display: flex; flex-direction: column; gap: .1rem; }
+.gap-tile .gap-half .gap-n { font-size: 1.6rem; font-weight: 650; line-height: 1.05; }
+.gap-tile .gap-half .gap-k {
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.gap-tile .gap-half.bad .gap-n { color: var(--gap-bad); }
+.gap-tile .gap-half.unknown .gap-n { color: var(--gap-unknown); }
+.gap-tile .gap-label {
+  font-size: .8rem;
+  color: var(--muted);
+  margin-top: .45rem;
+  line-height: 1.35;
+}
+
+/* The lead sentence. It is prose, so it gets a reading measure. */
+.gap-lead {
+  font-size: 1rem;
+  line-height: 1.55;
+  max-width: 62ch;
+  margin: 0 0 .2rem;
+}
+
+.gap-lead strong { color: var(--accent); font-weight: 650; }
+
+.gap-window { color: var(--muted); font-size: .8rem; margin: 0; }
+
+/* What the feature cannot answer. Permanently visible, never a toggle. */
+.gap-limits { margin: 0; padding-left: 1.1rem; display: grid; gap: .4rem; }
+.gap-limits li { color: var(--muted); font-size: .82rem; line-height: 1.45; }
+
+.gap-map-shell { position: relative; }
+#gaps-map {
+  height: 26rem;
+  border: 1px solid var(--line);
+  border-radius: .4rem;
+  background: var(--panel);
+}
+
+.gap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .9rem;
+  margin-top: .5rem;
+  font-size: .78rem;
+  color: var(--muted);
+}
+
+.gap-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.gap-legend i {
+  width: .7rem;
+  height: .7rem;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid currentColor;
+}
+.gap-legend i.bad { background: var(--gap-bad); color: var(--gap-bad); }
+.gap-legend i.unknown { background: var(--gap-unknown); color: var(--gap-unknown); }
+.gap-legend i.ok { background: transparent; color: var(--muted); }
+
+/* A marker on the gaps map. Circles only: nothing here draws a line,
+   because no signal on this page names two ends of one. */
+.gap-marker-bad { color: var(--gap-bad); }
+.gap-marker-unknown { color: var(--gap-unknown); }

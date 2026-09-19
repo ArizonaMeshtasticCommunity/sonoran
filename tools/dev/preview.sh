@@ -87,10 +87,11 @@ AZMSH_API_PASSWORD=${PASSWORD}
 AZMSH_JOBS_PASSWORD=${PASSWORD}
 MESH_GRAPH_BASE_URL=http://localhost:8080
 TERRAIN_CACHE_DIR=/tmp/sonoran-terrain
+COVERAGE_CACHE_DIR=/tmp/sonoran-coverage
 LOG_LEVEL=INFO
 ENV
 fi
-mkdir -p /tmp/sonoran-terrain
+mkdir -p /tmp/sonoran-terrain /tmp/sonoran-coverage
 
 echo "==> running the migrations"
 for attempt in 1 2 3; do
@@ -114,6 +115,18 @@ if [ "$NODES" = "0" ]; then
 else
   echo "==> the database has ${NODES} nodes already, so no data is added"
 fi
+
+# The coverage gaps page reads a written file, not the database, so it
+# has nothing to show until the job has run once. The job is only SQL
+# and takes well under a second on the seed, so it runs here rather
+# than leaving a preview with one empty page on it.
+#
+# The coverage map is not built here. That one runs the engine and takes
+# minutes, so it stays a deliberate `sonoran-coverage-once`. Until it is
+# run, the gaps page reports the predicted signal as "cannot tell",
+# which is the honest state and worth seeing too.
+echo "==> measuring the coverage gaps"
+uv run sonoran-gaps-once || echo "==> the gaps job failed; the page will say so"
 
 echo "==> the dashboard is at http://127.0.0.1:${PORT}"
 exec uv run uvicorn --factory sonoran.api.app:create_app \
