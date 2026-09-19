@@ -66,7 +66,7 @@
           <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
           <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg>Planner</a>
           <a href="#coverage" data-nav="coverage"><svg class="icon" aria-hidden="true"><use href="#i-coverage"/></svg>Coverage</a>
-          <a href="#gaps" data-nav="gaps"><svg class="icon" aria-hidden="true"><use href="#i-gaps"/></svg>Coverage gaps</a>
+          <a href="#gaps" data-nav="gaps"><svg class="icon" aria-hidden="true"><use href="#i-gaps"/></svg>Gaps</a>
           <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg>Config check</a>
           <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg>Mesh graph</a>
           <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg>Nodes</a>
@@ -139,7 +139,7 @@
                 would be links that cannot exist. See AGENTS.md 9.7.
               -->
               <label class="muted" data-link-channel-wrap>Preset
-                <select data-link-channel></select>
+                <select data-link-channel aria-label="Modem preset"></select>
               </label>
               <!--
                 The dots follow the preset with the lines. A topic
@@ -269,10 +269,10 @@
               <!-- Only shown when the run published more than one site
                    set, which needs COVERAGE_INCLUDE_CLIENTS. -->
               <label class="coverage-pick" data-coverage-siteset-wrap hidden>Predict from
-                <select data-coverage-siteset></select>
+                <select data-coverage-siteset aria-label="Which nodes the run predicted from"></select>
               </label>
               <label class="coverage-pick">Preset
-                <select data-coverage-preset></select>
+                <select data-coverage-preset aria-label="Modem preset"></select>
               </label>
             </div>
           </div>
@@ -372,7 +372,7 @@
             <div class="controls">
               <!-- Only shown when more than one preset has an assessment. -->
               <label class="coverage-pick" data-gaps-preset-wrap hidden>Preset
-                <select data-gaps-preset></select>
+                <select data-gaps-preset aria-label="Modem preset"></select>
               </label>
             </div>
           </div>
@@ -595,7 +595,8 @@
                   <option value="168">7 days</option>
                 </select>
               </label>
-              <input data-graph-search placeholder="Find a node" />
+              <input type="search" data-graph-search placeholder="Find a node"
+                     aria-label="Find a node in this graph" />
               <!--
                 The mesh is a geographic thing. Laying it out on real
                 positions puts the Phoenix and Tucson knots where they
@@ -644,14 +645,15 @@
               <p class="sub" data-node-count></p>
             </div>
             <div class="controls">
-              <input data-node-search placeholder="Name or node ID" />
-              <select data-node-active>
+              <input type="search" data-node-search placeholder="Name or node ID"
+                     aria-label="Search nodes by name or node ID" />
+              <select data-node-active aria-label="How recently the node was heard">
                 <option value="">Any time</option>
                 <option value="1">Last hour</option>
                 <option value="24" selected>Last 24 h</option>
                 <option value="168">Last 7 days</option>
               </select>
-              <select data-node-role>
+              <select data-node-role aria-label="Device role">
                 <option value="">Any role</option>
               </select>
               <button type="button" class="toggle" data-node-gateway aria-pressed="false">Gateways</button>
@@ -671,7 +673,7 @@
               <p class="sub">Select a node from the Nodes page.</p>
             </div>
             <div class="controls">
-              <select data-node-hours>
+              <select data-node-hours aria-label="Time window">
                 <option value="6">6 h</option>
                 <option value="24" selected>24 h</option>
                 <option value="168">7 days</option>
@@ -691,7 +693,7 @@
               <p class="sub">One section for each detected channel, grouped by what it is for. New names land in Custom.</p>
             </div>
             <div class="controls">
-              <select data-chat-hours>
+              <select data-chat-hours aria-label="Time window">
                 <option value="24">Last 24 h</option>
                 <option value="168" selected>Last 7 days</option>
                 <option value="720">Last 30 days</option>
@@ -711,7 +713,7 @@
             </div>
             <div class="controls">
               <label class="muted">Tag <input data-meshnet-tag value="meshnet" size="10" /></label>
-              <select data-meshnet-weeks>
+              <select data-meshnet-weeks aria-label="How many weeks to show">
                 <option value="4">4 weeks</option>
                 <option value="8" selected>8 weeks</option>
                 <option value="26">26 weeks</option>
@@ -730,7 +732,13 @@
               <p class="sub">Every packet the mesh sees, newest first.</p>
             </div>
             <div class="controls">
-              <input data-firehose-portnum placeholder="Port number or name" />
+              <input type="search" data-firehose-portnum list="firehose-types"
+                     placeholder="Packet type, such as Position"
+                     aria-label="Filter by packet type" />
+              <!-- Suggestions only. The field still takes a port number
+                   or the exact protobuf name, and app.js translates a
+                   readable answer into the name the API wants. -->
+              <datalist id="firehose-types" data-firehose-types></datalist>
               <button type="button" class="primary" data-firehose-apply>Filter</button>
               <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
             </div>
@@ -822,6 +830,12 @@
     <script>window.SONORAN = __SONORAN_CONFIG__;</script>
     <script src="static/vendor/leaflet.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/vendor/echarts.min.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!--
+      The words the dashboard uses for protocol values. app.js, gaps.js
+      and the pages they draw all read this table, so it loads before
+      every one of them.
+    -->
+    <script src="static/labels.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The planner loads before app.js on purpose. app.js runs the router
       as its last act, and the router needs window.SonoranPlanner to

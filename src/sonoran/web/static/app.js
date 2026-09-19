@@ -272,11 +272,32 @@ function nodeChip(node) {
   return el('button', { class: 'linky', type: 'button', title: id, onclick: () => openNode(id) }, chip);
 }
 
+/*
+ * One sentence, used by both tables that print an age.
+ *
+ * "Heard" is the dashboard's word and it hides two things: the observer
+ * is always a gateway (AGENTS.md 9.5.1), and the clock is this
+ * process's, never the node's (9.4).
+ */
+const HEARD_HINT = "How long ago a gateway last uploaded a packet from this node. It is the time this dashboard received the upload, not the node's own clock.";
+
 /** Build a table from column definitions and rows. */
 function table(columns, rows, emptyMessage = 'No data.') {
   if (!rows || !rows.length) return empty(emptyMessage);
+  /*
+   * A column may carry a `hint`: one plain sentence for the reader who
+   * does not know the word in the heading. "Gateway", "hops" and a
+   * `!hex` node ID are all exact and none of them explains itself. The
+   * hint goes in the title, the same place `roleCell` puts the wire
+   * value, and the heading takes a dotted underline so there is
+   * something to hover.
+   */
   const head = el('tr', {}, columns.map((column) =>
-    el('th', { class: column.num ? 'num' : null, text: column.label })));
+    el('th', {
+      class: [column.num ? 'num' : '', column.hint ? 'hinted' : ''].join(' ').trim() || null,
+      title: column.hint || null,
+      text: column.label,
+    })));
   const body = rows.map((row) =>
     el('tr', {}, columns.map((column) => {
       const value = column.cell(row);
@@ -315,11 +336,11 @@ function expandingTable(columns, rows, emptyMessage, options = {}) {
     el('span', { class: 'muted', text: `${rows.length - limit} more` }))];
 }
 
-function statTile(label, value, delta) {
+function statTile(label, value, delta, hint) {
   return el('div', { class: 'panel' },
     el('div', { class: 'stat' },
       el('span', { class: 'value', text: value }),
-      el('span', { class: 'label', text: label }),
+      el('span', { class: hint ? 'label hinted' : 'label', title: hint || null, text: label }),
       delta ? el('span', { class: 'delta', text: delta }) : null));
 }
 
@@ -414,6 +435,10 @@ const charts = new Map();
 
 function chart(target, option) {
   if (!target) return null;
+  // The box collapses while it holds a sentence instead of a chart, and
+  // ECharts measures the box when it starts, so the height comes back
+  // before the instance is made. See `chartEmpty`.
+  target.classList.remove('chart-empty');
   let instance = charts.get(target);
   if (!instance || instance.isDisposed()) {
     instance = echarts.init(target, null, { renderer: 'canvas' });
@@ -421,6 +446,30 @@ function chart(target, option) {
   }
   instance.setOption(option, true);
   return instance;
+}
+
+/**
+ * Say why a chart panel is blank.
+ *
+ * Every chart on this page used to be drawn inside `if (rows.length)`
+ * with no else. An endpoint that answered with an empty list left a
+ * titled panel holding nothing at all, and a panel holding nothing
+ * reads as "measured, and the answer is nothing". The daily activity
+ * chart is the plain case: the snapshot job writes that table, so a
+ * dashboard whose jobs service has never run shows an empty box where
+ * a month of history belongs.
+ *
+ * "We have not been told" and "there is none" are different sentences,
+ * so each caller passes its own.
+ */
+function chartEmpty(target, message) {
+  if (!target) return;
+  const instance = charts.get(target);
+  if (instance && !instance.isDisposed()) instance.dispose();
+  charts.delete(target);
+  target.classList.add('chart-empty');
+  target.removeAttribute('_echarts_instance_');
+  replace(target, empty(message));
 }
 
 const CHART_BASE = {
@@ -458,11 +507,27 @@ async function loadSummary(page) {
   const yesterday = snapshots && snapshots[1];
   const delta = (key) =>
     yesterday && yesterday[key] != null ? `${count(yesterday[key])} yesterday` : null;
+  /*
+   * "Observations" was the endpoint's word for `packet_seen`, printed
+   * at the reader. A `packet_seen` row is one MQTT upload, and saying
+   * so is the whole of AGENTS.md 9.5.1: the only observers this
+   * database can hold are gateways, one gateway uploads the same packet
+   * more than once, and every other node on the mesh hears plenty and
+   * reports none of it. The firehose column says "Uploads" too, so the
+   * dashboard has one word for it. No count changes.
+   */
   replace(target,
-    statTile('Nodes', count(stats.node_count), delta('node_count')),
-    statTile('Packets', count(stats.packet_count), delta('packet_count')),
-    statTile('Observations', count(stats.observation_count), delta('observation_count')),
-    statTile('Gateways', count(stats.gateway_count), delta('gateway_count')));
+    statTile('Nodes', count(stats.node_count), delta('node_count'),
+      'How many nodes this database holds.'),
+    statTile('Packets', count(stats.packet_count), delta('packet_count'),
+      'Packets stored. The same packet uploaded by several gateways is counted once.'),
+    statTile('Uploads', count(stats.observation_count), delta('observation_count'),
+      'One for each time a gateway uploaded a packet to MQTT. One packet is often '
+      + 'uploaded by several gateways, and by the same gateway more than once, so this '
+      + 'is larger than the packet count and is not a count of gateways.'),
+    statTile('Gateways', count(stats.gateway_count), delta('gateway_count'),
+      'Nodes that upload what they hear to MQTT. They are the only observers this '
+      + 'database has.'));
 }
 
 async function loadTopTalkers(page) {
@@ -490,7 +555,7 @@ PAGES.dashboard = async (page) => {
     ? table([
         { label: 'Node', cell: (row) => nodeChip(row) },
         { label: 'Role', cell: (row) => roleCell(row.role) },
-        { label: 'Heard', num: true, cell: (row) => `${ago(row.last_heard)} ago` },
+        { label: 'Heard', num: true, hint: HEARD_HINT, cell: (row) => `${ago(row.last_heard)} ago` },
       ], nodes, 'No nodes heard yet.')
     : failure(new Error('Cannot load nodes.')));
 
@@ -500,13 +565,25 @@ PAGES.dashboard = async (page) => {
         : [empty('No messages stored.')])
     : [failure(new Error('Cannot load messages.'))]);
 
-  if (portnums && portnums.length) {
+  const portnumChart = $('[data-portnum-chart]', page);
+  if (!portnums) {
+    chartEmpty(portnumChart, 'Cannot load the packet types.');
+  } else if (!portnums.length) {
+    chartEmpty(portnumChart, 'No packet was stored in the window.');
+  } else {
     const top = [...portnums].sort((a, b) => b.count - a.count).slice(0, 10).reverse();
-    chart($('[data-portnum-chart]', page), {
+    // The axis carries the label and the tooltip carries the enum, the
+    // same bargain `portnumCell` makes in a table.
+    const wire = new Map(top.map((row) => [portnumLabel(row.name || row.portnum), row.name || String(row.portnum)]));
+    chart(portnumChart, {
       ...CHART_BASE,
-      tooltip: { ...CHART_BASE.tooltip, trigger: 'item' },
+      tooltip: {
+        ...CHART_BASE.tooltip,
+        trigger: 'item',
+        formatter: (item) => `${item.name} (${wire.get(item.name)})<br>${count(item.value)} packets`,
+      },
       xAxis: { type: 'value', ...AXIS },
-      yAxis: { type: 'category', data: top.map((row) => row.name || String(row.portnum)), ...AXIS },
+      yAxis: { type: 'category', data: [...wire.keys()], ...AXIS },
       series: [{ type: 'bar', data: top.map((row) => row.count), itemStyle: { color: PALETTE.accent, borderRadius: [0, 3, 3, 0] } }],
     });
   }
@@ -524,39 +601,15 @@ const mapState = { map: null, nodes: null, traffic: null, links: null, traces: n
 window.SonoranMap = mapState;
 
 /*
- * Every device role the firmware knows, in the order the legend shows
- * them: the routing roles first, then the clients, then the rest.
- *
- * The colours live in app.css so the stylesheet stays the one source of
- * the palette. A role that is not in this list still draws, in the
- * muted colour, so a new firmware role never leaves an invisible node.
+ * The role table, the port number table and the words for both live in
+ * labels.js, which loads first. Three files needed them and each used
+ * to carry its own copy, so the same value had three spellings on
+ * pages a reader moves between.
  */
-const ROLES = [
-  { key: 'ROUTER', label: 'Router' },
-  { key: 'ROUTER_LATE', label: 'Router late' },
-  { key: 'ROUTER_CLIENT', label: 'Router client' },
-  { key: 'REPEATER', label: 'Repeater' },
-  { key: 'CLIENT', label: 'Client' },
-  { key: 'CLIENT_MUTE', label: 'Client mute' },
-  { key: 'CLIENT_BASE', label: 'Client base' },
-  { key: 'CLIENT_HIDDEN', label: 'Client hidden' },
-  { key: 'CLIENT_TAK', label: 'Client TAK' },
-  { key: 'TAK_TRACKER', label: 'TAK tracker' },
-  { key: 'TAK_PLUGIN', label: 'TAK plugin' },
-  { key: 'ATAK_PLUGIN', label: 'ATAK plugin' },
-  { key: 'TRACKER', label: 'Tracker' },
-  { key: 'SENSOR', label: 'Sensor' },
-  { key: 'LOST_AND_FOUND', label: 'Lost and found' },
-];
+const { ROLES, roleLabel, portnumLabel, portnumWire } = window.SonoranLabels;
 
-const ROLE_LABELS = new Map(ROLES.map((role) => [role.key, role.label]));
+const KNOWN_ROLES = new Set(ROLES.map((role) => role.key));
 const roleColour = (role) => colour(`role-${role}`, PALETTE.muted);
-
-/** The label for a role, or a readable form of an unknown one. */
-function roleLabel(role) {
-  if (!role) return 'No role reported';
-  return ROLE_LABELS.get(role) || role.replace(/_/g, ' ').toLowerCase();
-}
 
 /** A role as a table cell: readable, with the wire value on hover.
  *
@@ -571,6 +624,19 @@ function roleLabel(role) {
 function roleCell(role) {
   if (!role) return el('span', { class: 'muted', text: '-' });
   return el('span', { title: role, text: roleLabel(role) });
+}
+
+/** A port number as a table cell: readable, with the wire value on hover.
+ *
+ * Same bargain as `roleCell`. `TELEMETRY_APP` is the exact thing the
+ * firmware sent and it is not a phrase anybody says out loud, so the
+ * cell reads "Telemetry" and carries `TELEMETRY_APP` in its title. The
+ * packet page still prints the enum in full, because that page exists
+ * to show the record rather than to summarise it.
+ */
+function portnumCell(portnum) {
+  if (portnum == null || portnum === '') return el('span', { class: 'muted', text: '-' });
+  return el('span', { title: String(portnum), text: portnumLabel(portnum) });
 }
 
 /**
@@ -765,11 +831,6 @@ function drawMapNodes(rows) {
 const packetHref = (event) =>
   `#packet/${encodeURIComponent(event.from.node_id)}/${event.packet_id}`;
 
-/** A port number as a short label, without the shouting. */
-function portnumLabel(portnum) {
-  if (!portnum) return 'packet';
-  return String(portnum).replace(/_APP$/, '').replace(/_/g, ' ').toLowerCase();
-}
 
 /*
  * The live traffic animation.
@@ -1525,9 +1586,9 @@ function graphCategories(nodes) {
     itemStyle: { color: roleColour(role.key) },
   }));
   // A role this build has never heard of still needs a place to sit,
-  // and so does a node that has never reported one. `ROLE_LABELS` is
-  // already keyed by the roles this build knows.
-  const other = [...present].filter((role) => role && !ROLE_LABELS.has(role));
+  // and so does a node that has never reported one. `KNOWN_ROLES` is
+  // the set of roles this build knows.
+  const other = [...present].filter((role) => role && !KNOWN_ROLES.has(role));
   for (const role of other.sort()) {
     categories.push({ name: roleLabel(role), itemStyle: { color: roleColour(role) } });
   }
@@ -2329,32 +2390,61 @@ function nodeQuery(page) {
   return `api/nodes?${params}`;
 }
 
+/*
+ * Which node search is the current one.
+ *
+ * The box now searches as it is typed, so several requests can be in
+ * the air at once and they do not have to come back in order. Without
+ * this an earlier, slower answer lands last and the table then shows
+ * the results of a query the box no longer holds.
+ */
+let nodeSearchToken = 0;
+
 PAGES.nodes = async (page) => {
+  const token = ++nodeSearchToken;
   const target = $('[data-node-table]', page);
   replace(target, el('p', { class: 'loading', text: 'Loading' }));
   const rows = await get(nodeQuery(page)).catch((error) => error);
+  if (token !== nodeSearchToken) return;
   if (rows instanceof Error) return replace(target, failure(rows));
 
   const roleSelect = $('[data-node-role]', page);
   if (roleSelect.options.length <= 1) {
     for (const role of [...new Set(rows.map((row) => row.role).filter(Boolean))].sort()) {
-      roleSelect.append(el('option', { value: role, text: role }));
+      // The value stays the enum, because the API filters on it. Only
+      // the words a reader chooses between change.
+      roleSelect.append(el('option', { value: role, text: roleLabel(role) }));
     }
   }
 
   $('[data-node-count]', page).textContent = `${count(rows.length)} nodes match.`;
   replace(target, table([
     { label: 'Node', cell: (row) => nodeChip(row) },
-    { label: 'ID', cell: (row) => el('code', { text: row.node_id }) },
-    { label: 'Hardware', cell: (row) => row.hw_model || '-' },
+    {
+      label: 'Node ID',
+      hint: 'The number the firmware gives the node, written in hexadecimal after a "!".',
+      cell: (row) => el('code', { text: row.node_id }),
+    },
+    {
+      label: 'Hardware',
+      hint: 'The board model the node reports for itself.',
+      cell: (row) => row.hw_model || '-',
+    },
     { label: 'Role', cell: (row) => roleCell(row.role) },
     {
       label: 'Flags',
+      hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is.',
       cell: (row) => el('span', {},
-        row.is_mqtt_gateway ? el('span', { class: 'tag gateway', text: 'gateway' }) : null,
+        row.is_mqtt_gateway
+          ? el('span', {
+              class: 'tag gateway',
+              title: 'This node uploads packets it hears to MQTT. It is not a device role.',
+              text: 'gateway',
+            })
+          : null,
         row.has_position ? el('span', { class: 'tag', text: 'position' }) : null),
     },
-    { label: 'Last heard', num: true, cell: (row) => `${ago(row.last_heard)} ago` },
+    { label: 'Last heard', num: true, hint: HEARD_HINT, cell: (row) => `${ago(row.last_heard)} ago` },
   ], rows, 'No nodes match the filters.'));
 };
 
@@ -2464,7 +2554,7 @@ function activityPanel(detail) {
     el('h3', {}, 'Activity',
       el('span', { class: 'muted', text: `${count(detail.activity.packet_count)} packets in ${detail.window_hours} h` })),
     el('div', { class: 'table-wrap' }, table([
-      { label: 'Packet type', cell: (row) => row.portnum },
+      { label: 'Packet type', cell: (row) => portnumCell(row.portnum) },
       { label: 'Count', num: true, cell: (row) => count(row.count) },
     ], detail.activity.by_portnum, 'This node sent no packets in the window.')));
 }
@@ -2606,13 +2696,47 @@ PAGES.meshnet = async (page) => {
 
 /* --- Firehose --------------------------------------------------- */
 
+/*
+ * The suggestions under the firehose filter, filled once.
+ *
+ * They are the types this mesh has actually sent, not every type the
+ * protocol defines, so the list is short and every entry returns rows.
+ * The page refreshes on a timer, so this is fetched once per visit
+ * rather than on every draw.
+ */
+let firehoseTypesFilled = false;
+
+async function fillFirehoseTypes(page) {
+  if (firehoseTypesFilled) return;
+  const list = $('[data-firehose-types]', page);
+  if (!list) return;
+  firehoseTypesFilled = true;
+  const rows = await get('api/stats/portnums').catch(() => null);
+  if (!rows || !rows.length) return;
+  replace(list, [...rows]
+    .sort((a, b) => b.count - a.count)
+    .map((row) => el('option', { value: portnumLabel(row.name || row.portnum) })));
+}
+
 PAGES.firehose = async (page) => {
-  const portnum = $('[data-firehose-portnum]', page).value.trim();
+  fillFirehoseTypes(page);
+  const typed = $('[data-firehose-portnum]', page).value.trim();
+  // The API takes a number or the exact protobuf name. `portnumWire`
+  // turns "position" into POSITION_APP and leaves anything else alone,
+  // so the field can ask for a packet type in the words the rest of the
+  // page uses without the endpoint learning a second vocabulary.
+  const portnum = portnumWire(typed);
   const params = new URLSearchParams({ limit: '150' });
   if (portnum) params.set('portnum', portnum);
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
-  if (rows instanceof Error) return replace(target, failure(rows));
+  if (rows instanceof Error) {
+    // 422 here is always the filter, and "Request failed (422)" tells
+    // the reader nothing they can act on.
+    return replace(target, /422/.test(rows.message || '')
+      ? failure(new Error(`No packet type is called "${typed}". Try one of the suggestions, or a port number.`))
+      : failure(rows));
+  }
   replace(target, table([
     {
       label: 'Time',
@@ -2624,10 +2748,29 @@ PAGES.firehose = async (page) => {
     },
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => (row.to_node === '^all' ? 'everyone' : row.to_name || row.to_node) },
-    { label: 'Type', cell: (row) => row.portnum },
+    { label: 'Type', cell: (row) => portnumCell(row.portnum) },
     { label: 'Channel', cell: (row) => row.channel || '-' },
-    { label: 'Hops', num: true, cell: (row) => (row.hop_start == null ? '-' : `${row.hop_start - (row.hop_limit ?? row.hop_start)}`) },
-    { label: 'Gateways', num: true, cell: (row) => count(row.seen_count) },
+    {
+      label: 'Hops',
+      num: true,
+      hint: 'Hop start minus hop limit: how many relays the packet had used by the time it was uploaded.',
+      cell: (row) => (row.hop_start == null ? '-' : `${row.hop_start - (row.hop_limit ?? row.hop_start)}`),
+    },
+    {
+      /*
+       * `seen_count` counts `packet_seen` rows, and a `packet_seen` row
+       * is one MQTT upload. One gateway uploads the same packet several
+       * times: AGENTS.md 9.5.1 measured 22 uploads from 15 gateways on
+       * one live packet, and says to use `gateway_count` for a count of
+       * gateways. This column has always shown the uploads. The heading
+       * said "Gateways", so the page named a number it was not holding.
+       * The number is untouched; only the word for it is corrected.
+       */
+      label: 'Uploads',
+      num: true,
+      hint: 'How many times a gateway uploaded this packet to MQTT. One gateway often uploads the same packet more than once, so this is not a count of gateways.',
+      cell: (row) => count(row.seen_count),
+    },
   ], rows, 'No packets match the filter.'));
 };
 
@@ -2646,11 +2789,12 @@ PAGES.traceroutes = async (page) => {
     },
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => nodeChip({ node_id: row.to_node, display_name: row.to_name }) },
-    { label: 'Path', wrap: true, cell: (row) => (row.route_names || []).join(' -> ') || 'direct' },
+    { label: 'Path', wrap: true, cell: (row) => (row.route_names || []).join(' \u2192 ') || 'direct' },
     { label: 'Hops', num: true, cell: (row) => (row.hops || []).length },
     {
-      label: 'Measured',
+      label: 'Signal measured',
       num: true,
+      hint: 'How many hops came back with a signal reading. The firmware reports no reading for a hop it could not measure, and often sends fewer readings than hops.',
       cell: (row) =>
         `${(row.hops || []).filter((hop) => hop.snr != null).length} of ${(row.hops || []).length}`,
     },
@@ -2665,7 +2809,8 @@ PAGES.traceroutes = async (page) => {
           })),
     },
     {
-      label: 'mesh-graph',
+      label: 'Drawing',
+      hint: 'Opens this trace as a drawing in mesh-graph, a separate service.',
       cell: (row) => (row.graph_url == null
         ? el('span', { class: 'muted', text: '-' })
         : el('a', {
@@ -2688,9 +2833,6 @@ function everySeconds(seconds) {
   return `${round(seconds / 86400, 1)} days`;
 }
 
-/** The short name of a packet family, without the shouting. */
-const familyLabel = (name) =>
-  String(name).replace(/_APP$/, '').replace(/_/g, ' ').toLowerCase();
 
 /**
  * Draw the nodes that send the most often for their family.
@@ -2721,11 +2863,18 @@ function drawBroadcastTable(page, data) {
       const mains = h.battery_level > 100;
       parts.push(el('span', {
         class: h.brownout_risk ? 'tag bad' : 'tag',
-        text: mains ? 'on mains' : `${Math.round(h.battery_level)}%`,
+        title: mains
+          ? 'The node reports a battery level above 100%, which the firmware uses for mains power.'
+          : 'Battery level the node last reported.',
+        text: mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
       }));
     }
     if (h.uptime_seconds != null) {
-      parts.push(el('span', { class: 'muted', text: `up ${everySeconds(h.uptime_seconds)}` }));
+      parts.push(el('span', {
+        class: 'muted',
+        title: 'How long the node says it has been running since it last restarted.',
+        text: `up ${everySeconds(h.uptime_seconds)}`,
+      }));
     }
     return el('span', { class: 'tags' }, parts.length ? parts : el('span', { text: 'ok' }));
   };
@@ -2739,7 +2888,7 @@ function drawBroadcastTable(page, data) {
           class: rate.notable ? 'tag bad' : rate.faster_than_default ? 'tag' : 'tag muted',
           title: `every ${everySeconds(rate.interval_seconds)}, ` +
                  `default ${everySeconds(rate.default_seconds)}`,
-          text: `${familyLabel(name)} ${rate.ratio}x`,
+          text: `${portnumLabel(name)} ${rate.ratio}x`,
         })));
 
   replace(target, table(
@@ -2757,7 +2906,15 @@ function drawBroadcastTable(page, data) {
 /** Draw what the mesh sends each hour, stacked by packet family. */
 function drawActivityChart(page, data) {
   const note = $('[data-activity-note]', page);
-  if (!data || !data.families || !data.families.length) return;
+  const target = $('[data-activity-chart]', page);
+  if (!data || !data.families) {
+    note.textContent = '';
+    return chartEmpty(target, 'Cannot load what the mesh is sending.');
+  }
+  if (!data.families.length) {
+    note.textContent = '';
+    return chartEmpty(target, `No packet was stored in the last ${data.window_hours} h.`);
+  }
   const total = data.families.reduce((sum, family) => sum + family.total, 0);
   note.textContent = `${count(total)} packets over ${data.window_hours} h`;
 
@@ -2778,17 +2935,17 @@ function drawActivityChart(page, data) {
     PALETTE.relayed, PALETTE.bad, PALETTE.muted,
   ];
 
-  chart($('[data-activity-chart]', page), {
+  chart(target, {
     ...CHART_BASE,
     legend: {
-      data: bands.map((band) => familyLabel(band.name)),
+      data: bands.map((band) => portnumLabel(band.name)),
       textStyle: { color: PALETTE.muted },
       top: 0,
     },
     xAxis: { type: 'category', data: data.hours.map((hour) => clock(hour)), ...AXIS },
     yAxis: { type: 'value', ...AXIS },
     series: bands.map((band, index) => ({
-      name: familyLabel(band.name),
+      name: portnumLabel(band.name),
       type: 'line',
       stack: 'all',
       areaStyle: { opacity: 0.75 },
@@ -2811,9 +2968,16 @@ PAGES.stats = async (page) => {
   drawActivityChart(page, activity);
   drawBroadcastTable(page, broadcast);
 
-  if (daily && daily.length) {
+  const dailyChart = $('[data-daily-chart]', page);
+  if (!daily) {
+    chartEmpty(dailyChart, 'Cannot load the daily history.');
+  } else if (!daily.length) {
+    // The jobs service writes `daily_snapshot`. No row means nobody has
+    // written one yet, which is not the same as thirty quiet days.
+    chartEmpty(dailyChart, 'No daily snapshot has been written yet. The jobs service writes one each day.');
+  } else {
     const rows = [...daily].reverse();
-    chart($('[data-daily-chart]', page), {
+    chart(dailyChart, {
       ...CHART_BASE,
       legend: { textStyle: { color: PALETTE.muted }, top: 0 },
       xAxis: { type: 'category', data: rows.map((row) => row.day), ...AXIS },
@@ -2829,9 +2993,14 @@ PAGES.stats = async (page) => {
     });
   }
 
-  if (hardware && hardware.length) {
+  const hardwareChart = $('[data-hardware-chart]', page);
+  if (!hardware) {
+    chartEmpty(hardwareChart, 'Cannot load the hardware mix.');
+  } else if (!hardware.length) {
+    chartEmpty(hardwareChart, 'No node has reported its board model.');
+  } else {
     const top = hardware.slice(0, 12).reverse();
-    chart($('[data-hardware-chart]', page), {
+    chart(hardwareChart, {
       ...CHART_BASE,
       tooltip: { ...CHART_BASE.tooltip, trigger: 'item' },
       xAxis: { type: 'value', ...AXIS },
@@ -3167,7 +3336,7 @@ PAGES.packet = async (page) => {
   const uploads = data.observations.length;
 
   replace($('[data-packet-title]', page),
-    el('h2', { text: `${packet.portnum} from ${packet.from_name}` }),
+    el('h2', { title: String(packet.portnum), text: `${portnumLabel(packet.portnum)} from ${packet.from_name}` }),
     el('p', { class: 'sub',
       text: `Packet ${packetId}, ${count(uploads)} uploads from ${count(gateways)} gateways, `
         + (direct ? `${count(direct)} heard it direct` : 'none heard it direct') }));
@@ -3179,7 +3348,8 @@ PAGES.packet = async (page) => {
         el('dt', { text: 'Packet ID' }), el('dd', {}, el('code', { text: String(packetId) })),
         el('dt', { text: 'From' }), el('dd', {}, nodeChip({ node_id: packet.from_node, display_name: packet.from_name })),
         el('dt', { text: 'To' }), el('dd', { text: packet.to_name || packet.to_node }),
-        el('dt', { text: 'Type' }), el('dd', { text: packet.portnum }),
+        el('dt', { text: 'Type' }),
+        el('dd', { text: packet.portnum ? `${portnumLabel(packet.portnum)} (${packet.portnum})` : 'unknown' }),
         el('dt', { text: 'Channel' }), el('dd', { text: packet.channel || 'unknown' }),
         el('dt', { text: 'Hop start' }), el('dd', { text: packet.hop_start == null ? 'unknown' : String(packet.hop_start) }),
         el('dt', { text: 'Hop limit' }), el('dd', { text: packet.hop_limit == null ? 'unknown' : String(packet.hop_limit) }),
@@ -3377,8 +3547,26 @@ function wire() {
     render('map');
   });
   $('[data-node-apply]').addEventListener('click', () => render('nodes'));
+  /*
+   * Both search boxes look the same, so both behave the same.
+   *
+   * The graph box filtered as it was typed and the nodes box waited for
+   * Enter or for the button beside it, with nothing on either one to
+   * say so. The graph filters a list the browser already holds; the
+   * nodes box asks the server, and that list is in the thousands, so it
+   * waits for a pause in the typing rather than firing per keystroke.
+   * The button stays for the people who look for a button.
+   */
+  const NODE_SEARCH_PAUSE_MS = 350;
+  let nodeSearchTimer = null;
+  $('[data-node-search]').addEventListener('input', () => {
+    clearTimeout(nodeSearchTimer);
+    nodeSearchTimer = setTimeout(() => render('nodes'), NODE_SEARCH_PAUSE_MS);
+  });
   $('[data-node-search]').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') render('nodes');
+    if (event.key !== 'Enter') return;
+    clearTimeout(nodeSearchTimer);
+    render('nodes');
   });
   $('[data-graph-search]').addEventListener('input', () => render('graph'));
   $('[data-meshnet-apply]').addEventListener('click', () => render('meshnet'));

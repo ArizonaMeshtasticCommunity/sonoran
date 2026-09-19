@@ -840,7 +840,15 @@
     const preset = state.summary && presetOf(state.summary, state.preset);
     const nodes = (preset && preset.nodes) || [];
     if (!nodes.length) {
-      replace(host, el('p', { class: 'muted', text: 'No sites in this run.' }));
+      // "No run yet" and "a run that predicted from nothing" are not
+      // the same answer, and the second one is a fault worth seeing.
+      const published = state.summary && state.summary.available;
+      replace(host, el('p', {
+        class: 'muted',
+        text: published
+          ? 'No sites in this run.'
+          : 'No coverage run has been made yet, so there are no sites to list.',
+      }));
       return;
     }
     const used = nodes.filter((node) => node.used);
@@ -897,6 +905,28 @@
     host.className = `notice${kind ? ` ${kind}` : ''}`;
   }
 
+  /*
+   * Show or hide the controls that only mean something once a run has
+   * published tiles. The preset picker stays with them: it lists the
+   * presets of a run, so with no run it is an empty select.
+   */
+  function setControlsHidden(page, hidden) {
+    const selectors = [
+      '[data-coverage-layers]',
+      '[data-coverage-views]',
+      '[data-coverage-opacity-wrap]',
+      '.coverage-pick',
+    ];
+    for (const selector of selectors) {
+      for (const node of page.querySelectorAll(selector)) {
+        // The site-set picker has a hidden rule of its own and must keep
+        // it: it only appears when a run published more than one set.
+        if (node.hasAttribute('data-coverage-siteset-wrap')) continue;
+        node.hidden = hidden;
+      }
+    }
+  }
+
   function drawAll(page) {
     drawSiteSets(page);
     drawPresets(page);
@@ -943,11 +973,29 @@
           + 'each modem preset the mesh is using.',
         '',
       );
+      /*
+       * Everything on the page still has to say where it stands.
+       *
+       * This branch used to draw three panels and return, so the
+       * calibration and the site list kept their headings and held
+       * nothing at all. Each one already had an empty state written for
+       * it; neither was ever reached. A titled panel with nothing in it
+       * reads as a measured zero, and a dashboard whose coverage job
+       * has never run showed two of them.
+       *
+       * The controls go with it. A layer picker, an opacity slider and
+       * a preset list drive tiles that do not exist, so they are put
+       * away rather than left to be dragged.
+       */
       drawDiagnosticBanner(page);
-    drawAssumes(page);
-    drawCoarse(page);
+      drawAssumes(page);
+      drawCoarse(page);
+      drawSites(page);
+      drawCalibration(page);
+      setControlsHidden(page, true);
       return;
     }
+    setControlsHidden(page, false);
     notice(page, '');
 
     if (!state.siteSet || !siteSetOf(summary, state.siteSet)) {

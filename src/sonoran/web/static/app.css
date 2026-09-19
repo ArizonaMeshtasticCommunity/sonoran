@@ -1,6 +1,22 @@
 /* Sonoran dashboard styles. There is no build step. */
 
 /*
+ * `hidden` means hidden.
+ *
+ * The browser's own rule is `[hidden] { display: none }`, which any
+ * author rule that sets `display` outranks. Three rules in this file
+ * already restated it one class at a time, and the class that had not
+ * been found was `.controls`: the config check ships its export buttons
+ * with `hidden` on them, and `.controls { display: flex }` showed them
+ * anyway. "Download corrected config" was offered, as the primary
+ * button on the page, before any config had been loaded.
+ *
+ * A reset is the honest fix. A panel that says it is hidden must not be
+ * on the screen, whatever else styles it.
+ */
+[hidden] { display: none !important; }
+
+/*
  * Sonoran desert palette. The background is a dark warm brown, not a
  * grey. The accent is sunset orange. The "good" colour is saguaro
  * green, which stays readable against the warm background.
@@ -226,6 +242,8 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 .stat { display: flex; flex-direction: column; gap: .3rem; padding: 1.15rem 1.2rem; }
 .stat .value { font-size: 1.9rem; font-weight: 650; line-height: 1.1; }
 .stat .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
+/* A tile label with a sentence behind it, like `th.hinted`. */
+.stat .label.hinted { text-decoration: underline dotted; text-underline-offset: .3em; cursor: help; }
 .stat .delta { font-size: .78rem; color: var(--muted); }
 
 /* Node identity */
@@ -252,6 +270,8 @@ th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--
    reads as a shorter value that happens to exist. */
 td { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
 th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+/* A heading with a `hint` has a sentence behind it. See `table()`. */
+th.hinted { text-decoration: underline dotted; text-underline-offset: .3em; cursor: help; }
 tbody tr:hover { background: var(--panel-2); }
 td.wrap { white-space: normal; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -611,6 +631,9 @@ body.watch-mode { overflow: hidden; }
 /* Charts */
 
 .chart { width: 100%; height: 15rem; }
+/* A chart that has nothing to draw says so, and a sentence does not
+   need 15rem of empty box under it. See `chartEmpty` in app.js. */
+.chart.chart-empty { height: auto; }
 .chart.tall { height: min(82vh, 52rem); }
 
 /* Chat */

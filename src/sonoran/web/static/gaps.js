@@ -220,7 +220,12 @@
         label: 'Node',
         cell: (row) => el('span', {}, nodeChip(row)),
       },
-      { label: 'Role', cell: (row) => row.role },
+      /*
+       * `roleCell` is app.js's, and it prints the label with the wire
+       * value on hover. This column printed the enum, so the same node
+       * read "Client base" on the nodes page and `CLIENT_BASE` here.
+       */
+      { label: 'Role', cell: (row) => roleCell(row.role) },
       ...order.map((name) => ({
         label: labels[name] || name,
         cell: (row) => chip((row.signals || {})[name]),

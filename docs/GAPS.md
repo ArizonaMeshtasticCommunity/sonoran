@@ -277,8 +277,14 @@ sonoran-gaps-once
 
 ## 7. Where it appears
 
-`#gaps`, "Coverage gaps", its own page. In reading order: one sentence,
-the counts, the map, the table, the unknown bucket, and the limits list.
+`#gaps`, its own page. The nav entry says "Gaps" and the heading says
+"Coverage gaps": the nav is a column of short nouns, and three entries
+that all began with "Coverage" made it unreadable. The coverage map is
+"Coverage" and the coverage planner is "Planner" for the same reason.
+The fragment is unchanged.
+
+In reading order: one sentence, the counts, the map, the table, the
+unknown bucket, and the limits list.
 
 `gaps.js` loads **before** `app.js`. `app.js` runs the router as its last
 act, and a reload straight onto `#gaps` would otherwise fall back to the
