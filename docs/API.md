@@ -43,16 +43,46 @@ Returns the application version and the schema revision.
 
 ### 3.1 `GET /api/nodes`
 
-Returns nodes, newest heard first.
+Returns nodes, newest heard first by default.
 
-Query parameters:
+The body is a bare array. The count of **everything matching the
+filters** is in the **`X-Total-Count`** response header, which is not
+the same as the number of rows returned: the list is capped, and a
+caller that counts what it received reports the cap. A page that did
+exactly that said "300 nodes match" on a mesh of 2,372.
+
+Filters:
 
 - `q` — search in long name, short name, node ID.
 - `hw` — filter by hardware model.
 - `role` — filter by role.
+- `channel` — the channel the node was last heard on.
+- `position` — `exact`, `coarse`, or `none`. How well the node's
+  position is known, by the same rule the gaps assessment applies. A
+  node that sent no precision field at all is `exact`, not missing: that
+  is the ordinary case for a node heard directly over the radio.
+- `licensed` — `true` for nodes that claim an amateur licence.
 - `gateway` — `true` to show only MQTT gateways.
 - `active_hours` — only nodes heard in the last N hours. Default: all.
-- `before`, `limit` — pagination.
+- `first_seen_hours` — only nodes first seen in the last N hours.
+- `before`, `limit`, `offset` — pagination.
+
+Ordering:
+
+- `sort` — one of `last_heard`, `first_seen`, `name`, `node_id`, `hw`,
+  `role`, `channel`, `position`. Anything else is a 422 naming the
+  list. Default `last_heard`.
+- `order` — `asc` or `desc`. Default `desc`.
+
+`name` orders by the long name, then the short name, then the ID, which
+is what the column shows. Nulls sort last in both directions: a node
+with no role is not the smallest role. Every order is made total with
+the node number, so a node cannot arrive on two pages or on none.
+
+**Paging is by offset and the list is alive.** A node heard between two
+requests can shift the boundary, so a row may be seen twice or missed
+across pages. A keyset cursor would fix it and is more machinery than a
+few thousand rows deserve; this is written down rather than hidden.
 
 Response item:
 

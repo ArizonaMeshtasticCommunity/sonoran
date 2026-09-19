@@ -127,6 +127,35 @@ async function main() {
     return `${before} -> ${narrowed} for "base", 0 for nonsense`;
   });
 
+  await journey(context, 'a column heading reorders the whole list', async (page) => {
+    await open(page, 'nodes');
+    const summary = () => page.locator('[data-node-count]').innerText();
+    const roles = () => page.$$eval(
+      '[data-page="nodes"] tbody tr td:nth-child(4) span',
+      (cells) => cells.slice(0, 6).map((cell) => cell.textContent.trim()),
+    );
+    const before = await roles();
+    const wasSaying = await summary();
+    await page.click('[data-page="nodes"] th:nth-child(4) .sort-button');
+    await page.waitForTimeout(2500);
+    const after = await roles();
+    const nowSaying = await summary();
+
+    /*
+     * The sort happens on the server, so the summary must name the new
+     * order and the total must not move. A browser that reordered the
+     * rows it already held would change the rows and leave the summary
+     * saying the old thing.
+     */
+    must(nowSaying.includes('sorted by role'), `the summary did not follow: ${nowSaying}`);
+    const total = (line) => (line.match(/^[\d,]+/) || [''])[0];
+    must(total(wasSaying) === total(nowSaying), `the total moved: ${wasSaying} -> ${nowSaying}`);
+    must(before.join() !== after.join() || before.length < 2, 'the rows did not reorder');
+    const sorted = [...after].sort((a, b) => a.localeCompare(b));
+    must(after.join() === sorted.join(), `not in order: ${after.join(', ')}`);
+    return `${total(nowSaying)} nodes, reordered by role`;
+  });
+
   await journey(context, 'chat reloads on a new window', async (page) => {
     await open(page, 'chat');
     const before = await page.locator('[data-chat-body] .panel').count();

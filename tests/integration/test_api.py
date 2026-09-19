@@ -1582,3 +1582,130 @@ def test_an_observation_with_no_packet_is_not_direct(migrated_engine, timescale_
     orphan = [e for e in body["events"] if e["packet_id"] == 5199]
     assert orphan, "the orphan observation was dropped from the events"
     assert orphan[0]["direct"] is False
+
+
+# --- the nodes list: ordering, paging, and an honest total -------------
+#
+# The list is capped, so the page cannot count the rows it received and
+# call that the answer, and it cannot sort the rows it holds and call
+# that the order. Both were true before; these hold them true.
+
+
+def _seed_node_list(engine) -> None:  # type: ignore[no-untyped-def]
+    """Nodes that tie on role, and one of each position confidence."""
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM node WHERE node_num BETWEEN 9700 AND 9799"))
+        rows = [
+            # num, name, role, lat, lon, bits
+            (9701, "alpha", "ROUTER", 33.5, -112.1, None),
+            (9702, "bravo", "ROUTER", 33.6, -112.2, 13),
+            (9703, "charlie", "ROUTER", None, None, None),
+            (9704, "delta", "CLIENT", 33.7, -112.3, None),
+            (9705, "echo", None, 33.8, -112.4, 13),
+            (9706, "foxtrot", None, 0.0, 0.0, None),
+        ]
+        for num, name, role, lat, lon, bits in rows:
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, long_name, role, "
+                    "last_lat, last_lon, last_position_precision_bits, "
+                    "first_seen, last_heard, updated_at) VALUES "
+                    "(:num, :nid, :name, :role, :lat, :lon, :bits, :now, :now, :now)"
+                ),
+                {
+                    "num": num,
+                    "nid": f"!{num:08x}",
+                    "name": name,
+                    "role": role,
+                    "lat": lat,
+                    "lon": lon,
+                    "bits": bits,
+                    "now": now,
+                },
+            )
+
+
+def test_the_total_counts_matches_not_returned_rows(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The page said "300 nodes match" when it meant "here are 300"."""
+    _seed_node_list(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        response = client.get("/api/nodes?limit=2")
+        every = client.get("/api/nodes?limit=500")
+    assert len(response.json()) == 2
+    total = int(response.headers["X-Total-Count"])
+    assert total == len(every.json())
+    assert total > 2, "the fixture is too small to tell a cap from a count"
+
+
+def test_an_unknown_sort_is_refused_by_name(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """Nothing a caller sends may reach the query."""
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        answer = client.get("/api/nodes?sort=last_heard%3B+drop+table+node")
+    assert answer.status_code == 422
+    assert "sort must be one of" in answer.json()["detail"]
+
+
+def test_paging_returns_each_node_once(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The tie-break is what makes this true when a column has ties.
+
+    Sorting by role puts several nodes on the same value. Without a
+    total order Postgres may place equal rows differently between two
+    queries, and a node then lands on two pages or on none.
+    """
+    _seed_node_list(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    seen: list[str] = []
+    with TestClient(app) as client:
+        first = client.get("/api/nodes?sort=role&order=asc&limit=3&offset=0")
+        total = int(first.headers["X-Total-Count"])
+        seen += [row["node_id"] for row in first.json()]
+        offset = len(seen)
+        while offset < total and offset < 500:
+            page = client.get(f"/api/nodes?sort=role&order=asc&limit=3&offset={offset}")
+            rows = page.json()
+            if not rows:
+                break
+            seen += [row["node_id"] for row in rows]
+            offset += len(rows)
+    assert len(seen) == len(set(seen)), "a node arrived on two pages"
+    assert len(set(seen)) == total, "a node arrived on no page"
+
+
+def test_nulls_sort_last_whichever_way_it_was_clicked(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A node with no role is not the smallest role."""
+    _seed_node_list(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        for order in ("asc", "desc"):
+            rows = client.get(f"/api/nodes?sort=role&order={order}&limit=500").json()
+            roles = [row["role"] for row in rows]
+            named = [index for index, role in enumerate(roles) if role is not None]
+            blank = [index for index, role in enumerate(roles) if role is None]
+            if named and blank:
+                assert max(named) < min(blank), f"{order}: a null sorted before a value"
+
+
+def test_position_filter_matches_the_gaps_rule(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """The three states must partition the list, and agree with Python.
+
+    A node that sent no precision field at all is exact, not missing.
+    Null island is no position. If this drifts from
+    `gaps.signals.position_confidence`, two pages disagree about one
+    node.
+    """
+    _seed_node_list(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        totals = {}
+        for state in ("exact", "coarse", "none"):
+            answer = client.get(f"/api/nodes?limit=1&position={state}")
+            totals[state] = int(answer.headers["X-Total-Count"])
+        everything = int(client.get("/api/nodes?limit=1").headers["X-Total-Count"])
+        none_rows = client.get("/api/nodes?limit=500&position=none").json()
+    assert sum(totals.values()) == everything, totals
+    ids = {row["node_id"] for row in none_rows}
+    assert f"!{9703:08x}" in ids, "a node with no coordinates is not 'no position'"
+    assert f"!{9706:08x}" in ids, "null island is not 'no position'"

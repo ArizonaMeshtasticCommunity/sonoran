@@ -1291,3 +1291,29 @@ div.check { cursor: default; }
 /* An embed that cannot work yet still shows its snippet, dimmed, because
    the snippet is what somebody came here for. The notice above says why. */
 .embed-box.embed-off .embed-field textarea { opacity: .6; }
+
+/* Sortable column headings, on the nodes list. */
+th.sortable { padding: 0; }
+.sort-button {
+  display: flex; align-items: baseline; gap: .35rem; width: 100%;
+  background: none; border: 0; color: inherit; font: inherit;
+  text-align: inherit; padding: .5rem .6rem; cursor: pointer;
+}
+th.num .sort-button { justify-content: flex-end; }
+.sort-button:hover { color: var(--text); }
+.sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The arrow is never the only signal: aria-sort carries the same fact
+   and the heading in force is brighter. */
+.sort-arrow { font-size: .8em; opacity: .45; }
+th.sorted { color: var(--text); }
+th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
+
+/* The starting points above the table. */
+.node-starts { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin: 0 0 .9rem; }
+.node-starts .muted { font-size: .85rem; margin-right: .2rem; }
+.chip {
+  background: var(--panel-2); border: 1px solid var(--line); color: inherit;
+  border-radius: 1rem; padding: .25rem .7rem; font: inherit; font-size: .85rem; cursor: pointer;
+}
+.chip:hover { border-color: var(--accent); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

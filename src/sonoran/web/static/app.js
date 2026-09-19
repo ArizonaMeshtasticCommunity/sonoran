@@ -33,6 +33,25 @@ async function get(path) {
  * A failed request becomes null. A null path stays null and makes no
  * request, so a caller can skip one item of a set.
  */
+/** Fetch a list, and the count of everything that matched it.
+ *
+ * `/api/nodes` answers with a bare array, because it is documented and
+ * something outside this repository may read it. The count of the whole
+ * matching set rides in `X-Total-Count`, which is the only way the page
+ * can say "2,372 nodes, showing 300" instead of counting the rows it
+ * was handed and calling that the answer.
+ */
+async function getList(path) {
+  const response = await fetch(api(path));
+  if (!response.ok) throw new Error(`Request failed (${response.status})`);
+  const rows = await response.json();
+  const header = response.headers.get('X-Total-Count');
+  // No header is not zero. An older server, or a proxy that dropped it,
+  // means we do not know the total — and then we say what we do know.
+  const total = header == null ? null : Number(header);
+  return { rows, total: Number.isFinite(total) ? total : null };
+}
+
 async function getAll(paths) {
   return Promise.all(
     paths.map((path) =>
@@ -292,12 +311,45 @@ function table(columns, rows, emptyMessage = 'No data.') {
    * value, and the heading takes a dotted underline so there is
    * something to hover.
    */
-  const head = el('tr', {}, columns.map((column) =>
-    el('th', {
-      class: [column.num ? 'num' : '', column.hint ? 'hinted' : ''].join(' ').trim() || null,
+  const head = el('tr', {}, columns.map((column) => {
+    const classes = [column.num ? 'num' : '', column.hint ? 'hinted' : ''];
+    /*
+     * A column may also carry `sort`: the name the server knows the
+     * column by. The heading then becomes a button that asks the
+     * server to reorder, never the browser.
+     *
+     * That distinction is the whole point. This list is capped, so
+     * reordering the rows a page happens to hold would sort the most
+     * recently heard few hundred by name and present the answer as the
+     * first few hundred by name. Different sets, and a reader cannot
+     * tell them apart by looking.
+     */
+    if (!column.sort) {
+      return el('th', {
+        class: classes.join(' ').trim() || null,
+        title: column.hint || null,
+        text: column.label,
+      });
+    }
+    const active = column.sortState && column.sortState.key === column.sort;
+    const direction = active ? column.sortState.order : null;
+    classes.push('sortable');
+    if (active) classes.push('sorted');
+    return el('th', {
+      class: classes.join(' ').trim() || null,
+      'aria-sort': active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none',
+    }, el('button', {
+      type: 'button',
+      class: 'sort-button',
       title: column.hint || null,
-      text: column.label,
-    })));
+      onclick: () => column.onSort(column.sort, active && direction === 'asc' ? 'desc' : 'asc'),
+    },
+    el('span', { text: column.label }),
+    // An arrow, and never only an arrow: `aria-sort` carries the same
+    // fact, and the heading is bold when it is the one in force.
+    el('span', { class: 'sort-arrow', 'aria-hidden': 'true',
+      text: active ? (direction === 'asc' ? '\u2191' : '\u2193') : '\u2195' })));
+  }));
   const body = rows.map((row) =>
     el('tr', {}, columns.map((column) => {
       const value = column.cell(row);
@@ -2772,17 +2824,48 @@ PAGES.graph = async (page) => {
 
 /* --- Nodes ----------------------------------------------------- */
 
-function nodeQuery(page) {
-  const params = new URLSearchParams({ limit: '300' });
-  const search = $('[data-node-search]', page).value.trim();
-  const active = $('[data-node-active]', page).value;
-  const role = $('[data-node-role]', page).value;
+/* How the list is ordered and how far down it we have read.
+ *
+ * The order lives here and travels to the server, never to a sort
+ * applied over the rows already on screen. See `table()`.
+ */
+const NODE_PAGE = 300;
+let nodeSort = { key: 'last_heard', order: 'desc' };
+let nodeOffset = 0;
+let nodeTotal = 0;
+let nodeRows = [];
+
+function nodeQuery(page, offset = 0) {
+  const params = new URLSearchParams({
+    limit: String(NODE_PAGE),
+    offset: String(offset),
+    sort: nodeSort.key,
+    order: nodeSort.order,
+  });
+  const value = (selector) => {
+    const node = $(selector, page);
+    return node ? node.value : '';
+  };
+  const search = value('[data-node-search]').trim();
+  const active = value('[data-node-active]');
+  const role = value('[data-node-role]');
+  const channel = value('[data-node-channel]');
+  const position = value('[data-node-position]');
   const gateway = $('[data-node-gateway]', page).getAttribute('aria-pressed') === 'true';
   if (search) params.set('q', search);
   if (active) params.set('active_hours', active);
   if (role) params.set('role', role);
+  if (channel) params.set('channel', channel);
+  if (position) params.set('position', position);
   if (gateway) params.set('gateway', 'true');
   return `api/nodes?${params}`;
+}
+
+/** How many filters are narrowing the list, for the summary line. */
+function nodeFilterCount(page) {
+  const query = new URLSearchParams(nodeQuery(page).split('?')[1]);
+  for (const key of ['limit', 'offset', 'sort', 'order']) query.delete(key);
+  return [...query.keys()].length;
 }
 
 /*
@@ -2796,39 +2879,70 @@ function nodeQuery(page) {
 let nodeSearchToken = 0;
 
 PAGES.nodes = async (page) => {
+  await loadNodes(page, { reset: true });
+};
+
+/** Draw the nodes list, or append the next page of it.
+ *
+ * `reset` starts again from the top. Without it the rows already on
+ * screen are kept and the next page is appended, which is what "Show
+ * more" does.
+ */
+async function loadNodes(page, { reset = false } = {}) {
   const token = ++nodeSearchToken;
   const target = $('[data-node-table]', page);
-  replace(target, el('p', { class: 'loading', text: 'Loading' }));
-  const rows = await get(nodeQuery(page)).catch((error) => error);
+  if (reset) {
+    nodeOffset = 0;
+    nodeRows = [];
+    replace(target, el('p', { class: 'loading', text: 'Loading' }));
+  }
+  const answer = await getList(nodeQuery(page, nodeOffset)).catch((error) => error);
   if (token !== nodeSearchToken) return;
-  if (rows instanceof Error) return replace(target, failure(rows));
+  if (answer instanceof Error) return replace(target, failure(answer));
+
+  nodeRows = reset ? answer.rows : nodeRows.concat(answer.rows);
+  nodeTotal = answer.total;
 
   const roleSelect = $('[data-node-role]', page);
   if (roleSelect.options.length <= 1) {
-    for (const role of [...new Set(rows.map((row) => row.role).filter(Boolean))].sort()) {
+    for (const role of [...new Set(nodeRows.map((row) => row.role).filter(Boolean))].sort()) {
       // The value stays the enum, because the API filters on it. Only
       // the words a reader chooses between change.
       roleSelect.append(el('option', { value: role, text: roleLabel(role) }));
     }
   }
+  fillNodeChannels(page);
+  describeNodeList(page);
 
-  $('[data-node-count]', page).textContent = `${count(rows.length)} nodes match.`;
+  const onSort = (key, order) => {
+    nodeSort = { key, order };
+    loadNodes(page, { reset: true });
+  };
+  const sortable = (column) => ({ ...column, sortState: nodeSort, onSort });
+
   replace(target, table([
-    { label: 'Node', cell: (row) => nodeChip(row) },
-    {
+    sortable({ label: 'Node', sort: 'name', cell: (row) => nodeChip(row) }),
+    sortable({
       label: 'Node ID',
+      sort: 'node_id',
       hint: 'The number the firmware gives the node, written in hexadecimal after a "!".',
       cell: (row) => el('code', { text: row.node_id }),
-    },
-    {
+    }),
+    sortable({
       label: 'Hardware',
+      sort: 'hw',
       hint: 'The board model the node reports for itself.',
       cell: (row) => row.hw_model || '-',
-    },
-    { label: 'Role', cell: (row) => roleCell(row.role) },
-    {
+    }),
+    sortable({ label: 'Role', sort: 'role', cell: (row) => roleCell(row.role) }),
+    sortable({
       label: 'Flags',
-      hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is.',
+      // Flags is not one value, so sorting it is a decision rather than
+      // a rule. It sorts by how exactly the position is known, which is
+      // the half of this column somebody sorts it to find.
+      sort: 'position',
+      hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is. '
+        + 'Sorting this column orders by how exactly the position is known.',
       cell: (row) => el('span', {},
         row.is_mqtt_gateway
           ? el('span', {
@@ -2838,9 +2952,69 @@ PAGES.nodes = async (page) => {
             })
           : null,
         row.has_position ? el('span', { class: 'tag', text: 'position' }) : null),
-    },
-    { label: 'Last heard', num: true, hint: HEARD_HINT, cell: (row) => `${ago(row.last_heard)} ago` },
-  ], rows, 'No nodes match the filters.'));
+    }),
+    sortable({
+      label: 'Last heard',
+      sort: 'last_heard',
+      num: true,
+      hint: HEARD_HINT,
+      cell: (row) => `${ago(row.last_heard)} ago`,
+    }),
+  ], nodeRows, 'No nodes match the filters.'));
+
+  // "Show more", only when there is more. The count is of everything
+  // that matched, so this can say how much is still unread.
+  if (nodeTotal != null && nodeRows.length < nodeTotal) {
+    const more = el('button', {
+      class: 'more', type: 'button',
+      text: `Show more (${count(nodeTotal - nodeRows.length)} still to read)`,
+    });
+    more.addEventListener('click', () => {
+      more.disabled = true;
+      nodeOffset = nodeRows.length;
+      loadNodes(page);
+    });
+    target.append(el('p', { class: 'more-wrap' }, more));
+  }
+}
+
+/** Offer the channels this mesh actually uses, once they are known. */
+function fillNodeChannels(page) {
+  const select = $('[data-node-channel]', page);
+  if (!select || select.options.length > 1) return;
+  const seen = [...new Set(nodeRows.map((row) => row.last_channel).filter(Boolean))].sort();
+  for (const channel of seen) select.append(el('option', { value: channel, text: channel }));
+}
+
+/** Say what is on screen, and never mistake the page for the answer.
+ *
+ * This line used to read `${rows.length} nodes match`, which on a mesh
+ * of 2,372 nodes said "300 nodes match" and meant "here are 300".
+ */
+function describeNodeList(page) {
+  const filters = nodeFilterCount(page);
+  const parts = [];
+  if (nodeTotal == null) {
+    parts.push(`${count(nodeRows.length)} nodes shown`);
+  } else if (nodeRows.length < nodeTotal) {
+    parts.push(`${count(nodeTotal)} nodes`, `showing ${count(nodeRows.length)}`);
+  } else {
+    parts.push(`${count(nodeTotal)} nodes`);
+  }
+  parts.push(`sorted by ${NODE_SORT_WORDS[nodeSort.key] || nodeSort.key}`);
+  if (filters) parts.push(`${filters} filter${filters === 1 ? '' : 's'}`);
+  $('[data-node-count]', page).textContent = parts.join(' \u00b7 ');
+}
+
+const NODE_SORT_WORDS = {
+  last_heard: 'when last heard',
+  first_seen: 'when first seen',
+  name: 'name',
+  node_id: 'node ID',
+  hw: 'hardware',
+  role: 'role',
+  channel: 'channel',
+  position: 'position',
 };
 
 /* --- Node detail ----------------------------------------------- */
@@ -3977,6 +4151,38 @@ function wire() {
     render('map');
   });
   $('[data-node-apply]').addEventListener('click', () => render('nodes'));
+  for (const select of ['[data-node-channel]', '[data-node-position]']) {
+    $(select).addEventListener('change', () => render('nodes'));
+  }
+
+  /*
+   * The starting points. Each one sets a whole query, because the
+   * question somebody arrives with is "which routers have gone quiet",
+   * not "role equals ROUTER and last heard is over seven days".
+   */
+  const NODE_STARTS = {
+    'silent-routers': { role: 'ROUTER', active: '', sort: { key: 'last_heard', order: 'asc' } },
+    'no-position': { position: 'none', sort: { key: 'last_heard', order: 'desc' } },
+    gateways: { gateway: true, sort: { key: 'last_heard', order: 'desc' } },
+    newest: { sort: { key: 'first_seen', order: 'desc' } },
+    clear: {},
+  };
+  for (const chip of $$('[data-node-start]')) {
+    chip.addEventListener('click', () => {
+      const page = $('[data-page="nodes"]');
+      const start = NODE_STARTS[chip.dataset.nodeStart] || {};
+      // Every chip starts from nothing, so two clicks never compose
+      // into a query nobody asked for.
+      $('[data-node-search]', page).value = '';
+      $('[data-node-role]', page).value = start.role || '';
+      $('[data-node-channel]', page).value = '';
+      $('[data-node-position]', page).value = start.position || '';
+      $('[data-node-active]', page).value = start.active === undefined ? '24' : start.active;
+      $('[data-node-gateway]', page).setAttribute('aria-pressed', start.gateway ? 'true' : 'false');
+      nodeSort = start.sort || { key: 'last_heard', order: 'desc' };
+      render('nodes');
+    });
+  }
   /*
    * Both search boxes look the same, so both behave the same.
    *

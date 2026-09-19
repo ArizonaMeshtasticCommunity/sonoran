@@ -512,16 +512,28 @@ async def main() -> None:
             # is a worse preview and a less honest one.
             is_infrastructure = role in ("ROUTER", "ROUTER_LATE", "REPEATER")
             node_channel = PRIMARY_PRESET if is_infrastructure or num % 5 != 0 else SECONDARY_PRESET
+            # Not every node knows where it is, and not every node that
+            # does says so exactly. The nodes list filters on that, and
+            # the siting half of the gaps feature is blind to a coarse
+            # position, so a preview needs all three kinds or neither
+            # behaviour can be seen.
+            #
+            # One node in seven reports nothing, and one in five reduces
+            # its own precision before publishing — which is the node
+            # doing it, not the broker.
+            coarse = num % 5 == 0
+            no_position = num % 7 == 0
             await conn.execute(
                 text(
                     """
                     INSERT INTO node (node_num, node_id, long_name, short_name,
                         hw_model, role, is_licensed, last_lat, last_lon,
-                        last_altitude, position_time, last_heard,
+                        last_altitude, last_position_precision_bits,
+                        position_time, last_heard,
                         is_mqtt_gateway, last_mqtt_topic, last_channel,
                         first_seen, updated_at)
                     VALUES (:num, :nid, :long, :short, :hw, :role, false,
-                        :lat, :lon, :alt, :ptime, :heard, :gw, :topic,
+                        :lat, :lon, :alt, :bits, :ptime, :heard, :gw, :topic,
                         :node_channel, :first, :heard)
                     """
                 ),
@@ -532,9 +544,10 @@ async def main() -> None:
                     "short": short,
                     "hw": hw,
                     "role": role,
-                    "lat": lat,
-                    "lon": lon,
-                    "alt": alt,
+                    "lat": None if no_position else lat,
+                    "lon": None if no_position else lon,
+                    "alt": None if no_position else alt,
+                    "bits": 13 if coarse and not no_position else None,
                     "ptime": heard,
                     "heard": heard,
                     "gw": gw,

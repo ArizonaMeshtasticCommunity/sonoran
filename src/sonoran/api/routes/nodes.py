@@ -3,8 +3,8 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import ColumnElement, Select, and_, func, or_, select, true
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy import ColumnElement, Select, and_, func, not_, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import (
@@ -31,7 +31,7 @@ from sonoran.db.models import (
     TextMessage,
 )
 from sonoran.meshtastic import portnums_pb2
-from sonoran.positions import is_usable
+from sonoran.positions import MIN_SITE_PRECISION_BITS, NULL_ISLAND_MARGIN, is_usable
 from sonoran.radio.resolve import resolve_profile
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
@@ -266,16 +266,84 @@ def _position(node: Node) -> dict[str, object] | None:
     }
 
 
+# The columns the list may be ordered by, and what each one means.
+#
+# A whitelist, not a lookup of whatever arrived: nothing a caller sends
+# reaches the query. `name` orders by what the column actually shows,
+# which is the long name, then the short name, then the ID — sorting by
+# `long_name` alone would scatter the unnamed nodes through the middle
+# of the alphabet rather than gathering them at the end.
+SORTS: dict[str, Any] = {
+    "last_heard": Node.last_heard,
+    "first_seen": Node.first_seen,
+    "name": func.lower(func.coalesce(Node.long_name, Node.short_name, Node.node_id)),
+    "node_id": Node.node_num,
+    "hw": Node.hw_model,
+    "role": Node.role,
+    "channel": Node.last_channel,
+    "position": Node.last_position_precision_bits,
+}
+
+
+def _usable_position() -> ColumnElement[bool]:
+    """The SQL form of `positions.is_usable`.
+
+    It has to be the same rule the gaps page applies in Python, or the
+    two disagree about the same node. Null island needs both values, not
+    either: a node really can sit on the equator, and one really can sit
+    on the meridian.
+    """
+    return and_(
+        Node.last_lat.is_not(None),
+        Node.last_lon.is_not(None),
+        not_(
+            and_(
+                func.abs(Node.last_lat) <= NULL_ISLAND_MARGIN,
+                func.abs(Node.last_lon) <= NULL_ISLAND_MARGIN,
+            )
+        ),
+    )
+
+
+def _position_filter(value: str) -> ColumnElement[bool]:
+    """Select nodes by how well their position is known.
+
+    `exact`, `coarse`, `none`, matching `gaps.signals.position_confidence`.
+    A NULL precision is **exact**, not missing: a node that sent no
+    precision field at all is the ordinary case for one heard over the
+    radio, and it is full precision. See `positions.is_precise_enough`.
+    """
+    usable = _usable_position()
+    if value == "none":
+        return not_(usable)
+    coarse = and_(
+        Node.last_position_precision_bits.is_not(None),
+        Node.last_position_precision_bits < MIN_SITE_PRECISION_BITS,
+    )
+    if value == "coarse":
+        return and_(usable, coarse)
+    return and_(usable, not_(coarse))
+
+
 def _apply_node_filters(
-    statement: Select[tuple[Node]],
+    statement: Select[Any],
     q: str | None,
     hw: str | None,
     role: str | None,
     gateway: bool | None,
     active_hours: int | None,
     before: datetime | None,
-) -> Select[tuple[Node]]:
-    """Apply the documented node list filters to a statement."""
+    channel: str | None = None,
+    position: str | None = None,
+    licensed: bool | None = None,
+    first_seen_hours: int | None = None,
+) -> Select[Any]:
+    """Apply the documented node list filters to a statement.
+
+    Typed loosely on purpose: the same predicates are applied to the
+    select that returns rows and to the one that counts them, so that
+    the count can never drift from the page it describes.
+    """
     if q:
         match = contains(q)
         predicates: list[ColumnElement[bool]] = [
@@ -299,24 +367,81 @@ def _apply_node_filters(
         )
     if before is not None:
         statement = statement.where(Node.last_heard < before)
+    if channel:
+        statement = statement.where(Node.last_channel == channel)
+    if position:
+        statement = statement.where(_position_filter(position))
+    if licensed is not None:
+        statement = statement.where(Node.is_licensed == licensed)
+    if first_seen_hours is not None:
+        statement = statement.where(
+            Node.first_seen >= datetime.now(UTC) - timedelta(hours=first_seen_hours)
+        )
     return statement
 
 
 @router.get("", response_model=list[NodeSummary])
 async def list_nodes(
+    response: Response,
     q: str | None = None,
     hw: str | None = None,
     role: str | None = None,
     gateway: bool | None = None,
     active_hours: int | None = Query(default=None, ge=1, le=720),
     before: datetime | None = None,
+    channel: str | None = None,
+    position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
+    licensed: bool | None = None,
+    first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
+    sort: str = Query(default="last_heard"),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    offset: int = Query(default=0, ge=0, le=100_000),
     limit: int = Query(default=100, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
 ) -> list[NodeSummary]:
-    """Return nodes newest heard first."""
-    statement = select(Node).order_by(Node.last_heard.desc().nullslast()).limit(limit)
-    statement = _apply_node_filters(statement, q, hw, role, gateway, active_hours, before)
-    return [_summary(node) for node in (await session.scalars(statement)).all()]
+    """Return nodes, ordered by one of the documented columns.
+
+    The body stays a bare array, because this endpoint is documented and
+    something outside this repository may read it. The count of
+    everything matching the filters travels in `X-Total-Count`.
+
+    That count is the point of the header rather than a nicety. The list
+    is capped, and a page that counts the rows it received reports the
+    cap: it said "300 nodes match" on a mesh of 2,372. The same fault is
+    recorded against `/api/map/traffic` in its own docstring.
+
+    **Ordering happens here, never in the browser.** Sorting the rows a
+    caller happens to hold would sort the most recently heard 500 by
+    name and present the answer as the first 500 by name. Those are
+    different sets and a reader cannot tell them apart by looking.
+    """
+    if sort not in SORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"sort must be one of: {', '.join(sorted(SORTS))}",
+        )
+    column = SORTS[sort]
+    direction = column.asc() if order == "asc" else column.desc()
+
+    # Nulls last whichever way it was clicked. A node with no role is
+    # not the smallest role, and a reader scanning a column wants the
+    # rows that have nothing to say out of the way.
+    #
+    # `node_num` breaks the tie. Without it Postgres may order equal
+    # rows differently between two queries, so a node could arrive on
+    # two pages or on neither. With 160 nodes reporting no role at all,
+    # ties are the ordinary case here rather than an edge.
+    ordering = (direction.nullslast(), Node.node_num.asc())
+
+    filters = (q, hw, role, gateway, active_hours, before, channel, position, licensed)
+    statement = _apply_node_filters(select(Node), *filters, first_seen_hours)
+    total = await session.scalar(
+        _apply_node_filters(select(func.count()).select_from(Node), *filters, first_seen_hours)
+    )
+    response.headers["X-Total-Count"] = str(total or 0)
+
+    rows = (await session.scalars(statement.order_by(*ordering).offset(offset).limit(limit))).all()
+    return [_summary(node) for node in rows]
 
 
 @router.get("/{node_id}", response_model=NodeSummary)
