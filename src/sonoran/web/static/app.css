@@ -1164,12 +1164,23 @@ body.watch-mode { overflow: hidden; }
 .messages .body .hash { color: var(--accent); }
 .reactions { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .15rem; }
 .reaction {
-  display: inline-flex; align-items: center; gap: .2rem;
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: .2rem;
+  max-width: 100%; overflow-wrap: anywhere;
   background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 1rem; padding: .05rem .45rem; font-size: .85rem;
   cursor: default;
 }
-.reaction .who { display: inline-flex; align-items: baseline; gap: .2rem; font-size: .78rem; }
+/* A tapback with several senders is one long row of node names, and
+   `inline-flex` will not break it. On a 320px viewport one reaction ran
+   to 344px and took the whole chat page with it, failing WCAG 2.1 SC
+   1.4.10 Reflow.
+   It only shows up on real traffic: a reaction needs several senders
+   with long names before the row is wide enough to overflow, and no
+   seeded fixture produces one. */
+.reaction .who {
+  display: inline-flex; flex-wrap: wrap; align-items: baseline;
+  gap: .2rem; font-size: .78rem; min-width: 0;
+}
 .reaction .who .sep { color: var(--muted); }
 .reaction .who .packet { font-size: .7rem; opacity: .7; }
 .reaction .who .packet:hover { opacity: 1; }

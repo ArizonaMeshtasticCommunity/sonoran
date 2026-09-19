@@ -156,6 +156,33 @@ async function main() {
     return `${total(nowSaying)} nodes, reordered by role`;
   });
 
+  await journey(context, 'chat reflows at 320px with a busy reaction', async (page) => {
+    /*
+     * WCAG 2.1 SC 1.4.10 Reflow: 320 CSS px with no two-dimensional
+     * scrolling. A tapback several people sent draws as one chip
+     * listing every sender, and with long node names that row does not
+     * break on its own. A real one measured 344px and took the whole
+     * page sideways.
+     *
+     * It needs a reaction with several long-named senders to show at
+     * all, which is why the seed makes one.
+     */
+    await page.setViewportSize({ width: 320, height: 800 });
+    await open(page, 'chat', 4000);
+    const measured = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      reactions: document.querySelectorAll('.reaction').length,
+    }));
+    must(
+      measured.scrollWidth <= measured.clientWidth + 1,
+      `the page scrolls sideways at 320px: ${measured.scrollWidth}/${measured.clientWidth}`,
+    );
+    return measured.reactions
+      ? `${measured.scrollWidth}/${measured.clientWidth} with ${measured.reactions} reaction(s)`
+      : `${measured.scrollWidth}/${measured.clientWidth}, but no reaction was drawn to test`;
+  });
+
   await journey(context, 'chat reloads on a new window', async (page) => {
     await open(page, 'chat');
     const before = await page.locator('[data-chat-body] .panel').count();

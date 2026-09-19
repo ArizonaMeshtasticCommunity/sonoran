@@ -1013,6 +1013,51 @@ async def main() -> None:
                 },
             )
 
+        # A tapback that several people sent.
+        #
+        # The chat page draws these as one chip listing every sender, and
+        # with long node names that row is wide. On a 320px viewport a
+        # real one measured 344px and took the whole page sideways,
+        # failing WCAG 2.1 SC 1.4.10 Reflow. Nothing here produced a
+        # reaction at all, so the fixture could never show it.
+        #
+        # Several senders, and the longest names in the set, because one
+        # thumbs-up from one node would not have caught it either.
+        reacted = await conn.execute(
+            text(
+                "SELECT packet_id, from_node_num FROM text_message "
+                "WHERE emoji = false AND packet_id IS NOT NULL "
+                "ORDER BY seen_at DESC LIMIT 1"
+            )
+        )
+        parent = reacted.first()
+        if parent is not None:
+            senders = await conn.execute(
+                text(
+                    "SELECT node_num FROM node WHERE long_name IS NOT NULL "
+                    "ORDER BY length(long_name) DESC LIMIT 5"
+                )
+            )
+            for index, row in enumerate(senders):
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO text_message (packet_id, from_node_num,
+                            to_node_num, channel, body, emoji, reply_id, seen_at)
+                        VALUES (:p, :f, :to, :ch, :body, true, :reply, :t)
+                        """
+                    ),
+                    {
+                        "p": 900_000 + index,
+                        "f": row.node_num,
+                        "to": BROADCAST,
+                        "ch": PRIMARY_PRESET,
+                        "body": "\U0001f44d",
+                        "reply": parent.packet_id,
+                        "t": NOW - timedelta(minutes=index + 1),
+                    },
+                )
+
     async with engine.connect() as conn:
         for table in (
             "node",
