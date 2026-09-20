@@ -432,6 +432,46 @@ def test_no_stylesheet_filter_reaches_a_coverage_tile() -> None:
         )
 
 
+def test_the_basemap_filter_lands_on_the_tiles_not_the_container() -> None:
+    """Filtering Leaflet's tile container is filtering a 0x0 element.
+
+    Every tile inside it is absolutely positioned and overflows it, so
+    the browser rasterises a layer whose bounds come only from those
+    children. When the map grows — entering fullscreen takes it from a
+    column to the whole screen — the filtered region does not always
+    follow, and the map draws dark where it had already been drawn and
+    raw light OpenStreetMap beyond it.
+
+    Naming the tiles keeps each filter on a real box.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+    for rule in re.finditer(r"([^{}]+)\{([^}]*)\}", css):
+        selector, body = rule.group(1).strip(), rule.group(2)
+        if "filter:" not in body or "basemap-tiles" not in selector:
+            continue
+        assert "img" in selector, (
+            f"{selector!r} filters the tile container, which is 0x0; name the tiles"
+        )
+
+
+def test_the_basemap_filter_stays_per_pixel() -> None:
+    """One element became many, so a spatial filter would now seam.
+
+    invert, hue-rotate, brightness, contrast, saturate and sepia each
+    read one pixel and write one pixel, so splitting the filter across
+    tiles cannot show a join. A blur or a drop-shadow reads neighbours,
+    and every tile edge would become visible.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+    for rule in re.finditer(r"([^{}]+)\{([^}]*)\}", css):
+        if "basemap-tiles" not in rule.group(1):
+            continue
+        for spatial in ("blur(", "drop-shadow("):
+            assert spatial not in rule.group(2), (
+                f"{spatial} reads neighbouring pixels and would seam at every tile edge"
+            )
+
+
 def test_every_base_layer_is_named_for_the_filter() -> None:
     """A map that forgets the class loses its dark basemap, and one
     that is added later inherits the bug invisibly."""

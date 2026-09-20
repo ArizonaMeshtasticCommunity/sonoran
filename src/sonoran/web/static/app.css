@@ -688,7 +688,27 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
  * Cancelling the filter on the overlay instead would fix one layer and
  * leave the next one to find the bug again.
  */
-.leaflet-tile-pane .basemap-tiles {
+/*
+ * The filter is on the tiles, not on the layer element that holds them.
+ *
+ * That element is Leaflet's tile container, and it is 0x0: every tile
+ * inside it is absolutely positioned and overflows it. Filtering a
+ * zero-size element makes the browser rasterise a layer whose bounds
+ * come entirely from its overflowing children, and when those bounds
+ * change — entering fullscreen grows the map from a column to the whole
+ * screen — the filtered region does not always follow. The result is a
+ * map dark where it was already drawn and raw light OpenStreetMap
+ * beyond it, in one map, with the controls correctly at the new edges.
+ *
+ * Each tile is a real box, so each rasterises at its own bounds and
+ * there is no oversized implicit layer to invalidate.
+ *
+ * Every operation here is per-pixel — invert, hue-rotate, brightness,
+ * contrast, saturate, sepia — so moving from one element to many cannot
+ * seam. A spatial filter such as blur would, and must not be added here
+ * without moving the rule back and finding another answer.
+ */
+.leaflet-tile-pane .basemap-tiles img.leaflet-tile {
   filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.88) saturate(.6) sepia(.35);
 }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
