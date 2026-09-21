@@ -192,3 +192,41 @@ def test_a_degree_the_region_does_not_touch_is_not_missing(tmp_path: Path) -> No
     )
     for name in ("N34W112", "N33W111", "N34W111"):
         assert name not in missing, f"{name} is off the region and was counted"
+
+
+def test_charging_the_receiver_in_strips_matches_one_pass() -> None:
+    """The strip loop must give exactly the old whole grid answer.
+
+    The old form made seven full size int16 temporaries, about 700 MB on
+    the real region, and the kernel killed the run. The strips change the
+    memory and nothing else. The grid here is not a multiple of the strip
+    height, so the last short strip is tested too.
+    """
+    import numpy as np
+
+    from sonoran.coverage.grid import MAX_LEVEL, MIN_LEVEL, NO_COVERAGE
+    from sonoran.jobs import coverage
+
+    rng = np.random.default_rng(7)
+    height = coverage._CHARGE_ROWS * 2 + 37
+    levels = rng.integers(0, 256, size=(height, 50), dtype=np.uint8)
+    levels[::5, ::3] = NO_COVERAGE
+    loss = rng.integers(0, 40, size=(height, 50), dtype=np.uint8)
+
+    moved = np.clip(levels.astype(np.int16) - loss.astype(np.int16), MIN_LEVEL, MAX_LEVEL)
+    expected = np.where(levels == NO_COVERAGE, NO_COVERAGE, moved).astype(np.uint8)
+
+    found = coverage._charge_receiver(levels, loss)
+    assert found.dtype == np.uint8
+    assert np.array_equal(found, expected)
+    # A hole stays a hole, and a covered cell never falls into one.
+    assert np.array_equal(found == NO_COVERAGE, levels == NO_COVERAGE)
+
+
+def test_no_land_cover_leaves_a_layer_untouched() -> None:
+    import numpy as np
+
+    from sonoran.jobs import coverage
+
+    levels = np.arange(12, dtype=np.uint8).reshape(3, 4)
+    assert coverage._charge_receiver(levels, None) is levels
