@@ -300,8 +300,15 @@ function nodeChip(node) {
  */
 const HEARD_HINT = "How long ago a gateway last uploaded a packet from this node. It is the time this dashboard received the upload, not the node's own clock.";
 
-/** Build a table from column definitions and rows. */
-function table(columns, rows, emptyMessage = 'No data.') {
+/**
+ * Build a table from column definitions and rows.
+ *
+ * `options.rowHref(row)`, when given, makes each whole row open that
+ * address: a click anywhere on it that is not on a link or a button of
+ * its own. The row also carries the address for keyboards and screen
+ * readers through the link a column puts in it.
+ */
+function table(columns, rows, emptyMessage = 'No data.', options = {}) {
   if (!rows || !rows.length) return empty(emptyMessage);
   /*
    * A column may carry a `hint`: one plain sentence for the reader who
@@ -374,12 +381,18 @@ function table(columns, rows, emptyMessage = 'No data.') {
     el('span', { class: 'sort-arrow', 'aria-hidden': 'true',
       text: active ? (direction === 'asc' ? '\u2191' : '\u2193') : '\u2195' })));
   }));
-  const body = rows.map((row) =>
-    el('tr', {}, columns.map((column) => {
+  const body = rows.map((row) => {
+    const href = options.rowHref ? options.rowHref(row) : null;
+    const open = (event) => {
+      if (event.target.closest('a, button, input, summary')) return;
+      location.hash = href.replace(/^#/, '');
+    };
+    return el('tr', href ? { class: 'row-link', onclick: open } : {}, columns.map((column) => {
       const value = column.cell(row);
       return el('td', { class: [column.num ? 'num' : '', column.wrap ? 'wrap' : ''].join(' ').trim() || null },
         value && value.nodeType ? value : el('span', { text: value == null ? '-' : String(value) }));
-    })));
+    }));
+  });
   return el('table', {}, el('thead', {}, head), el('tbody', {}, body));
 }
 
@@ -3824,7 +3837,7 @@ PAGES.firehose = async (page) => {
   // so the field can ask for a packet type in the words the rest of the
   // page uses without the endpoint learning a second vocabulary.
   const portnum = portnumWire(typed);
-  const params = new URLSearchParams({ limit: '150' });
+  const params = new URLSearchParams({ limit: '150', summary: 'true' });
   if (portnum) params.set('portnum', portnum);
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
@@ -3835,18 +3848,34 @@ PAGES.firehose = async (page) => {
       ? failure(new Error(`No packet type is called "${typed}". Try one of the suggestions, or a port number.`))
       : failure(rows));
   }
+  /*
+   * Every row opens its packet: a click anywhere on it, or the Open link
+   * at its start for a keyboard or a screen reader. The time used to be
+   * the only way in, drawn as plain text, so nothing said it could be
+   * clicked. "What it said" puts the content on the row itself.
+   */
+  const packetHref = (row) =>
+    `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
   replace(target, table([
     {
-      label: 'Time',
+      label: 'Packet',
       cell: (row) => el('a', {
-        class: 'linky',
-        href: `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`,
-        text: clock(row.first_seen_at),
+        class: 'open-link', href: packetHref(row),
+        'aria-label': `Open packet ${row.packet_key.split(':')[1]}`, text: 'Open \u203a',
       }),
     },
+    { label: 'Time', cell: (row) => el('span', { title: stamp(row.first_seen_at), text: clock(row.first_seen_at) }) },
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => (row.to_node === '^all' ? 'everyone' : row.to_name || row.to_node) },
     { label: 'Type', cell: (row) => portnumCell(row.portnum) },
+    {
+      label: 'What it said',
+      wrap: true,
+      hint: 'A short line from the decoded packet. Node info and routing packets store nothing to show, and neither does a text message while text storage is off.',
+      cell: (row) => (row.summary
+        ? el('span', { class: 'summary', text: row.summary })
+        : el('span', { class: 'muted', text: '-' })),
+    },
     { label: 'Channel', cell: (row) => row.channel || '-' },
     {
       label: 'Hops',
@@ -3869,7 +3898,7 @@ PAGES.firehose = async (page) => {
       hint: 'How many times a gateway uploaded this packet to MQTT. One gateway often uploads the same packet more than once, so this is not a count of gateways.',
       cell: (row) => count(row.seen_count),
     },
-  ], rows, 'No packets match the filter.'));
+  ], rows, 'No packets match the filter.', { rowHref: packetHref }));
 };
 
 /* --- Traceroutes ------------------------------------------------ */
@@ -4169,10 +4198,17 @@ function traceroutePath(hops) {
  * mesh-graph keeps its own database, so it may hold no drawing for a
  * given trace. The image stays hidden until it loads.
  */
-function meshGraphTrace(url) {
+/*
+ * The drawing comes through this API, recoloured for the dark site
+ * (`api/trace_drawing.py`, issue #51). mesh-graph draws on white, and a
+ * CSS filter over its picture would invert its colours too. The link
+ * still opens mesh-graph itself.
+ */
+function meshGraphTrace(trace) {
+  const url = trace && trace.graph_url;
   if (!url) return empty('This traceroute has no packet ID, so it cannot be linked.');
   const drawing = el('img', {
-    src: url,
+    src: trace.drawing_url ? api(trace.drawing_url) : url,
     alt: '',
     class: 'trace-drawing',
     loading: 'lazy',
@@ -4291,7 +4327,7 @@ PAGES.traceroute = async (page) => {
       traceroutePath(trace.hops)),
     el('div', { class: 'panel span-2' },
       el('h3', {}, 'mesh-graph drawing'),
-      meshGraphTrace(trace.graph_url)),
+      meshGraphTrace(trace)),
     trace.return_hops && trace.return_hops.length
       ? el('div', { class: 'panel' },
           el('h3', {}, 'Path back',
@@ -4658,7 +4694,7 @@ PAGES.packet = async (page) => {
           traceroutePath(trace.hops)),
         el('div', { class: 'panel' },
           el('h3', {}, 'mesh-graph drawing'),
-          meshGraphTrace(trace.graph_url)));
+          meshGraphTrace(trace)));
     }
   }
 };

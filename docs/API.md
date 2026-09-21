@@ -762,6 +762,12 @@ Query parameters:
 - `channel` — filter by channel name.
 - `since` — only packets newer than this timestamp.
 - `before`, `limit` — pagination.
+- `summary` — `true` adds `summary`, one short line of what the packet
+  said, read from its decoded row: a message, a position with its
+  precision, battery and voltage, temperature and humidity, a neighbour
+  count, or a traceroute request or reply. It is null for a kind that
+  stores nothing to show (node info, routing), and for a text message
+  while text storage is off. The firehose asks for it.
 
 Response item:
 
@@ -1399,14 +1405,30 @@ Response item includes the route, the return route, SNR lists, and the mesh-grap
 
 ### 9.2 `GET /api/traceroutes/{id}`
 
-Returns one traceroute with full detail and the mesh-graph URL.
+Returns one traceroute with full detail, the mesh-graph URL
+(`graph_url`), and `drawing_url`, the recoloured drawing below.
+
+### 9.3 `GET /api/traceroutes/{id}/drawing.svg`
+
+Returns mesh-graph's drawing of the trace as `image/svg+xml`,
+recoloured for the dark site: the page is transparent, edges and loose
+text are light, and node fills keep mesh-graph's own colours. 404 when
+the trace is unknown or mesh-graph holds no drawing, 502 when mesh-graph
+cannot be reached or sends no SVG. Cached for five minutes.
 
 ## 10. mesh-graph URL building
 
-The API never proxies mesh-graph.
-It returns URLs from `MESH_GRAPH_BASE_URL`.
-The UI embeds the SVG endpoints with `<object>` tags.
-The UI links to the mesh-graph pages for full views.
+The API returns links from `MESH_GRAPH_BASE_URL`, and the UI links to
+the mesh-graph pages for full views.
+
+There is one exception to "links only": the trace drawing (9.3). mesh-graph
+draws on white, the site is dark, mesh-graph is not changed here, and a
+CSS filter over its picture inverts its colours too (issue #51). So the
+API fetches that one SVG from `MESH_GRAPH_INTERNAL_URL` on the compose
+network, rewrites only its neutral colours, and serves it. The UI shows
+it in an `<img>`, where an SVG runs no script and follows no link. It is
+not a general proxy: one route, one mesh-graph path, the trace key taken
+from the database row, and no user input reaches the upstream URL.
 
 ## 11. Terrain endpoints
 

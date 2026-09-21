@@ -1889,3 +1889,130 @@ def test_the_summary_returns_what_the_filters_need(migrated_engine, timescale_ur
     for field in ("channel", "is_licensed", "position_confidence"):
         assert field in rows[0], f"the list filters on {field} but does not return it"
     assert rows[0]["position_confidence"] in {"exact", "coarse", "none"}
+
+
+def _seed_drawn_trace(migrated_engine, packet_id: int | None) -> int:  # type: ignore[no-untyped-def]
+    """Insert one traceroute and return its row ID."""
+    with migrated_engine.begin() as connection:
+        return int(
+            connection.execute(
+                text(
+                    "INSERT INTO traceroute (from_node_num, to_node_num, packet_id, seen_at) "
+                    "VALUES (7801, 7802, :p, :now) RETURNING id"
+                ),
+                {"p": packet_id, "now": datetime.now(UTC)},
+            ).scalar_one()
+        )
+
+
+_GRAPHVIZ = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+    b'<g class="graph"><polygon fill="white" points="0,0 10,0 10,10"/>'
+    b'<g class="edge"><path stroke="black" d="M0,0L5,5"/></g></g></svg>'
+)
+
+
+def test_the_trace_drawing_is_served_recoloured(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str, monkeypatch
+) -> None:
+    """mesh-graph's white drawing comes back transparent, with light edges (#51)."""
+    from sonoran.api.routes import traceroutes
+
+    asked: list[int] = []
+
+    async def fake_fetch(settings, key):  # type: ignore[no-untyped-def]
+        asked.append(key)
+        return _GRAPHVIZ
+
+    monkeypatch.setattr(traceroutes, "fetch_trace_svg", fake_fetch)
+    trace_id = _seed_drawn_trace(migrated_engine, 780001)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        detail = client.get(f"/api/traceroutes/{trace_id}").json()
+        response = client.get(f"/api/traceroutes/{trace_id}/drawing.svg")
+
+    assert detail["drawing_url"] == f"api/traceroutes/{trace_id}/drawing.svg"
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert asked == [780001], "the trace key comes from the row, never from the request"
+    assert b'fill="white"' not in response.content
+    assert b'stroke="black"' not in response.content
+
+
+def test_a_trace_mesh_graph_never_drew_is_a_404(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str, monkeypatch
+) -> None:
+    from sonoran.api.routes import traceroutes
+
+    async def nothing(settings, key):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(traceroutes, "fetch_trace_svg", nothing)
+    trace_id = _seed_drawn_trace(migrated_engine, 780002)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        assert client.get(f"/api/traceroutes/{trace_id}/drawing.svg").status_code == 404
+        assert client.get("/api/traceroutes/999999999/drawing.svg").status_code == 404
+
+
+def test_an_unreachable_mesh_graph_is_a_502(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str, monkeypatch
+) -> None:
+    import httpx
+
+    from sonoran.api.routes import traceroutes
+
+    async def down(settings, key):  # type: ignore[no-untyped-def]
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(traceroutes, "fetch_trace_svg", down)
+    trace_id = _seed_drawn_trace(migrated_engine, 780003)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        assert client.get(f"/api/traceroutes/{trace_id}/drawing.svg").status_code == 502
+
+
+def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """`summary=true` gives one line per packet, from its decoded row.
+
+    A kind with nothing stored gets no line, never a guess. Battery above
+    100 is how Meshtastic says the node is on external power.
+    """
+    now = datetime.now(UTC)
+    sender = 7901
+    with migrated_engine.begin() as connection:
+        for packet_id, portnum in ((790001, 3), (790002, 67), (790003, 4)):
+            connection.execute(
+                text(
+                    "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                    "first_seen_at) VALUES (:s, :p, :n, 3, :now) ON CONFLICT DO NOTHING"
+                ),
+                {"s": sender, "p": packet_id, "n": portnum, "now": now},
+            )
+        connection.execute(
+            text(
+                "INSERT INTO position_metrics (node_num, packet_id, latitude, longitude, "
+                "precision_bits, time) VALUES (:s, 790001, 33.4484, -112.074, 13, :now)"
+            ),
+            {"s": sender, "now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO device_metrics (node_num, packet_id, battery_level, voltage, time) "
+                "VALUES (:s, 790002, 101, 4.2, :now)"
+            ),
+            {"s": sender, "now": now},
+        )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        plain = client.get("/api/packets?from=!00001edd&limit=10").json()
+        rich = client.get("/api/packets?from=!00001edd&limit=10&summary=true").json()
+
+    assert "summary" not in plain[0], "summaries are opt in"
+    by_id = {row["packet_key"].split(":")[1]: row["summary"] for row in rich}
+    assert by_id["790001"].startswith("33.4484, -112.0740, within about")
+    assert by_id["790002"] == "on power, 4.20 V"
+    assert by_id["790003"] is None, "node info stores nothing to show"
