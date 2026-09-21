@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session
 from sonoran.db.models import RfHeard, RfLatest, RfStation, RfTrack
-from sonoran.rf.schema import STATION_ID
+from sonoran.rf.schema import KINDS, STATION_ID, STORED_KINDS
 
 router = APIRouter(prefix="/api/rf", tags=["rf"])
 
@@ -44,6 +44,16 @@ def _point(row: RfLatest | RfTrack) -> dict[str, object]:
         "rssi_db": row.rssi_db,
         "station": row.station_id,
     }
+
+
+@router.get("/kinds")
+async def kinds() -> dict[str, list[str]]:
+    """Return every kind a station may send, and the ones stored today.
+
+    The RF page draws its source list from this, so a source whose phase
+    has not landed reads as "not stored yet", never as an empty sky.
+    """
+    return {"known": list(KINDS), "stored": sorted(STORED_KINDS)}
 
 
 @router.get("/stations")
@@ -113,7 +123,7 @@ async def track(
 ) -> dict[str, object]:
     """Return one thing's track over the last hours, oldest first."""
     thing_id = thing_id.lower()
-    if kind not in {"adsb", "uat", "aprs", "sonde", "ism"} or thing_id in _hidden(request):
+    if kind not in KINDS or thing_id in _hidden(request):
         raise HTTPException(status_code=404, detail="nothing heard")
     since = datetime.now(UTC) - timedelta(hours=hours)
     rows = (

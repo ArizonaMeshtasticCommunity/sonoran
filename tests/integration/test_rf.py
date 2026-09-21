@@ -188,3 +188,29 @@ def test_the_api_serves_stations_latest_tracks_and_heard_cells(
     assert latest.headers["X-Total-Count"] == "1"
     assert [p["lat"] for p in track["points"]] == [33.5, 33.55], "oldest first"
     assert heard["cells"] and all(cell["heard"] >= 1 for cell in heard["cells"])
+
+
+def test_rf_never_counts_as_meshtastic(timescale_url: str, migrated_engine, clean: None) -> None:  # type: ignore[no-untyped-def]
+    """RF is separate: it adds no node, packet, upload or gateway.
+
+    RF stations are not Meshtastic gateways, and what they hear is not
+    a mesh packet. The dashboard's counts must not move.
+    """
+    with _client(timescale_url) as client:
+        before = client.get("/api/stats").json()
+    now = datetime.now(UTC)
+    asyncio.run(
+        _write(
+            timescale_url,
+            Status.model_validate(
+                {"v": 1, "station": "north-site", "sent": now, "lat": 33.4, "lon": -111.9}
+            ),
+            _batch("north-site", "adsb", [_obs("a1b2c3", now, -20.0), _obs("eeeeee", now, -9.0)]),
+        )
+    )
+    with _client(timescale_url) as client:
+        after = client.get("/api/stats").json()
+        kinds = client.get("/api/rf/kinds").json()
+    for key in ("node_count", "packet_count", "observation_count", "gateway_count"):
+        assert after[key] == before[key], key
+    assert kinds == {"known": ["adsb", "uat", "aprs", "sonde", "ism"], "stored": ["adsb", "uat"]}

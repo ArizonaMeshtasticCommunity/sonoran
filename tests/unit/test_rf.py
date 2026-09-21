@@ -159,6 +159,21 @@ def test_text_off_the_air_is_never_built_into_html() -> None:
         assert risky not in source, risky
 
 
+def test_the_page_is_about_every_source_not_only_aircraft() -> None:
+    """The RF map is aircraft, APRS, sondes, sensors and the band."""
+    html = _static("index.html")
+    page = html[html.index('data-page="rf"') :]
+    page = page[: page.index("</section>")]
+    for word in ("aircraft", "APRS", "radiosondes", "weather sensors", "900 MHz band"):
+        assert word in page, word
+    assert "data-rf-sources" in page
+    source = _static("rf.js")
+    for key in ("'aircraft'", "'aprs'", "'sonde'", "'ism'", "'spectrum'"):
+        assert f"key: {key}" in source, key
+    # Stored or not comes from the server, never from the page.
+    assert "api/rf/kinds" in source
+
+
 def test_the_page_says_what_it_does_not_claim() -> None:
     """Design 1.3: not air traffic control, not the whole sky."""
     html = _static("index.html")

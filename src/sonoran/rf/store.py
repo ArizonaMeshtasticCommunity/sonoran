@@ -22,7 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.db.models import RfHeard, RfLatest, RfStation, RfTrack
-from sonoran.rf.schema import AIRCRAFT_KINDS, ICAO, Batch, Observation, Status
+from sonoran.rf.schema import ICAO, STORED_KINDS, Batch, Observation, Status
 
 # The receiver layer's resolution. Five minutes per thing per station is
 # enough to draw where a station hears, and keeps `rf_heard` small.
@@ -213,7 +213,7 @@ async def store_batch(
 ) -> Tally:
     """Store one batch of observations. Returns what happened to each."""
     tally = Tally()
-    if batch.kind not in AIRCRAFT_KINDS:
+    if batch.kind not in STORED_KINDS:
         # Phase 1 stores aircraft only. The rest waits for its phase.
         tally.kind_not_stored = len(batch.obs)
         return tally

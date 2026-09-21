@@ -369,11 +369,12 @@
           <div class="page-head">
             <div>
               <h2>RF</h2>
-              <p class="sub">Aircraft our own receivers hear, from stations that run rf-agent beside an SDR.</p>
+              <p class="sub">What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors and the 900 MHz band, from stations that run rf-agent beside an SDR.</p>
             </div>
             <div class="controls">
-              <button type="button" class="toggle" data-rf-layer="aircraft" aria-pressed="true">Aircraft</button>
-              <button type="button" class="toggle" data-rf-layer="stations" aria-pressed="true">Receivers</button>
+              <!-- One toggle per source that is stored, built by rf.js
+                   from /api/rf/kinds, then the receivers. -->
+              <span class="rf-layers" data-rf-layers></span>
               <label class="muted">Window
                 <select data-rf-minutes aria-label="How far back to show">
                   <option value="1">1 min</option>
@@ -385,14 +386,17 @@
             </div>
           </div>
           <p class="notice rf-notice">
-            This shows what our receivers picked up, and nothing else. An
-            aircraft missing from it was not received by any of our stations.
-            It is not air traffic control and not for navigation.
+            This shows what our receivers picked up, and nothing else. Anything
+            missing from it was not received by any of our stations. It is not
+            air traffic control and not for navigation.
           </p>
+          <!-- Every source the RF map is designed for, with its honest
+               state: live, sent but not stored yet, or not collected yet. -->
+          <ul class="rf-sources" data-rf-sources aria-label="Sources"></ul>
           <p class="muted" data-rf-summary>Loading</p>
           <div class="map-shell"><div id="rf-map"></div></div>
-          <p class="muted" data-rf-selected>Click an aircraft for its track, or a receiver for where it hears.</p>
-          <div class="legend" data-rf-legend aria-label="Altitude colours"></div>
+          <p class="muted" data-rf-selected>Click a mark for its track, or a receiver for where it hears.</p>
+          <div class="legend" data-rf-legend aria-label="What the marks mean"></div>
         </section>
 
         <section class="page" data-page="coverage">
