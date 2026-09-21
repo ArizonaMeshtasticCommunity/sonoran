@@ -1519,3 +1519,46 @@ Response:
 ```
 
 The maximum values are the far edge of the last tile, not its corner.
+
+## 12. RF map endpoints
+
+What the community's own receivers hear beyond Meshtastic, aircraft
+first. Nothing here is fetched from anywhere else: a thing that is not
+in these answers was not received by any of our stations. See
+`docs/design/rf-map.md`. The message format stations publish is
+`docs/rf-message-v1.schema.json`.
+
+Aircraft in `RF_HIDDEN_IDS` (the FAA LADD and PIA lists, loaded by an
+operator) are never stored and never returned.
+
+### 12.1 `GET /api/rf/stations`
+
+Every station: `station`, `lat` and `lon` rounded by the agent,
+`precision_m` (by how much), `kinds`, `agent_version`, `last_seen`,
+`online` (a heartbeat in the last five minutes), and `counts` since the
+heartbeat before: `heard`, `sent`, and `dropped` by thinning.
+
+### 12.2 `GET /api/rf/latest`
+
+The newest point of everything heard in the window, newest first.
+
+Query parameters: `kind` (`adsb`, `uat`, `aprs`, `sonde`, `ism`),
+`minutes` (1 to 60, default 5), `limit` (1 to 5000, default 2000). The
+count of the whole window is in `X-Total-Count`.
+
+Each item: `kind`, `id`, `t`, `lat`, `lon`, `alt_m`, `alt_ref`, `gs_kn`,
+`track_deg`, `rssi_db`, `station` (the station that heard this point),
+and `meta` (for aircraft: `callsign`, `squawk`, `category` when sent).
+
+### 12.3 `GET /api/rf/track/{kind}/{id}`
+
+One thing's points, oldest first, one per 20 s bucket. `hours` is 1 to
+48, default 1. 404 for an unknown kind or a hidden aircraft.
+
+### 12.4 `GET /api/rf/heard/{station}`
+
+Where one station has heard things, on a grid of about 2 km
+(`cell_deg`, 0.02). Each cell: `lat`, `lon`, `best_rssi_db` and `heard`.
+`kind` defaults to `adsb`, `hours` is 1 to 336, default 24. Measured,
+not modelled: the RF page draws a station's reach from it.
+

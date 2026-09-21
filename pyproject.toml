@@ -59,6 +59,8 @@ sonoran-gaps-once = "sonoran.jobs.gaps:run"
 # One siting answer, now. It runs the engine, so the schedule puts it
 # inside the coverage cycle rather than beside it.
 sonoran-gaps-siting-once = "sonoran.jobs.gaps_siting:run"
+# What rf-agent stations publish. See docs/design/rf-map.md.
+sonoran-rf-ingest = "sonoran.rf.ingest:run"
 
 [build-system]
 requires = ["hatchling"]

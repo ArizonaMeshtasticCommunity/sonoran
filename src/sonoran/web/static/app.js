@@ -2584,6 +2584,11 @@ PAGES.coverage = async (page) => {
   await window.SonoranCoverage.show(page);
 };
 
+/* The RF map lives in rf.js, which loads before this file. */
+PAGES.rf = async (page) => {
+  await window.SonoranRf.show(page);
+};
+
 /*
  * The coverage gaps page lives in gaps.js, which loads before this file.
  * It measures which nodes are not carried well and predicts nothing.

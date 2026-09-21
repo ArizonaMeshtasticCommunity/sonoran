@@ -179,6 +179,27 @@ services:
       timescaledb:
         condition: service_healthy
 
+  # The RF map (docs/design/rf-map.md). Off unless asked for:
+  #   docker compose --profile rf up -d rf-ingest
+  # It writes as the ingest role, and reads its own broker settings,
+  # `RF_MQTT_*`, because member stations publish to the broker they can
+  # reach. It never sees the Meshtastic channel keys.
+  rf-ingest:
+    build: .
+    restart: unless-stopped
+    logging: *logging
+    profiles: ["rf"]
+    command: ["sonoran-rf-ingest"]
+    env_file: .env
+    environment:
+      <<: *no-credentials
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+
   jobs:
     build: .
     restart: unless-stopped
