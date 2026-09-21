@@ -125,6 +125,39 @@ So two rules follow:
 The deployment's override has been corrected: that service now resolves
 to 0 credentials with all four MQTT variables intact.
 
+#### `environment:` beats `env_file:`, so the allowlist cannot be redirected
+
+The correction above left a second fault in place. `mesh-graph`'s four
+variables are set under `environment:`, interpolated from `.env`, and
+Compose gives `environment:` precedence over any `env_file:`. The
+override's `env_file: [.env.emqx]` was therefore not narrowing anything
+and not redirecting anything: every key in it was overridden by the
+base file. The container held the four variables from `.env`, which
+named the upstream broker and its login, and for two days `mesh-graph`
+read the upstream broker directly instead of the local bridge the
+deployment had chosen.
+
+Reproduced with `docker compose config`, `.env` naming one broker and
+the override's env file another:
+
+| override for `mesh-graph` | resolved `MQTT_HOST` |
+|---|---|
+| `env_file: [.env.other]` | the one in `.env` |
+| `environment: !reset {}` then `env_file: [.env.other]` | the one in `.env.other` |
+
+So a third rule:
+
+3. **To change a variable the base file sets under `environment:`,
+   the override must set it under `environment:` too**, or reset the
+   block with `environment: !reset {}` and then name its env file. An
+   `env_file` alone is silently ignored for those keys.
+
+The base file's `mesh-graph` command also used to ignore `MQTT_HOST`
+and `MQTT_PORT` and connect to the `broker` written in
+`mesh-graph.config.toml`. It now writes both into the config it runs,
+so the broker is set in one place, the environment, as it is for the
+ingest.
+
 ## 3. Module contracts
 
 ### 3.1 `config`
@@ -530,6 +563,46 @@ into the overlay rather than copying them, so there is one preset
 picker and one feed renderer. The preset name, the node scope, the
 honesty counter, the replay lag and the OpenStreetMap attribution never
 hide.
+
+#### 3.10.1 The packet page, by kind
+
+A packet page (`#packet/<from>/<packet id>`) is read in this order:
+
+1. **One sentence** that says what the packet was, in plain words.
+2. **Who heard it**: the gateways that uploaded it, with the signal of
+   the direct ones. It is first because no other page shows it for one
+   packet. See `AGENTS.md` 9.5.1 for what the list is and is not.
+3. **What it said**, in the terms of its kind.
+4. **The envelope**: from, to, channel, hops allowed, the fewest hops
+   any gateway saw, whether an ack was asked for, and the rest.
+5. **Raw data**, closed, holding everything the API returned.
+
+What each kind shows under "What it said":
+
+| Port | Shows | Source |
+|---|---|---|
+| `TEXT_MESSAGE_APP` | The message, large, with hashtags marked. | `text_message` |
+| `POSITION_APP` | Latitude, longitude, altitude, and the precision in metres, then a map. A rounded position says how far it was rounded. | `position_metrics` |
+| `TELEMETRY_APP` | Named readings with units: device, environment, air quality or power. | the four telemetry tables |
+| `NEIGHBORINFO_APP` | A table of the neighbours it reported, with the SNR it heard each at. | `neighbor_metrics` |
+| `TRACEROUTE_APP` | The path, hop by hop, and the mesh-graph drawing. | `traceroute` |
+| `NODEINFO_APP` | A sentence saying it is not stored, and a link to the node page. | not stored per packet |
+| `ROUTING_APP` | A sentence saying it is not stored. | not stored |
+| any other | "No decoded value is stored for this packet." | none |
+
+The envelope says which key sealed the packet: the recipient's public
+key (PKI) or the channel key. Ingest keeps `pki_encrypted` in
+`mesh_packet_metrics`, and the packet endpoint reads it from there.
+
+What the page does not claim, because the database does not hold it:
+
+- Whether an acknowledgement came back. The firmware acknowledges with
+  a `ROUTING_APP` packet whose `request_id` is the original packet ID
+  and whose `error_reason` is `NONE`, but ingest does not store routing
+  packets, so only the request is known.
+- The content of a node-info or routing packet.
+- Which node relayed it. `relay_node` holds only the last byte of a
+  node number (`mesh.proto`), which cannot name a node.
 
 #### Content Security Policy
 

@@ -334,8 +334,18 @@ const SonoranLive = (() => {
    * "a packet of a kind this view does not distinguish".
    */
   function familyOf(portnum) {
-    if (!portnum) return FAMILIES.OTHER;
-    return FAMILIES[portnum] || FAMILIES.OTHER;
+    return FAMILIES[familyKey(portnum)];
+  }
+
+  /**
+   * The key of one port number's family, with the same fall to the bucket.
+   *
+   * The packet filter works on keys. A port this build does not know is
+   * `OTHER`, so hiding every named family can never hide a packet we
+   * failed to classify without also saying so: the bucket has a chip.
+   */
+  function familyKey(portnum) {
+    return portnum && FAMILIES[portnum] ? portnum : 'OTHER';
   }
 
   /* --- Aggregation: from uploads to packets ---------------------- */
@@ -539,6 +549,9 @@ const SonoranLive = (() => {
       size: 0,
       numeral: 0,
       arriving: false,
+      // The packet family, so a filter change can take a mark off the
+      // map without waiting for it to fade. Empty for a traceroute hop.
+      family: '',
     };
   }
 
@@ -895,6 +908,40 @@ const SonoranLive = (() => {
 
     let tracePaths = 0;
 
+    /*
+     * Which packet families are drawn. Null means all of them, which is
+     * the default and the cheapest test.
+     */
+    let hiddenFamilies = null;
+    const shows = (packet) => !hiddenFamilies || !hiddenFamilies.has(familyKey(packet.portnum));
+
+    /**
+     * Draw only some packet families.
+     *
+     * The change is immediate. Queued packets of a hidden kind are
+     * dropped from the buffer, and marks of that kind already on the map
+     * are taken off rather than left to fade, so the picture matches the
+     * control the moment it is pressed.
+     *
+     * The heat is thrown away. It is one quantity summed over every
+     * family, so it cannot be split after the fact, and a halo built
+     * from positions would otherwise dominate a map filtered to text
+     * messages for a whole half-life. It rebuilds from what arrives next.
+     */
+    function setFamilyFilter(hidden) {
+      hiddenFamilies = hidden && hidden.size ? new Set(hidden) : null;
+      queue = queue.filter((item) => item.hop || shows(item.packet));
+      for (const slot of pool) {
+        if (slot.live && slot.family && hiddenFamilies && hiddenFamilies.has(slot.family)) {
+          release(slot);
+        }
+      }
+      emitHeat.clear();
+      uploadHeat.clear();
+      heatList = { at: 0, halos: [], rings: [], hidden: 0 };
+      if (paused) repaint();
+    }
+
     /**
      * What the last batch offered, drew, dropped and still holds.
      *
@@ -1028,6 +1075,7 @@ const SonoranLive = (() => {
         if (slot) {
           lastEmit.set(packet.from.node_id, now);
           slot.kind = KIND_PULSE;
+          slot.family = familyKey(packet.portnum);
           slot.born = at;
           slot.life = reduced ? STATIC_LIFE_MS : ARC_LIFE_MS;
           slot.lat0 = packet.from.lat;
@@ -1061,6 +1109,7 @@ const SonoranLive = (() => {
         }
         drawnArcs += 1;
         slot.kind = KIND_ARC;
+        slot.family = familyKey(packet.portnum);
         slot.born = at;
         slot.life = reduced ? STATIC_LIFE_MS : ARC_LIFE_MS;
         slot.lat0 = packet.from.lat;
@@ -1093,6 +1142,7 @@ const SonoranLive = (() => {
       const slot = take();
       if (!slot) return false;
       slot.kind = KIND_HOP;
+      slot.family = '';
       slot.born = performance.now();
       slot.life = reduced ? STATIC_LIFE_MS : TRACE_LIFE_MS;
       slot.lat0 = hop.from.lat;
@@ -1608,6 +1658,9 @@ const SonoranLive = (() => {
           if (!admitHop(item.hop)) stats.droppedBatch += 1;
           continue;
         }
+        // A packet of a hidden kind was queued before the filter
+        // changed. It is not a drop: the viewer asked not to see it.
+        if (!shows(item.packet)) continue;
         rateWindow.push(started);
         const ok = admitPacket(item.packet);
         if (ok) {
@@ -1709,6 +1762,7 @@ const SonoranLive = (() => {
         stats.arcsDropped = 0;
       },
       counts: publicCounts,
+      setFamilyFilter,
       setReduced(value) {
         if (reduced === value) return;
         reduced = value;
@@ -1776,7 +1830,7 @@ const SonoranLive = (() => {
   }
 
   return {
-    create, aggregate, familyOf, FAMILIES, FAMILY_ORDER, bowFor, BOW, BOW_UNKNOWN,
+    create, aggregate, familyOf, familyKey, FAMILIES, FAMILY_ORDER, bowFor, BOW, BOW_UNKNOWN,
     /* The ladder and the heat, exposed so the legend can name them in
      * the same words the engine uses and a console can check them. */
     heatNow, rungForRate, RUNG_LABELS, EMIT_HALF_LIFE_MS, UPLOAD_HALF_LIFE_MS,

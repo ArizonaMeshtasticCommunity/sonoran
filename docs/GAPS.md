@@ -153,6 +153,38 @@ instrumentation as much as about the mesh. Zero direct gateways is
 `unknown`, not `bad`: a well connected node three hops deep is heard
 directly by nobody, and that is normal.
 
+**One gateway that is close to the node is `ok`.** The common false
+positive was a repeater on a roof and a client inside the house. The
+repeater is the one gateway that hears the client, and that is the setup
+working as intended.
+
+The test is the median RSSI of the direct observations:
+
+```
+ok when direct_gateways == 1
+    and direct_rssi_readings >= GAPS_SOLE_GATEWAY_MIN_READINGS   (5)
+    and direct_rssi_dbm      >= GAPS_SOLE_GATEWAY_CLOSE_RSSI_DBM (-60)
+```
+
+It is RSSI because a strong signal bounds the distance. At 915 MHz, a
+path loss of 90 dB is about 0.8 km in free space. So -60 dBm from the
+30 dBm the US band allows means about a kilometre with plain antennas,
+and a few kilometres with high gain ones. SNR cannot do this: it tops
+out near +11 dB on any strong link. Positions cannot do it either:
+most nodes round theirs to 13 bits, about 2.9 km, so two nodes on one
+roof often read "0 m" and a pair heard at -48 dBm read 49.5 km apart.
+
+Measured on the live mesh (2026-09-21, 7 day window, 152 flagged nodes):
+
+| | median RSSI | SNR |
+|---|---|---|
+| pairs with precise positions under 1 km | -1 to -58 dBm | +6 to +13 dB, spread under 1 dB |
+| single links that really are marginal | -90 to -128 dBm | mostly below 0 dB |
+
+The line sits in the gap between the two groups. It reads no names and
+makes no guess about who owns what. The sentence states the reading and
+says what it means.
+
 ### 4.5 `weak_best_link` — the best measured link has little margin
 
 Only measured readings, from three sources: a `neighbor_metrics.snr` in

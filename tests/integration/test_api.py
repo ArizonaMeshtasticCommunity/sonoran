@@ -295,6 +295,76 @@ def test_tapbacks_attach_to_the_message_they_react_to(migrated_engine, timescale
     assert "\N{THUMBS UP SIGN}" not in bodies, "a lone emoji is not a message"
 
 
+def test_chat_metrics_say_how_a_message_travelled(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """`metrics=true` adds the delivery facts of each message.
+
+    Three gateways matter here, and each one tests a rule:
+    the sender uploading its own packet is not a gateway that heard it,
+    one gateway uploading twice is still one gateway, and a relayed
+    upload's strong reading belongs to the last hop, so it is never the
+    best direct signal. See AGENTS.md 9.5 and 9.5.1.
+    """
+    now = datetime.now(UTC)
+    sender, near, far = 7601, 7602, 7603
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM text_message WHERE from_node_num BETWEEN 7600 AND 7699")
+        )
+        connection.execute(
+            text(
+                "INSERT INTO text_message (from_node_num, to_node_num, channel, body, "
+                "packet_id, emoji, seen_at) "
+                "VALUES (:s, 4294967295, 'MetricsTest', 'Anyone copy?', 766001, false, :now)"
+            ),
+            {"s": sender, "now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, channel, hop_start, "
+                "want_ack, first_seen_at) "
+                "VALUES (:s, 766001, 1, 'MetricsTest', 3, true, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"s": sender, "now": now},
+        )
+        uploads = (
+            (sender, 3, 12.0, -20, 0),  # its own voice
+            (near, 3, 6.5, -70, 1),  # direct
+            (near, 3, 6.5, -70, 4),  # the same gateway again
+            (far, 1, 11.0, -40, 2),  # relayed twice, with a strong last hop
+        )
+        for gateway, hop_limit, snr, rssi, delay in uploads:
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, channel, hop_limit, rx_snr, rx_rssi, seen_at) "
+                    "VALUES (:s, 766001, :g, 'msh/US/AZ/t', 'MetricsTest', :hl, :snr, :rssi, :t) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {
+                    "s": sender,
+                    "g": gateway,
+                    "hl": hop_limit,
+                    "snr": snr,
+                    "rssi": rssi,
+                    "t": now + timedelta(seconds=delay),
+                },
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        plain = client.get("/api/chat?channel=MetricsTest").json()
+        rich = client.get("/api/chat?channel=MetricsTest&metrics=true").json()
+
+    assert "metrics" not in plain[0], "metrics are opt in"
+    metrics = rich[0]["metrics"]
+    assert metrics["gateway_count"] == 2, "gateways, not uploads, and never the sender"
+    assert metrics["direct_gateways"] == 1
+    assert metrics["fewest_hops"] == 0
+    assert metrics["best_direct_snr"] == 6.5, "a relayed reading is not a direct one"
+    assert metrics["best_direct_rssi"] == -70
+    assert metrics["want_ack"] is True
+
+
 def test_replies_carry_the_message_they_answer(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
     """A threaded reply shows what it replies to."""
     now = datetime.now(UTC)
@@ -659,6 +729,39 @@ def test_an_unanswered_request_draws_no_link(migrated_engine, timescale_url: str
         graph = client.get("/api/graph?hours=24&channel=ShortTurbo").json()
     pairs = {frozenset((link["source"], link["target"])) for link in graph["links"]}
     assert frozenset(("!0000206d", "!0000206e")) not in pairs
+
+
+def test_a_packet_says_which_key_sealed_it(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """`pki_encrypted` comes from `mesh_packet_metrics`, and unknown stays unknown.
+
+    Sender 7501 is used by no other test here. The tables are shared across
+    this file, and a reused key makes a second packet row for another test.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for packet_id in (92, 93):
+            connection.execute(
+                text(
+                    "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                    "first_seen_at) VALUES (7501, :p, 1, 3, :now) ON CONFLICT DO NOTHING"
+                ),
+                {"p": packet_id, "now": now},
+            )
+        connection.execute(
+            text(
+                "INSERT INTO mesh_packet_metrics (from_node_num, to_node_num, packet_id, "
+                "pki_encrypted, time) VALUES (7501, 7502, 92, true, :now)"
+            ),
+            {"now": now},
+        )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        sealed = client.get("/api/packets/!00001d4d/92").json()
+        unknown = client.get("/api/packets/!00001d4d/93").json()
+
+    assert sealed["packet"]["pki_encrypted"] is True
+    assert unknown["packet"]["pki_encrypted"] is None, "no row is not the same as false"
 
 
 def test_a_sender_gatewaying_itself_is_not_a_direct_observation(

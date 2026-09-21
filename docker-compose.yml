@@ -127,8 +127,13 @@ services:
       # The coverage tiles. The jobs service writes them and this one
       # serves them.
       - coverage_cache:/var/lib/sonoran/coverage
+    # Loopback only. A bare "8000:8000" publishes on every interface,
+    # and on a standard (rootful) Docker install published ports bypass
+    # ufw, so the dashboard would be open to the internet with no
+    # reverse proxy in front of it. A
+    # deployment that needs another address says so in its override.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   migrate:
     build: .
@@ -224,6 +229,13 @@ services:
     # keys. None of that has anything to do with drawing a traceroute.
     #
     # Its command below reads four variables. It is given four.
+    #
+    # These are `environment:`, and `environment:` beats `env_file:`.
+    # An override that adds `env_file: [.env.other]` to this service
+    # therefore changes none of the four: they still come from `.env`.
+    # To point this service at a different broker, set the keys under
+    # `environment:` in the override, or start it with
+    # `environment: !reset {}` and then name the env file.
     environment:
       MQTT_HOST: ${MQTT_HOST:?set MQTT_HOST in .env}
       MQTT_PORT: ${MQTT_PORT:-1883}
@@ -233,9 +245,14 @@ services:
     volumes:
       - meshgraph_data:/data
       - ./mesh-graph.config.toml:/config.toml:ro
+    # Loopback only, as for the api above.
     ports:
-      - "8080:8080"
-    command: ["awk -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^\\[db\\]/{print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"} {print}' /config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]
+      - "127.0.0.1:8080:8080"
+    # Writes the broker, port and login into a copy of the config.
+    # `broker` in mesh-graph.config.toml is replaced by MQTT_HOST, so
+    # the host and port come from the environment like the ingest's do,
+    # and are not a second copy of the broker address that can disagree.
+    command: ["awk -v host=\"$$MQTT_HOST\" -v port=\"$$MQTT_PORT\" -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^broker[[:space:]]*=/{print \"broker = \\\"\" host \"\\\"\"; next} {print} /^\\[mqtt\\]/{print \"port = \" port; print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"}' /config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]
 
 volumes:
   tsdb_data:

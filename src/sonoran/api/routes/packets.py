@@ -1,6 +1,6 @@
 """Read-only packet endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +13,7 @@ from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
     EnvironmentMetrics,
+    MeshPacketMetrics,
     NeighborMetrics,
     Packet,
     PacketSeen,
@@ -23,6 +24,11 @@ from sonoran.db.models import (
 from sonoran.meshtastic import portnums_pb2
 
 router = APIRouter(prefix="/api/packets", tags=["packets"])
+
+# How far before a packet's first sighting its metrics rows are read. The
+# bound lets the hypertable read skip old chunks. It does not decide which
+# rows count: every row is keyed on the packet itself.
+_METRICS_SLACK = timedelta(hours=1)
 
 
 def _node_id(value: int | None) -> str:
@@ -205,12 +211,24 @@ async def get_packet(
             *(item.gateway_node_num for item in observations),
         ],
     )
+    # Whether the packet was sealed with the recipient's public key (PKI)
+    # rather than the channel key. Ingest keeps it per upload in
+    # `mesh_packet_metrics`, so it is read from there. None when no row
+    # recorded it, which is not the same as false.
+    pki_encrypted = await session.scalar(
+        select(func.bool_or(MeshPacketMetrics.pki_encrypted)).where(
+            MeshPacketMetrics.from_node_num == packet.from_node_num,
+            MeshPacketMetrics.packet_id == packet.packet_id,
+            MeshPacketMetrics.time >= packet.first_seen_at - _METRICS_SLACK,
+        )
+    )
     return {
         "packet": _packet_item(packet, len(observations), names)
         | {
             "decoded": await _decoded_payload(session, packet),
             "payload_json": packet.payload_json,
             "want_ack": packet.want_ack,
+            "pki_encrypted": pki_encrypted,
             "priority": packet.priority,
             "rx_time": packet.rx_time,
             "raw_bytes_length": None if packet.raw_bytes is None else len(packet.raw_bytes),

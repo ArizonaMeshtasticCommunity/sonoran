@@ -172,6 +172,12 @@ REASON_SENTENCES: dict[str, str] = {
         "Only one gateway has heard this node directly. That is a statement about where "
         "our gateways are as much as about the mesh."
     ),
+    "one_gateway_hears_it_close": (
+        "Only one gateway has heard this node directly, and it receives it very "
+        "strongly: a median of {direct_rssi_dbm} dBm over {direct_rssi_readings} "
+        "packets. A signal that strong comes from a gateway close to the node. One "
+        "gateway here says where our gateways are, not that this node has a problem."
+    ),
     "several_gateways_hear_it": "{direct_gateways} gateways have heard this node directly.",
     "no_direct_observation": (
         "No gateway has heard it directly. A well connected node several hops deep is "
@@ -327,6 +333,11 @@ class NodeEvidence:
     # record that belongs to a real link.
     direct_gateways: int = 0
     best_direct_snr: float | None = None
+    # The median RSSI of those direct observations, in dBm, and how many
+    # carried one. A gateway that does not report RSSI stores NULL,
+    # never 0, so a missing reading is never the loudest one.
+    direct_rssi_dbm: float | None = None
+    direct_rssi_readings: int = 0
     # Whether the node ever uploaded anything itself. Only a gateway can
     # be `radio_isolated`.
     is_mqtt_gateway: bool = False
@@ -584,6 +595,7 @@ async def read_evidence(
         named, their_snr = named_as.get(node_num, (0, None))
         neighbour_snr = _best_of(own_snr, their_snr)
         hops, trace_snr = trace.get(node_num, (0, None))
+        direct_gateways, direct_rssi, rssi_readings = direct.get(node_num, (0, None, 0))
         found[node_num] = NodeEvidence(
             node_num=node_num,
             packets=_as_int(row.packets),
@@ -591,7 +603,9 @@ async def read_evidence(
             ambiguous_packets=_as_int(row.ambiguous_packets),
             active_hours=_as_int(row.active_hours),
             rf_hours=_as_int(row.rf_hours),
-            direct_gateways=direct.get(node_num, 0),
+            direct_gateways=direct_gateways,
+            direct_rssi_dbm=direct_rssi,
+            direct_rssi_readings=rssi_readings,
             best_direct_snr=_as_float(row.best_direct_snr),
             is_mqtt_gateway=node_num in gateways,
             neighbour_reports=reports,
@@ -629,8 +643,12 @@ def _as_float(value: float | None) -> float | None:
 
 async def _read_direct_gateways(
     session: AsyncSession, channels: Sequence[str], since: datetime, until: datetime
-) -> dict[int, int]:
+) -> dict[int, tuple[int, float | None, int]]:
     """Return how many gateways heard each node with no hop used.
+
+    Also returns the median RSSI of those observations and how many
+    carried one. `sole_observer` reads it to tell a gateway beside the
+    node from a marginal link.
 
     Gateways, not rows. One live packet had 22 uploads from 15
     gateways, and 15 is the number that means something. See
@@ -645,6 +663,8 @@ async def _read_direct_gateways(
         select(
             keys.c.from_node_num,
             func.count(func.distinct(PacketSeen.gateway_node_num)).label("gateways"),
+            func.percentile_cont(0.5).within_group(PacketSeen.rx_rssi).label("rssi"),
+            func.count(PacketSeen.rx_rssi).label("rssi_readings"),
         )
         .select_from(keys)
         .join(
@@ -661,7 +681,14 @@ async def _read_direct_gateways(
         .group_by(keys.c.from_node_num)
     )
     rows = (await session.execute(statement)).all()
-    return {row.from_node_num: int(row.gateways or 0) for row in rows}
+    return {
+        row.from_node_num: (
+            int(row.gateways or 0),
+            _as_float(row.rssi),
+            int(row.rssi_readings or 0),
+        )
+        for row in rows
+    }
 
 
 async def _read_neighbour_evidence(
@@ -965,17 +992,30 @@ def sole_observer(evidence: NodeEvidence, settings: Settings) -> Signal:
     three hops deep is heard directly by nobody, and that is normal.
     `radio_isolated` and `rf_intermittent` are the signals to read for
     such a node.
+
+    One gateway that receives the node very strongly is `ok`. The common
+    case is a repeater and a client at one site: the repeater is the one
+    gateway, and the client works as intended. The test is the median
+    RSSI, which is physics: a strong enough signal bounds the distance.
+    Positions cannot do this, because most are rounded to kilometres.
+    Nothing here reads names or guesses who owns what.
     """
     counts: dict[str, object] = {
         "direct_gateways": evidence.direct_gateways,
         "packets": evidence.packets,
         "min_packets": settings.gaps_min_packets,
+        "direct_rssi_dbm": (
+            None if evidence.direct_rssi_dbm is None else round(evidence.direct_rssi_dbm)
+        ),
+        "direct_rssi_readings": evidence.direct_rssi_readings,
     }
     if evidence.packets < settings.gaps_min_packets:
         return Signal(UNKNOWN, "too_few_packets", evidence=counts)
     if evidence.direct_gateways == 0:
         return Signal(UNKNOWN, "no_direct_observation", evidence=counts)
     if evidence.direct_gateways == 1:
+        if _sole_gateway_is_close(evidence, settings):
+            return Signal(OK, "one_gateway_hears_it_close", value=1.0, evidence=counts)
         return Signal(BAD, "one_gateway_hears_it", value=1.0, evidence=counts)
     return Signal(
         OK,
@@ -983,6 +1023,19 @@ def sole_observer(evidence: NodeEvidence, settings: Settings) -> Signal:
         value=float(evidence.direct_gateways),
         evidence=counts,
     )
+
+
+def _sole_gateway_is_close(evidence: NodeEvidence, settings: Settings) -> bool:
+    """Return true when the one direct gateway receives the node very strongly.
+
+    Too few readings is false, so the signal stays as it was. One loud
+    packet is not a site.
+    """
+    if evidence.direct_rssi_dbm is None:
+        return False
+    if evidence.direct_rssi_readings < settings.gaps_sole_gateway_min_readings:
+        return False
+    return evidence.direct_rssi_dbm >= settings.gaps_sole_gateway_close_rssi_dbm
 
 
 # --------------------------------------------------------------- 4.5

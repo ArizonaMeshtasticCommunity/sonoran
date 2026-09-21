@@ -390,7 +390,7 @@ tell".
 | `radio_isolated` | It is an MQTT gateway and no gateway heard any of its traffic over the air, by any path. Its packets reach us through its own internet link. |
 | `rf_intermittent` | In fewer than `GAPS_RF_RATIO_BAD` of the hours it was awake, anything on the air heard it. |
 | `weak_best_link` | Its best **measured** link has under `GAPS_MARGIN_BAD_DB` of margin above what the preset needs to demodulate. |
-| `sole_observer` | Exactly one gateway has heard it directly. This is a fact about where our gateways are as much as about the mesh. It is not a single point of failure and must not be drawn as one. |
+| `sole_observer` | Exactly one gateway has heard it directly. This is a fact about where our gateways are as much as about the mesh. It is not a single point of failure and must not be drawn as one. When that one gateway receives the node at `GAPS_SOLE_GATEWAY_CLOSE_RSSI_DBM` or stronger (median over at least `GAPS_SOLE_GATEWAY_MIN_READINGS` packets), the signal is `ok` with reason `one_gateway_hears_it_close`, and `evidence` carries `direct_rssi_dbm` and `direct_rssi_readings`. |
 | `outside_predicted_usable` | The published coverage run predicts no usable coverage where it stands. This is the one signal here that reads a prediction and not a measurement. |
 
 A signal's `evidence` object holds the counts the claim rests on, and
@@ -835,7 +835,32 @@ These endpoints return empty lists when text storage is disabled.
 
 Returns text messages, newest first.
 
-Query parameters: `channel`, `from`, `since`, `before`, `limit`.
+Query parameters: `channel`, `from`, `q`, `since`, `before`, `limit`
+(1 to 500), `reactions`, `metrics`.
+
+With `metrics=true`, each message carries `metrics`: how it travelled.
+The channel page (`#chat/<channel>`) asks for it. It is null when the
+message has no packet row.
+
+| Field | Meaning |
+|---|---|
+| `gateway_count` | Distinct gateways that uploaded it. Never uploads, and never the sender uploading its own packet. |
+| `direct_gateways` | Of those, how many heard it with no hop used. |
+| `fewest_hops` | The fewest relays any gateway saw it use. |
+| `best_direct_snr`, `best_direct_rssi` | The best reading from a direct gateway. A relayed upload's reading belongs to its last hop, so it never counts. |
+| `want_ack` | The sender asked for an acknowledgement. Whether one came back is not recorded, so nothing claims it. |
+
+See `AGENTS.md` 9.5 and 9.5.1 for why each rule is there.
+
+Tapbacks are grouped under the message they react to. The page draws
+each emoji once with its count, folds all but the four most sent into
+"+N more", and draws MeshMonitor's Auto Acknowledge tapbacks apart as
+"possibly auto-acked". MeshMonitor sends a keycap that says how the
+message arrived: `*` direct, `1` to `7` hops (`7` is seven or more), `#`
+via MQTT, and older builds `0` or a direct hit for direct (its
+`hopEmoji`, in `docs/features/automation-engine.md` of
+Yeraze/meshmonitor). The page writes each one out in words. A person can
+send those too, and nothing in the packet tells the two apart.
 
 ### 5.2 `GET /api/chat/channels`
 
