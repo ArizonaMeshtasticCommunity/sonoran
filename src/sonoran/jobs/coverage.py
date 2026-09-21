@@ -740,16 +740,34 @@ def receiver_loss(settings: Settings, grid: Grid) -> tuple[Levels | None, list[s
     return loss, sorted(set(missing))
 
 
+# How many rows `_charge_receiver` works on at once.
+#
+# The region grid is 9,600 by 9,600 cells, so one pass over the whole of
+# it in int16 made about seven full sized temporaries: roughly 700 MB, on
+# a box with 3.3 GB that also runs the database and the brokers. The run
+# was killed by the kernel as soon as land cover was present. In strips
+# the temporaries are a few megabytes and the answer is the same.
+_CHARGE_ROWS = 256
+
+
 def _charge_receiver(levels: Levels, loss: Levels | None) -> Levels:
     """Take the receiving end's clutter off a layer.
 
     A cell nothing reached stays unreached, as in `_shift`. Turning a
     hole into a very weak signal would draw coverage that is not there.
+
+    It works a strip of rows at a time into one output grid. See
+    `_CHARGE_ROWS` for why.
     """
     if loss is None:
         return levels
-    moved = np.clip(levels.astype(np.int16) - loss.astype(np.int16), MIN_LEVEL, MAX_LEVEL)
-    return np.where(levels == NO_COVERAGE, NO_COVERAGE, moved).astype(np.uint8)
+    out = np.empty_like(levels)
+    for top in range(0, levels.shape[0], _CHARGE_ROWS):
+        rows = slice(top, top + _CHARGE_ROWS)
+        strip = levels[rows]
+        moved = np.clip(strip.astype(np.int16) - loss[rows].astype(np.int16), MIN_LEVEL, MAX_LEVEL)
+        out[rows] = np.where(strip == NO_COVERAGE, NO_COVERAGE, moved)
+    return out
 
 
 def _empty_summary(key: str, rejected: "Counter[str]") -> store.PresetSummary:
