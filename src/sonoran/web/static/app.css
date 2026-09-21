@@ -1606,6 +1606,22 @@ div.check { cursor: default; }
 .rf-notice { margin: 0 0 .5rem; }
 [data-page="rf"] .map-shell { margin: .5rem 0; }
 .rf-tip { display: grid; gap: .1rem; font-size: .8rem; }
+.rf-layers { display: inline-flex; flex-wrap: wrap; gap: .5rem; }
+/* The sources strip: every source the RF map is designed for, and its
+   state. The state is words, and the border only repeats it. */
+.rf-sources {
+  list-style: none; margin: 0 0 .5rem; padding: 0;
+  display: flex; flex-wrap: wrap; gap: .4rem;
+}
+.rf-source {
+  display: grid; gap: .05rem; padding: .35rem .6rem; font-size: .8rem;
+  border: 1px solid var(--line); border-radius: .4rem; background: var(--panel);
+}
+.rf-source .rf-status { color: var(--muted); }
+.rf-source.live { border-color: var(--good); }
+.rf-source.live .rf-status { color: var(--good); }
+.rf-source.waiting { border-style: dashed; }
+.rf-source.off { opacity: .7; }
 .rf-tip strong { font-size: .9rem; }
 
 /* Vertical rhythm down the coverage page.

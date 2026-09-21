@@ -380,6 +380,14 @@ from `map-live.js` reused for moving marks.
 
 ### 7.1 Layers
 
+The tab is about every source in 1.1, not only aircraft. A **sources
+strip** lists each one with its honest state: live, with how many were
+heard; ready, with no station sending it; sent by a station but not
+stored yet; or not collected yet. Which kinds are stored comes from
+`/api/rf/kinds`, never from the page. RF is separate from Meshtastic
+everywhere, and adds nothing to any Meshtastic count.
+
+
 A toggle per kind, remembered per browser, the same pattern as the
 packet kind filter on the Live map (issue #48):
 

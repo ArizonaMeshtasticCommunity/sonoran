@@ -1531,6 +1531,16 @@ in these answers was not received by any of our stations. See
 Aircraft in `RF_HIDDEN_IDS` (the FAA LADD and PIA lists, loaded by an
 operator) are never stored and never returned.
 
+### 12.0 `GET /api/rf/kinds`
+
+`known`, every kind a station may send, and `stored`, the kinds the
+ingest keeps today. The RF page draws its sources list from it, so a
+source whose phase has not landed reads as "not stored yet".
+
+RF is separate from Meshtastic everywhere: its own tables, its own
+topics, its own ingest. It adds no node, packet, upload or gateway to
+any Meshtastic count.
+
 ### 12.1 `GET /api/rf/stations`
 
 Every station: `station`, `lat` and `lon` rounded by the agent,

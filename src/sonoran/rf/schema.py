@@ -26,7 +26,11 @@ ICAO = re.compile(r"^~?[0-9a-f]{6}$")
 # Everything an observation may be. Phase 1 stores `adsb` and `uat`; the
 # ingest drops the rest, counted, until their phase lands.
 Kind = Literal["adsb", "uat", "aprs", "sonde", "ism"]
+KINDS: tuple[str, ...] = ("adsb", "uat", "aprs", "sonde", "ism")
 AIRCRAFT_KINDS = frozenset({"adsb", "uat"})
+# What the ingest stores today. The RF page reads this through
+# `/api/rf/kinds`, so it never shows a source as working before it does.
+STORED_KINDS = AIRCRAFT_KINDS
 
 MAX_OBS = 100
 MAX_META_BYTES = 1024

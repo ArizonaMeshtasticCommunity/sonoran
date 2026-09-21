@@ -38,6 +38,30 @@
   // station: receivers read in their own units, not comparable dBm.
   const HEARD_RAMP = ['#3a2a20', '#6b3f22', '#a8592a', '#e0793a', '#f6b35a'];
 
+  /*
+   * Every source the RF map is designed for (docs/design/rf-map.md 1.1).
+   * Whether each is stored today comes from `/api/rf/kinds`, never from
+   * here, so the page cannot show a source as working before it does.
+   * `spectrum` is not an observation kind; it has its own view (design
+   * 7.4) and is listed so the page says what is coming.
+   */
+  const SOURCES = [
+    { key: 'aircraft', label: 'Aircraft', kinds: ['adsb', 'uat'], band: '1090 and 978 MHz' },
+    { key: 'aprs', label: 'APRS', kinds: ['aprs'], band: '144.39 MHz' },
+    { key: 'sonde', label: 'Radiosondes', kinds: ['sonde'], band: '400 to 406 MHz' },
+    { key: 'ism', label: 'Weather sensors', kinds: ['ism'], band: '433 and 915 MHz' },
+    { key: 'spectrum', label: '900 MHz band', kinds: ['spectrum'], band: '902 to 928 MHz' },
+  ];
+  const sourceOf = (kind) => SOURCES.find((source) => source.kinds.includes(kind));
+
+  /* How each kind is drawn. Shape and colour both differ, so a mark
+     reads without colour. Aircraft take their colour from altitude. */
+  const KIND_STYLE = {
+    aprs: { colour: '#a48fd0', radius: 6, label: 'APRS station' },
+    sonde: { colour: '#f6ece2', radius: 5, label: 'Radiosonde' },
+    ism: { colour: '#8fd0a4', radius: 4, label: 'Weather sensor' },
+  };
+
   const state = {
     map: null,
     aircraft: null,
@@ -45,7 +69,10 @@
     heard: null,
     track: null,
     selectedStation: null,
-    selectedAircraft: null,
+    selectedThing: null,
+    kinds: null,
+    // Which layers are shown, by source key, plus `stations`.
+    shown: { stations: true },
   };
 
   function el(tag, props = {}, ...children) {
@@ -120,6 +147,20 @@
       el('div', { class: 'muted', text: `heard ${ago(row.t)} by ${row.station}` }));
   }
 
+  /* Any other kind: what it is, its id, and the plain fields it sent. */
+  function otherTooltip(row) {
+    const style = KIND_STYLE[row.kind] || { label: row.kind };
+    const meta = row.meta || {};
+    const extras = Object.entries(meta).slice(0, 4)
+      .map(([key, value]) => el('div', { text: `${key.replaceAll('_', ' ')}: ${String(value).slice(0, 40)}` }));
+    return el('div', { class: 'rf-tip' },
+      el('strong', { text: row.id }),
+      el('div', { text: style.label }),
+      row.alt_m == null ? null : el('div', { text: `${Math.round(row.alt_m).toLocaleString()} m` }),
+      extras,
+      el('div', { class: 'muted', text: `heard ${ago(row.t)} by ${row.station}` }));
+  }
+
   function stationTooltip(row) {
     const counts = row.counts || {};
     return el('div', { class: 'rf-tip' },
@@ -132,17 +173,30 @@
       el('div', { class: 'muted', text: 'Click to show where it hears aircraft.' }));
   }
 
-  function drawAircraft(rows, show) {
+  function isAircraft(kind) {
+    return kind === 'adsb' || kind === 'uat';
+  }
+
+  function drawThings(rows) {
     state.aircraft.clearLayers();
-    if (!show) return;
     for (const row of rows) {
-      const colour = altitudeColour(row.alt_m);
+      const source = sourceOf(row.kind);
+      if (!source || !state.shown[source.key]) continue;
+      const aircraft = isAircraft(row.kind);
+      const style = aircraft ? null : KIND_STYLE[row.kind] || { colour: '#b59c88', radius: 4 };
+      const colour = aircraft ? altitudeColour(row.alt_m) : style.colour;
       const marker = L.circleMarker([row.lat, row.lon], {
-        radius: 5, color: colour, fillColor: colour, fillOpacity: 0.9, weight: 1,
-      }).bindTooltip(aircraftTooltip(row), { direction: 'top' });
-      marker.on('click', () => selectAircraft(row));
+        radius: aircraft ? 5 : style.radius,
+        color: colour,
+        fillColor: colour,
+        // Hollow for anything that is not an aircraft, so the two read
+        // apart without colour.
+        fillOpacity: aircraft ? 0.9 : 0.15,
+        weight: aircraft ? 1 : 2,
+      }).bindTooltip(aircraft ? aircraftTooltip(row) : otherTooltip(row), { direction: 'top' });
+      marker.on('click', () => selectThing(row));
       state.aircraft.addLayer(marker);
-      if (row.track_deg != null) {
+      if (aircraft && row.track_deg != null) {
         state.aircraft.addLayer(L.polyline([[row.lat, row.lon], ahead(row.lat, row.lon, row.track_deg, 4)], {
           color: colour, weight: 2, opacity: 0.9, interactive: false,
         }));
@@ -150,9 +204,9 @@
     }
   }
 
-  function drawStations(rows, show) {
+  function drawStations(rows) {
     state.stations.clearLayers();
-    if (!show) return;
+    if (!state.shown.stations) return;
     for (const row of rows) {
       if (row.lat == null || row.lon == null) continue;
       const style = row.online
@@ -172,22 +226,23 @@
     }
   }
 
-  async function selectAircraft(row) {
-    state.selectedAircraft = row;
+  async function selectThing(row) {
+    state.selectedThing = row;
     state.track.clearLayers();
+    const colour = isAircraft(row.kind) ? altitudeColour(row.alt_m) : (KIND_STYLE[row.kind] || {}).colour;
     const { body } = await getJson(`api/rf/track/${row.kind}/${encodeURIComponent(row.id)}?hours=1`)
       .catch(() => ({ body: { points: [] } }));
     const points = body.points.map((p) => [p.lat, p.lon]);
     if (points.length > 1) {
       state.track.addLayer(L.polyline(points, {
-        color: altitudeColour(row.alt_m), weight: 2, opacity: 0.8, dashArray: '2 6',
+        color: colour, weight: 2, opacity: 0.8, dashArray: '2 6',
       }));
     }
     const note = $('[data-rf-selected]');
     if (note) {
       note.textContent = points.length > 1
-        ? `Track of ${(row.meta && row.meta.callsign) || row.id.toUpperCase()}: ${points.length} points in the last hour.`
-        : `Only one point heard for ${row.id.toUpperCase()} in the last hour.`;
+        ? `Track of ${(row.meta && row.meta.callsign) || row.id}: ${points.length} points in the last hour.`
+        : `Only one point heard for ${row.id} in the last hour.`;
     }
   }
 
@@ -218,28 +273,91 @@
 
   function drawLegend(page) {
     const target = $('[data-rf-legend]', page);
-    if (!target || target.childElementCount) return;
-    target.append(...ALTITUDE_BANDS.map((band) =>
-      el('span', { class: 'legend-note' },
-        el('span', { class: 'swatch', style: `background:${band.colour}` }), band.label)),
-    el('span', { class: 'legend-note' },
-      el('span', { class: 'swatch', style: `background:${UNKNOWN_ALTITUDE}` }), 'altitude not reported'));
+    if (!target) return;
+    target.replaceChildren();
+    if (state.shown.aircraft) {
+      target.append(...ALTITUDE_BANDS.map((band) =>
+        el('span', { class: 'legend-note' },
+          el('span', { class: 'swatch', style: `background:${band.colour}` }), `aircraft ${band.label}`)));
+    }
+    for (const [kind, style] of Object.entries(KIND_STYLE)) {
+      const source = sourceOf(kind);
+      if (!source || !state.shown[source.key]) continue;
+      target.append(el('span', { class: 'legend-note' },
+        el('span', { class: 'swatch ring', style: `border-color:${style.colour}` }), style.label));
+    }
+    if (state.shown.stations) {
+      target.append(el('span', { class: 'legend-note' },
+        el('span', { class: 'swatch', style: 'background:#f6ece2' }), 'our receiver (dashed: position rounded)'));
+    }
   }
 
-  function pressed(page, name) {
-    const button = $(`[data-rf-layer="${name}"]`, page);
-    return !button || button.getAttribute('aria-pressed') === 'true';
+  /* One toggle per stored source, then the receivers. Built once. */
+  function drawLayerToggles(page, stored) {
+    const target = $('[data-rf-layers]', page);
+    if (!target || target.childElementCount) return;
+    const layers = SOURCES.filter((source) => source.kinds.some((kind) => stored.has(kind)))
+      .map((source) => ({ key: source.key, label: source.label }))
+      .concat([{ key: 'stations', label: 'Receivers' }]);
+    for (const layer of layers) {
+      if (!(layer.key in state.shown)) state.shown[layer.key] = true;
+      const button = el('button', {
+        type: 'button', class: 'toggle', 'aria-pressed': String(state.shown[layer.key]), text: layer.label,
+      });
+      button.addEventListener('click', () => {
+        state.shown[layer.key] = !state.shown[layer.key];
+        button.setAttribute('aria-pressed', String(state.shown[layer.key]));
+        show(page);
+      });
+      target.append(button);
+    }
+  }
+
+  /*
+   * The sources strip: every source the RF map is designed for, with
+   * its honest state. Live: stored, with how many were heard. Sent but
+   * not stored: a station offers it and the ingest does not keep it
+   * yet. Not collected yet: nobody sends it.
+   */
+  function drawSources(page, stored, stations, counts) {
+    const target = $('[data-rf-sources]', page);
+    if (!target) return;
+    const offering = (source) => stations.filter((station) =>
+      (station.kinds || []).some((kind) => source.kinds.includes(kind))).length;
+    target.replaceChildren(...SOURCES.map((source) => {
+      const isStored = source.kinds.some((kind) => stored.has(kind));
+      const senders = offering(source);
+      let status;
+      let tone;
+      if (isStored && senders) {
+        status = `live, ${(counts[source.key] || 0).toLocaleString()} heard`;
+        tone = 'live';
+      } else if (isStored) {
+        status = 'ready, no station sends it yet';
+        tone = 'ready';
+      } else if (senders) {
+        status = `sent by ${senders} station${senders === 1 ? '' : 's'}, not stored yet`;
+        tone = 'waiting';
+      } else {
+        status = 'not collected yet';
+        tone = 'off';
+      }
+      return el('li', { class: `rf-source ${tone}` },
+        el('strong', { text: source.label }),
+        el('span', { class: 'muted', text: source.band }),
+        el('span', { class: 'rf-status', text: status }));
+    }));
   }
 
   async function show(page) {
     const map = ensureMap();
     setTimeout(() => map.invalidateSize(), 0);
-    drawLegend(page);
     const minutes = $('[data-rf-minutes]', page).value || '5';
     const summary = $('[data-rf-summary]', page);
     let stations;
     let latest;
     try {
+      if (!state.kinds) state.kinds = (await getJson('api/rf/kinds')).body;
       [stations, latest] = await Promise.all([
         getJson('api/rf/stations'),
         getJson(`api/rf/latest?minutes=${minutes}&limit=5000`),
@@ -248,19 +366,30 @@
       summary.textContent = `The RF data could not be loaded: ${error.message}.`;
       return;
     }
-    const online = stations.body.filter((s) => s.online).length;
-    drawStations(stations.body, pressed(page, 'stations'));
-    drawAircraft(latest.body, pressed(page, 'aircraft'));
-    const total = Number(latest.total || latest.body.length);
+    const stored = new Set(state.kinds.stored);
+    drawLayerToggles(page, stored);
+    const counts = {};
+    for (const row of latest.body) {
+      const source = sourceOf(row.kind);
+      if (source) counts[source.key] = (counts[source.key] || 0) + 1;
+    }
+    drawSources(page, stored, stations.body, counts);
+    drawLegend(page);
+    drawStations(stations.body);
+    drawThings(latest.body);
     if (!stations.body.length) {
       summary.textContent = 'No RF station has reported yet. A station runs rf-agent beside its SDR.';
       return;
     }
+    const online = stations.body.filter((station) => station.online).length;
+    const total = Number(latest.total || latest.body.length);
+    const heard = SOURCES.filter((source) => counts[source.key])
+      .map((source) => `${counts[source.key].toLocaleString()} ${source.label.toLowerCase()}`);
     summary.textContent =
-      `${total.toLocaleString()} aircraft heard in the last ${minutes} min by `
+      `In the last ${minutes} min: ${heard.length ? heard.join(', ') : 'nothing'} heard by `
       + `${stations.body.length} station${stations.body.length === 1 ? '' : 's'} `
       + `(${online} reporting now).`
-      + (total > latest.body.length ? ` The newest ${latest.body.length.toLocaleString()} are drawn.` : '');
+      + (total > latest.body.length ? ` The newest ${latest.body.length.toLocaleString()} of ${total.toLocaleString()} are drawn.` : '');
     if (state.selectedStation) selectStation(state.selectedStation);
   }
 
