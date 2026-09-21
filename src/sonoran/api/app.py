@@ -26,6 +26,7 @@ from sonoran.api.routes.graph import router as graph_router
 from sonoran.api.routes.map import router as map_router
 from sonoran.api.routes.nodes import router as nodes_router
 from sonoran.api.routes.packets import router as packets_router
+from sonoran.api.routes.rf import router as rf_router
 from sonoran.api.routes.stats import router as stats_router
 from sonoran.api.routes.terrain import router as terrain_router
 from sonoran.api.routes.traceroutes import router as traceroutes_router
@@ -308,6 +309,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(stats_router)
     app.include_router(terrain_router)
     app.include_router(traceroutes_router)
+    app.include_router(rf_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

@@ -285,6 +285,29 @@ One row per day. Written by the jobs process.
 | `text_count` | integer | text messages that day |
 | `created_at` | timestamptz | not null |
 
+## 5A. RF map tables
+
+What the community's own receivers hear beyond Meshtastic, aircraft
+first. Written by `sonoran-rf-ingest`, read by `/api/rf`. Revision 0013.
+The design is `docs/design/rf-map.md`.
+
+| Table | Kind | One row per | Kept |
+|---|---|---|---|
+| `rf_station` | plain | station, from its heartbeat: rounded position, kinds, counts, `last_seen` | always |
+| `rf_track` | hypertable on `bucket` | (`kind`, `thing_id`, 20 s bucket), across every station; the loudest hearing wins | 2 days |
+| `rf_heard` | hypertable on `bucket` | (`station_id`, `kind`, `thing_id`, 5 min bucket): hearings, best level, where | 14 days |
+| `rf_latest` | plain | (`kind`, `thing_id`): the newest point, updated in place | always |
+
+`sonoran-rf-ingest` writes as `azmsh_ingest`. It holds INSERT and UPDATE
+on these tables and SELECT on only the columns a conflict target or an
+`UPDATE ... WHERE` reads, so every upsert is `INSERT ... ON CONFLICT DO
+NOTHING` then `UPDATE`, as `AGENTS.md` 9.2 requires. `azmsh_api` and
+`azmsh_jobs` read them.
+
+`thing_id` is the identity of what was heard: the ICAO address, lower
+case, for aircraft. `rssi_db` is in the receiver's own units, so it
+compares one station with itself and never two stations.
+
 ## 6. Retention policy
 
 Applied in migrations with `add_retention_policy`.

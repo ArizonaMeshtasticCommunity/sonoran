@@ -35,7 +35,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -433,6 +433,108 @@ class DailySnapshot(Base):
     gateway_count: Mapped[int | None] = mapped_column(Integer)
     text_count: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+# --- The RF map (docs/design/rf-map.md) --------------------------------
+#
+# What the community's own receivers hear beyond Meshtastic: aircraft
+# first. Written by `sonoran-rf-ingest` from the messages `rf-agent`
+# publishes, and read by `/api/rf`.
+
+
+class RfStation(Base):
+    """One row per receiving station, from its heartbeat."""
+
+    __tablename__ = "rf_station"
+
+    station_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    # Rounded by the agent before it was sent. `precision_m` says by how much.
+    lat: Mapped[float | None] = mapped_column(Double)
+    lon: Mapped[float | None] = mapped_column(Double)
+    precision_m: Mapped[int | None] = mapped_column(Integer)
+    kinds: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    agent_version: Mapped[str | None] = mapped_column(Text)
+    # The counts since the heartbeat before this one. A thinned picture
+    # must say it is thinned (design 4.2).
+    heard: Mapped[int | None] = mapped_column(Integer)
+    sent: Mapped[int | None] = mapped_column(Integer)
+    dropped: Mapped[int | None] = mapped_column(Integer)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RfTrack(Base):
+    """One point per thing heard, per time bucket, across every station.
+
+    Two stations that hear the same aircraft make one point, not two:
+    the identity is (`kind`, `thing_id`, `bucket`), the way (`from_node_num`,
+    `packet_id`) is for Meshtastic. The point kept is the one heard
+    loudest. Which stations heard it lives in `rf_heard`.
+    """
+
+    __tablename__ = "rf_track"
+
+    kind: Mapped[str] = mapped_column(Text)
+    thing_id: Mapped[str] = mapped_column(Text)
+    bucket: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    t: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lat: Mapped[float] = mapped_column(Double)
+    lon: Mapped[float] = mapped_column(Double)
+    alt_m: Mapped[float | None] = mapped_column(REAL)
+    alt_ref: Mapped[str | None] = mapped_column(Text)
+    gs_kn: Mapped[float | None] = mapped_column(REAL)
+    track_deg: Mapped[float | None] = mapped_column(REAL)
+    rssi_db: Mapped[float | None] = mapped_column(REAL)
+    station_id: Mapped[str] = mapped_column(Text)
+    meta: Mapped[dict | None] = mapped_column(JSONB)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("kind", "thing_id", "bucket"),
+        Index("ix_rf_track_bucket", bucket.desc()),
+    )
+
+
+class RfHeard(Base):
+    """Per station, per thing, per five minutes: how well it was heard.
+
+    The receiver layer is drawn from this: where a station has actually
+    heard aircraft, measured and not modelled.
+    """
+
+    __tablename__ = "rf_heard"
+
+    station_id: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text)
+    thing_id: Mapped[str] = mapped_column(Text)
+    bucket: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    heard: Mapped[int] = mapped_column(Integer)
+    best_rssi_db: Mapped[float | None] = mapped_column(REAL)
+    # Where the thing was when this station heard it loudest.
+    lat: Mapped[float | None] = mapped_column(Double)
+    lon: Mapped[float | None] = mapped_column(Double)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("station_id", "kind", "thing_id", "bucket"),
+        Index("ix_rf_heard_station_bucket", "station_id", bucket.desc()),
+    )
+
+
+class RfLatest(Base):
+    """The newest point of each thing heard. Updated in place."""
+
+    __tablename__ = "rf_latest"
+
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    thing_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    t: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    lat: Mapped[float] = mapped_column(Double)
+    lon: Mapped[float] = mapped_column(Double)
+    alt_m: Mapped[float | None] = mapped_column(REAL)
+    alt_ref: Mapped[str | None] = mapped_column(Text)
+    gs_kn: Mapped[float | None] = mapped_column(REAL)
+    track_deg: Mapped[float | None] = mapped_column(REAL)
+    rssi_db: Mapped[float | None] = mapped_column(REAL)
+    station_id: Mapped[str] = mapped_column(Text)
+    meta: Mapped[dict | None] = mapped_column(JSONB)
 
 
 # The ingest role has INSERT and UPDATE rights only. Disable PostgreSQL

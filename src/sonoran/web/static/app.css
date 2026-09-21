@@ -1601,6 +1601,12 @@ div.check { cursor: default; }
    viewport, so on a phone with the address bar showing it is taller
    than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
 #coverage-map { height: min(70svh, 40rem); width: 100%; }
+/* The RF page. Same map height as coverage. */
+#rf-map { height: min(70svh, 40rem); width: 100%; }
+.rf-notice { margin: 0 0 .5rem; }
+[data-page="rf"] .map-shell { margin: .5rem 0; }
+.rf-tip { display: grid; gap: .1rem; font-size: .8rem; }
+.rf-tip strong { font-size: .9rem; }
 
 /* Vertical rhythm down the coverage page.
  *

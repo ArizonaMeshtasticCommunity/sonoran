@@ -1,6 +1,10 @@
 # RF map: what our own receivers hear, beyond Meshtastic
 
-**State:** design only. Nothing here is built.
+**State:** Phase 1 (aircraft) is built on the sonoran side:
+`sonoran-rf-ingest`, revision 0013, `/api/rf`, and the RF page. The
+message contract is `sonoran/rf/schema.py`, published as
+`docs/rf-message-v1.schema.json`. `rf-agent` is built separately.
+Phases 2 to 4 are design only.
 
 This document answers one request: a new tab that maps what the
 community's own radios receive. Aircraft first, then APRS, radiosondes
@@ -282,10 +286,16 @@ Without it, ADS-B is about one message per aircraft per second.
 ### 5.1 The process
 
 A new process beside `ingest`, in the same image, started as
-`sonoran-rf-ingest`. It follows the same rules as the Meshtastic ingest:
-its own database role with INSERT and UPDATE only, no SELECT
-(`AGENTS.md` 4, 9.1, 9.2), and two statements instead of
-`ON CONFLICT DO UPDATE`.
+`sonoran-rf-ingest`, behind the compose profile `rf`, so it runs only
+where it is asked for. It follows the same rules as the Meshtastic
+ingest: INSERT and UPDATE only, SELECT on nothing but the columns a
+conflict target or an `UPDATE ... WHERE` reads (`AGENTS.md` 4, 9.1, 9.2),
+and two statements instead of `ON CONFLICT DO UPDATE`.
+
+Phase 1 runs it as `azmsh_ingest` rather than a role of its own. A new
+role is a new password on every deployment, and the ingest role already
+holds exactly the shape of rights it needs. When RF runs on a host of
+its own, it gets its own role.
 
 It validates every message against the schema in 4.2, drops what does
 not fit, and counts what it dropped per station. A bad station must not
@@ -303,7 +313,7 @@ be able to stop the ingest.
 
 `rf_track` deduplicates across stations. Two receivers hearing the same
 aircraft make one track point, not two. The identity is
-(`kind`, `id`, 20 s bucket), the same idea as (`from_node_num`,
+(`kind`, `thing_id`, 20 s bucket), the same idea as (`from_node_num`,
 `packet_id`) for Meshtastic (`AGENTS.md` 9.1). Which stations heard it
 lives in `rf_heard`, so the dedup loses nothing.
 

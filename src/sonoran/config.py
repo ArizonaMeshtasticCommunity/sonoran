@@ -369,11 +369,36 @@ class Settings(BaseSettings):
     # working state.
     radio_overrides_path: str = "config/nodes.yaml"
 
+    # The RF map (docs/design/rf-map.md). `sonoran-rf-ingest` reads what
+    # the community's own receivers publish through `rf-agent`. It has a
+    # broker of its own, because members' stations publish to the broker
+    # they can reach, which need not be the one Meshtastic comes from.
+    # An empty host means the Meshtastic broker above.
+    rf_mqtt_host: str = ""
+    rf_mqtt_port: int = 1883
+    rf_mqtt_username: str = ""
+    rf_mqtt_password: str = ""
+    rf_mqtt_use_tls: bool = False
+    rf_topics: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["rf/v1/#"])
+    # One track point per thing per this many seconds, across every
+    # station. The design's capacity arithmetic assumes 20 (5.4).
+    rf_bucket_seconds: int = 20
+    # A point stamped this far ahead of our clock, or this far behind it,
+    # is stored with the time we received it instead (design 5.3).
+    rf_future_slack_seconds: int = 60
+    rf_past_slack_seconds: int = 600
+    # Things never stored or shown: aircraft on the FAA LADD and PIA
+    # programmes, as lower case ICAO hex. Loaded by an operator, never
+    # fetched (design 8).
+    rf_hidden_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
     # Logging.
     log_level: str = "INFO"
 
     @field_validator(
         "mqtt_topics",
+        "rf_topics",
+        "rf_hidden_ids",
         "channel_keys",
         "core_channels",
         "embed_frame_ancestors",
