@@ -1419,11 +1419,27 @@ a.more { text-decoration: none; display: inline-block; }
   background: var(--panel-2); border: 1px solid var(--line); border-radius: .35rem;
   padding: .6rem; overflow-x: auto; font: var(--mono); margin: 0; max-height: 24rem;
 }
-/* mesh-graph renders on a light background, so keep it on white. */
+/* The drawing arrives recoloured, with a transparent page, so it sits on
+   the panel like the rest of the site. See `api/trace_drawing.py`. */
 .trace-drawing {
-  display: none; width: 100%; background: #fff;
+  display: none; width: 100%; background: var(--panel-2);
   border: 1px solid var(--line); border-radius: .35rem;
 }
+
+/*
+ * A table row that opens something. The whole row is the target, and it
+ * says so: a pointer, a hover, and an Open link at its start that
+ * keyboards and screen readers reach like any other link.
+ */
+tr.row-link { cursor: pointer; }
+tr.row-link:hover td { background: var(--panel-2); }
+tr.row-link:focus-within td { background: var(--panel-2); }
+.open-link {
+  display: inline-flex; align-items: center; min-height: 24px; white-space: nowrap;
+  color: var(--accent); font-weight: 600; text-decoration: none;
+}
+.open-link:hover { text-decoration: underline; }
+td .summary { color: var(--text); }
 
 /* Traceroute path chain */
 

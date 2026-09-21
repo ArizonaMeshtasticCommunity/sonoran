@@ -49,6 +49,12 @@ class Settings(BaseSettings):
 
     # mesh-graph integration.
     mesh_graph_base_url: str = "http://localhost:8080"
+    # Where the API itself reaches mesh-graph, on the compose network. The
+    # base URL above is the public one, for links a browser follows. The
+    # API fetches trace drawings from this one and recolours them for the
+    # dark site. See `sonoran/api/trace_drawing.py`.
+    mesh_graph_internal_url: str = "http://mesh-graph:8080"
+    mesh_graph_timeout_seconds: float = 10.0
 
     # Privacy switch. Text message bodies are stored only when this is true.
     store_text_messages: bool = False

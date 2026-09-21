@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
+from sonoran.api.packet_summary import summaries
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
@@ -95,9 +96,14 @@ async def list_packets(
     since: datetime | None = None,
     before: datetime | None = None,
     limit: int = Query(default=100, ge=1, le=500),
+    summary: bool = False,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
-    """Return packets newest first."""
+    """Return packets newest first.
+
+    Set `summary=true` to add a one line `summary` of what each packet
+    said, read from the decoded tables. See `api/packet_summary.py`.
+    """
     count = func.count(PacketSeen.id).label("seen_count")
     statement = (
         select(Packet, count)
@@ -122,7 +128,16 @@ async def list_packets(
     names = await resolve_names(
         session, [num for packet, _ in rows for num in (packet.from_node_num, packet.to_node_num)]
     )
-    return [_packet_item(packet, seen_count, names) for packet, seen_count in rows]
+    items = [_packet_item(packet, seen_count, names) for packet, seen_count in rows]
+    if summary and rows:
+        lines = await summaries(
+            session,
+            [(packet.from_node_num, packet.packet_id) for packet, _ in rows],
+            min(packet.first_seen_at for packet, _ in rows),
+        )
+        for item, (packet, _) in zip(items, rows, strict=True):
+            item["summary"] = lines.get((packet.from_node_num, packet.packet_id))
+    return items
 
 
 def _values(model: Any, row: object) -> dict[str, object]:
