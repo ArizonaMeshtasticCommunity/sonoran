@@ -134,6 +134,13 @@ def json_schema() -> dict[str, object]:
             "the heartbeat to rf/v1/<station>/status, retained. "
             "See docs/design/rf-map.md section 4. Generated from sonoran/rf/schema.py."
         ),
-        "oneOf": [{"$ref": "#/$defs/Batch"}, {"$ref": "#/$defs/Status"}],
+        # A message with `obs` is a batch; anything else is a heartbeat.
+        # Not `oneOf`: a heartbeat ignores unknown fields, so every batch
+        # would also pass as one, and `anyOf` would let a batch with bad
+        # observations through as a "heartbeat". sonoran itself decides
+        # by the topic; this is the same split for a file on its own.
+        "if": {"required": ["obs"]},
+        "then": {"$ref": "#/$defs/Batch"},
+        "else": {"$ref": "#/$defs/Status"},
         "$defs": top["$defs"],
     }

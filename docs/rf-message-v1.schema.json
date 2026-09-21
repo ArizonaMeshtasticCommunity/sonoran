@@ -302,13 +302,16 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Published by rf-agent. Observations go to rf/v1/<station>/<kind>, the heartbeat to rf/v1/<station>/status, retained. See docs/design/rf-map.md section 4. Generated from sonoran/rf/schema.py.",
-  "oneOf": [
-    {
-      "$ref": "#/$defs/Batch"
-    },
-    {
-      "$ref": "#/$defs/Status"
-    }
-  ],
+  "else": {
+    "$ref": "#/$defs/Status"
+  },
+  "if": {
+    "required": [
+      "obs"
+    ]
+  },
+  "then": {
+    "$ref": "#/$defs/Batch"
+  },
   "title": "rf-agent message, version 1"
 }
