@@ -193,5 +193,7 @@ Check these items on every pull request:
    service, so the credential scoping in `docker-compose.yml` can be
    undone from a file that is not in this repository. The deployment's
    override did exactly that to `mesh-graph`, which held 8 credentials
-   while the base file granted it 4 MQTT variables. See
-   `docs/ARCHITECTURE.md` 2.1.
+   while the base file granted it 4 MQTT variables. The reverse also
+   holds: a key the base file sets under `environment:` wins over any
+   `env_file` in the override, so check that `MQTT_HOST` resolves to the
+   broker the deployment meant. See `docs/ARCHITECTURE.md` 2.1.

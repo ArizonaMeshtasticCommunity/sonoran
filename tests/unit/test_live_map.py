@@ -792,3 +792,62 @@ def test_the_phone_ticker_does_not_run_where_it_cannot_be_seen() -> None:
     script = _read("app.js")
     assert "getComputedStyle(ticker).display !== 'none'" in script
     assert "!SonoranWatch.isOn() || !visible" in script
+
+
+def test_packet_filter_chips_come_from_the_family_list() -> None:
+    """One list of families, so a chip and a mark cannot disagree.
+
+    The chips are built from `SonoranLive.FAMILY_ORDER`, and that list
+    must hold the `OTHER` bucket, so a filter can never hide traffic we
+    failed to classify without a chip that says so. See issue #48.
+    """
+    text = _client().get("/").text
+    assert "data-family-chips" in text
+    app = _read("app.js")
+    assert "SonoranLive.FAMILY_ORDER.map((key)" in app
+    live = _read("map-live.js")
+    order = live[live.index("const FAMILY_ORDER = [") :]
+    order = order[: order.index("];")]
+    assert "'OTHER'" in order
+
+
+def test_packet_filter_sits_in_the_controls_row_that_watch_mode_moves() -> None:
+    """Watch mode moves `.controls` into its bar, so the filter goes with it."""
+    text = _client().get("/").text
+    head = text[text.index('data-page="map"') :]
+    controls = head[head.index('<div class="controls">') : head.index('<div class="map-shell"')]
+    assert "data-family-filter" in controls
+
+
+def test_a_hidden_packet_is_still_recorded_as_seen() -> None:
+    """Showing a kind again must not replay its packets as if they were new.
+
+    `releaseTraffic` records the key before it applies the filter.
+    """
+    app = _read("app.js")
+    body = app[app.index("function releaseTraffic(") :]
+    body = body[: body.index("\n}\n")]
+    assert body.index("trafficSeen.set(") < body.index("familyShown(packet)")
+
+
+def test_the_packet_filter_survives_refused_storage() -> None:
+    """A private window refuses storage, and the map must still load."""
+    app = _read("app.js")
+    for name in ("function recallHiddenFamilies()", "function keepHiddenFamilies()"):
+        body = app[app.index(name) :]
+        body = body[: body.index("\n}\n")]
+        assert "try {" in body, name
+        assert "catch" in body, name
+
+
+def test_the_engine_takes_hidden_marks_off_at_once() -> None:
+    """A filter change removes marks and queued packets of a hidden kind."""
+    live = _read("map-live.js")
+    assert "setFamilyFilter," in live
+    body = live[live.index("function setFamilyFilter(") :]
+    body = body[: body.index("\n    }\n")]
+    assert "queue = queue.filter(" in body
+    assert "release(slot)" in body
+    # A packet the viewer hid is not counted as dropped.
+    tick = live[live.index("if (!shows(item.packet)) continue;") - 200 :]
+    assert tick.index("if (!shows(item.packet)) continue;") < tick.index("admitPacket(item.packet)")

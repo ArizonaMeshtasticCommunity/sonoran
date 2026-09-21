@@ -129,7 +129,8 @@ def _packet(
     connection,  # type: ignore[no-untyped-def]
     sender: int,
     packet_id: int,
-    gateways: list[tuple[int, int | None, float | None]],
+    gateways: list[tuple[int, int | None, float | None]]
+    | list[tuple[int, int | None, float | None, int | None]],
     *,
     channel: str = "LongFast",
     hop_start: int = 3,
@@ -139,9 +140,10 @@ def _packet(
 ) -> None:
     """Insert one packet and the uploads that carried it.
 
-    `gateways` is a list of (gateway, hop_limit, rx_snr). A hop_limit
-    equal to `hop_start` is a direct observation; anything lower was
-    relayed. A gateway equal to the sender is a self upload.
+    `gateways` is a list of (gateway, hop_limit, rx_snr), with an
+    optional rx_rssi fourth. A hop_limit equal to `hop_start` is a
+    direct observation; anything lower was relayed. A gateway equal to
+    the sender is a self upload.
     """
     when = seen_at or datetime.now(UTC)
     connection.execute(
@@ -152,12 +154,12 @@ def _packet(
         ),
         {"f": sender, "p": packet_id, "ch": channel, "hs": hop_start, "rx": rx_time, "t": when},
     )
-    for gateway, hop_limit, snr in gateways:
+    for gateway, hop_limit, snr, *rest in gateways:
         connection.execute(
             text(
                 "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
-                "mqtt_topic, channel, hop_limit, rx_snr, seen_at) "
-                "VALUES (:f, :p, :g, 'msh/US/AZ/t', :ch, :hl, :snr, :t) "
+                "mqtt_topic, channel, hop_limit, rx_snr, rx_rssi, seen_at) "
+                "VALUES (:f, :p, :g, 'msh/US/AZ/t', :ch, :hl, :snr, :rssi, :t) "
                 "ON CONFLICT DO NOTHING"
             ),
             {
@@ -167,6 +169,7 @@ def _packet(
                 "ch": channel,
                 "hl": hop_start if hop_limit is None else hop_limit,
                 "snr": snr,
+                "rssi": rest[0] if rest else None,
                 "t": when,
             },
         )
@@ -301,6 +304,38 @@ def test_a_relayed_observation_is_evidence_and_carries_no_signal_reading(
     assert row["signals"]["sole_observer"]["state"] == "unknown"
     # And that strong reading never reached the evidence.
     assert "11.5" not in json.dumps(row)
+
+
+def test_a_sole_gateway_beside_the_node_is_not_a_fault(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """One gateway that hears a node very loudly is close to it.
+
+    A repeater and a client at one site look exactly like this, and the
+    setup is working. A distant single link reads far weaker, and stays
+    flagged. The median is read from the direct observations only.
+    """
+    near, far, gateway = BASE + 41, BASE + 42, BASE + 49
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, near, role="CLIENT")
+        _add_node(connection, far, role="CLIENT")
+        _add_node(connection, gateway, role="ROUTER")
+        _busy(connection, near, 4000, lambda hour: [(gateway, None, 11.0, -44)])
+        _busy(connection, far, 5000, lambda hour: [(gateway, None, -12.0, -112)])
+
+    _run(settings, gaps.run_once)
+    rows = _rows(settings)
+
+    close = rows[_ident(near)]["signals"]["sole_observer"]
+    assert close["state"] == "ok"
+    assert close["reason"] == "one_gateway_hears_it_close"
+    assert close["evidence"]["direct_rssi_dbm"] == -44
+    assert close["evidence"]["direct_rssi_readings"] == 8
+
+    distant = rows[_ident(far)]["signals"]["sole_observer"]
+    assert distant["state"] == "bad"
+    assert distant["reason"] == "one_gateway_hears_it"
 
 
 def test_a_self_upload_is_never_a_direct_observation(

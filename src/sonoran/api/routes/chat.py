@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.channels import classify, group_order
@@ -16,7 +16,7 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.db.models import TextMessage
+from sonoran.db.models import Packet, PacketSeen, TextMessage
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -149,7 +149,100 @@ async def _reply_parents(
     }
 
 
-async def _as_messages(session: AsyncSession, rows: list[TextMessage]) -> list[dict[str, object]]:
+# How far before the oldest message the observation read looks. A
+# gateway stamps nothing we order on, and an upload can land a little
+# after the text row, so the bound is loose on purpose. It exists so the
+# hypertable read can skip old chunks, not to decide which rows count.
+_METRICS_SLACK = timedelta(hours=1)
+
+
+async def _metrics_for(
+    session: AsyncSession, rows: list[TextMessage]
+) -> dict[tuple[int, int], dict[str, object]]:
+    """Return what the packet record says about how each message travelled.
+
+    Keyed by (`from_node_num`, `packet_id`), the identity of a packet
+    (`AGENTS.md` 9.1). Every figure follows the rules in `AGENTS.md`
+    9.5 and 9.5.1:
+
+    - `gateway_count` counts distinct gateways, never uploads.
+    - A gateway that is the sender uploaded its own voice. It is never
+      a direct observation and never counts as a gateway that heard it.
+    - A signal reading is offered only from a direct observation. A
+      relayed upload's SNR belongs to the last hop, not to the sender.
+
+    `fewest_hops` is the fewest relays any gateway saw the packet use.
+    `want_ack` says an acknowledgement was asked for. Whether one came
+    back is not recorded, so no field claims it.
+    """
+    wanted = {(row.from_node_num, row.packet_id) for row in rows if row.packet_id is not None}
+    if not wanted:
+        return {}
+    since = min(row.seen_at for row in rows) - _METRICS_SLACK
+    keys = (
+        select(
+            Packet.from_node_num.label("from_node_num"),
+            Packet.packet_id.label("packet_id"),
+            func.max(Packet.hop_start).label("hop_start"),
+            func.bool_or(Packet.want_ack).label("want_ack"),
+        )
+        .where(
+            tuple_(Packet.from_node_num, Packet.packet_id).in_(sorted(wanted)),
+            Packet.first_seen_at >= since,
+        )
+        .group_by(Packet.from_node_num, Packet.packet_id)
+        .cte("chat_keys")
+    )
+    other = PacketSeen.gateway_node_num != PacketSeen.from_node_num
+    direct = and_(other, PacketSeen.hop_limit == keys.c.hop_start)
+    statement = (
+        select(
+            keys.c.from_node_num,
+            keys.c.packet_id,
+            keys.c.hop_start,
+            keys.c.want_ack,
+            func.count(func.distinct(PacketSeen.gateway_node_num))
+            .filter(other)
+            .label("gateway_count"),
+            func.count(func.distinct(PacketSeen.gateway_node_num))
+            .filter(direct)
+            .label("direct_gateways"),
+            func.max(PacketSeen.hop_limit).filter(other).label("best_hop_limit"),
+            func.max(PacketSeen.rx_snr).filter(direct).label("best_direct_snr"),
+            func.max(PacketSeen.rx_rssi).filter(direct).label("best_direct_rssi"),
+        )
+        .select_from(keys)
+        .outerjoin(
+            PacketSeen,
+            and_(
+                PacketSeen.from_node_num == keys.c.from_node_num,
+                PacketSeen.packet_id == keys.c.packet_id,
+                PacketSeen.seen_at >= since,
+            ),
+        )
+        .group_by(keys.c.from_node_num, keys.c.packet_id, keys.c.hop_start, keys.c.want_ack)
+    )
+    found: dict[tuple[int, int], dict[str, object]] = {}
+    for row in (await session.execute(statement)).all():
+        fewest = (
+            None
+            if row.hop_start is None or row.best_hop_limit is None
+            else max(0, int(row.hop_start) - int(row.best_hop_limit))
+        )
+        found[(int(row.from_node_num), int(row.packet_id))] = {
+            "gateway_count": int(row.gateway_count or 0),
+            "direct_gateways": int(row.direct_gateways or 0),
+            "fewest_hops": fewest,
+            "best_direct_snr": None if row.best_direct_snr is None else float(row.best_direct_snr),
+            "best_direct_rssi": None if row.best_direct_rssi is None else int(row.best_direct_rssi),
+            "want_ack": bool(row.want_ack),
+        }
+    return found
+
+
+async def _as_messages(
+    session: AsyncSession, rows: list[TextMessage], *, metrics: bool = False
+) -> list[dict[str, object]]:
     """Map message rows to the public form, with names resolved.
 
     Tapback reactions are attached to the message they react to. They
@@ -161,8 +254,10 @@ async def _as_messages(session: AsyncSession, rows: list[TextMessage]) -> list[d
     )
     reactions = await _reactions_for(session, rows)
     parents = await _reply_parents(session, rows)
-    return [
-        {
+    travelled = await _metrics_for(session, rows) if metrics else {}
+    messages: list[dict[str, object]] = []
+    for row in rows:
+        message: dict[str, object] = {
             "id": row.id,
             "packet_id": row.packet_id,
             "from_node": format_node_id(row.from_node_num),
@@ -177,8 +272,14 @@ async def _as_messages(session: AsyncSession, rows: list[TextMessage]) -> list[d
             "reply_to": None if row.reply_id is None else parents.get(row.reply_id),
             "reactions": [] if row.packet_id is None else reactions.get(row.packet_id, []),
         }
-        for row in rows
-    ]
+        if metrics:
+            # Null when the message has no packet row, which is a fact
+            # about the record, not a message that nobody heard.
+            message["metrics"] = (
+                None if row.packet_id is None else travelled.get((row.from_node_num, row.packet_id))
+            )
+        messages.append(message)
+    return messages
 
 
 def _apply_filters(
@@ -211,6 +312,7 @@ async def chat(
     since: datetime | None = None,
     before: datetime | None = None,
     reactions: bool = False,
+    metrics: bool = False,
     limit: int = Query(default=100, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
@@ -219,6 +321,11 @@ async def chat(
     Tapback reactions are attached to the message they react to, so they
     do not appear as messages here. Set `reactions=true` to list them as
     ordinary rows instead.
+
+    Set `metrics=true` to add how each message travelled: gateways that
+    heard it, how many heard it direct, the fewest hops, the best direct
+    signal, and whether an acknowledgement was asked for. See
+    `_metrics_for`.
     """
     statement = select(TextMessage).order_by(TextMessage.seen_at.desc()).limit(limit)
     statement = _apply_filters(statement, channel, from_node, since, before)
@@ -227,7 +334,7 @@ async def chat(
     if q:
         statement = statement.where(TextMessage.body.ilike(contains(q), escape=LIKE_ESCAPE))
     rows = list((await session.scalars(statement)).all())
-    return await _as_messages(session, rows)
+    return await _as_messages(session, rows, metrics=metrics)
 
 
 @router.get("/channels")

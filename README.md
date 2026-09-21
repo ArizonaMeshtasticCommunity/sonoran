@@ -56,24 +56,13 @@ role has `INSERT` and `UPDATE` only. The API role has `SELECT` only. See
 You need Docker and Docker Compose.
 
 ```bash
-# 1. Configure
-cp .env.example .env
-#    Edit .env. Every CHANGE_ME in it must be replaced. The migration
-#    that creates the three database roles refuses to run while a role
-#    password is missing or still CHANGE_ME, so an unedited copy stops
-#    at the first `docker compose up` with the variable named.
-#      POSTGRES_PASSWORD            the superuser; the stack does not start without it
-#      AZMSH_INGEST_PASSWORD        \
-#      AZMSH_API_PASSWORD            > the three role logins. Each must match
-#      AZMSH_JOBS_PASSWORD          /  the password in its DATABASE_URL_* below.
-#      DATABASE_URL/_API/_JOBS      one URL per process role
-#      MQTT_HOST/USERNAME/PASSWORD  your broker
-#      CHANNEL_KEYS                 base64 channel keys (default public key is set)
-#      MESH_GRAPH_BASE_URL          the public URL of the mesh-graph service
-
-# 2. Start everything (migrations run first, automatically)
+cp .env.example .env        # then replace every CHANGE_ME in it
 docker compose up -d --build
 ```
+
+Pick real passwords. The four database passwords are set once, when the
+database is first created, and changing `.env` later does not change them.
+[Configuration](#️-configuration) below says what each setting is.
 
 Then open the dashboard at **<http://localhost:8000>**. The mesh-graph engine is
 at **<http://localhost:8080>**.

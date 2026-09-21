@@ -188,6 +188,19 @@
                 </select>
               </label>
               <button type="button" class="toggle" data-show-traffic aria-pressed="true">Traffic</button>
+              <!--
+                Which kinds of packet the traffic layer draws. The chips
+                are built from SonoranLive.FAMILY_ORDER, so the list here
+                and the shapes on the map cannot disagree. "Other kinds"
+                is always one of them, so a filter can never hide traffic
+                we failed to classify without a chip that says so. It sits
+                in this row, so watch mode moves it into its bar with the
+                rest.
+              -->
+              <details class="family-filter" data-family-filter>
+                <summary data-family-summary>Packet kinds: all</summary>
+                <div class="family-chips" data-family-chips role="group" aria-label="Packet kinds to draw"></div>
+              </details>
               <button type="button" class="toggle" data-show-traces aria-pressed="true">Live traceroutes</button>
               <button type="button" class="toggle" data-show-links aria-pressed="false">Neighbor links</button>
               <!--
@@ -376,33 +389,6 @@
                    data-coverage-opacity aria-label="Signal strength opacity" />
             <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
           </label>
-
-          <!--
-            The embed snippet.
-
-            Kept below the map rather than in the controls row: it is a
-            thing you do once when you are setting a site up, not a
-            control you reach for while reading the map.
-          -->
-          <details class="embed-box" data-embed-box>
-            <summary>Put this map on another website</summary>
-            <div class="embed-body">
-              <p class="embed-what">
-                The public embed draws the same predicted coverage, from routers and
-                repeaters only, at reduced position precision. It never shows client
-                nodes, node names, or message content.
-              </p>
-              <p class="notice" data-embed-status hidden></p>
-              <label class="embed-field">
-                <span>Paste this where you want the map</span>
-                <textarea data-embed-snippet rows="4" readonly spellcheck="false"></textarea>
-              </label>
-              <p class="embed-actions">
-                <button type="button" class="more" data-embed-copy>Copy</button>
-                <a class="linky" data-embed-open target="_blank" rel="noopener">Open the embed</a>
-              </p>
-            </div>
-          </details>
 
           <div class="map-shell">
             <div id="coverage-map"></div>
@@ -829,10 +815,20 @@
         <section class="page" data-page="chat">
           <div class="page-head">
             <div>
-              <h2>Chat</h2>
-              <p class="sub">One section for each detected channel, grouped by what it is for. New names land in Custom.</p>
+              <h2 data-chat-title>Chat</h2>
+              <p class="sub" data-chat-sub>One section for each detected channel, grouped by what it is for. New names land in Custom.</p>
             </div>
             <div class="controls">
+              <!--
+                Only on a channel page (#chat/<channel>). Two views of the
+                same rows: a chat to read, a table to scan. The view is in
+                the fragment, so a link opens the view it was sent from.
+              -->
+              <a class="more" href="#chat" data-chat-back hidden>All channels</a>
+              <div class="view-switch" role="group" aria-label="View" data-chat-view hidden>
+                <button type="button" data-chat-view-choice="chat" aria-pressed="true">Chat</button>
+                <button type="button" data-chat-view-choice="table" aria-pressed="false">Table</button>
+              </div>
               <select data-chat-hours aria-label="Time window">
                 <option value="24">Last 24 h</option>
                 <option value="168" selected>Last 7 days</option>

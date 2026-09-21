@@ -456,29 +456,101 @@ function messageBody(text) {
  * The phone apps send a tapback as a text message carrying the emoji,
  * so the API groups them and the page shows one chip per emoji.
  */
+/*
+ * How many reaction chips show before the rest fold into "+N more".
+ *
+ * A busy message collected enough distinct emoji to wrap three lines on
+ * a phone, which pushed the next message off the screen. The most sent
+ * come first, so the fold hides the least said.
+ */
+const REACTION_CAP = 4;
+
+/*
+ * MeshMonitor's Auto Acknowledge answers a message with a tapback that
+ * says how the message arrived. Its `hopEmoji` mapping is a keycap:
+ * `*` direct, `1` to `7` the hop count (`7` is seven or more), `#` via
+ * MQTT. Older builds sent `0` and a direct hit (U+1F3AF) for direct.
+ * See docs/features/automation-engine.md in Yeraze/meshmonitor. On the
+ * live mesh these were nine in ten of all tapbacks in a month.
+ *
+ * That is a delivery signal, not an opinion, so it is drawn apart from
+ * the reactions people chose, with each sender's reading in words. A
+ * person can send any of these too, and nothing in the packet tells the
+ * two apart, so the chip says "possibly". A bare digit is accepted,
+ * because some clients drop the keycap.
+ */
+const AUTO_ACK = /^(?:[0-7*#]\uFE0F?\u20E3?|\u{1F3AF})$/u;
+
+/** What one auto-ack tapback says about how the message arrived. */
+function autoAckMeaning(emoji) {
+  const mark = emoji.trim().charAt(0);
+  if (mark === '*' || mark === '0' || emoji.includes('\u{1F3AF}')) return 'direct';
+  if (mark === '#') return 'via MQTT';
+  if (mark === '7') return '7 or more hops';
+  return mark === '1' ? '1 hop' : `${mark} hops`;
+}
+
+/** The senders of one reaction, each a node link with its own packet. */
+function reactionSenders(reaction) {
+  return el('ul', { class: 'reaction-senders' }, (reaction.senders || []).map((sender) =>
+    el('li', {},
+      el('button', {
+        class: 'linky', type: 'button', title: sender.node_id,
+        text: sender.display_name,
+        onclick: () => openNode(sender.node_id),
+      }),
+      sender.packet_id == null
+        ? null
+        : el('a', {
+            class: 'linky packet',
+            href: `#packet/${encodeURIComponent(sender.node_id)}/${sender.packet_id}`,
+            title: `Open the packet that carried this ${reaction.emoji}`,
+            text: '↗',
+          }))));
+}
+
+/**
+ * One reaction: the emoji and how many sent it, with the senders a tap away.
+ *
+ * The names used to sit inline in the chip, which is how a tapback with
+ * several senders took the whole chat page sideways at 320 px (#44). A
+ * `details` holds them now: it opens on a tap or a key, needs no hover,
+ * and a closed chip is only as wide as an emoji and a number.
+ */
+function reactionChip(reaction, label, extra) {
+  const n = reaction.count ?? (reaction.senders || []).length;
+  return el('details', { class: extra ? `reaction ${extra}` : 'reaction' },
+    el('summary', { title: `${label || reaction.emoji}, sent by ${n}` },
+      el('span', { class: 'glyph', text: label || reaction.emoji }),
+      n > 1 ? el('span', { class: 'count', text: String(n) }) : null),
+    reactionSenders(reaction));
+}
+
 function reactionChips(reactions) {
   if (!reactions || !reactions.length) return null;
-  return el('div', { class: 'reactions' }, reactions.map((reaction) =>
-    el('span', { class: 'reaction' },
-      el('span', { class: 'glyph', text: reaction.emoji }),
-      // Name everyone who sent this emoji. Each name opens the node,
-      // and the tapback's own packet can be opened beside it.
-      el('span', { class: 'who' }, (reaction.senders || []).flatMap((sender, index) => [
-        index ? el('span', { class: 'sep', text: ',' }) : null,
-        el('button', {
-          class: 'linky', type: 'button', title: sender.node_id,
-          text: sender.display_name,
-          onclick: () => openNode(sender.node_id),
-        }),
-        sender.packet_id == null
-          ? null
-          : el('a', {
-              class: 'linky packet',
-              href: `#packet/${encodeURIComponent(sender.node_id)}/${sender.packet_id}`,
-              title: `Open the packet that carried this ${reaction.emoji}`,
-              text: '\u2197',
-            }),
-      ])))));
+  const acks = reactions.filter((reaction) => AUTO_ACK.test(reaction.emoji.trim()));
+  const people = reactions
+    .filter((reaction) => !AUTO_ACK.test(reaction.emoji.trim()))
+    .sort((a, b) => (b.count || 0) - (a.count || 0));
+  const shown = people.slice(0, REACTION_CAP);
+  const folded = people.slice(REACTION_CAP);
+  const ackSenders = acks.reduce((sum, reaction) => sum + (reaction.count || 0), 0);
+  return el('div', { class: 'reactions' },
+    shown.map((reaction) => reactionChip(reaction)),
+    folded.length
+      ? el('details', { class: 'reaction more-reactions' },
+          el('summary', { text: `+${folded.length} more` }),
+          el('div', { class: 'reactions' }, folded.map((reaction) => reactionChip(reaction))))
+      : null,
+    acks.length
+      ? reactionChip({
+          emoji: acks.map((reaction) => reaction.emoji).join(' '),
+          count: ackSenders,
+          senders: acks.flatMap((reaction) => (reaction.senders || []).map((sender) => ({
+            ...sender, display_name: `${sender.display_name}: ${autoAckMeaning(reaction.emoji)}`,
+          }))),
+        }, 'Possibly auto-acked', 'auto-ack')
+      : null);
 }
 
 /** Render the message this one replies to, as a short quote. */
@@ -911,6 +983,7 @@ function ensureMap() {
     // from the loop rather than once per fetch.
     onStats: liveCounters,
   });
+  mapState.live.setFamilyFilter(hiddenFamilies);
   /*
    * `window.SonoranMap` is already how this map answers questions from
    * the console. The animation's own numbers go in the same place, so
@@ -985,6 +1058,100 @@ const TRAFFIC_LIMIT = 2000;
 // made the map re-draw traffic it had already drawn.
 const trafficSeen = new Map();
 
+/*
+ * The packet kinds the viewer chose not to see, remembered per browser.
+ *
+ * The hidden set is stored rather than the shown one, so a family that a
+ * later build adds is drawn by default instead of silently missing. A
+ * key this build does not know is dropped on load. Storage can be
+ * refused (a private window, a full quota), and then the map simply
+ * forgets between visits.
+ */
+const FAMILY_FILTER_KEY = 'sonoran.map.hiddenFamilies';
+const hiddenFamilies = recallHiddenFamilies();
+
+function recallHiddenFamilies() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FAMILY_FILTER_KEY) || '[]');
+    if (!Array.isArray(saved)) return new Set();
+    return new Set(saved.filter((key) => Object.hasOwn(SonoranLive.FAMILIES, key)));
+  } catch {
+    return new Set();
+  }
+}
+
+function keepHiddenFamilies() {
+  try {
+    localStorage.setItem(FAMILY_FILTER_KEY, JSON.stringify([...hiddenFamilies]));
+  } catch {
+    // Not kept. The choice still holds for this visit.
+  }
+}
+
+/** Whether the packet filter lets a packet through. */
+function familyShown(packet) {
+  return !hiddenFamilies.has(SonoranLive.familyKey(packet.portnum));
+}
+
+/**
+ * Build the packet kind chips, once.
+ *
+ * Each chip is a toggle with the family's own mark on it. "All kinds"
+ * appears only while something is hidden, as the way back.
+ */
+function wireFamilyFilter() {
+  const chips = $('[data-family-chips]');
+  if (!chips) return;
+  const buttons = SonoranLive.FAMILY_ORDER.map((key) => {
+    const family = SonoranLive.FAMILIES[key];
+    return el('button', {
+      type: 'button',
+      class: 'family-chip',
+      'aria-pressed': String(!hiddenFamilies.has(key)),
+      dataset: { family: key },
+      onclick: () => {
+        if (hiddenFamilies.has(key)) hiddenFamilies.delete(key);
+        else hiddenFamilies.add(key);
+        familyFilterChanged();
+      },
+    }, familySwatch(family), family.label);
+  });
+  const all = el('button', {
+    type: 'button',
+    class: 'family-chip clear',
+    text: 'All kinds',
+    onclick: () => {
+      hiddenFamilies.clear();
+      familyFilterChanged();
+    },
+  });
+  replace(chips, buttons, all);
+  paintFamilyFilter();
+}
+
+function paintFamilyFilter() {
+  for (const button of $$('.family-chip[data-family]')) {
+    button.setAttribute('aria-pressed', String(!hiddenFamilies.has(button.dataset.family)));
+  }
+  const all = $('.family-chip.clear');
+  if (all) all.hidden = hiddenFamilies.size === 0;
+  const total = SonoranLive.FAMILY_ORDER.length;
+  const shown = total - hiddenFamilies.size;
+  const summary = $('[data-family-summary]');
+  if (summary) {
+    summary.textContent = hiddenFamilies.size
+      ? `Packet kinds: ${shown} of ${total}`
+      : 'Packet kinds: all';
+  }
+}
+
+function familyFilterChanged() {
+  keepHiddenFamilies();
+  paintFamilyFilter();
+  if (mapState.live) mapState.live.setFamilyFilter(hiddenFamilies);
+  if (currentPage === 'map') render('map');
+}
+
 /**
  * Hand the animation every packet it has not drawn yet.
  *
@@ -1003,6 +1170,9 @@ function releaseTraffic(packets, firstPass, cutoffMs, intervalMs) {
     const known = trafficSeen.has(packet.key);
     trafficSeen.set(packet.key, packet.timeMs || Date.now());
     if (known || firstPass) continue;
+    // A packet of a hidden kind is still recorded as seen above, so
+    // showing its kind again later does not replay it as if it were new.
+    if (!familyShown(packet)) continue;
     // A packet whose only upload was the sender's own still fires its
     // emission pulse, so `arcs` being empty is not a reason to skip it.
     fresh.push(packet);
@@ -1524,6 +1694,41 @@ function applyMotionSetting() {
 }
 
 /**
+ * Draw one packet family's mark, as the map draws it.
+ *
+ * The watch legend and the packet filter both use it, so a chip and the
+ * mark it controls are the same shape and the same colour.
+ */
+function familySwatch(family) {
+  const box = el('canvas', { class: 'pkt-swatch', width: '16', height: '16' });
+  const ctx = box.getContext('2d');
+  const paint = colour(family.token, family.fallback);
+  ctx.strokeStyle = paint;
+  ctx.fillStyle = paint;
+  const size = Math.min(family.size, 10);
+  const half = size / 2;
+  if (family.shape === 'disc') { ctx.beginPath(); ctx.arc(8, 8, half, 0, Math.PI * 2); ctx.fill(); }
+  else if (family.shape === 'ring') { ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(8, 8, half, 0, Math.PI * 2); ctx.stroke(); }
+  else if (family.shape === 'square') ctx.fillRect(8 - half, 8 - half, size, size);
+  else if (family.shape === 'capsule') { ctx.beginPath(); ctx.roundRect(8 - half, 6.5, size, 3, 1.5); ctx.fill(); }
+  else if (family.shape === 'diamond') {
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(8, 8 - half); ctx.lineTo(8 + half, 8); ctx.lineTo(8, 8 + half); ctx.lineTo(8 - half, 8);
+    ctx.closePath(); ctx.stroke();
+  } else if (family.shape === 'cross') {
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(8 - half, 8); ctx.lineTo(8 + half, 8); ctx.moveTo(8, 8 - half); ctx.lineTo(8, 8 + half);
+    ctx.stroke();
+  } else {
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(8 - half, 8); ctx.lineTo(8 + half, 8); ctx.stroke();
+  }
+  return box;
+}
+
+/**
  * Build the legend, once, inside watch mode.
  *
  * It names what the marks mean in the terms the data supports, and the
@@ -1532,35 +1737,6 @@ function applyMotionSetting() {
  * collapses, so it is not repeated here.
  */
 function watchLegend(target) {
-  const swatch = (family) => {
-    const box = el('canvas', { class: 'pkt-swatch', width: '16', height: '16' });
-    const ctx = box.getContext('2d');
-    const paint = colour(family.token, family.fallback);
-    ctx.strokeStyle = paint;
-    ctx.fillStyle = paint;
-    const size = Math.min(family.size, 10);
-    const half = size / 2;
-    if (family.shape === 'disc') { ctx.beginPath(); ctx.arc(8, 8, half, 0, Math.PI * 2); ctx.fill(); }
-    else if (family.shape === 'ring') { ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(8, 8, half, 0, Math.PI * 2); ctx.stroke(); }
-    else if (family.shape === 'square') ctx.fillRect(8 - half, 8 - half, size, size);
-    else if (family.shape === 'capsule') { ctx.beginPath(); ctx.roundRect(8 - half, 6.5, size, 3, 1.5); ctx.fill(); }
-    else if (family.shape === 'diamond') {
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(8, 8 - half); ctx.lineTo(8 + half, 8); ctx.lineTo(8, 8 + half); ctx.lineTo(8 - half, 8);
-      ctx.closePath(); ctx.stroke();
-    } else if (family.shape === 'cross') {
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(8 - half, 8); ctx.lineTo(8 + half, 8); ctx.moveTo(8, 8 - half); ctx.lineTo(8, 8 + half);
-      ctx.stroke();
-    } else {
-      ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.moveTo(8 - half, 8); ctx.lineTo(8 + half, 8); ctx.stroke();
-    }
-    return box;
-  };
-
   replace(target,
     el('h4', { text: 'What the marks mean' }),
     el('div', { class: 'legend' },
@@ -1575,7 +1751,7 @@ function watchLegend(target) {
     el('div', { class: 'legend' },
       SonoranLive.FAMILY_ORDER.map((key) => {
         const family = SonoranLive.FAMILIES[key];
-        return el('span', { class: 'legend-note' }, swatch(family), family.label);
+        return el('span', { class: 'legend-note' }, familySwatch(family), family.label);
       })),
     /*
      * The two heat layers, named in the design's own words, and named
@@ -1623,9 +1799,10 @@ function watchLegend(target) {
  */
 function liveCounters(counts) {
   const held = mapState.lastPackets ? mapState.lastPackets.length : 0;
+  const kinds = hiddenFamilies.size ? ' of the chosen kinds' : '';
   const drawing = counts.dropped
     ? `drawing ${count(counts.offered - counts.dropped)} of ${count(counts.offered)} packets`
-    : `${count(held)} packets in the window`
+    : `${count(held)} packets${kinds} in the window`
       + (counts.queued ? `, ${count(counts.queued)} still to replay` : '');
   /*
    * The display runs about one poll behind live, because a batch is
@@ -1948,13 +2125,24 @@ PAGES.map = async (page) => {
      * purpose: a panel row can be read and an 850 ms particle cannot.
      */
     const packets = SonoranLive.aggregate(traffic.events);
+    /*
+     * The packet filter. Everything below that draws or lists packets
+     * reads `shown`. The counts in the summary stay those of the whole
+     * window, with the shown number beside them, so a quiet filtered map
+     * says it is filtered rather than looking like a quiet mesh.
+     */
+    const filtered = hiddenFamilies.size > 0;
+    const shown = filtered ? packets.filter(familyShown) : packets;
+    const nothing = filtered
+      ? 'Nothing of the chosen packet kinds in the window.'
+      : 'No traffic in the window.';
     // A refresh of slack past the window covers any late upload, so a
     // key is only forgotten once nothing can bring it back.
     const cutoff = Date.now() - (Number(minutes) * 60000 + LIVE_INTERVAL_MS);
     const fresh = releaseTraffic(
       packets, !mapState.trafficPrimed, cutoff, LIVE_INTERVAL_MS);
     mapState.trafficPrimed = true;
-    mapState.lastPackets = packets;
+    mapState.lastPackets = shown;
     const direct = traffic.direct_count || 0;
     /*
      * The count is of uploads, not of listeners, and the packet count
@@ -1967,32 +2155,33 @@ PAGES.map = async (page) => {
       `${count(traffic.event_count)} uploads in ${traffic.window_minutes} min, `
       + `${count(direct)} direct, from ${count(packets.length)} packets.`
       + (traffic.truncated ? ` Newest ${count(traffic.returned_count)} shown.` : '')
+      + (filtered ? ` ${count(shown.length)} of the chosen kinds.` : '')
       + (fresh ? ` ${count(fresh)} new.` : '');
     /*
      * One coalesced list, two renderings. The list is updated in place
      * rather than replaced, so a viewer reading a row halfway down the
      * watch panel keeps their place across a refresh.
      */
-    const newest = coalesceFeed(packets.slice().reverse()).slice(0, FEED_ROWS);
-    updateFeed($('[data-traffic-feed]', page), newest, 'No traffic in the window.');
+    const newest = coalesceFeed(shown.slice().reverse()).slice(0, FEED_ROWS);
+    updateFeed($('[data-traffic-feed]', page), newest, nothing);
     replace($('[data-traffic-table]', page),
-      packets.length
-        ? trafficTable(packets.slice().reverse().slice(0, FEED_ROWS))
-        : empty('No traffic in the window.'));
+      shown.length
+        ? trafficTable(shown.slice().reverse().slice(0, FEED_ROWS))
+        : empty(nothing));
     /*
      * The rate chart, raw. The window's row cap is named under it rather
      * than left to be inferred from a short chart, because a row limit
      * must never be what decides how much evidence a reader thinks there
      * is. See AGENTS.md 9.19.
      */
-    drawSparkline($('[data-traffic-spark]', page), packets, traffic.truncated);
+    drawSparkline($('[data-traffic-spark]', page), shown, traffic.truncated);
     $('[data-traffic-spark-note]', page).textContent =
       `Packets a second, 1 s samples, last ${SPARK_SECONDS} s`
       + (traffic.truncated
         ? `. The window returned its newest ${count(traffic.returned_count)} uploads, so anything`
           + ' before those is not drawn rather than drawn as nothing.'
         : '.');
-    updateWatchStatus(page, packets, traffic);
+    updateWatchStatus(page, shown, traffic);
     SonoranWatch.bump('traffic', fresh);
   } else {
     mapState.live.clear();
@@ -2378,73 +2567,7 @@ function graphTabs(page, all) {
  * It draws what the coverage job already computed and predicts nothing
  * itself, so it needs no workers and no engine.
  */
-/** Fill in the embed snippet and say plainly whether it will work.
- *
- * Three separate things can each stop an embed dead, and none of them
- * is visible to somebody who has just pasted an iframe into their site:
- * the feature can be switched off, the page can be published at an
- * address this deployment does not know, and the list of sites allowed
- * to frame it can be empty — which means nobody, not everybody.
- *
- * So the snippet is always shown, because it is what they came for, and
- * whatever would stop it working is stated above it.
- */
-function fillEmbedBox(page) {
-  const box = $('[data-embed-box]', page);
-  if (!box) return;
-  const embed = CONFIG.embed || {};
-  const base = (CONFIG.apiBase || '').replace(/\/$/, '') || window.location.origin;
-  const url = `${base}${embed.path || '/embed/coverage'}`;
-
-  $('[data-embed-snippet]', box).value =
-    `<iframe src="${url}"
-        width="100%" height="520"
-        style="border:0" loading="lazy"
-        title="azmsh.net mesh coverage"></iframe>`;
-  const open = $('[data-embed-open]', box);
-  open.href = url;
-
-  const status = $('[data-embed-status]', box);
-  const ancestors = embed.frameAncestors || [];
-  let note = '';
-  if (!embed.enabled) {
-    note = 'The public embed is switched off, so this address answers 404 for '
-      + 'everybody. Someone who operates the server turns it on, and has to allow '
-      + 'the embed paths at the reverse proxy at the same time.';
-  } else if (!ancestors.length) {
-    note = 'The embed is on, but no site is allowed to frame it, so it will refuse '
-      + 'to load anywhere it is pasted. The sites that may frame it are named on the '
-      + 'server; an empty list means nobody rather than everybody.';
-  } else {
-    note = `Framing is allowed from: ${ancestors.join(', ')}. Pasting it anywhere else `
-      + 'will load a blank box.';
-  }
-  status.textContent = note;
-  status.hidden = false;
-  box.classList.toggle('embed-off', !embed.enabled || !ancestors.length);
-
-  const copy = $('[data-embed-copy]', box);
-  if (!copy.dataset.wired) {
-    copy.dataset.wired = '1';
-    copy.addEventListener('click', async () => {
-      const field = $('[data-embed-snippet]', box);
-      try {
-        await navigator.clipboard.writeText(field.value);
-      } catch {
-        // Clipboard access needs a secure context and a permission that
-        // a browser may simply refuse. Selecting the text still lets
-        // somebody copy it themselves, which is better than a button
-        // that silently did nothing.
-        field.select();
-      }
-      copy.textContent = 'Copied';
-      setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
-    });
-  }
-}
-
 PAGES.coverage = async (page) => {
-  fillEmbedBox(page);
   await window.SonoranCoverage.show(page);
 };
 
@@ -3445,17 +3568,189 @@ PAGES.node = async () => {
 
 /* --- Chat ------------------------------------------------------ */
 
+/** The fragment of one channel's page, in one view. */
+function chatHref(channel, view) {
+  return `#chat/${encodeURIComponent(channel)}${view === 'table' ? '/table' : ''}`;
+}
+
+/*
+ * One channel on the overview.
+ *
+ * "View all" used to expand the list in place, which is not a page: it
+ * could not be linked, and it had no room beside a message for anything
+ * but the message. It opens the channel's own page now. A channel with
+ * no name has nothing to address it by, so it keeps the old list.
+ */
 function channelSection(section) {
+  const named = Boolean(section.channel);
+  const shown = section.messages.slice(0, 5);
   return el('div', { class: 'panel' },
     el('h3', { class: 'channel-head' },
-      el('span', { class: 'title', text: section.label }),
+      named
+        ? el('a', { class: 'title', href: chatHref(section.channel), text: section.label })
+        : el('span', { class: 'title', text: section.label }),
       el('span', { class: 'muted', text: `${count(section.count)} messages - last ${ago(section.last_seen)} ago` })),
-    section.messages.length
-      ? expandingList(section.messages, (message) => messageItem(message), { limit: 5 })
-      : empty('No messages in the window.'));
+    !section.messages.length
+      ? empty('No messages in the window.')
+      : named
+        ? [
+            el('ul', { class: 'messages' }, shown.map((message) => messageItem(message))),
+            section.count > shown.length
+              ? el('p', { class: 'more-wrap' },
+                  el('a', { class: 'more', href: chatHref(section.channel),
+                    text: `Open all ${count(section.count)} messages` }))
+              : null,
+          ]
+        : expandingList(section.messages, (message) => messageItem(message), { limit: 5 }));
+}
+
+/*
+ * One channel's page: `#chat/<channel>`, or `#chat/<channel>/table`.
+ *
+ * It asks for the newest `chatLimit` messages with their delivery
+ * metrics. "Load older" raises the limit rather than paging with a
+ * cursor, so the Live refresh redraws the same rows it was showing
+ * instead of snapping back to the first page. The API stops at 500, and
+ * past that the page says to narrow the window rather than pretend the
+ * list is whole.
+ */
+const CHAT_STEP = 100;
+const CHAT_MAX = 500;
+let currentChatChannel = null;
+let chatView = 'chat';
+let chatLimit = CHAT_STEP;
+
+/** How a message travelled, in a few short facts. */
+function messageMetrics(metrics) {
+  if (!metrics) {
+    return el('dl', { class: 'msg-metrics' },
+      el('dt', { text: 'Record' }), el('dd', { class: 'muted', text: 'no packet stored' }));
+  }
+  const heard = metrics.gateway_count
+    ? `${count(metrics.gateway_count)} gateway${metrics.gateway_count === 1 ? '' : 's'}`
+      + (metrics.direct_gateways ? `, ${count(metrics.direct_gateways)} direct` : '')
+    : 'only its own upload';
+  return el('dl', { class: 'msg-metrics' },
+    el('dt', { text: 'Heard by' }), el('dd', { text: heard }),
+    el('dt', { text: 'Fewest hops' }),
+    el('dd', { text: metrics.fewest_hops == null ? '-' : String(metrics.fewest_hops) }),
+    el('dt', { text: 'Best direct' }),
+    el('dd', {},
+      snrCell(metrics.best_direct_snr),
+      metrics.best_direct_rssi == null ? null : ` ${metrics.best_direct_rssi} dBm`),
+    metrics.want_ack ? el('dt', { text: 'Ack' }) : null,
+    metrics.want_ack ? el('dd', { text: 'asked for' }) : null);
+}
+
+/** The reading view: each message with its metrics beside it. */
+function chatReading(messages) {
+  return el('ul', { class: 'messages chat-reading' }, messages.map((message) => {
+    const item = messageItem(message);
+    const text = el('div', { class: 'msg-text' }, ...item.childNodes);
+    item.append(text, messageMetrics(message.metrics));
+    return item;
+  }));
+}
+
+const METRICS_HINT = 'Gateways count distinct gateways, never uploads, and never the sender '
+  + 'uploading its own packet. Only a gateway that heard it with no hop used measures the '
+  + 'sender\u2019s own signal. Whether an acknowledgement came back is not recorded.';
+
+/** The scanning view: one row per message. */
+function chatTable(messages) {
+  const metric = (message, key) => (message.metrics ? message.metrics[key] : null);
+  return el('div', { class: 'table-wrap' }, table([
+    {
+      label: 'Time',
+      cell: (message) => (message.packet_id == null
+        ? clock(message.seen_at)
+        : el('a', {
+            class: 'linky',
+            href: `#packet/${encodeURIComponent(message.from_node)}/${message.packet_id}`,
+            title: stamp(message.seen_at),
+            text: clock(message.seen_at),
+          })),
+    },
+    { label: 'From', cell: (message) => nodeChip({ node_id: message.from_node, display_name: message.from_name }) },
+    { label: 'Message', wrap: true, cell: (message) => messageBody(message.body) },
+    { label: 'Gateways', num: true, hint: METRICS_HINT, cell: (message) => count(metric(message, 'gateway_count') ?? 0) },
+    { label: 'Direct', num: true, cell: (message) => count(metric(message, 'direct_gateways') ?? 0) },
+    {
+      label: 'Hops',
+      num: true,
+      hint: 'The fewest relays any gateway saw this message use.',
+      cell: (message) => {
+        const hops = metric(message, 'fewest_hops');
+        return hops == null ? '-' : String(hops);
+      },
+    },
+    { label: 'SNR', num: true, cell: (message) => snrCell(metric(message, 'best_direct_snr')) },
+    {
+      label: 'RSSI',
+      num: true,
+      cell: (message) => {
+        const rssi = metric(message, 'best_direct_rssi');
+        return rssi == null ? '-' : `${rssi} dBm`;
+      },
+    },
+    { label: 'Ack', cell: (message) => (metric(message, 'want_ack') ? 'asked' : '-') },
+    {
+      label: 'Reactions',
+      num: true,
+      cell: (message) => count((message.reactions || [])
+        .reduce((sum, reaction) => sum + (reaction.count || 0), 0)),
+    },
+  ], messages, 'No messages in the window.'));
+}
+
+/** Set the page head for the overview or for one channel. */
+function chatHead(page, channel, sub) {
+  $('[data-chat-title]', page).textContent = channel || 'Chat';
+  $('[data-chat-sub]', page).textContent = sub;
+  $('[data-chat-back]', page).hidden = !channel;
+  const views = $('[data-chat-view]', page);
+  views.hidden = !channel;
+  for (const button of $$('[data-chat-view-choice]', views)) {
+    button.setAttribute('aria-pressed', String(button.dataset.chatViewChoice === chatView));
+  }
+}
+
+async function chatChannelPage(page, channel) {
+  const hours = Number($('[data-chat-hours]', page).value || '168');
+  const body = $('[data-chat-body]', page);
+  const since = new Date(Date.now() - hours * 3600000).toISOString();
+  const params = new URLSearchParams({
+    channel, since, limit: String(chatLimit), metrics: 'true',
+  });
+  const messages = await get(`api/chat?${params}`).catch((error) => error);
+  if (messages instanceof Error) return replace(body, failure(messages));
+  const full = messages.length === chatLimit;
+  chatHead(page, channel, full
+    ? `The newest ${count(messages.length)} messages in the window, newest first.`
+    : `${count(messages.length)} messages in the window, newest first.`);
+  const older = full && chatLimit < CHAT_MAX
+    ? el('p', { class: 'more-wrap' },
+        el('button', {
+          class: 'more', type: 'button', text: 'Load older',
+          onclick: () => {
+            chatLimit = Math.min(CHAT_MAX, chatLimit + CHAT_STEP);
+            render('chat');
+          },
+        }))
+    : full
+      ? el('p', { class: 'muted', text: `This page stops at ${CHAT_MAX} messages. Pick a shorter window to see the rest.` })
+      : null;
+  replace(body, el('div', { class: 'panel' },
+    messages.length
+      ? (chatView === 'table' ? chatTable(messages) : chatReading(messages))
+      : empty('No messages on this channel in the window.'),
+    older));
 }
 
 PAGES.chat = async (page) => {
+  if (currentChatChannel) return chatChannelPage(page, currentChatChannel);
+  chatHead(page, null,
+    'One section for each detected channel, grouped by what it is for. New names land in Custom.');
   const hours = $('[data-chat-hours]', page).value || '168';
   const body = $('[data-chat-body]', page);
   const data = await get(`api/chat/overview?hours=${hours}`).catch((error) => error);
@@ -4087,24 +4382,189 @@ function positionMap(target, rows) {
   return true;
 }
 
-/** Build the panels that show what a packet carried. */
-function decodedPanels(decoded) {
+/*
+ * The packet page, by kind.
+ *
+ * What is worth showing depends on what the packet was, and the list is
+ * written down in docs/ARCHITECTURE.md 3.10.1. Each kind shows what the
+ * database stored for it, in its own terms. A kind whose content is not
+ * stored says so, rather than printing an empty box or a dump.
+ */
+
+/* The name of each decoded kind, as the heading of its panel. */
+const DECODED_KIND = {
+  text: 'Message',
+  position: 'Position',
+  neighbors: 'Neighbours it reported',
+  device: 'Device readings',
+  environment: 'Environment readings',
+  air_quality: 'Air quality readings',
+  power: 'Power readings',
+};
+
+/*
+ * How wide the doubt is around a position sent with fewer bits, in
+ * metres. The firmware keeps the top `bits` of each coordinate, so the
+ * cell halves with each bit: 13 bits is about 2.9 km, 16 about 365 m.
+ * 32 bits, and no value at all, both mean a full precision position.
+ */
+function precisionMetres(bits) {
+  if (bits == null || bits >= 32 || bits <= 0) return null;
+  return 23905787.925 / 2 ** bits;
+}
+
+/** One plain sentence that says what this packet was. */
+function packetSentence(packet, decoded) {
+  const from = packet.from_name || packet.from_node;
+  const to = !packet.to_node || packet.to_node === '^all' ? 'everyone' : packet.to_name || packet.to_node;
+  const on = packet.channel ? ` on ${packet.channel}` : '';
+  const kind = decoded && decoded.kind;
+  switch (packet.portnum) {
+    case 'TEXT_MESSAGE_APP': return `A text message from ${from} to ${to}${on}.`;
+    case 'POSITION_APP': return `${from} reporting where it is.`;
+    case 'NODEINFO_APP': return `${from} saying who it is: its name, hardware and role.`;
+    case 'NEIGHBORINFO_APP': return `${from} listing the nodes it can hear directly.`;
+    case 'TRACEROUTE_APP': return `A traceroute from ${from} to ${to}: a request to record the path between them.`;
+    case 'ROUTING_APP': return `A routing message from ${from} to ${to}. It is usually an acknowledgement, or a report that a delivery failed.`;
+    case 'TELEMETRY_APP':
+      return kind && DECODED_KIND[kind]
+        ? `${DECODED_KIND[kind]} from ${from}.`
+        : `Telemetry from ${from}.`;
+    default: return `A ${portnumLabel(packet.portnum).toLowerCase()} packet from ${from} to ${to}${on}.`;
+  }
+}
+
+/* What the page can say about a kind whose content is not stored. */
+const NOT_STORED = {
+  NODEINFO_APP: 'This dashboard keeps only the newest identity of each node, not what each '
+    + 'node-info packet said. The node page shows that identity.',
+  ROUTING_APP: 'This dashboard does not store what a routing packet said, so it cannot show '
+    + 'whether this was an acknowledgement or an error.',
+};
+
+/** A position, with how wide the doubt around it is. */
+function positionValues(row) {
+  const doubt = precisionMetres(row.precision_bits);
+  const entries = [
+    ['Latitude', round(row.latitude, 5)],
+    ['Longitude', round(row.longitude, 5)],
+    row.altitude == null ? null : ['Altitude', `${row.altitude} m`],
+    ['Precision', doubt == null
+      ? 'full'
+      : `about ${doubt >= 1000 ? `${round(doubt / 1000, 1)} km` : `${Math.round(doubt)} m`} `
+        + `(${row.precision_bits} bits). The node chose to send a rounded position.`],
+    row.ground_speed == null ? null : ['Ground speed', `${row.ground_speed} m/s`],
+    row.sats_in_view == null ? null : ['Satellites', String(row.sats_in_view)],
+  ].filter(Boolean);
+  return el('dl', { class: 'kv' }, entries.flatMap(([label, value]) =>
+    [el('dt', { text: label }), el('dd', { text: String(value) })]));
+}
+
+/** The neighbours a node reported, as a table it can be read from. */
+function neighbourValues(rows) {
+  return el('div', { class: 'table-wrap' }, table([
+    {
+      label: 'Neighbour',
+      cell: (row) => {
+        const id = `!${(row.neighbor_node_num >>> 0).toString(16).padStart(8, '0')}`;
+        return nodeChip({ node_id: id, display_name: id });
+      },
+    },
+    {
+      label: 'SNR',
+      num: true,
+      hint: 'How well this node heard that neighbour, as it reported it. This is a measured radio link.',
+      cell: (row) => snrCell(row.snr),
+    },
+  ], rows, 'It reported no neighbours.'));
+}
+
+/** The panels that show what a packet said. */
+function decodedPanels(packet) {
+  const decoded = packet.decoded;
   if (!decoded || !decoded.values || !decoded.values.length) {
     return el('div', { class: 'panel span-2' },
-      el('h3', {}, 'Payload'),
-      empty('No decoded value is stored for this packet.'));
+      el('h3', {}, 'What it said'),
+      NOT_STORED[packet.portnum]
+        ? el('p', {}, NOT_STORED[packet.portnum], ' ',
+            packet.portnum === 'NODEINFO_APP'
+              ? el('button', {
+                  class: 'linky', type: 'button', text: `Open ${packet.from_name || packet.from_node}`,
+                  onclick: () => openNode(packet.from_node),
+                })
+              : null)
+        : packet.portnum === 'TRACEROUTE_APP'
+          ? el('p', { class: 'muted', text: 'The path is below, if this dashboard stored it.' })
+          : empty('No decoded value is stored for this packet.'));
   }
-  const panels = [
-    el('div', { class: 'panel' },
-      el('h3', {}, 'Payload', el('span', { class: 'muted', text: decoded.kind })),
-      el('div', {}, decoded.values.map((row) => decodedValues(row)))),
-  ];
+  const heading = DECODED_KIND[decoded.kind] || 'What it said';
+  if (decoded.kind === 'text') {
+    return el('div', { class: 'panel span-2' },
+      el('h3', {}, heading),
+      decoded.values.map((row) => el('p', { class: 'packet-text' }, messageBody(row.body))));
+  }
   if (decoded.kind === 'position') {
     const holder = el('div', { class: 'chart tall', 'data-position-map': '' });
-    panels.push(el('div', { class: 'panel' },
-      el('h3', {}, 'Reported position'), holder));
+    return [
+      el('div', { class: 'panel' }, el('h3', {}, heading), decoded.values.map(positionValues)),
+      el('div', { class: 'panel' }, el('h3', {}, 'On the map'), holder),
+    ];
   }
-  return panels;
+  if (decoded.kind === 'neighbors') {
+    return el('div', { class: 'panel span-2' }, el('h3', {}, heading), neighbourValues(decoded.values));
+  }
+  // Telemetry: named readings with their units.
+  return el('div', { class: 'panel span-2' },
+    el('h3', {}, heading),
+    decoded.values.map((row) => decodedValues(row)));
+}
+
+/** The envelope: who, to whom, where, and how far it came. */
+function envelopePanel(packet, packetId, observations) {
+  const heard = observations.filter((row) => !row.self_reported && row.hops_taken != null);
+  const fewest = heard.length ? Math.min(...heard.map((row) => row.hops_taken)) : null;
+  const to = !packet.to_node || packet.to_node === '^all' ? 'everyone' : packet.to_name || packet.to_node;
+  return el('div', { class: 'panel' },
+    el('h3', {}, 'Envelope'),
+    el('dl', { class: 'kv' },
+      el('dt', { text: 'From' }), el('dd', {}, nodeChip({ node_id: packet.from_node, display_name: packet.from_name })),
+      el('dt', { text: 'To' }), el('dd', { text: to }),
+      el('dt', { text: 'Channel' }), el('dd', { text: packet.channel || 'unknown' }),
+      el('dt', { text: 'Type' }),
+      el('dd', { title: String(packet.portnum), text: portnumLabel(packet.portnum) }),
+      el('dt', { text: 'Hops allowed' }),
+      el('dd', { text: packet.hop_start == null ? 'unknown' : String(packet.hop_start) }),
+      el('dt', { text: 'Fewest hops used' }),
+      el('dd', { text: fewest == null ? 'unknown' : `${fewest}, by the nearest gateway` }),
+      el('dt', { text: 'Encryption' }),
+      el('dd', { text: packet.pki_encrypted == null
+        ? 'not recorded'
+        : packet.pki_encrypted
+          ? 'the recipient\u2019s public key (PKI), so only it could read it'
+          : 'the channel key' }),
+      el('dt', { text: 'Asked for an ack' }),
+      el('dd', { text: packet.want_ack ? 'yes. Whether one came back is not recorded.' : 'no' }),
+      el('dt', { text: 'First seen' }), el('dd', { text: stamp(packet.first_seen_at) }),
+      el('dt', { text: 'Packet ID' }), el('dd', {}, el('code', { text: String(packetId) })),
+      el('dt', { text: 'Size' }),
+      el('dd', { text: packet.raw_bytes_length == null ? 'unknown' : `${packet.raw_bytes_length} bytes` }),
+      el('dt', { text: 'Priority' }),
+      el('dd', { text: packet.priority == null ? 'default' : String(packet.priority) })));
+}
+
+/*
+ * Everything the API returned for this packet, as it came, behind a
+ * disclosure. The views above are the reading; this is for the person
+ * who wants the fields themselves.
+ */
+function rawPanel(data) {
+  return el('details', { class: 'panel span-2 raw-data' },
+    el('summary', {}, 'Raw data'),
+    el('pre', { text: JSON.stringify({
+      packet: data.packet,
+      gateway_count: data.gateway_count,
+      observations: data.observations,
+    }, null, 2) }));
 }
 
 PAGES.packet = async (page) => {
@@ -4140,35 +4600,26 @@ PAGES.packet = async (page) => {
 
   replace($('[data-packet-title]', page),
     el('h2', { title: String(packet.portnum), text: `${portnumLabel(packet.portnum)} from ${packet.from_name}` }),
-    el('p', { class: 'sub',
-      text: `Packet ${packetId}, ${count(uploads)} uploads from ${count(gateways)} gateways, `
-        + (direct ? `${count(direct)} heard it direct` : 'none heard it direct') }));
+    el('p', { class: 'sub packet-sentence' },
+      packetSentence(packet, packet.decoded), ' ',
+      el('span', { class: 'muted',
+        text: `${count(gateways)} gateways uploaded it, `
+          + (direct ? `${count(direct)} heard it direct.` : 'none heard it direct.') })));
 
+  /*
+   * Who heard it comes first. It is the one thing on this page that no
+   * other page shows for a single packet, and it was at the bottom.
+   */
   const panels = [
-    el('div', { class: 'panel' },
-      el('h3', {}, 'Packet'),
-      el('dl', { class: 'kv' },
-        el('dt', { text: 'Packet ID' }), el('dd', {}, el('code', { text: String(packetId) })),
-        el('dt', { text: 'From' }), el('dd', {}, nodeChip({ node_id: packet.from_node, display_name: packet.from_name })),
-        el('dt', { text: 'To' }), el('dd', { text: packet.to_name || packet.to_node }),
-        el('dt', { text: 'Type' }),
-        el('dd', { text: packet.portnum ? `${portnumLabel(packet.portnum)} (${packet.portnum})` : 'unknown' }),
-        el('dt', { text: 'Channel' }), el('dd', { text: packet.channel || 'unknown' }),
-        el('dt', { text: 'Hop start' }), el('dd', { text: packet.hop_start == null ? 'unknown' : String(packet.hop_start) }),
-        el('dt', { text: 'Hop limit' }), el('dd', { text: packet.hop_limit == null ? 'unknown' : String(packet.hop_limit) }),
-        el('dt', { text: 'Wants ack' }), el('dd', { text: packet.want_ack ? 'yes' : 'no' }),
-        el('dt', { text: 'Priority' }), el('dd', { text: packet.priority == null ? 'default' : String(packet.priority) }),
-        el('dt', { text: 'Size' }), el('dd', { text: packet.raw_bytes_length == null ? 'unknown' : `${packet.raw_bytes_length} bytes` }),
-        el('dt', { text: 'First seen' }), el('dd', { text: stamp(packet.first_seen_at) }))),
     el('div', { class: 'panel span-2' },
-      el('h3', {}, 'Uploaded by',
+      el('h3', {}, 'Who heard it',
         el('span', { class: 'muted',
           text: `${count(gateways)} gateways, ${count(uploads)} uploads, ${count(direct)} direct` })),
       el('p', { class: 'notice' },
         'This is which MQTT gateways uploaded a copy of this packet. It is not '
         + 'which nodes could hear the sender: a node that is not a gateway hears '
         + 'plenty and reports none of it. A gateway that used a hop received the '
-        + 'packet from a relay, so only a direct row measures the sender\u2019s own '
+        + 'packet from a relay, so only a direct row measures the sender’s own '
         + 'link. A sender that gateways its own traffic uploads what it just sent, '
         + 'which is not a radio link at all.'),
       el('div', { class: 'table-wrap' }, table([
@@ -4186,12 +4637,9 @@ PAGES.packet = async (page) => {
       ], data.observations, 'No gateway observation stored.'))),
   ];
 
-  panels.push(...[decodedPanels(packet.decoded)].flat());
-  if (packet.payload_json) {
-    panels.push(el('div', { class: 'panel span-2' },
-      el('h3', {}, 'Raw payload'),
-      el('pre', { text: JSON.stringify(packet.payload_json, null, 2) })));
-  }
+  panels.push(...[decodedPanels(packet)].flat());
+  panels.push(envelopePanel(packet, packetId, data.observations));
+  panels.push(rawPanel(data));
   replace(body, el('div', { class: 'grid two' }, panels));
 
   const mapHolder = $('[data-position-map]', body);
@@ -4470,6 +4918,13 @@ async function route() {
     currentLink = pair(decodeURIComponent(parts[1] || ''), decodeURIComponent(parts[2] || ''));
   }
   if (known === 'traceroute') currentTrace = decodeURIComponent(parts[1] || '') || null;
+  if (known === 'chat') {
+    const channel = decodeURIComponent(parts[1] || '') || null;
+    // A different channel starts from its newest page again.
+    if (channel !== currentChatChannel) chatLimit = CHAT_STEP;
+    currentChatChannel = channel;
+    chatView = parts[2] === 'table' ? 'table' : 'chat';
+  }
   currentNodeId = known === 'node' ? decodeURIComponent(nodeId || '') : currentNodeId;
   const leavingMap = currentPage === 'map' && known !== 'map';
   currentPage = known;
@@ -4497,6 +4952,12 @@ async function route() {
 }
 
 function wire() {
+  wireFamilyFilter();
+  for (const button of $$('[data-chat-view-choice]')) {
+    button.addEventListener('click', () => {
+      if (currentChatChannel) location.hash = chatHref(currentChatChannel, button.dataset.chatViewChoice).slice(1);
+    });
+  }
   for (const button of $$('.toggle')) {
     // A toggle that changes only how the page is drawn carries
     // `data-no-refresh` and wires itself. The Motion toggle is one: it
