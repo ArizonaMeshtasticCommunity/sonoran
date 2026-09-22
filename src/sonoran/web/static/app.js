@@ -2221,8 +2221,33 @@ PAGES.map = async (page) => {
   mapState.lastNodes = nodes;
   const bounds = drawMapNodes(nodes);
   drawMapLegend($('[data-map-legend]', page), nodes);
+  /*
+   * Fit only when fitting would zoom IN. Never when it would zoom out.
+   *
+   * This used to fit to every positioned node, which threw away the
+   * configured view. The mesh is not the shape that assumes: measured
+   * on the live instance, 1260 positioned nodes run from 22.89 N to
+   * 58.50 N and from 137.66 W to 80.08 W, with 148 of them outside
+   * Arizona. Those are MQTT nodes reporting from elsewhere, and
+   * `fitBounds` over that set opens the map on most of North America
+   * with the Arizona mesh a speck in the middle. `maxZoom` did not
+   * help, because it caps zooming in and this is zooming out.
+   *
+   * The configured view is the deployment's own statement of what it
+   * is about, so it becomes the floor rather than a starting point to
+   * be overridden. A deployment whose nodes really do sit in one town
+   * still gets the zoom-in this was added for, and no geography is
+   * hardcoded, so it stays right for a mesh that is not this one.
+   *
+   * Nothing is hidden either way: every node is drawn, and panning or
+   * zooming out reaches them.
+   */
   if (bounds.length && !mapState.fitted) {
-    map.fitBounds(bounds, { padding: [30, 30], maxZoom: 11 });
+    const wanted = CONFIG.mapZoom || 7;
+    const padding = { padding: [30, 30], maxZoom: 11 };
+    // What `fitBounds` would settle on, asked before committing to it.
+    const fitted = map.getBoundsZoom(L.latLngBounds(bounds), false, L.point(30, 30));
+    if (fitted >= wanted) map.fitBounds(bounds, padding);
     mapState.fitted = true;
   }
 

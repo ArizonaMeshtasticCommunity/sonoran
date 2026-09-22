@@ -866,3 +866,34 @@ def test_the_docked_key_and_the_watch_legend_say_the_same_thing() -> None:
     assert "A line from a node to a gateway is an upload, not a radio link." in app
     # The choice is remembered, and refused storage does not break the key.
     assert "localStorage.setItem(MAP_KEY_STORE" in app
+
+
+def test_the_opening_view_is_not_thrown_away_by_an_outlier() -> None:
+    """The live map must not re-fit to every node it has a position for.
+
+    `map_default_lat` / `_lon` / `_zoom` are what the deployment says
+    it is about. The map used to open on them and then `fitBounds` to
+    every positioned node, which is not the shape the data has:
+    measured on the live instance, 1260 positioned nodes ran from
+    22.89 N to 58.50 N and 137.66 W to 80.08 W, 148 of them outside
+    Arizona, because MQTT carries nodes from other meshes. Fitting to
+    that opens the map on most of North America.
+
+    `maxZoom` does not help — it caps zooming in, and this is zooming
+    out. So the fit has to be asked what it would do before it is
+    allowed to do it, and refused when it would widen the view.
+
+    This fails against an unconditional `fitBounds`.
+    """
+    source = _read("app.js")
+    start = source.index("mapState.fitted")
+    window = source[start : start + 1200]
+    assert "getBoundsZoom" in window, (
+        "the live map fit does not ask what zoom it would land on. An "
+        "unconditional fitBounds re-opens the map on every mesh that "
+        "reaches us over MQTT, not on the configured view."
+    )
+    assert "CONFIG.mapZoom" in window, (
+        "the configured zoom is not consulted, so there is no floor to "
+        "refuse a fit against"
+    )
