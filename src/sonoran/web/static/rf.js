@@ -448,15 +448,16 @@
       class: 'rf-mark', title: `${c.label}: ${mhz(c.centre_hz)}, ${c.bandwidth_hz / 1000} kHz`,
       style: `left:${left(c.low_hz)};width:calc(${left(c.high_hz)} - ${left(c.low_hz)})`,
     })));
-    axis.replaceChildren(
-      el('span', { class: 'rf-tick', style: 'left:0', text: mhz(data.f_start_hz) }),
-      el('span', { class: 'rf-tick end', style: 'left:100%', text: mhz(data.f_start_hz + width) }),
-      // Neighbouring presets sit a few hundred kHz apart, so the names
-      // go on two rows, alternating from low to high, and do not overlap.
-      ...inSweep.map((c, index) => el('span', {
-        class: `rf-tick channel${index % 2 ? ' lower' : ''}`, style: `left:${left(c.centre_hz)}`, text: c.name,
-      })));
+    // Neighbouring presets sit a few hundred kHz apart, so the names go
+    // on three rows, in turn from low to high, and do not overlap. The
+    // band's edges are written under the waterfall instead.
+    axis.replaceChildren(...inSweep.map((c, index) => el('span', {
+      class: `rf-tick channel row-${index % 3}`, style: `left:${left(c.centre_hz)}`, text: c.name,
+    })));
     scale.replaceChildren(
+      el('span', { class: 'rf-edges' },
+        el('span', { text: mhz(data.f_start_hz) }),
+        el('span', { text: mhz(data.f_start_hz + width) })),
       el('span', { text: 'quiet' }),
       el('span', { class: 'rf-ramp', style: `background:linear-gradient(to right, ${BAND_RAMP.join(', ')})` }),
       el('span', { text: 'loud, for this station' }),
