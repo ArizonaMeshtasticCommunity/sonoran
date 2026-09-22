@@ -684,36 +684,36 @@ def test_a_reply_counts_its_way_back(migrated_engine, timescale_url: str) -> Non
     """
     now = datetime.now(UTC)
     with migrated_engine.begin() as connection:
-        for node_num in (8901, 8902, 8903):
+        for node_num in (6401, 6402, 6403):
             connection.execute(
                 text(
                     "INSERT INTO node (node_num, node_id, short_name, first_seen, updated_at, "
                     "last_heard) VALUES (:n, :nid, :sn, :now, :now, :now) "
                     "ON CONFLICT (node_num) DO NOTHING"
                 ),
-                {"n": node_num, "nid": f"!{node_num:08x}", "sn": f"R{node_num}", "now": now},
+                {"n": node_num, "nid": f"!{node_num:08x}", "sn": f"W{node_num}", "now": now},
             )
-        # A direct reply: 8901 asked 8902, which answered by way of 8903.
+        # A direct reply: 6401 asked 6402, which answered by way of 6403.
         connection.execute(
             text(
                 "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
                 "request_id, route, route_back, snr_towards, snr_back, seen_at) "
-                "VALUES (8902, 8901, 'MediumSlow', 890001, 890000, CAST('[]' AS jsonb), "
-                "CAST('[8903]' AS jsonb), CAST('[12]' AS jsonb), CAST('[8, 4]' AS jsonb), :now)"
+                "VALUES (6402, 6401, 'LongModerate', 640001, 640000, CAST('[]' AS jsonb), "
+                "CAST('[6403]' AS jsonb), CAST('[12]' AS jsonb), CAST('[8, 4]' AS jsonb), :now)"
             ),
             {"now": now},
         )
 
     app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
     with TestClient(app) as client:
-        links = client.get("/api/graph?hours=24&channel=MediumSlow").json()["links"]
+        links = client.get("/api/graph?hours=24&channel=LongModerate").json()["links"]
         by_pair = {frozenset((link["source"], link["target"])): link for link in links}
-        back = by_pair[frozenset(("!000022c6", "!000022c7"))]
+        back = by_pair[frozenset(("!00001902", "!00001903"))]
         evidence = client.get(
-            "/api/graph/link?a=!000022c6&b=!000022c7&hours=24&channel=MediumSlow"
+            "/api/graph/link?a=!00001902&b=!00001903&hours=24&channel=LongModerate"
         ).json()
 
-    assert sorted(by_pair[frozenset(("!000022c5", "!000022c6"))]["each_way"]) == [0, 1]
+    assert sorted(by_pair[frozenset(("!00001901", "!00001902"))]["each_way"]) == [0, 1]
     assert back["snr"] == 2.0
     assert back["strength"] == "weak"
     assert evidence["report_count"] == 1, "a hop only the way back names still has evidence"
