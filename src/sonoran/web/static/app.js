@@ -231,6 +231,30 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+/*
+ * Tooltip content as a DOM node, for libraries that would take a string
+ * and set `innerHTML` with it.
+ *
+ * Both Leaflet and ECharts do exactly that, and the values we put in a
+ * tooltip include a node's name, which is chosen by whoever owns the
+ * radio. A name of `<img src=x onerror=...>` therefore executed on this
+ * origin. Everything passed here lands through `createTextNode` or
+ * `el({text})`, so markup in a name is shown and never run.
+ *
+ * Pass a string for a plain line, or an element when a line needs
+ * markup of our own. Empty lines are dropped, as the old `.filter`
+ * did, so a node with no hardware model still reads correctly.
+ */
+function tooltipLines(...lines) {
+  const wrap = document.createElement('div');
+  for (const line of lines.flat()) {
+    if (line == null || line === '') continue;
+    if (wrap.childNodes.length) wrap.append(document.createElement('br'));
+    wrap.append(line.nodeType ? line : document.createTextNode(String(line)));
+  }
+  return wrap;
+}
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
@@ -2937,6 +2961,20 @@ PAGES.graph = async (page) => {
     backgroundColor: 'transparent',
     tooltip: {
       backgroundColor: PALETTE.panel, borderColor: PALETTE.line, textStyle: { color: PALETTE.text },
+      /*
+       * Returns a DOM node, never an HTML string.
+       *
+       * ECharts renders a string formatter result with `innerHTML`
+       * (`if (U(t)) o.innerHTML = t + a`), and a node's name is chosen
+       * by whoever owns the radio. Interpolating `display_name` into a
+       * template literal therefore let a name of `<img src=x
+       * onerror=...>` run script on this origin, which also holds Web
+       * Serial for the config page. `tooltipLines` puts every value in
+       * as text, so markup in a name is shown rather than executed.
+       *
+       * ECharts takes an HTMLElement here; the string branch is the
+       * only one that injects.
+       */
       formatter: (item) => {
         if (item.dataType === 'edge') {
           const snr = item.data.snr == null ? 'no SNR' : `${round(item.data.snr, 1)} dB`;
@@ -2945,22 +2983,24 @@ PAGES.graph = async (page) => {
             const node = data.nodes.find((each) => each.node_id === id);
             return node ? (node.short_name || node.display_name) : id;
           });
-          return `${LINK_STRENGTH[item.data.strength] || 'Link'}<br/>`
-            + `${snr}, seen ${item.data.count} times<br/>`
-            + `${ends[0]} → ${ends[1]}: ${count(there)}<br/>`
-            + `${ends[1]} → ${ends[0]}: ${count(back)}<br/>`
-            + `from ${(item.data.kinds || [item.data.kind]).join(' and ')} reports`;
+          return tooltipLines(
+            LINK_STRENGTH[item.data.strength] || 'Link',
+            `${snr}, seen ${item.data.count} times`,
+            `${ends[0]} → ${ends[1]}: ${count(there)}`,
+            `${ends[1]} → ${ends[0]}: ${count(back)}`,
+            `from ${(item.data.kinds || [item.data.kind]).join(' and ')} reports`,
+          );
         }
         const node = item.data.raw;
-        return [
-          `<b>${node.display_name}</b>`,
+        return tooltipLines(
+          el('b', { text: node.display_name }),
           node.node_id,
           // The same words the key uses, so the two agree.
           roleLabel(node.role) + (node.is_mqtt_gateway ? ', gateway' : ''),
           node.hw_model || '',
           `${count(node.packet_count)} packets`,
           `heard ${ago(node.last_heard)} ago`,
-        ].filter(Boolean).join('<br/>');
+        );
       },
     },
     /*

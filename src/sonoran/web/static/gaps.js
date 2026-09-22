@@ -456,6 +456,24 @@
   }
 
   /*
+   * A tooltip as a DOM node, never as a string.
+   *
+   * Leaflet's `_updateContent` does `t.innerHTML = e` when the content
+   * is a string, and a node's name is chosen by whoever owns the radio.
+   * A name of `<img src=x onerror=...>` therefore ran on this origin,
+   * which also holds Web Serial for the config page. Building the node
+   * here means the name lands as text and markup in a name is shown,
+   * not executed. See the security issue for the confirmed sink.
+   *
+   * Leaflet accepts an HTMLElement for exactly this reason.
+   */
+  function nameTooltip(name, verdict) {
+    const wrap = document.createElement('span');
+    wrap.textContent = `${name}: ${verdict}`;
+    return wrap;
+  }
+
+  /*
    * Circles only, and only for a node whose position we can place.
    *
    * A node with a coarse or missing position is NOT drawn, because a
@@ -480,7 +498,10 @@
         fillColor: bad ? '#ef6f5c' : '#8fa6c4',
         fillOpacity: bad ? 0.75 : 0.35,
       })
-        .bindTooltip(`${row.display_name}: ${bad ? 'a fault we can measure' : 'not enough evidence'}`)
+        .bindTooltip(nameTooltip(
+          row.display_name,
+          bad ? 'a fault we can measure' : 'not enough evidence',
+        ))
         .on('click', () => { location.hash = `#node/${row.node_id}`; })
         .addTo(state.markers);
       points.push([row.latitude, row.longitude]);

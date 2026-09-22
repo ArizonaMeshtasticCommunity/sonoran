@@ -119,6 +119,22 @@
     return candidate.method === METHOD_SPLAT ? 'engine' : 'screen only';
   }
 
+  /*
+   * A tooltip as a DOM node, never as a string.
+   *
+   * Leaflet sets `innerHTML` from a string tooltip. Nothing on this
+   * layer carries a node's name today — these lines are counts and
+   * words of our own — so this is not a live hole the way the gaps map
+   * and the graph tooltip were. It is written this way so the rule has
+   * no exception to argue with: a later edit that drops a name into one
+   * of these lines must not silently become a sink.
+   */
+  function textTooltip(line) {
+    const wrap = document.createElement('span');
+    wrap.textContent = line;
+    return wrap;
+  }
+
   /* ------------------------------------------------------- the lead */
 
   function leadSentence(areas) {
@@ -359,7 +375,7 @@
         fill: true,
         fillOpacity: 0.06,
       })
-        .bindTooltip(`Area ${area.area + 1}: ${area.node_count} nodes that want help`)
+        .bindTooltip(textTooltip(`Area ${area.area + 1}: ${area.node_count} nodes that want help`))
         .addTo(state.layer);
     }
 
@@ -370,7 +386,7 @@
         ? 'not judged'
         : `would newly reach ${candidate.newly_usable}`;
       L.marker([candidate.latitude, candidate.longitude], { icon: pin(candidate) })
-        .bindTooltip(`Candidate (${kind}): ${reach} — ${methodWord(candidate)}`)
+        .bindTooltip(textTooltip(`Candidate (${kind}): ${reach} — ${methodWord(candidate)}`))
         .addTo(state.layer);
     }
   }
