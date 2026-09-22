@@ -8,13 +8,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 from starlette.routing import get_route_path
+from starlette.types import Scope
 
 from sonoran import __version__
 from sonoran.api.html import as_script_json
@@ -175,6 +178,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security headers to every response."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # The path below the mount, read BEFORE the request is routed.
+        #
+        # This used to be read after `call_next`, and by then a `Mount`
+        # has rewritten `root_path` in the same scope object. So for
+        # `/static/app.css` the helper returned `/app.css`, the
+        # `startswith("/static")` branch never matched, and **every
+        # static asset was served with no Content-Security-Policy**.
+        # `/` matched and looked right, which is why it went unnoticed.
+        #
+        # Read here, `root_path` is only what `WEB_BASE_PATH` set, which
+        # is the prefix 9.9.2 wants taken off. See that note: the header
+        # decision has to use the routed path, and this is the moment
+        # the routed path means what the note says.
+        path = get_route_path(request.scope)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         # Send the origin, not the full URL, on a cross-origin request.
@@ -187,15 +204,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # carries anyway. The full URL still goes to same-origin requests.
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         settings = request.app.state.settings
-        # The path below the mount, never the raw scope path.
-        #
-        # `scope["path"]` carries the mount prefix when `WEB_BASE_PATH`
-        # is set and the proxy does not strip it. `get_route_path` takes
-        # `root_path` off, and it is the same helper Starlette's own
-        # router uses to match a route — so the header decision and the
-        # route resolution agree by construction rather than by two
-        # copies of the arithmetic.
-        path = get_route_path(request.scope)
         embed = settings.embed_enabled and _is_embed(path)
         if embed:
             # `X-Frame-Options` has no allow list a modern browser reads
@@ -238,7 +246,39 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "frame-ancestors 'none'; "
                 f"frame-src 'self' {frame_source}"
             )
+        if path.startswith("/static"):
+            response.headers["Cache-Control"] = _static_cache_control(request.scope)
         return response
+
+
+# How long a versioned asset may be kept. A year, which is the longest
+# value the specification gives a meaning to.
+_A_YEAR = "public, max-age=31536000, immutable"
+
+# How long an unversioned asset may be kept. Long enough to be worth
+# something across one reading of the dashboard, short enough that a
+# deployment is not invisible to somebody who reached a file directly.
+_A_FEW_MINUTES = "public, max-age=300"
+
+
+def _static_cache_control(scope: Scope) -> str:
+    """Say how long a static file may be kept, from the URL that asked.
+
+    `index.html` asks for every asset with `?v=` and a hash of the
+    file's own bytes (see `_asset_version`), so a changed file is a
+    changed URL and the old one can be kept for ever. That is the whole
+    reason `immutable` is safe here, and it stops the 25 conditional
+    requests a warm load spent revalidating assets that had not moved.
+
+    **The version has to be checked, not assumed.** A file reached
+    without `?v=` — someone's bookmark, a direct link, a tool — has a
+    URL that never changes, so telling a browser to keep it for a year
+    would serve a stale asset until the cache was cleared by hand. Those
+    get a few minutes instead: still useful, and a deploy reaches them.
+    """
+    query = scope.get("query_string", b"")
+    version = parse_qs(query.decode("latin-1")).get("v", [""])[0]
+    return _A_YEAR if version else _A_FEW_MINUTES
 
 
 def _is_embed(path: str) -> bool:
@@ -300,6 +340,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # and ships with the image, so a change to it arrives with a deploy.
     app.state.radio_overrides = load_overrides(settings.radio_overrides_path)
     app.add_middleware(SecurityHeadersMiddleware)
+    # Compress what is worth compressing.
+    #
+    # Nothing was compressed before this, and a cold load moved 2.41 MB
+    # across 25 requests. The text assets are the bulk of it and they
+    # compress hard: 2,023,889 bytes of JavaScript and CSS becomes
+    # 635,575, and `meshtastic-static.js` alone goes from 407,780 to
+    # 27,458 because a protobuf schema is mostly repeated field names.
+    #
+    # `minimum_size` keeps the small JSON answers alone. Below about a
+    # kilobyte the gzip header and the round trip through the compressor
+    # cost more than the bytes saved, and this box has one core.
+    #
+    # Starlette's middleware skips a response that already carries a
+    # `Content-Encoding` and nothing else — it does **not** filter by
+    # content type, so the PNG routes do get re-compressed. That was
+    # measured rather than assumed before being accepted: a real icon
+    # from this directory gives back 2.9% for 0.12 ms, which is not
+    # worth a content-type subclass to avoid, and the coverage tiles are
+    # fetched once per client because they are immutable for a year.
+    #
+    # Level 6, not the library default of 9. On `app.js` the difference
+    # is 77,937 bytes against 77,721 — 0.3% — for 8% more processor
+    # time, and there is one core.
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.include_router(nodes_router)
     app.include_router(node_page_router)
     app.include_router(chat_router)
