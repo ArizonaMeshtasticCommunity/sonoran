@@ -2045,11 +2045,13 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-band { margin-top: 1rem; }
 .rf-band .controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .4rem 0; }
 .rf-band h4 { margin: 1rem 0 .2rem; }
-.rf-axis { position: relative; height: 1.4rem; font-size: .7rem; color: var(--muted); }
+.rf-axis { position: relative; height: 2.4rem; font-size: .7rem; color: var(--muted); }
 .rf-tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .rf-tick:first-child { transform: none; }
 .rf-tick.end { transform: translateX(-100%); }
-.rf-tick.channel { color: var(--text); font-weight: 600; top: .1rem; }
+.rf-tick.channel { color: var(--text); font-weight: 600; top: 0; }
+.rf-tick.channel.lower { top: 1.1rem; }
+.rf-tick.end, .rf-tick:first-child { top: 1.1rem; }
 .rf-waterfall { position: relative; border: 1px solid var(--line); border-radius: .35rem; overflow: hidden; }
 .rf-waterfall canvas {
   display: block; width: 100%; height: min(60svh, 26rem);

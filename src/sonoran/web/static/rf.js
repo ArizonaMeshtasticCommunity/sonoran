@@ -451,7 +451,11 @@
     axis.replaceChildren(
       el('span', { class: 'rf-tick', style: 'left:0', text: mhz(data.f_start_hz) }),
       el('span', { class: 'rf-tick end', style: 'left:100%', text: mhz(data.f_start_hz + width) }),
-      ...inSweep.map((c) => el('span', { class: 'rf-tick channel', style: `left:${left(c.centre_hz)}`, text: c.name })));
+      // Neighbouring presets sit a few hundred kHz apart, so the names
+      // go on two rows, alternating from low to high, and do not overlap.
+      ...inSweep.map((c, index) => el('span', {
+        class: `rf-tick channel${index % 2 ? ' lower' : ''}`, style: `left:${left(c.centre_hz)}`, text: c.name,
+      })));
     scale.replaceChildren(
       el('span', { text: 'quiet' }),
       el('span', { class: 'rf-ramp', style: `background:linear-gradient(to right, ${BAND_RAMP.join(', ')})` }),
@@ -598,7 +602,7 @@
     }
     note.textContent = `${band.station}, ${mhz(band.data.f_start_hz)} to `
       + `${mhz(band.data.f_start_hz + band.data.bins * band.data.bin_hz)}, `
-      + `${band.data.bin_hz / 1000} kHz bins, gain ${band.data.gain_db} dB, newest ${ago(band.data.newest)}`;
+      + `${band.data.bin_hz / 1000} kHz bins, gain ${Number(band.data.gain_db).toFixed(1)} dB, newest ${ago(band.data.newest)}`;
     drawWaterfall(page);
     drawBusy(page);
   }
