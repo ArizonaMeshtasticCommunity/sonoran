@@ -777,11 +777,30 @@
                 The file never leaves the browser. It is read with the
                 File API and parsed here. There is no upload.
               -->
-              <div class="dropzone" data-config-drop>
-                <strong>Drop a config here, or click to choose</strong>
+              <!--
+                A real <label> around a real <input type="file">.
+
+                This used to be a <div> with a click handler, beside an
+                input that was `hidden`. `hidden` takes an element out
+                of the tab order AND out of the accessibility tree, and
+                a div is not focusable either, so step 3 of this page
+                had no keyboard route at all (WCAG 2.1.1, Level A).
+                Walking the tab order found 22 stops and none of them
+                was this control.
+
+                A label gives the click target back for free, and the
+                input keeps its native keyboard behaviour, so no script
+                is needed to open the picker. The input is moved off
+                screen with `.sr-only` rather than `hidden`, because it
+                must still be focusable. Dragging and dropping stays on
+                the label, as an enhancement rather than the only way in.
+              -->
+              <label class="dropzone" data-config-drop>
+                <strong>Drop a config here, or choose one</strong>
                 <span class="muted">Android .cfg, CLI YAML, iOS or web JSON</span>
-              </div>
-              <input type="file" data-config-file accept=".yaml,.yml,.json,.cfg" hidden />
+                <input class="sr-only" type="file" data-config-file
+                       accept=".yaml,.yml,.json,.cfg" />
+              </label>
             </div>
             <div class="panel">
               <h3>Or start from scratch</h3>

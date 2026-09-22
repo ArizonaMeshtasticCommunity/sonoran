@@ -1657,6 +1657,18 @@ td .summary { color: var(--text); }
   display: flex; flex-direction: column; gap: .3rem;
 }
 .dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--panel-2); }
+/*
+ * The file input inside is `.sr-only`, so it is focusable but its own
+ * focus ring is clipped to a 1px box nobody can see. The label wears
+ * the ring instead. Without this the control is reachable by keyboard
+ * and still invisible to use, which trades WCAG 2.1.1 for 2.4.7.
+ */
+.dropzone:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
 .dropzone .muted { font-size: .8rem; }
 
 .checks { display: flex; flex-direction: column; gap: .35rem; }

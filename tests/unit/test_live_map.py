@@ -896,3 +896,47 @@ def test_the_opening_view_is_not_thrown_away_by_an_outlier() -> None:
     assert "CONFIG.mapZoom" in window, (
         "the configured zoom is not consulted, so there is no floor to refuse a fit against"
     )
+
+
+def test_the_config_file_control_can_take_focus() -> None:
+    """#128. Step 3 of the config page had no keyboard route (WCAG 2.1.1 A).
+
+    It was a `<div>` with a click handler beside an `<input
+    type="file" hidden>`. `hidden` takes an element out of the tab
+    order *and* the accessibility tree, and a div is not focusable, so
+    walking the page found 22 stops and none of them was this control.
+
+    A `<label>` gives the click target back natively, and `.sr-only`
+    keeps the input off screen while leaving it focusable. Fails
+    against the hidden input.
+    """
+    html = _read("index.html")
+    start = html.index("data-config-drop")
+    block = html[start - 400 : start + 900]
+    assert "<label" in block, "the dropzone is not a label, so it has no native control"
+    assert (
+        'type="file" data-config-file' in block.replace("\n", " ").replace("  ", " ")
+        or "data-config-file" in block
+    ), "the file input is not inside the label"
+    control = block[block.index("data-config-file") - 200 : block.index("data-config-file") + 120]
+    assert "hidden" not in control, (
+        "the file input is still `hidden`, which removes it from the tab "
+        "order and the accessibility tree"
+    )
+    assert "sr-only" in control, (
+        "the file input should be moved off screen with .sr-only, which "
+        "leaves it focusable, rather than hidden"
+    )
+
+
+def test_the_dropzone_shows_focus() -> None:
+    """A control you can reach and cannot see is not an improvement.
+
+    The input is `.sr-only`, so its own ring is clipped to a 1px box.
+    The label wears it instead, or we trade WCAG 2.1.1 for 2.4.7.
+    """
+    css = _read("app.css")
+    assert ".dropzone:focus-within" in css, (
+        "nothing gives the dropzone a visible focus state, so the file "
+        "control is reachable by keyboard and invisible to use"
+    )

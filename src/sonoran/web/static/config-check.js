@@ -336,7 +336,8 @@ function wire(page) {
   input.addEventListener('change', () => loadFile(page, input.files[0]));
 
   const drop = $('[data-config-drop]', page);
-  drop.addEventListener('click', () => input.click());
+  // No click forwarding: the label does that natively now, and calling
+  // `input.click()` from inside a label opens the picker twice.
   drop.addEventListener('dragover', (event) => {
     event.preventDefault();
     drop.classList.add('over');
