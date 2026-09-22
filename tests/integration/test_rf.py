@@ -16,15 +16,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from sonoran.api.app import create_app
 from sonoran.config import Settings
-from sonoran.rf.schema import Batch, Status
-from sonoran.rf.store import Rules, Tally, store_batch, store_status
+from sonoran.rf.schema import Batch, Spectrum, Status
+from sonoran.rf.store import Rules, Tally, store_batch, store_spectrum, store_status
 from tests.integration.conftest import role_url
 
 
 @pytest.fixture
 def clean(migrated_engine):  # type: ignore[no-untyped-def]
     with migrated_engine.begin() as connection:
-        connection.execute(text("TRUNCATE rf_station, rf_track, rf_heard, rf_latest"))
+        connection.execute(text("TRUNCATE rf_station, rf_track, rf_heard, rf_latest, rf_spectrum"))
     yield
 
 
@@ -213,4 +213,93 @@ def test_rf_never_counts_as_meshtastic(timescale_url: str, migrated_engine, clea
         kinds = client.get("/api/rf/kinds").json()
     for key in ("node_count", "packet_count", "observation_count", "gateway_count"):
         assert after[key] == before[key], key
-    assert kinds == {"known": ["adsb", "uat", "aprs", "sonde", "ism"], "stored": ["adsb", "uat"]}
+    assert kinds == {
+        "known": ["adsb", "uat", "aprs", "sonde", "ism"],
+        "stored": ["adsb", "uat"],
+        "views": ["spectrum"],
+    }
+
+
+def _minute(
+    station: str, when: datetime, p50: list[int | None], busy: list[int | None]
+) -> Spectrum:
+    return Spectrum.model_validate(
+        {
+            "v": 1,
+            "station": station,
+            "kind": "spectrum",
+            "t": when,
+            "f_start_hz": 902_000_000,
+            "bin_hz": 50_000,
+            "sweeps": 12,
+            "gain_db": 32.8,
+            "p50": p50,
+            "p95": [None if v is None else v + 40 for v in p50],
+            "peak": [None if v is None else v + 90 for v in p50],
+            "busy": busy,
+        }
+    )
+
+
+async def _write_spectrum(timescale_url: str, *minutes: Spectrum) -> list[bool]:
+    engine = create_async_engine(role_url(timescale_url, "azmsh_ingest"))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    stored: list[bool] = []
+    try:
+        for minute in minutes:
+            async with factory() as session:
+                stored.append(await store_spectrum(session, minute, datetime.now(UTC), Rules()))
+                await session.commit()
+    finally:
+        await engine.dispose()
+    return stored
+
+
+def test_a_minute_of_the_band_is_stored_once_by_the_ingest_role(  # type: ignore[no-untyped-def]
+    timescale_url: str, migrated_engine, clean: None
+) -> None:
+    """The ingest role can write it, not read it, and a repeat is ignored."""
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    first = _minute("west-site", now + timedelta(seconds=7), [-500, -490, None], [1, 50, None])
+    stored = asyncio.run(_write_spectrum(timescale_url, first, first))
+    assert stored == [True, False]
+    with migrated_engine.begin() as connection:
+        minute, p50 = connection.execute(text("SELECT t, p50 FROM rf_spectrum")).one()
+    assert minute == now, "floored to the minute"
+    assert p50 == [-500, -490, None], "an unswept bin stays NULL"
+
+
+def test_the_spectrum_api_buckets_a_long_window_and_keeps_bursts(  # type: ignore[no-untyped-def]
+    timescale_url: str, migrated_engine, clean: None
+) -> None:
+    """A day is sent as at most 240 rows, and a burst is never averaged away."""
+    # Inside the ten minutes the clock guard trusts. An older stamp is a
+    # clock fault and is stored at the minute it arrived (design 5.3).
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    minutes = [
+        _minute("west-site", now - timedelta(minutes=i), [-500, -500, -500], [0, 0, 0])
+        for i in range(8)
+    ]
+    # One loud minute on bin 1, inside what will be one bucket.
+    minutes[3] = _minute("west-site", now - timedelta(minutes=3), [-500, -300, -500], [0, 80, 0])
+    asyncio.run(_write_spectrum(timescale_url, *minutes))
+    with _client(timescale_url) as client:
+        hour = client.get("/api/rf/spectrum/west-site?hours=1").json()
+        day = client.get("/api/rf/spectrum/west-site?hours=24").json()
+        channels = client.get("/api/rf/channels").json()
+        stations = client.get("/api/rf/stations").json()
+        refused = client.get("/api/rf/spectrum/NOT_A_STATION")
+    assert hour["bucket_minutes"] == 1
+    assert len(hour["rows"]) == 8
+    assert hour["bins"] == 3 and hour["f_start_hz"] == 902_000_000
+    assert day["bucket_minutes"] == 6
+    assert len(day["rows"]) <= 3
+    loud = max(day["rows"], key=lambda row: row["p95"][1])
+    assert loud["p95"][1] == -260, "the highest 95th percentile in the bucket is kept"
+    assert loud["p50"][1] == -500, "the median of the medians ignores one loud minute"
+    by_name = {item["name"]: item for item in channels["channels"]}
+    assert by_name["LongFast"]["centre_hz"] == 906_875_000
+    assert refused.status_code == 422
+    # The station has no heartbeat, so it is not listed; spectrum alone
+    # does not invent a station.
+    assert all(item["station"] != "west-site" for item in stations)

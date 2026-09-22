@@ -2035,3 +2035,30 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* The theme control in the nav (#50). */
 .theme-switch { display: flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--muted); padding: .4rem .75rem; }
 .theme-switch select { font-size: .82rem; }
+
+/*
+ * The 900 MHz band on the RF page (design 7.4). The waterfall is a
+ * canvas one pixel per bin and per row, stretched to the panel and kept
+ * sharp. Our channels are outlined over it, never filled, so the level
+ * under a mark stays readable.
+ */
+.rf-band { margin-top: 1rem; }
+.rf-band .controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .4rem 0; }
+.rf-band h4 { margin: 1rem 0 .2rem; }
+.rf-axis { position: relative; height: 1.4rem; font-size: .7rem; color: var(--muted); }
+.rf-tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.rf-tick:first-child { transform: none; }
+.rf-tick.end { transform: translateX(-100%); }
+.rf-tick.channel { color: var(--text); font-weight: 600; top: .1rem; }
+.rf-waterfall { position: relative; border: 1px solid var(--line); border-radius: .35rem; overflow: hidden; }
+.rf-waterfall canvas {
+  display: block; width: 100%; height: min(60svh, 26rem);
+  image-rendering: pixelated; image-rendering: crisp-edges;
+}
+.rf-marks { position: absolute; inset: 0; pointer-events: none; }
+.rf-mark {
+  position: absolute; top: 0; bottom: 0; min-width: 2px;
+  border-left: 1px dashed rgb(255 255 255 / .75); border-right: 1px dashed rgb(255 255 255 / .75);
+}
+.rf-scale { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .75rem; margin-top: .35rem; }
+.rf-ramp { display: inline-block; width: 8rem; height: .6rem; border-radius: 999px; }
