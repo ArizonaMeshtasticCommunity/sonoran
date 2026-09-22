@@ -258,7 +258,7 @@ def test_element_heights_use_the_small_viewport() -> None:
     without_comments = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     stray = re.findall(r"(?<![sld])\b\d+vh\b", without_comments)
     assert not stray, f"plain vh left: {stray}"
-    assert "min(70svh, 40rem)" in css
+    assert "max(20rem, 70svh)" in css
 
 
 def test_no_hint_lives_only_in_a_tooltip() -> None:

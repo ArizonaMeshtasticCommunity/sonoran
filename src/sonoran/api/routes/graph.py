@@ -9,7 +9,7 @@ configuration, so a node on LongFast cannot hear a node on MediumFast.
 Drawing them together would show links that cannot exist.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -28,6 +28,7 @@ from sonoran.api.traces import (
     evidenced_hops,
     forward_path,
     is_reply,
+    return_path,
 )
 from sonoran.db.models import NeighborMetrics, Node, Packet, PacketSeen, Traceroute
 from sonoran.positions import clean
@@ -37,12 +38,35 @@ router = APIRouter(prefix="/api/graph", tags=["graph"])
 NEIGHBOR_KIND = "neighbor"
 TRACEROUTE_KIND = "traceroute"
 
+# How much evidence a link needs before the graph trusts it. See #73.
+#
+# Below WEAK_LINK_SAMPLES reports in total a link is weak: it happened,
+# but too rarely to say it is usable. Past that a link is two-way when
+# packets crossed it at least TWO_WAY_MIN_SAMPLES times in each
+# direction, and one-way when one direction falls short of that.
+WEAK_LINK_SAMPLES = 10
+TWO_WAY_MIN_SAMPLES = 3
+
+WEAK = "weak"
+ONE_WAY = "one_way"
+TWO_WAY = "two_way"
+
 __all__ = ["SNR_SCALE", "UNKNOWN_SNR", "router"]
 
 
 @dataclass
 class Edge:
-    """One link between two nodes."""
+    """One link between two nodes.
+
+    `source` and `target` give the direction the first report saw the
+    packet travel: `target` heard `source`. Later reports can run
+    either way, and `forward` and `backward` count them, from the
+    point of view of the first.
+
+    A neighbor report and a traceroute hop are the same kind of
+    evidence, one packet heard across the link, so they count alike.
+    Neither outranks the other (#73).
+    """
 
     source: int
     target: int
@@ -61,6 +85,21 @@ class Edge:
     # one way. Such links are true but weaker, and a page may want to
     # tell them apart.
     confirmed: bool = True
+    forward: int = 1
+    backward: int = 0
+    kinds: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        self.kinds.add(self.kind)
+
+    @property
+    def strength(self) -> str:
+        """Return how well the evidence supports this link."""
+        if self.forward + self.backward < WEAK_LINK_SAMPLES:
+            return WEAK
+        if min(self.forward, self.backward) < TWO_WAY_MIN_SAMPLES:
+            return ONE_WAY
+        return TWO_WAY
 
     def as_json(self) -> dict[str, object]:
         """Return the public form of this link."""
@@ -71,6 +110,9 @@ class Edge:
             "snr": self.snr,
             "count": self.count,
             "confirmed": self.confirmed,
+            "kinds": sorted(self.kinds),
+            "each_way": [self.forward, self.backward],
+            "strength": self.strength,
             "time": self.time,
         }
 
@@ -113,16 +155,45 @@ def _add(edges: EdgeMap, edge: Edge) -> None:
         edges[key] = edge
         return
     known.count += 1
+    if edge.source == known.source:
+        known.forward += 1
+    else:
+        known.backward += 1
+    known.kinds.add(edge.kind)
     known.confirmed = known.confirmed or edge.confirmed
     if edge.snr is not None and (known.snr is None or edge.time > known.time):
         known.snr = edge.snr
         known.time = max(known.time, edge.time)
 
 
+def _merge(edges: EdgeMap, edge: Edge) -> None:
+    """Fold one already counted link into another map of links."""
+    if not (_is_node(edge.source) and _is_node(edge.target)):
+        return
+    key = _key(edge.source, edge.target)
+    known = edges.get(key)
+    if known is None:
+        edges[key] = edge
+        return
+    same = edge.source == known.source
+    known.count += edge.count
+    known.forward += edge.forward if same else edge.backward
+    known.backward += edge.backward if same else edge.forward
+    known.kinds |= edge.kinds
+    known.confirmed = known.confirmed or edge.confirmed
+    if edge.snr is not None and (known.snr is None or edge.time > known.time):
+        known.snr = edge.snr
+    known.time = max(known.time, edge.time)
+
+
 async def _neighbor_edges(
     session: AsyncSession, since: datetime, limit: int, channel: str | None
 ) -> EdgeMap:
-    """Return the links that recent neighbor reports show on one channel."""
+    """Return the links that recent neighbor reports show on one channel.
+
+    A node names the neighbours it hears, so the packet each report
+    measures travelled from the neighbour to the node that reports it.
+    """
     statement = (
         select(NeighborMetrics)
         .where(NeighborMetrics.time >= since, channel_filter(NeighborMetrics.channel, channel))
@@ -137,8 +208,8 @@ async def _neighbor_edges(
         _add(
             edges,
             Edge(
-                source=row.node_num,
-                target=row.neighbor_node_num,
+                source=row.neighbor_node_num,
+                target=row.node_num,
                 kind=NEIGHBOR_KIND,
                 snr=row.snr,
                 time=row.time,
@@ -153,19 +224,30 @@ def _trace_links(row: Traceroute) -> list[tuple[int, int, float | None, int, int
     Each item holds the two ends, the reading, the position of the hop,
     and how many hops the whole path claims.
 
+    A reply carries its way back as well, and each hop of it is a packet
+    heard in the other direction. Those follow the outward hops, with
+    their own positions along the return path.
+
     The graph and the link page both read a row through this one
     function. They used to hold a copy each, and the copies disagreed:
     the graph drew links that the link page could then find no evidence
     for. See `sonoran.api.traces` for the three rules that apply.
     """
-    path = forward_path(row)
-    hops, _ = evidenced_hops(path, list(row.snr_towards or []))
-    claimed = max(len(path) - 1, 0)
-    return [
-        (source, target, snr, index + 1, claimed)
-        for index, (source, target, snr) in enumerate(hops)
-        if source != target
-    ]
+    links: list[tuple[int, int, float | None, int, int]] = []
+    for path, readings in (
+        (forward_path(row), row.snr_towards),
+        (return_path(row), row.snr_back),
+    ):
+        if len(path) < 2:
+            continue
+        hops, _ = evidenced_hops(path, list(readings or []))
+        claimed = len(path) - 1
+        links.extend(
+            (source, target, snr, index + 1, claimed)
+            for index, (source, target, snr) in enumerate(hops)
+            if source != target
+        )
+    return links
 
 
 async def _traceroute_edges(
@@ -340,7 +422,8 @@ async def graph_channels(
 def _mentions(node: int) -> ColumnElement[bool]:
     """Return the filter that selects the traceroutes naming one node.
 
-    A node appears as an end of the trace or as a hop inside its route.
+    A node appears as an end of the trace or as a hop inside its route,
+    either way: a reply's way back is evidence too (#73).
 
     This filter has to exist. Without it the query took the newest rows
     and hoped the link was among them, while the graph read four times
@@ -353,6 +436,7 @@ def _mentions(node: int) -> ColumnElement[bool]:
         Traceroute.from_node_num == node,
         Traceroute.to_node_num == node,
         Traceroute.route.cast(JSONB).contains([node]),
+        Traceroute.route_back.cast(JSONB).contains([node]),
     )
 
 
@@ -466,8 +550,10 @@ async def mesh_graph(
 ) -> dict[str, object]:
     """Return the mesh of one channel as nodes and links.
 
-    A neighbor link replaces a traceroute link between the same two
-    nodes. The neighbor report carries a measured SNR.
+    Neighbor reports and traceroute hops between the same two nodes add
+    up to one link. Each link says how strong its evidence is: `weak`
+    with few reports at all, `one_way` when packets crossed it mostly in
+    one direction, and `two_way` when they crossed it both ways.
 
     The `channel` parameter selects the preset. Without it the response
     holds every channel together. Nodes of different presets cannot hear
@@ -475,7 +561,8 @@ async def mesh_graph(
     """
     since = datetime.now(UTC) - timedelta(hours=hours)
     edges = await _traceroute_edges(session, since, limit, channel)
-    edges.update(await _neighbor_edges(session, since, limit, channel))
+    for edge in (await _neighbor_edges(session, since, limit, channel)).values():
+        _merge(edges, edge)
 
     node_nums: set[int] = set()
     for edge in edges.values():

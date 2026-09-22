@@ -202,7 +202,13 @@ async def top_talkers(
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
-    """Return top packet senders in the selected time window."""
+    """Return top packet senders in the selected time window.
+
+    Each row also carries `air_util_tx`: the node's own average share of
+    air time spent sending, from its device telemetry. On a shared
+    channel a busy sender is a cost to everybody else, and the page says
+    so beside the count (#60). None when the node reports no telemetry.
+    """
     start = datetime.now(UTC) - timedelta(hours=hours)
     rows = (
         await session.execute(
@@ -213,15 +219,35 @@ async def top_talkers(
             .limit(limit)
         )
     ).all()
-    names = await resolve_names(session, (row.from_node_num for row in rows))
+    senders = [row.from_node_num for row in rows]
+    air: dict[int, float | None] = {
+        node: value
+        for node, value in (
+            await session.execute(
+                select(DeviceMetrics.node_num, func.avg(DeviceMetrics.air_util_tx))
+                .where(
+                    DeviceMetrics.node_num.in_(senders),
+                    DeviceMetrics.time >= start,
+                    DeviceMetrics.air_util_tx.is_not(None),
+                )
+                .group_by(DeviceMetrics.node_num)
+            )
+        ).all()
+    }
+    names = await resolve_names(session, senders)
     return [
         {
             "node_id": format_node_id(row.from_node_num),
             "display_name": name_of(names, row.from_node_num),
             "packet_count": row.total,
+            "air_util_tx": _rounded_or_none(air.get(row.from_node_num)),
         }
         for row in rows
     ]
+
+
+def _rounded_or_none(value: float | None) -> float | None:
+    return None if value is None else round(float(value), 2)
 
 
 @router.get("/reliability/{node_id}")

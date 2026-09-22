@@ -26,6 +26,24 @@
  */
 :root {
   color-scheme: dark;
+  /*
+   * Semantic status, one set for the whole site (#49). The node health
+   * cards and the gaps signals both draw from it. `unknown` is its own
+   * colour and never the good one: not measured is not fine.
+   */
+  --status-ok: var(--good);
+  --status-warn: var(--warn);
+  --status-bad: var(--bad);
+  --status-unknown: var(--role-stale);
+  /* A second accent, for "a different kind of thing" (#49). */
+  --accent-2: var(--map-link);
+  /* Text on an accent fill, and the translucent box over a map. */
+  --on-accent: #1b1109;
+  --overlay: rgb(34 24 17 / .92);
+  /* The fade that says a table scrolls sideways. `--panel-clear` is the
+   * panel colour at zero alpha, so the fade has nothing to blend into. */
+  --panel-clear: rgb(34 24 17 / 0);
+  --scroll-shadow: rgb(0 0 0 / .62);
   --bg: #17100b;
   --panel: #221811;
   --panel-2: #2f2219;
@@ -411,7 +429,7 @@ button { cursor: pointer; }
  */
 a, button, summary, [role="tab"], .chip, .legend-key { touch-action: manipulation; }
 button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #06121e; font-weight: 600; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 
 .linky {
@@ -533,10 +551,10 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--a
 .table-wrap {
   overflow-x: auto;
   background:
-    linear-gradient(to right, var(--panel), rgb(34 24 17 / 0)) left center / 2rem 100% no-repeat local,
-    linear-gradient(to left, var(--panel), rgb(34 24 17 / 0)) right center / 2rem 100% no-repeat local,
-    linear-gradient(to right, rgb(0 0 0 / .62), rgb(0 0 0 / 0)) left center / 1.1rem 100% no-repeat scroll,
-    linear-gradient(to left, rgb(0 0 0 / .62), rgb(0 0 0 / 0)) right center / 1.1rem 100% no-repeat scroll;
+    linear-gradient(to right, var(--panel), var(--panel-clear)) left center / 2rem 100% no-repeat local,
+    linear-gradient(to left, var(--panel), var(--panel-clear)) right center / 2rem 100% no-repeat local,
+    linear-gradient(to right, var(--scroll-shadow), rgb(0 0 0 / 0)) left center / 1.1rem 100% no-repeat scroll,
+    linear-gradient(to left, var(--scroll-shadow), rgb(0 0 0 / 0)) right center / 1.1rem 100% no-repeat scroll;
 }
 /* A scrollable region is a tab stop, so it needs a ring like any other. */
 .table-wrap[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -654,7 +672,8 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 /* `svh` and not `vh`: see the note on `.shell`. `vh` is the LARGE
    viewport, so on a phone with the address bar showing it is taller
    than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
-#map { height: min(70svh, 40rem); background: var(--panel-2); }
+/* No rem ceiling, for the same reason as #planner-map (#70). */
+#map { height: max(20rem, 70svh); background: var(--panel-2); }
 /*
  * A panel that floats over the map.
  *
@@ -1105,8 +1124,10 @@ body.watch-mode { overflow: hidden; }
 }
 .legend .line.dashed { border-top-style: dashed; }
 .legend .line.dotted { border-top-style: dotted; border-color: var(--role-stale); }
-/* A hop a traceroute really made, that no reply confirmed. */
-.legend .line.faint { border-top-style: dashed; opacity: .45; }
+/* The graph's link strengths. Weak is dotted, a link the mesh
+ * reported no signal reading for is grey. */
+.legend .line.weak { border-top-style: dotted; }
+.legend .line.grey { border-top-color: var(--role-stale); }
 /*
  * The three live line kinds. These classes were already in the legend
  * markup and had no rules at all, so all three drew as the same muted
@@ -1474,8 +1495,11 @@ td .summary { color: var(--text); }
 
 /* `svh` and not `vh`: see the note on `.shell`. `vh` is the LARGE
    viewport, so on a phone with the address bar showing it is taller
-   than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
-#planner-map { height: min(62svh, 34rem); background: var(--panel-2); }
+   than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size
+   The map follows the screen with no upper cap: a fixed rem ceiling left
+   it a short strip on a 4K monitor (#70). The floor keeps it usable on a
+   short window. */
+#planner-map { height: max(24rem, 80svh); background: var(--panel-2); }
 
 .planner-form h3 { margin: 1.1rem 0 .5rem; }
 .planner-form h3:first-child { margin-top: 0; }
@@ -1600,9 +1624,9 @@ div.check { cursor: default; }
 /* `svh` and not `vh`: see the note on `.shell`. `vh` is the LARGE
    viewport, so on a phone with the address bar showing it is taller
    than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
-#coverage-map { height: min(70svh, 40rem); width: 100%; }
+#coverage-map { height: max(20rem, 70svh); width: 100%; }
 /* The RF page. Same map height as coverage. */
-#rf-map { height: min(70svh, 40rem); width: 100%; }
+#rf-map { height: max(20rem, 70svh); width: 100%; }
 .rf-notice { margin: 0 0 .5rem; }
 [data-page="rf"] .map-shell { margin: .5rem 0; }
 .rf-tip { display: grid; gap: .1rem; font-size: .8rem; }
@@ -1720,7 +1744,7 @@ div.check { cursor: default; }
 .coverage-layers button[aria-pressed="true"] {
   background: var(--accent);
   border-color: var(--accent);
-  color: #1b1109;
+  color: var(--on-accent);
   font-weight: 600;
 }
 .coverage-layers button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1730,7 +1754,7 @@ div.check { cursor: default; }
   right: .75rem;
   bottom: .75rem;
   z-index: 500;
-  background: rgba(34, 24, 17, .92);
+  background: var(--overlay);
   border: 1px solid var(--line);
   border-radius: .5rem;
   padding: .55rem .7rem;
@@ -1842,3 +1866,172 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0 0 .7rem; }
 .chip-drop { display: inline-flex; align-items: baseline; gap: .1rem; }
 .chip-drop:hover { border-color: var(--bad); color: var(--text); }
+
+/*
+ * Node health cards (#52) and the potential issues panel (#56).
+ *
+ * The state is said three ways: a word, a shape, and a colour. Colour is
+ * never the only one (WCAG 1.4.1), so the cards read in greyscale. An
+ * unknown card is grey and never green: nothing measured is not healthy.
+ */
+.health-cards {
+  display: grid; gap: .75rem; margin-bottom: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
+}
+.health-card {
+  --state: var(--role-stale);
+  background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--state);
+  border-radius: .6rem; padding: .8rem .9rem; display: flex; flex-direction: column; gap: .3rem;
+}
+.health-card.state-ok, .issue.state-ok { --state: var(--good); }
+.health-card.state-warn, .issue.state-warn { --state: var(--warn); }
+.health-card.state-bad, .issue.state-bad { --state: var(--bad); }
+.health-card.state-unknown, .issue.state-unknown { --state: var(--role-stale); }
+.health-card.state-none { --state: var(--line); }
+.health-head { display: flex; align-items: center; gap: .5rem; }
+.health-head h4 { margin: 0; font-size: .95rem; }
+.health-glyph {
+  display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; flex: none;
+  border: 2px solid var(--state); color: var(--state); font-weight: 700; font-size: .85rem;
+}
+/* A different outline for each state, so the shape carries it too. */
+.state-ok .health-glyph { border-radius: 50%; }
+.state-warn .health-glyph { border-radius: .2rem; border-style: double; border-width: 3px; }
+.state-bad .health-glyph { border-radius: .15rem; }
+.state-unknown .health-glyph { border-radius: 50%; border-style: dashed; }
+.health-state { margin: 0; font-weight: 650; color: var(--state); }
+.state-unknown .health-state { color: var(--muted); }
+.health-measure { margin: 0; }
+.health-green { margin: 0; font-size: .8rem; }
+.health-card .linky { align-self: flex-start; font-size: .82rem; }
+
+.issue-preset + .issue-preset { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: .75rem; }
+.issue-preset h4 { margin: 0 0 .25rem; }
+.issues { list-style: none; margin: .5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+.issue { border-left: 3px solid var(--state); padding: .35rem .7rem; background: var(--panel-2); border-radius: .35rem; }
+.issue p { margin: .3rem 0; }
+.issue-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.issue-head .health-glyph { width: 1.2rem; height: 1.2rem; font-size: .7rem; }
+.issue-state { margin-left: auto; font-size: .8rem; color: var(--state); font-weight: 600; }
+.issue.state-unknown .issue-state { color: var(--muted); }
+.issue details summary { cursor: pointer; font-size: .8rem; color: var(--muted); }
+
+/* Route widgets (#55). */
+.route-tiles {
+  display: grid; gap: .75rem; margin-bottom: .6rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+}
+.route-tile { display: flex; flex-direction: column; gap: .2rem; background: var(--panel-2); border-radius: .45rem; padding: .7rem .8rem; }
+.route-tile .label { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+.route-tile .value { font-size: 1.5rem; font-weight: 650; }
+.route-tile .muted { font-size: .8rem; }
+
+/* The charts sit in their own grid so each one keeps a whole cell. */
+.history-grid { margin: 0; grid-column: 1 / -1; }
+.timeline .controls { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
+
+/*
+ * The key docked on the live map (#46). It is the same content as the
+ * watch legend, so it takes the same look. Watch mode has its own
+ * legend, so the docked key steps aside there.
+ */
+.map-key {
+  background: color-mix(in srgb, var(--panel) 95%, transparent);
+  border: 1px solid var(--line); border-radius: .5rem;
+  max-width: min(18rem, calc(100vw - 5rem)); font-size: .76rem;
+  backdrop-filter: blur(6px);
+}
+.map-key summary { cursor: pointer; padding: .35rem .7rem; font-weight: 600; color: var(--text); }
+.map-key-body {
+  display: flex; flex-direction: column; gap: .45rem;
+  padding: 0 .7rem .6rem; max-height: min(42svh, 20rem); overflow: auto;
+}
+.map-key h4 { margin: .2rem 0 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.map-key p { margin: 0; }
+.map-key .legend { margin: 0; }
+.map-shell.watch .map-key { display: none; }
+
+/* Leaderboards (#60). The wrapper is not a panel, so it takes the
+ * whole row itself; `.panel.span-2` would not reach it. */
+.leaderboards-wrap { grid-column: 1 / -1; }
+.section-head { margin: .5rem 0 .6rem; font-size: 1rem; }
+.leaderboard p { margin: 0 0 .5rem; font-size: .82rem; }
+.board { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: .35rem; }
+.board li { display: grid; grid-template-columns: 1fr auto; gap: 0 .6rem; }
+.board .value { font-weight: 650; text-align: right; }
+.board .detail { grid-column: 1 / -1; font-size: .78rem; }
+.leaderboard details summary { cursor: pointer; font-size: .8rem; color: var(--muted); }
+
+/*
+ * The light theme (#50).
+ *
+ * The page sets `data-theme` before it paints, from the reader's choice
+ * or, when the choice is "follow the system", from
+ * `prefers-color-scheme`. See the script at the top of index.html. So
+ * one block holds every light value, and a light reader never sees a
+ * dark frame first.
+ *
+ * Every value here is a token the dark theme also has. The contrast of
+ * each pair is written down in docs/design/palette.md.
+ *
+ * Two things do not change with the theme, on purpose:
+ *
+ * - The coverage signal ramp. Inverting it once drew it backwards while
+ *   the legend beside it drew it the right way. It is data, not chrome.
+ * - The packet family and role hues keep their order and their shapes;
+ *   only their lightness moves, so a mark means the same thing in both.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f2ec;
+  --panel: #ffffff;
+  --panel-2: #f1e9e0;
+  --line: #ddd0c2;
+  --text: #25190f;
+  --muted: #6b5646;
+  --brand: #b8431c;
+  --accent: #b8481f;
+  --accent-soft: #d9744a;
+  --good: #3b7a1e;
+  --warn: #8a6100;
+  --bad: #b7352a;
+  --role-stale: #857260;
+  --map-link: #2c6a8f;
+  --traffic-relayed: #5b4a3d;
+  --pkt-position: #cf5220;
+  --pkt-nodeinfo: #7457ad;
+  --pkt-telemetry: #1b77a5;
+  --pkt-text: #25190f;
+  --pkt-trace: #5a8410;
+  --pkt-routing: #7d6857;
+  --pkt-other: #978573;
+  --heat-emission: #c27a10;
+  --heat-upload: #25190f;
+  --role-ROUTER: #4a8a2a;
+  --role-ROUTER_LATE: #2b7a7c;
+  --role-ROUTER_CLIENT: #6a9612;
+  --role-REPEATER: #1c6b5d;
+  --role-CLIENT: #9c7600;
+  --role-CLIENT_MUTE: #7457ad;
+  --role-CLIENT_BASE: #2d6aa8;
+  --role-CLIENT_HIDDEN: #7d6857;
+  --role-CLIENT_TAK: #b0417a;
+  --role-TAK_TRACKER: #a83656;
+  --role-TAK_PLUGIN: #8551a1;
+  --role-ATAK_PLUGIN: #955aab;
+  --role-TRACKER: #bd6418;
+  --role-SENSOR: #1b77a5;
+  --role-LOST_AND_FOUND: #b7352a;
+  --on-accent: #ffffff;
+  --overlay: rgb(255 255 255 / .92);
+  --panel-clear: rgb(255 255 255 / 0);
+  --scroll-shadow: rgb(0 0 0 / .18);
+}
+
+/* The dark basemap is the light one inverted. In light mode the tiles
+ * are drawn as they come, not filtered twice. */
+:root[data-theme="light"] .leaflet-tile-pane .basemap-tiles img.leaflet-tile { filter: none; }
+
+/* The theme control in the nav (#50). */
+.theme-switch { display: flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--muted); padding: .4rem .75rem; }
+.theme-switch select { font-size: .82rem; }
