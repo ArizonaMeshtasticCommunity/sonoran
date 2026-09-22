@@ -2843,7 +2843,7 @@ PAGES.graph = async (page) => {
       // Real positions are a layout in themselves, so the solver is
       // told to leave them alone. Dragging still works: ECharts moves
       // the node and redraws its links whatever the layout.
-      layout: onGround ? 'none' : 'force',
+      layout: (layout === 'spread' || layout === 'ground') ? 'none' : 'force',
       roam: true,
       draggable: true,
       categories,
@@ -2912,7 +2912,7 @@ PAGES.graph = async (page) => {
           // A dragged node stays where it was put while the layout
           // solver is running. Real positions are not solved at all,
           // so there is nothing to hold it against.
-          fixed: !onGround && graphPinned.has(node.node_id),
+          fixed: (layout === 'free' || layout === 'force-geo') && graphPinned.has(node.node_id),
           /*
            * The role gives the colour. On top of it:
            *
