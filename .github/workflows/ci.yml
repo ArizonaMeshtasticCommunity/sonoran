@@ -75,6 +75,91 @@ jobs:
       - run: uv run alembic downgrade -1
       - run: uv run alembic upgrade head
 
+  # The nineteen user journeys in tools/dev/e2e.js.
+  #
+  # They existed and nothing ran them, so a reflow regression shipped
+  # that this suite catches by name (#82, #83). `check_pages.js` fails
+  # on a page that throws; these fail on a page that loads happily and
+  # does nothing useful, which is the class that got through.
+  #
+  # Seeded data, not the live instance: a journey that gates a merge
+  # has to be deterministic. The nightly-against-production idea is in
+  # #83 and is deliberately not this job.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb-ha:pg17
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: azmsh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d azmsh"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:test@localhost:5432/azmsh
+      # Throwaway values for a throwaway container, as in `migrations`.
+      # They must not be `change_me`, which revision 0001 refuses.
+      AZMSH_INGEST_PASSWORD: ci-ingest-not-a-real-password
+      AZMSH_API_PASSWORD: ci-api-not-a-real-password
+      AZMSH_JOBS_PASSWORD: ci-jobs-not-a-real-password
+      # The API reads DATABASE_URL_API, and the gaps job DATABASE_URL_JOBS.
+      # Each must match the matching AZMSH_*_PASSWORD above, and the
+      # database here is `azmsh`, not the `sonoran` the defaults name.
+      DATABASE_URL_API: postgresql+asyncpg://azmsh_api:ci-api-not-a-real-password@localhost:5432/azmsh
+      DATABASE_URL_JOBS: postgresql+asyncpg://azmsh_jobs:ci-jobs-not-a-real-password@localhost:5432/azmsh
+      SEED_DATABASE_URL: postgresql+asyncpg://postgres:test@localhost:5432/azmsh
+      # The gaps assessment is written under the coverage cache, which
+      # defaults to /var/lib/sonoran and is not writable on a runner.
+      # The API reads it back from the same setting, so both steps need
+      # this and they need it to agree.
+      COVERAGE_CACHE_DIR: /tmp/sonoran-coverage
+      TERRAIN_CACHE_DIR: /tmp/sonoran-terrain
+      # No basemap in CI. The default is tile.openstreetmap.org, which
+      # answers a datacenter address with 403, and the suite counts a
+      # console error as a failure -- correctly, since that is how a
+      # silently broken page is caught. A run that gates a merge should
+      # not depend on somebody else's server being willing to serve it
+      # either. The maps still draw their own layers; only the basemap
+      # is absent, and the code already handles an empty tile URL.
+      MAP_TILE_URL: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: uv sync --extra dev
+      - run: uv run alembic upgrade head
+      - run: uv run python tools/dev/seed.py
+      # The gaps page reads a written artefact, not the database, so
+      # without this the gaps journeys walk an empty page.
+      - run: uv run sonoran-gaps-once
+      - name: Install the browser
+        # Installed into the workspace so `require('playwright')` in
+        # e2e.js resolves it; that lookup is by name, with two absolute
+        # fallbacks that only exist on a developer's machine.
+        run: |
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Start the API
+        run: |
+          uv run sonoran-api &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8000/api/stats >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8000/api/stats >/dev/null \
+            || { echo "the API did not come up"; exit 1; }
+      - name: Walk the journeys
+        env:
+          SONORAN_URL: http://127.0.0.1:8000
+        run: node tools/dev/e2e.js
+
   docker:
     runs-on: ubuntu-latest
     steps:
