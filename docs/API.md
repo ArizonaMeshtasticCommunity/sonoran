@@ -1691,9 +1691,10 @@ operator) are never stored and never returned.
 
 ### 12.0 `GET /api/rf/kinds`
 
-`known`, every kind a station may send, and `stored`, the kinds the
-ingest keeps today. The RF page draws its sources list from it, so a
-source whose phase has not landed reads as "not stored yet".
+`known`, every kind a station may send, `stored`, the kinds the
+ingest keeps today, and `views`, the things kept that are not
+observation kinds (`spectrum`). The RF page draws its sources list from
+it, so a source whose phase has not landed reads as "not stored yet".
 
 RF is separate from Meshtastic everywhere: its own tables, its own
 topics, its own ingest. It adds no node, packet, upload or gateway to
@@ -1703,8 +1704,11 @@ any Meshtastic count.
 
 Every station: `station`, `lat` and `lon` rounded by the agent,
 `precision_m` (by how much), `kinds`, `agent_version`, `last_seen`,
-`online` (a heartbeat in the last five minutes), and `counts` since the
-heartbeat before: `heard`, `sent`, and `dropped` by thinning.
+`online` (a heartbeat in the last five minutes), `counts` since the
+heartbeat before: `heard`, `sent`, and `dropped` by thinning, and
+`spectrum_last`, the newest minute of the 900 MHz band the station sent
+in the last day, or null. A sweeper is known by what it sends, not by
+the kinds its heartbeat lists.
 
 ### 12.2 `GET /api/rf/latest`
 
@@ -1729,4 +1733,37 @@ Where one station has heard things, on a grid of about 2 km
 (`cell_deg`, 0.02). Each cell: `lat`, `lon`, `best_rssi_db` and `heard`.
 `kind` defaults to `adsb`, `hours` is 1 to 336, default 24. Measured,
 not modelled: the RF page draws a station's reach from it.
+
+### 12.5 `GET /api/rf/spectrum/{station}`
+
+One station's minutes of the 900 MHz band, for the waterfall (design
+7.4). `hours` is 1 to 24, default 6. 422 for a name that is not a
+station ID.
+
+Response: `station`, `hours`, `bucket_minutes`, `f_start_hz`, `bin_hz`,
+`bins`, `gain_db`, `sweeps_per_minute`, `newest`, and `rows`, oldest
+first. Each row: `t`, and per bin `p50`, `p95` and `busy`. An empty
+window has no layout fields and an empty `rows`.
+
+- A window longer than 240 minutes is bucketed in the database, so no
+  answer holds more than 240 rows. In a bucket a bin keeps the median of
+  its medians, the highest 95th percentile (a burst is never averaged
+  away) and the mean busy share.
+- `p50` is the noise floor. A mesh packet is a short burst, so it does
+  not move the median of a minute's sweeps. `p95` shows the bursts, our
+  own traffic included.
+- Levels are tenths of a dB relative to that station's receiver. They
+  compare one station with itself and never two stations.
+- Only minutes with the station's newest layout (start, bin width, bin
+  count) are used.
+
+### 12.6 `GET /api/rf/channels`
+
+Where each preset's default channel sits in the US band, computed the
+way the firmware does: `slot = djb2(name) % slots`, centre `902 MHz +
+bandwidth / 2 + slot × bandwidth`. `sonoran/radio/channels.py`.
+
+Response: `region`, `start_hz`, `end_hz`, and `channels`, lowest first:
+`name`, `label`, `bandwidth_hz`, `slot`, `centre_hz`, `low_hz`,
+`high_hz`. LongFast is 906.875 MHz, MediumFast 913.125 MHz.
 

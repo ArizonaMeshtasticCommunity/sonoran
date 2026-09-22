@@ -31,6 +31,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     PrimaryKeyConstraint,
+    SmallInteger,
     Text,
     UniqueConstraint,
     false,
@@ -535,6 +536,34 @@ class RfLatest(Base):
     rssi_db: Mapped[float | None] = mapped_column(REAL)
     station_id: Mapped[str] = mapped_column(Text)
     meta: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class RfSpectrum(Base):
+    """One minute of the 900 MHz band from one station.
+
+    Bin `i` covers `f_start_hz + i * bin_hz`. Levels are tenths of a dB
+    relative to the dongle's full scale: they compare one station with
+    itself over time and never two stations (design 3.5). `busy` is the
+    share of sweeps, in percent, in which a bin stood more than 6 dB above
+    its own median. A bin no sweep reached is NULL, never a made-up level.
+    """
+
+    __tablename__ = "rf_spectrum"
+
+    station_id: Mapped[str] = mapped_column(Text)
+    # The start of the minute summarised.
+    t: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    f_start_hz: Mapped[int] = mapped_column(BigInteger)
+    bin_hz: Mapped[int] = mapped_column(Integer)
+    sweeps: Mapped[int] = mapped_column(Integer)
+    gain_db: Mapped[float] = mapped_column(REAL)
+    p50: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    p95: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    peak: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    busy: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (PrimaryKeyConstraint("station_id", "t"),)
 
 
 # The ingest role has INSERT and UPDATE rights only. Disable PostgreSQL

@@ -21,8 +21,8 @@ from sqlalchemy import CursorResult, Executable, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.db.models import RfHeard, RfLatest, RfStation, RfTrack
-from sonoran.rf.schema import ICAO, STORED_KINDS, Batch, Observation, Status
+from sonoran.db.models import RfHeard, RfLatest, RfSpectrum, RfStation, RfTrack
+from sonoran.rf.schema import ICAO, STORED_KINDS, Batch, Observation, Spectrum, Status
 
 # The receiver layer's resolution. Five minutes per thing per station is
 # enough to draw where a station hears, and keeps `rf_heard` small.
@@ -79,6 +79,41 @@ def guarded_time(stamped: datetime, received: datetime, rules: Rules) -> tuple[d
     if stamped > received + rules.future_slack or stamped < received - rules.past_slack:
         return received, True
     return stamped, False
+
+
+# The spectrum grid: one row per station per minute (design 4.2).
+SPECTRUM_MINUTE = timedelta(minutes=1)
+
+
+async def store_spectrum(
+    session: AsyncSession, spectrum: Spectrum, received: datetime, rules: Rules
+) -> bool:
+    """Store one minute of the band. True when it was new.
+
+    The minute is the station's own `t`, floored to the minute, unless
+    its clock is out, when it is the minute we received it in, as for
+    every other RF point (design 5.3). A second message for the same
+    station and minute is a repeat and is ignored.
+    """
+    stamped, _ = guarded_time(spectrum.t, received, rules)
+    return await _inserted(
+        session,
+        insert(RfSpectrum)
+        .values(
+            station_id=spectrum.station,
+            t=floor_time(stamped, SPECTRUM_MINUTE),
+            f_start_hz=spectrum.f_start_hz,
+            bin_hz=spectrum.bin_hz,
+            sweeps=spectrum.sweeps,
+            gain_db=spectrum.gain_db,
+            p50=list(spectrum.p50),
+            p95=list(spectrum.p95),
+            peak=list(spectrum.peak),
+            busy=list(spectrum.busy),
+            received_at=received,
+        )
+        .on_conflict_do_nothing(index_elements=["station_id", "t"]),
+    )
 
 
 async def store_status(session: AsyncSession, status: Status, received: datetime) -> None:

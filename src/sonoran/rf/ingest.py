@@ -25,7 +25,7 @@ from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.logging import configure_logging, get_logger
 from sonoran.rf.schema import Batch, Spectrum, Status, TopicError, parse_topic
-from sonoran.rf.store import Rules, store_batch, store_status
+from sonoran.rf.store import Rules, store_batch, store_spectrum, store_status
 
 logger = get_logger(__name__)
 
@@ -115,13 +115,12 @@ async def main() -> None:
                 totals["invalid"] += 1
                 logger.info("drop invalid RF message on %s: %s", topic, str(exc)[:200])
                 continue
-            if isinstance(message, Spectrum):
-                # Valid, and counted. Stored once `rf_spectrum` lands.
-                totals["spectrum_not_stored"] += 1
-                continue
             async with session_factory() as session:
                 try:
-                    if isinstance(message, Status):
+                    if isinstance(message, Spectrum):
+                        new = await store_spectrum(session, message, received, rules)
+                        totals["spectrum" if new else "spectrum_repeat"] += 1
+                    elif isinstance(message, Status):
                         await store_status(session, message, received)
                         totals["status"] += 1
                     else:

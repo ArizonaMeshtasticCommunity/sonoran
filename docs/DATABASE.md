@@ -297,12 +297,15 @@ The design is `docs/design/rf-map.md`.
 | `rf_track` | hypertable on `bucket` | (`kind`, `thing_id`, 20 s bucket), across every station; the loudest hearing wins | 2 days |
 | `rf_heard` | hypertable on `bucket` | (`station_id`, `kind`, `thing_id`, 5 min bucket): hearings, best level, where | 14 days |
 | `rf_latest` | plain | (`kind`, `thing_id`): the newest point, updated in place | always |
+| `rf_spectrum` | hypertable on `t` | (`station_id`, minute): `p50`, `p95`, `peak` and `busy` arrays, one entry per bin, NULL for a bin not swept. Revision 0014 | 14 days |
 
 `sonoran-rf-ingest` writes as `azmsh_ingest`. It holds INSERT and UPDATE
 on these tables and SELECT on only the columns a conflict target or an
 `UPDATE ... WHERE` reads, so every upsert is `INSERT ... ON CONFLICT DO
 NOTHING` then `UPDATE`, as `AGENTS.md` 9.2 requires. `azmsh_api` and
-`azmsh_jobs` read them.
+`azmsh_jobs` read them. `rf_spectrum` is insert only: a repeated minute
+is ignored, so the ingest role holds INSERT and SELECT on (`station_id`,
+`t`) there and nothing else.
 
 `thing_id` is the identity of what was heard: the ICAO address, lower
 case, for aircraft. `rssi_db` is in the receiver's own units, so it

@@ -421,6 +421,48 @@
           <div class="map-shell"><div id="rf-map"></div></div>
           <p class="muted" data-rf-selected>Click a mark for its track, or a receiver for where it hears.</p>
           <div class="legend" data-rf-legend aria-label="What the marks mean"></div>
+
+          <!--
+            The 900 MHz band (design 7.4). One station at a time: an SDR
+            reads in its own units, so two stations are never compared.
+            The median view is the default because it shows the noise
+            floor: a mesh packet is a short burst and does not move the
+            median of a minute's sweeps. The 95th percentile shows the
+            bursts, ours included. Our preset channels are marked, so
+            busy inside a mark is expected traffic and busy outside every
+            mark is something else.
+          -->
+          <section class="panel rf-band" data-rf-band hidden aria-label="900 MHz band">
+            <h3><span>900 MHz band</span> <span class="muted head-note" data-rf-band-note></span></h3>
+            <div class="controls">
+              <label class="muted">Station <select data-rf-band-station aria-label="Station"></select></label>
+              <label class="muted">Window
+                <select data-rf-band-hours aria-label="How far back">
+                  <option value="1">1 h</option>
+                  <option value="6" selected>6 h</option>
+                  <option value="24">24 h</option>
+                </select>
+              </label>
+              <span class="segmented" role="group" aria-label="Level shown">
+                <button type="button" class="toggle" data-rf-band-view="p50" aria-pressed="true">Noise floor (median)</button>
+                <button type="button" class="toggle" data-rf-band-view="p95" aria-pressed="false">Bursts (95th percentile)</button>
+              </span>
+            </div>
+            <!-- Where the samples were taken: the station's rounded
+                 position and by how much, or a plain "not shared". A
+                 waterfall means nothing without where it was measured. -->
+            <p class="rf-where" data-rf-band-where></p>
+            <p class="sub" data-rf-band-explain></p>
+            <div class="rf-axis" data-rf-band-axis aria-hidden="true"></div>
+            <div class="rf-waterfall" data-rf-band-waterfall>
+              <canvas data-rf-band-canvas></canvas>
+              <div class="rf-marks" data-rf-band-marks></div>
+            </div>
+            <div class="rf-scale" data-rf-band-scale></div>
+            <h4>How busy each part of the band is</h4>
+            <p class="sub">The share of sweeps in which a bin stood 6 dB above its own median. Inside a mesh channel that is mostly our own packets. <strong>Outside every mesh channel</strong> it is something else on the band.</p>
+            <div class="chart" data-rf-band-busy></div>
+          </section>
         </section>
 
         <section class="page" data-page="coverage">
