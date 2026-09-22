@@ -69,6 +69,15 @@ def timescale_url() -> Iterator[str]:
         password="postgres",
         dbname="azmsh_test",
     )
+    # No TimescaleDB background workers at all, for the life of the
+    # container. `_stop_background_workers` below stops the scheduler that
+    # is running at start, but `test_migrations.py` downgrades to base and
+    # back, which recreates the extension and starts a new scheduler. Its
+    # retention jobs then ran against `packet` while a later downgrade
+    # altered it, and CI saw "deadlock detected" on
+    # `ALTER TABLE packet ALTER COLUMN want_ack DROP DEFAULT`. A setting
+    # read at server start cannot be undone by the schema under test.
+    container.with_command("postgres -c timescaledb.max_background_workers=0")
     try:
         container.start()
     except Exception as exc:  # Docker not available or image pull failed.
