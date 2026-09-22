@@ -1957,7 +1957,24 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .section-head { margin: .5rem 0 .6rem; font-size: 1rem; }
 .leaderboard p { margin: 0 0 .5rem; font-size: .82rem; }
 .board { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: .35rem; }
-.board li { display: grid; grid-template-columns: 1fr auto; gap: 0 .6rem; }
+/* `minmax(0, 1fr)`, not `1fr`. A bare `1fr` is `minmax(auto, 1fr)`, and
+ * in a grid `auto` means the track will not shrink below its content —
+ * so a long detail line ("-8.0 dB, 11 and 6 reports each way") pushed
+ * the tracks to 283px + 32px inside a 232px row, and the Statistics
+ * page needed sideways scrolling at 320 CSS px. Every other grid in
+ * this file already guards the same way with `minmax(min(Xrem, 100%),
+ * 1fr)`; this one was the exception. See WCAG 2.1 SC 1.4.10. */
+.board li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 .6rem; }
+/* The name has to be allowed to shrink too, or the track width above
+ * buys nothing. The chain from the track down is
+ * `li > .who > .linky > .node-name > .long`, and `.long` only ellipses
+ * when everything above it is narrower than the text. `.linky` is an
+ * `inline-block`, so without a ceiling it sizes to its content and
+ * overflows `.who` — which is how "Fred V4 - W0FMS/7 - Corona de
+ * Tucson" pushed the page 18px past 320. `.node-name` already sets
+ * `min-width: 0`; the two boxes between it and the track did not. */
+.board .who { min-width: 0; }
+.board .who > .linky { max-width: 100%; }
 .board .value { font-weight: 650; text-align: right; }
 .board .detail { grid-column: 1 / -1; font-size: .78rem; }
 .leaderboard details summary { cursor: pointer; font-size: .8rem; color: var(--muted); }
