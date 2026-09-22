@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult
+from sqlalchemy import CursorResult, null
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,7 +109,10 @@ async def store_packet(
                         rx_time=packet.rx_time,
                         first_seen_at=packet.first_seen_at,
                         raw_bytes=packet.raw_bytes,
-                        payload_json=packet.payload_json,
+                        # A JSONB column stores Python None as the JSON
+                        # value null, not as SQL NULL. "Nothing kept" must
+                        # be SQL NULL, so a query for it can use IS NULL.
+                        payload_json=null() if packet.payload_json is None else packet.payload_json,
                     )
                 )
         except IntegrityError:
