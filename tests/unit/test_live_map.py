@@ -894,6 +894,5 @@ def test_the_opening_view_is_not_thrown_away_by_an_outlier() -> None:
         "reaches us over MQTT, not on the configured view."
     )
     assert "CONFIG.mapZoom" in window, (
-        "the configured zoom is not consulted, so there is no floor to "
-        "refuse a fit against"
+        "the configured zoom is not consulted, so there is no floor to refuse a fit against"
     )
