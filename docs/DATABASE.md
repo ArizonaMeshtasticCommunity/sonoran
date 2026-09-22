@@ -153,7 +153,7 @@ One row per unique packet. Hypertable on `first_seen_at`.
 | `rx_time` | integer | from the packet header |
 | `first_seen_at` | timestamptz | not null. partition key |
 | `raw_bytes` | bytea | the raw MeshPacket protobuf |
-| `payload_json` | jsonb | decoded summary. nullable |
+| `payload_json` | jsonb | what the packet carried, for node info, routing, traceroute, map report and pax counter only (`decode/stored.py`). NULL for every other family and for rows stored before 2026-09-22. |
 
 Constraints:
 

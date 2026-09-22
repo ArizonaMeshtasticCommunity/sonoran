@@ -24,14 +24,19 @@ def test_who_heard_it_comes_before_what_it_said() -> None:
     assert page.index("decodedPanels(packet)") < page.index("envelopePanel(")
 
 
-def test_the_raw_data_is_kept_but_starts_closed() -> None:
-    """The JSON is always reachable, and never the first thing read."""
+def test_the_raw_data_starts_open_and_comes_last() -> None:
+    """The JSON is always on screen, and never the first thing read.
+
+    It used to start closed, and a closed panel titled "Raw data" read as
+    an empty one. It stays a `details`, so a reader can fold it away.
+    """
     app = _app()
     raw = app[app.index("function rawPanel(") :]
     raw = raw[: raw.index("\n}\n")]
     assert "el('details'" in raw
-    assert "open" not in raw
-    assert "rawPanel(data)" in _page()
+    assert "open: true" in raw
+    page = _page()
+    assert page.index("decodedPanels(packet)") < page.index("rawPanel(data)")
 
 
 def test_every_kind_the_api_decodes_has_a_heading() -> None:

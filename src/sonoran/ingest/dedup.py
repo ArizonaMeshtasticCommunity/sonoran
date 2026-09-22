@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult
+from sqlalchemy import CursorResult, null
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,10 @@ class PacketInput:
     rx_time: int | None
     first_seen_at: datetime
     raw_bytes: bytes
+    # What the packet carried, for the families `decode.stored` keeps.
+    # Only ingest holds the channel keys, so this is the one place it
+    # can be written. None for every other family.
+    payload_json: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,10 @@ async def store_packet(
                         rx_time=packet.rx_time,
                         first_seen_at=packet.first_seen_at,
                         raw_bytes=packet.raw_bytes,
+                        # A JSONB column stores Python None as the JSON
+                        # value null, not as SQL NULL. "Nothing kept" must
+                        # be SQL NULL, so a query for it can use IS NULL.
+                        payload_json=null() if packet.payload_json is None else packet.payload_json,
                     )
                 )
         except IntegrityError:

@@ -9,6 +9,7 @@ from sonoran.crypto.decrypt import decode_key, decrypt_packet
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.decode.envelope import ParsedEnvelope, parse_envelope
 from sonoran.decode.payloads import decode_payload, parse_data
+from sonoran.decode.stored import stored_payload
 from sonoran.ingest.dedup import ObservationInput, PacketInput, StoredPacket, store_packet
 from sonoran.ingest.handlers import HandlerContext, store_mesh_packet_metrics, store_payload
 from sonoran.ingest.handlers.presence import store_gateway, store_heard
@@ -162,6 +163,9 @@ async def process_message(
         rx_time=packet.rx_time or None,
         first_seen_at=heard_at(message),
         raw_bytes=envelope.raw_packet,
+        # The public API cannot decrypt, so what the packet carried is
+        # kept here for the families that have no table of their own.
+        payload_json=stored_payload(decoded),
     )
     observation_input = ObservationInput(
         gateway_node_num=_node_num(envelope.gateway_id or message.topic.gateway_id or ""),

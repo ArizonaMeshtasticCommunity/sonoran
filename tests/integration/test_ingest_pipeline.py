@@ -97,9 +97,20 @@ async def _replay(timescale_url: str) -> None:
                     MeshPacketMetrics.packet_id == packet.id,
                 )
             )
+            # The recorded packet is a node info. The public API holds no
+            # channel key, so what it said is kept here or never shown.
+            payload = await session.scalar(
+                select(Packet.payload_json).where(
+                    Packet.from_node_num == getattr(packet, "from"),
+                    Packet.packet_id == packet.id,
+                )
+            )
         assert packet_count == 1
         assert observation_count == 2
         assert metric_count == 1
+        assert isinstance(payload, dict)
+        assert payload.get("long_name")
+        assert "macaddr" not in payload
     finally:
         await engine.dispose()
 
@@ -376,8 +387,17 @@ async def _replay_pki(timescale_url: str) -> None:
             row = await session.scalar(
                 select(Packet).where(Packet.from_node_num == sender, Packet.channel == "PKI")
             )
+            # Nothing was kept, and that must be SQL NULL. A JSONB column
+            # writes Python None as the JSON value null unless told not to,
+            # and then IS NULL finds nothing.
+            is_sql_null = await session.scalar(
+                select(Packet.payload_json.is_(None)).where(
+                    Packet.from_node_num == sender, Packet.channel == "PKI"
+                )
+            )
         assert row is not None, "the packet is kept as traffic"
         assert row.portnum == 0, "the port number is unknown inside the encrypted part"
+        assert is_sql_null is True, "an empty payload is SQL NULL, not JSON null"
     finally:
         await engine.dispose()
 

@@ -5160,13 +5160,110 @@ function packetSentence(packet, decoded) {
   }
 }
 
-/* What the page can say about a kind whose content is not stored. */
+/* What the page can say about a kind whose content is not stored.
+ *
+ * Since ingest started keeping `payload_json` (see `decode/stored.py`),
+ * these only apply to packets stored before then. The public API holds
+ * no channel key, so an older packet cannot be decoded after the fact. */
+const PAYLOAD_KEPT_SINCE = 'September 22, 2026';
 const NOT_STORED = {
-  NODEINFO_APP: 'This dashboard keeps only the newest identity of each node, not what each '
-    + 'node-info packet said. The node page shows that identity.',
-  ROUTING_APP: 'This dashboard does not store what a routing packet said, so it cannot show '
-    + 'whether this was an acknowledgement or an error.',
+  NODEINFO_APP: `Node-info packets stored before ${PAYLOAD_KEPT_SINCE} were kept without what `
+    + 'they said. The node page shows the newest identity.',
+  ROUTING_APP: `Routing packets stored before ${PAYLOAD_KEPT_SINCE} were kept without what they said, `
+    + 'so this one cannot show whether it was an acknowledgement or an error.',
 };
+
+/* Words for a routing error reason. `NONE` is a delivery report that
+ * nothing went wrong: an acknowledgement. */
+const ROUTING_WORDS = {
+  NONE: 'Acknowledgement: the packet was delivered.',
+  NO_ROUTE: 'No route to the destination.',
+  GOT_NAK: 'The destination refused it.',
+  TIMEOUT: 'No acknowledgement came back in time.',
+  NO_INTERFACE: 'No radio interface could send it.',
+  MAX_RETRANSMIT: 'Sent the most times allowed with no acknowledgement.',
+  NO_CHANNEL: 'No channel matched it.',
+  TOO_LARGE: 'The packet was too large.',
+  NO_RESPONSE: 'The destination sent no response.',
+  DUTY_CYCLE_LIMIT: 'Held back by the duty cycle limit.',
+  BAD_REQUEST: 'The request was not valid.',
+  NOT_AUTHORIZED: 'Not authorised.',
+  PKI_FAILED: 'The public key encryption failed.',
+  PKI_UNKNOWN_PUBKEY: 'The sender does not know the destination\u2019s public key.',
+  ADMIN_BAD_SESSION_KEY: 'The admin session key was wrong.',
+  ADMIN_PUBLIC_KEY_UNAUTHORIZED: 'That public key may not administer this node.',
+  RATE_LIMIT_EXCEEDED: 'Refused by the rate limit.',
+};
+
+/** A list of labelled values, leaving out the ones that are missing. */
+function kvList(entries) {
+  const shown = entries.filter((entry) => entry && entry[1] != null && entry[1] !== '');
+  if (!shown.length) return empty('The packet carried no values.');
+  return el('dl', { class: 'kv' }, shown.flatMap(([label, value]) =>
+    [el('dt', { text: label }), el('dd', { text: String(value) })]));
+}
+
+const yesNo = (value) => (value == null ? null : value ? 'yes' : 'no');
+const coordinate = (value) => (value == null ? null : round(value / 1e7, 5));
+
+/**
+ * What a packet carried, from `payload_json`.
+ *
+ * Ingest keeps it for node info, routing, traceroute, map reports and
+ * pax counters, the families with no table of their own. Field names
+ * are the protobuf's own, and an enum arrives as its name.
+ */
+function storedPanel(packet) {
+  const values = packet.payload_json || {};
+  const panel = (heading, ...body) => el('div', { class: 'panel span-2' }, el('h3', {}, heading), ...body);
+  switch (packet.portnum) {
+    case 'NODEINFO_APP':
+      return panel('Who it said it is', kvList([
+        ['Long name', values.long_name],
+        ['Short name', values.short_name],
+        ['Hardware', values.hw_model],
+        ['Role', values.role ? `${roleLabel(values.role)} (${values.role})` : 'Client (not sent)'],
+        ['Licensed', yesNo(values.is_licensed)],
+        ['Accepts messages', values.is_unmessagable == null ? null : values.is_unmessagable ? 'no' : 'yes'],
+        ['Public key', values.public_key ? `${values.public_key.slice(0, 16)}\u2026` : 'none sent'],
+      ]));
+    case 'ROUTING_APP': {
+      const reason = values.error_reason || (values.route_request || values.route_reply ? null : 'NONE');
+      return panel('What it reported', kvList([
+        ['Result', reason ? (ROUTING_WORDS[reason] || reason) : null],
+        ['Reason code', reason],
+        values.route_request ? ['Route request', (values.route_request.route || []).length + ' hops'] : null,
+        values.route_reply ? ['Route reply', (values.route_reply.route || []).length + ' hops'] : null,
+      ]));
+    }
+    case 'MAP_REPORT_APP':
+      return panel('What it published to the map', kvList([
+        ['Long name', values.long_name],
+        ['Short name', values.short_name],
+        ['Hardware', values.hw_model],
+        ['Role', values.role ? roleLabel(values.role) : null],
+        ['Firmware', values.firmware_version],
+        ['Region', values.region],
+        ['Modem preset', values.modem_preset],
+        ['Default channel', yesNo(values.has_default_channel)],
+        ['Latitude', coordinate(values.latitude_i)],
+        ['Longitude', coordinate(values.longitude_i)],
+        ['Altitude', values.altitude == null ? null : `${values.altitude} m`],
+        ['Position precision', values.position_precision == null ? null : `${values.position_precision} bits`],
+        ['Nodes it sees online', values.num_online_local_nodes],
+      ]));
+    case 'PAXCOUNTER_APP':
+      return panel('What it counted', kvList([
+        ['Wi-Fi devices', values.wifi],
+        ['Bluetooth devices', values.ble],
+        ['Uptime', values.uptime == null ? null : `${round(values.uptime / 3600, 1)} h`],
+      ]));
+    default:
+      // Traceroute and anything added later: the fields as they came.
+      return panel('What it said', kvList(Object.entries(values).map(([key, value]) =>
+        [evidenceLabel(key), Array.isArray(value) ? value.join(', ') || 'none' : typeof value === 'object' ? JSON.stringify(value) : value])));
+  }
+}
 
 /** A position, with how wide the doubt around it is. */
 function positionValues(row) {
@@ -5208,6 +5305,13 @@ function neighbourValues(rows) {
 /** The panels that show what a packet said. */
 function decodedPanels(packet) {
   const decoded = packet.decoded;
+  // An empty object is kept too: a traceroute request with no route yet
+  // serialises to nothing. It says nothing, so the usual panel is shown.
+  const stored = packet.payload_json;
+  if ((!decoded || !decoded.values || !decoded.values.length)
+      && stored && Object.keys(stored).length) {
+    return storedPanel(packet);
+  }
   if (!decoded || !decoded.values || !decoded.values.length) {
     return el('div', { class: 'panel span-2' },
       el('h3', {}, 'What it said'),
@@ -5283,8 +5387,11 @@ function envelopePanel(packet, packetId, observations) {
  * disclosure. The views above are the reading; this is for the person
  * who wants the fields themselves.
  */
+/* The JSON starts open: closed, it read as an empty panel. It is still
+ * a `details`, so it can be folded away, and it is still the last thing
+ * on the page. */
 function rawPanel(data) {
-  return el('details', { class: 'panel span-2 raw-data' },
+  return el('details', { class: 'panel span-2 raw-data', open: true },
     el('summary', {}, 'Raw data'),
     el('pre', { text: JSON.stringify({
       packet: data.packet,
