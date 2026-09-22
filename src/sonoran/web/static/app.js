@@ -255,6 +255,23 @@ function tooltipLines(...lines) {
   return wrap;
 }
 
+/*
+ * Who a packet was addressed to.
+ *
+ * `^all` is the broadcast address. The word for it is written once
+ * here because it used to be written out at four call sites and they
+ * drifted: three of them show it as a field value, where it reads as a
+ * label and takes a capital, and one puts it inside a sentence, where
+ * a capital would be wrong. Pass `sentence` for that one.
+ */
+const BROADCAST = 'Everyone';
+
+function toLabel(packet, { sentence = false } = {}) {
+  const broadcast = !packet.to_node || packet.to_node === '^all';
+  if (broadcast) return sentence ? BROADCAST.toLowerCase() : BROADCAST;
+  return packet.to_name || packet.to_node;
+}
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
@@ -4235,7 +4252,7 @@ async function drawTimeline(target, nodeId, hours, types) {
     { label: 'Time', ...sortable('time'), cell: (row) => el('a', { class: 'linky', href: packetHref(row), title: stamp(row.seen_at), text: stamp(row.seen_at) }) },
     heard ? { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) } : null,
     { label: 'Type', ...sortable('type'), hint: 'What the packet carried: a position, telemetry, a message, and so on.', cell: (row) => portnumCell(row.portnum) },
-    { label: 'To', ...sortable('to'), hint: 'Everyone for a broadcast, or the one node it was addressed to.', cell: (row) => (row.to_node === '^all' ? 'everyone' : row.to_name || row.to_node) },
+    { label: 'To', ...sortable('to'), hint: 'Everyone for a broadcast, or the one node it was addressed to.', cell: (row) => toLabel(row) },
     { label: 'Channel', ...sortable('channel'), cell: (row) => row.channel || '-' },
     { label: 'Hops', num: true, ...sortable('hops'), hint: 'The fewest relays any gateway saw it use before it was uploaded.', cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
     { label: 'Gateways', num: true, ...sortable('gateways'), hint: 'How many different gateways uploaded it, not counting the sender uploading its own packet.', cell: (row) => count(row.gateways) },
@@ -4649,7 +4666,7 @@ PAGES.firehose = async (page) => {
     },
     { label: 'Time', cell: (row) => el('span', { title: stamp(row.first_seen_at), text: clock(row.first_seen_at) }) },
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
-    { label: 'To', cell: (row) => (row.to_node === '^all' ? 'everyone' : row.to_name || row.to_node) },
+    { label: 'To', cell: (row) => toLabel(row) },
     { label: 'Type', cell: (row) => portnumCell(row.portnum) },
     {
       label: 'What it said',
@@ -5244,7 +5261,7 @@ function precisionMetres(bits) {
 /** One plain sentence that says what this packet was. */
 function packetSentence(packet, decoded) {
   const from = packet.from_name || packet.from_node;
-  const to = !packet.to_node || packet.to_node === '^all' ? 'everyone' : packet.to_name || packet.to_node;
+  const to = toLabel(packet, { sentence: true });
   const on = packet.channel ? ` on ${packet.channel}` : '';
   const kind = decoded && decoded.kind;
   switch (packet.portnum) {
@@ -5455,7 +5472,7 @@ function decodedPanels(packet) {
 function envelopePanel(packet, packetId, observations) {
   const heard = observations.filter((row) => !row.self_reported && row.hops_taken != null);
   const fewest = heard.length ? Math.min(...heard.map((row) => row.hops_taken)) : null;
-  const to = !packet.to_node || packet.to_node === '^all' ? 'everyone' : packet.to_name || packet.to_node;
+  const to = toLabel(packet);
   return el('div', { class: 'panel' },
     el('h3', {}, 'Envelope'),
     el('dl', { class: 'kv' },

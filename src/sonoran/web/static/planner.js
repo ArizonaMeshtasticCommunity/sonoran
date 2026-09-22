@@ -549,6 +549,11 @@ async function runCoverage() {
   const request = readForm();
   if (!request) return;
 
+  // Any link on screen belongs to the previous prediction, drawn from
+  // a site that may have just moved. Take it away with its panel.
+  hideLinkPanel();
+  state.linkLayer.clearLayers();
+
   const params = SonoranPlannerParams.toEngineParams(request);
   const runId = nextRunId;
   nextRunId += 1;
@@ -800,10 +805,21 @@ async function runLink(node) {
   }
 }
 
+/** Empty the one-link panel and take its border off the page with it. */
+function hideLinkPanel() {
+  const panel = document.querySelector('[data-planner-link]');
+  if (!panel) return;
+  replace(panel, []);
+  panel.hidden = true;
+}
+
 /** Draw the terrain between the site and one node, and say if it works. */
 function showLink(node, result, request) {
   const panel = document.querySelector('[data-planner-link]');
   if (!panel) return;
+  // It carries the `panel` class, so an empty one is a bordered box
+  // with nothing in it. It is only ever visible while it holds a link.
+  panel.hidden = false;
   const level = SonoranPlannerParams.receivedDbm(result.dbm, request);
   const threshold = Number(request.sensitivity);
   const margin = level - threshold;
@@ -902,7 +918,7 @@ function wirePlanner() {
       state.coverageLayer.clearLayers();
       state.linkLayer.clearLayers();
       replace(document.querySelector('[data-planner-summary]'), []);
-      replace(document.querySelector('[data-planner-link]'), []);
+      hideLinkPanel();
       drawNodes();
       setNotice('', '');
     });

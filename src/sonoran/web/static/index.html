@@ -719,7 +719,10 @@
                 <span class="muted">Click the map to place the site. Click a node to use it, or to check that one link.</span>
               </p>
               <div data-planner-summary></div>
-              <div class="panel" data-planner-link style="margin-top: 1rem"></div>
+              <!-- Filled only when the reader clicks a node to check one link.
+                   Hidden until then: with the `panel` class and no content it
+                   drew an empty bordered box under the legend. -->
+              <div class="panel" data-planner-link hidden style="margin-top: 1rem"></div>
             </div>
           </div>
         </section>
