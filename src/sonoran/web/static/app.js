@@ -3791,10 +3791,29 @@ function healthCards(gaps, detail) {
     ? 'The gap assessment does not list this node.'
     : 'No gap assessment has been written yet.';
 
+  /*
+   * "Heard over the air", and the case that used to read Good.
+   *
+   * `sole_observer` is `bad` at exactly one direct gateway and
+   * `unknown` at zero (gaps/signals.py). Downgrading only on `bad`
+   * therefore let the zero case through as green, and the severity came
+   * out backwards: a node nothing had heard read Good, while a node one
+   * gateway had heard read Needs help. Measured on the live mesh, 218
+   * of 774 assessed nodes were in that state, each shown a green card
+   * over the words "0 gateways heard it directly".
+   *
+   * `unknown` is not a shade of `ok` here. A node nothing heard may be
+   * three hops deep and perfectly well, or it may be off the air, and
+   * this check cannot tell those apart -- which is exactly what
+   * `unknown` is for. It must not be coloured as health.
+   */
   const isolated = signal('radio_isolated');
   const sole = signal('sole_observer');
   let heardState = signalState(isolated);
-  if (heardState === 'ok' && sole && sole.state === 'bad') heardState = 'warn';
+  if (heardState === 'ok' && sole) {
+    if (sole.state === 'bad') heardState = 'warn';
+    else if (sole.state === 'unknown') heardState = 'unknown';
+  }
 
   const margin = signal('weak_best_link');
   const marginEvidence = margin ? margin.evidence || {} : {};
@@ -3821,13 +3840,31 @@ function healthCards(gaps, detail) {
 
   const confidence = detail.node.position_confidence || 'none';
   const deviation = row && row.position_deviation_m;
+  /*
+   * Sharing a position is optional, and rounding one is a choice.
+   *
+   * A rounded position used to read `warn`, over the sentence "Green
+   * when it shares its position at full precision." The mesh asks for
+   * neither. Rounding is how somebody keeps their house off a public
+   * map, and marking it as a fault told a careful owner they had got
+   * something wrong.
+   *
+   * So both of the shared cases are `ok`, and sharing nothing is
+   * neutral rather than a warning: worth mentioning, because it can be
+   * switched off by accident, but never scored against the node.
+   *
+   * The coverage and siting pages still hold their own line on this --
+   * they need an exact position to place a marker, and they say so
+   * where they need it. That is a statement about what a map can draw,
+   * not about whether a node is set up correctly.
+   */
   const position = {
-    exact: ['ok', 'Shares a full precision position.'],
-    coarse: ['warn', deviation
-      ? `Shares a position rounded to about ${count(Math.round(deviation))} m.`
-      : 'Shares a position at reduced precision.'],
-    none: ['unknown', 'Shares no position.'],
-  }[confidence] || ['unknown', 'Shares no position.'];
+    exact: ['ok', 'Shares its position.'],
+    coarse: ['ok', deviation
+      ? `Shares its position, rounded to about ${count(Math.round(deviation))} m.`
+      : 'Shares its position at reduced precision.'],
+    none: ['unknown', 'Shares no position. That is optional on this mesh.'],
+  }[confidence] || ['unknown', 'Shares no position. That is optional on this mesh.'];
 
   const measured = (value, fallback) => (row ? value : fallback);
   return el('div', { class: 'health-cards' },
@@ -3838,7 +3875,7 @@ function healthCards(gaps, detail) {
         `${count(row && row.direct_gateways)} gateways heard it directly. `
           + `${count(row && row.rf_packets)} of ${count(row && row.packets)} packets reached a gateway over the air.`,
         notAssessed),
-      green: 'Green when a gateway other than itself hears it over the air, and more than one gateway hears it directly.',
+      green: 'Green when a gateway other than itself hears it over the air, and more than one gateway hears it directly. Grey when nothing heard it directly, which this check cannot tell apart from a node several hops deep.',
       evidence: Boolean(row),
     }),
     healthCard({
@@ -3880,7 +3917,7 @@ function healthCards(gaps, detail) {
       name: 'Position',
       state: position[0],
       measure: position[1],
-      green: 'Green when it shares its position at full precision.',
+      green: 'Green whenever it shares a position, rounded or exact. Sharing one is optional.',
     }),
     el('div', { class: 'health-card state-none' },
       el('div', { class: 'health-head' },

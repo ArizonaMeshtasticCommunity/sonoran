@@ -177,3 +177,69 @@ def test_no_board_counts_packets() -> None:
 def test_leaderboards_default_to_the_busiest_preset(tmp_path: Path) -> None:
     _write(tmp_path, {"LongFast": [_row(NODE, 1)], "MediumFast": [_row(NODE, 1), _row("!1", 1)]})
     assert leaderboards._assessed_presets(_settings(tmp_path)) == ["MediumFast", "LongFast"]
+
+
+def _health_cards_source() -> str:
+    """The body of `healthCards`, which decides what colour a card is."""
+    source = (
+        Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
+    start = source.index("function healthCards(")
+    return source[start : start + 9000]
+
+
+def test_nothing_heard_is_not_coloured_as_health() -> None:
+    """#87. A node no gateway heard read Good, in green, on live data.
+
+    `sole_observer` is `bad` at exactly one direct gateway and
+    `unknown` at zero, so downgrading only on `bad` let the zero case
+    through as `ok`. The severity came out backwards with it: nothing
+    heard read Good, one gateway read Needs help. 218 of 774 assessed
+    nodes were in that state.
+
+    Fails against a downgrade that tests only for `bad`.
+    """
+    body = _health_cards_source()
+    start = body.index("let heardState")
+    window = body[start : start + 400]
+    assert "'unknown'" in window, (
+        "the heard-over-the-air card does not handle sole_observer being "
+        "unknown, so a node nothing heard directly is coloured as healthy"
+    )
+
+
+def test_a_rounded_position_is_not_a_fault() -> None:
+    """#96. Sharing a position is optional, and rounding one is a choice.
+
+    A coarse position used to read `warn` over the promise "Green when
+    it shares its position at full precision". The mesh asks for
+    neither, and rounding is how somebody keeps their house off a
+    public map.
+    """
+    body = _health_cards_source()
+    start = body.index("const position = {")
+    window = body[start : start + 500]
+    coarse = window[window.index("coarse:") :]
+    assert coarse.lstrip().startswith("coarse: ['ok'"), (
+        f"a rounded position is still scored as a fault: {coarse[:60]!r}"
+    )
+
+
+def test_no_card_promises_full_precision() -> None:
+    """The promise has to match the rule that decides the colour.
+
+    Only the `green:` lines are read. Prose about the old behaviour is
+    allowed to quote it -- a comment explaining why something changed
+    has to be able to say what it used to say.
+    """
+    import re
+
+    body = _health_cards_source()
+    promises = re.findall(r"green:\s*[`'\"]([^`'\"]*)", body)
+    assert promises, "no green promises found; the test is looking in the wrong place"
+    offenders = [text for text in promises if "full precision" in text]
+    assert not offenders, (
+        f"a card still tells the reader that green needs a full precision "
+        f"position, which is not what the check does and not a rule this "
+        f"mesh has: {offenders!r}"
+    )

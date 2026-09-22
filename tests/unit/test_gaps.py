@@ -244,16 +244,66 @@ def test_without_neighbour_reports_the_asymmetry_is_unknown_never_ok() -> None:
     assert found.state == UNKNOWN
 
 
-def test_a_healthy_node_never_reads_ok_on_the_asymmetry() -> None:
-    """The signal has exactly two states, and `ok` is not one of them."""
+def test_silence_about_neighbours_never_reads_ok() -> None:
+    """The invariant that matters, and the one this check was built on.
+
+    A node that published no neighbour reports has almost certainly got
+    the NeighborInfo module switched off, which says nothing at all
+    about its radio. That must never be read as health.
+
+    This replaces `test_a_healthy_node_never_reads_ok_on_the_asymmetry`,
+    which asserted the check had only two states. It has three now (see
+    #97): the old contract made the node page's promise, "Green when the
+    nodes it hears also hear it", impossible to keep, and made every
+    healthy node read Unknown for ever. The reasoning behind the old
+    test is kept here, narrowed to the case it actually argued for.
+    """
+    settings = _settings()
+    evidence = NodeEvidence(
+        node_num=1, packets=400, rf_packets=400, is_mqtt_gateway=True, neighbour_reports=0
+    )
+    isolated = signals.radio_isolated(evidence, settings, 31)
+    found = signals.hears_but_is_not_heard(evidence, settings, 31, isolated)
+    assert found.state == UNKNOWN
+    assert found.reason == "no_neighbour_reports"
+
+
+def test_a_proven_receiver_that_gateways_hear_reads_ok() -> None:
+    """Both directions measured, so both directions may be reported.
+
+    The receiver is proven by the node's own measured reports, and the
+    transmitter by `radio_isolated`. Nothing is being inferred.
+    """
     settings = _settings()
     evidence = NodeEvidence(
         node_num=1, packets=400, rf_packets=400, is_mqtt_gateway=True, neighbour_reports=9
     )
     isolated = signals.radio_isolated(evidence, settings, 31)
+    assert isolated.state == OK, "the fixture must be a node that was heard"
     found = signals.hears_but_is_not_heard(evidence, settings, 31, isolated)
-    assert found.state == UNKNOWN
-    assert found.state != OK
+    assert found.state == OK
+    assert found.reason == "heard_both_ways"
+
+
+def test_a_reason_never_describes_a_state_the_node_is_not_in() -> None:
+    """The defect behind #97, stated as a rule.
+
+    One reason string used to serve every outcome that was not the
+    fault, so a node with hundreds of measured neighbour reports was
+    told it had published "fewer than 2". A reason now belongs to one
+    state only, and `no_neighbour_reports` is reachable only when the
+    reports really are missing.
+    """
+    settings = _settings()
+    plenty = NodeEvidence(
+        node_num=1, packets=400, rf_packets=400, is_mqtt_gateway=True, neighbour_reports=379
+    )
+    isolated = signals.radio_isolated(plenty, settings, 31)
+    found = signals.hears_but_is_not_heard(plenty, settings, 31, isolated)
+    assert found.reason != "no_neighbour_reports", (
+        f"a node with {plenty.neighbour_reports} measured reports was given the "
+        f"sentence for having fewer than {settings.gaps_min_neighbour_reports}"
+    )
 
 
 # --------------------------------------------------------------- 4.3

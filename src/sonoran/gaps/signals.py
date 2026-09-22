@@ -157,6 +157,16 @@ REASON_SENTENCES: dict[str, str] = {
         "measured signal, so we cannot tell whether its receiver works. The "
         "NeighborInfo module is off on most nodes."
     ),
+    "heard_both_ways": (
+        "It published {neighbour_reports} neighbour reports with a measured signal, so "
+        "its receiver works, and gateways heard it over the air. Both directions are "
+        "accounted for."
+    ),
+    "receiver_works_transmitter_unmeasured": (
+        "It published {neighbour_reports} neighbour reports with a measured signal, so "
+        "its receiver works. Whether anything heard it over the air is not settled in "
+        "this window, so the pair is not judged."
+    ),
     "rf_in_few_hours": (
         "In {rf_hours} of the {active_hours} hours it was awake, something on the air "
         "heard it. In the rest, nothing did."
@@ -925,9 +935,21 @@ def hears_but_is_not_heard(
     is the only case in which this project will ever say a node cannot
     be heard.
 
-    Anything else is `unknown`, **never `ok`**. The absence of neighbour
-    reports is almost always the NeighborInfo module being switched off,
-    which says nothing at all about the radio.
+    **The absence of neighbour reports stays `unknown`, never `ok`.**
+    That absence is almost always the NeighborInfo module being
+    switched off, which says nothing at all about the radio.
+
+    `ok` is for the opposite case, and it is not the same claim. When a
+    node published enough measured reports to prove its receiver works
+    **and** `radio_isolated` says something heard it over the air, both
+    directions are accounted for by measurement. That is precisely what
+    the node page promises with "Green when the nodes it hears also
+    hear it", so refusing to say it left that promise unkeepable.
+
+    This used to return one reason for every outcome that was not the
+    fault, so a node with 379 neighbour reports was told it had
+    published "fewer than 2". A reason now belongs to one state only:
+    a sentence can no longer describe a state the node is not in.
     """
     counts: dict[str, object] = {
         "neighbour_reports": evidence.neighbour_reports,
@@ -936,9 +958,15 @@ def hears_but_is_not_heard(
         "radio_isolated_state": isolated.state,
     }
     proven_receiver = evidence.neighbour_reports >= settings.gaps_min_neighbour_reports
-    if isolated.state == BAD and proven_receiver:
+    if not proven_receiver:
+        return Signal(UNKNOWN, "no_neighbour_reports", evidence=counts)
+    if isolated.state == BAD:
         return Signal(BAD, "receiver_works_transmitter_does_not", evidence=counts)
-    return Signal(UNKNOWN, "no_neighbour_reports", evidence=counts)
+    if isolated.state == OK:
+        return Signal(OK, "heard_both_ways", evidence=counts)
+    # The receiver is proven and the other half is not settled. Saying
+    # `ok` here would claim a measurement nobody made.
+    return Signal(UNKNOWN, "receiver_works_transmitter_unmeasured", evidence=counts)
 
 
 # --------------------------------------------------------------- 4.3
