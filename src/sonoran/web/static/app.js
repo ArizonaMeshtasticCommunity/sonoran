@@ -5305,7 +5305,11 @@ function neighbourValues(rows) {
 /** The panels that show what a packet said. */
 function decodedPanels(packet) {
   const decoded = packet.decoded;
-  if ((!decoded || !decoded.values || !decoded.values.length) && packet.payload_json) {
+  // An empty object is kept too: a traceroute request with no route yet
+  // serialises to nothing. It says nothing, so the usual panel is shown.
+  const stored = packet.payload_json;
+  if ((!decoded || !decoded.values || !decoded.values.length)
+      && stored && Object.keys(stored).length) {
     return storedPanel(packet);
   }
   if (!decoded || !decoded.values || !decoded.values.length) {
