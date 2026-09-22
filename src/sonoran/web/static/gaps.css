@@ -263,3 +263,31 @@
 }
 
 .gap-siting h4 { font-size: .85rem; margin-bottom: .3rem; }
+
+/*
+ * The page rework (#62): tiles that open, one table with two views, and
+ * the long explanations behind a disclosure.
+ */
+.gap-tile button.gap-half {
+  background: none; border: 1px solid transparent; border-radius: .4rem;
+  padding: .2rem .35rem; margin: -.2rem -.35rem; color: inherit; font: inherit;
+  text-align: left; cursor: pointer;
+}
+.gap-tile button.gap-half:hover,
+.gap-tile button.gap-half:focus-visible { border-color: var(--line); }
+.gap-tile button.gap-half.active { border-color: currentColor; background: var(--panel-2); }
+.gap-toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.gap-toolbar .segmented { display: flex; flex-wrap: wrap; gap: .35rem; }
+.gap-toolbar input[type="search"] { min-width: 12rem; }
+.gap-filter { display: inline-flex; gap: .5rem; align-items: center; padding: .2rem .6rem; border: 1px solid var(--line); border-radius: 999px; font-size: .82rem; }
+.gap-open { white-space: nowrap; font-size: .82rem; }
+.gap-more > summary { cursor: pointer; font-weight: 600; }
+.gap-more[open] > summary { margin-bottom: .5rem; }
+details.panel.gap-more { padding-top: .8rem; padding-bottom: .8rem; }
+
+/* The light theme (#50). See the note at the end of app.css. */
+:root[data-theme="light"] {
+  --gap-unknown: #4d6891;
+  --gap-unknown-line: #a9b8cc;
+  --gap-candidate: #94650f;
+}

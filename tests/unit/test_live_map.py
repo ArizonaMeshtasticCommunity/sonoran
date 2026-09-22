@@ -851,3 +851,18 @@ def test_the_engine_takes_hidden_marks_off_at_once() -> None:
     # A packet the viewer hid is not counted as dropped.
     tick = live[live.index("if (!shows(item.packet)) continue;") - 200 :]
     assert tick.index("if (!shows(item.packet)) continue;") < tick.index("admitPacket(item.packet)")
+
+
+def test_the_docked_key_and_the_watch_legend_say_the_same_thing() -> None:
+    """#46: one description of the map, drawn in two places.
+
+    The key docked on the map and the watch mode legend both draw
+    `mapKeyBody`, so they cannot drift apart. It names the colour rule
+    for a line and says what a line to a gateway is not.
+    """
+    app = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert app.count("mapKeyBody()") >= 2
+    assert "installMapKey(map)" in app
+    assert "A line from a node to a gateway is an upload, not a radio link." in app
+    # The choice is remembered, and refused storage does not break the key.
+    assert "localStorage.setItem(MAP_KEY_STORE" in app

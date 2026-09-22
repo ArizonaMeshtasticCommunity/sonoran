@@ -91,6 +91,15 @@ def _read(settings: Settings, preset: str) -> dict[str, object] | None:
     )
 
 
+def read_assessment(settings: Settings, preset: str) -> dict[str, object] | None:
+    """Return one preset's assessment for another route to read.
+
+    The node page reads the same rows through the same cache, so the
+    two pages cannot hold different copies of one node's findings.
+    """
+    return _read(settings, preset)
+
+
 def _read_file(
     key: str,
     path: Path | None,

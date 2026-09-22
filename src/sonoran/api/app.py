@@ -23,7 +23,9 @@ from sonoran.api.routes.coverage import router as coverage_router
 from sonoran.api.routes.embed import router as embed_router
 from sonoran.api.routes.gaps import router as gaps_router
 from sonoran.api.routes.graph import router as graph_router
+from sonoran.api.routes.leaderboards import router as leaderboards_router
 from sonoran.api.routes.map import router as map_router
+from sonoran.api.routes.node_page import router as node_page_router
 from sonoran.api.routes.nodes import router as nodes_router
 from sonoran.api.routes.packets import router as packets_router
 from sonoran.api.routes.rf import router as rf_router
@@ -299,6 +301,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.radio_overrides = load_overrides(settings.radio_overrides_path)
     app.add_middleware(SecurityHeadersMiddleware)
     app.include_router(nodes_router)
+    app.include_router(node_page_router)
     app.include_router(chat_router)
     app.include_router(coverage_router)
     app.include_router(embed_router)
@@ -307,6 +310,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(map_router)
     app.include_router(packets_router)
     app.include_router(stats_router)
+    app.include_router(leaderboards_router)
     app.include_router(terrain_router)
     app.include_router(traceroutes_router)
     app.include_router(rf_router)

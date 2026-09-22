@@ -4,7 +4,18 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import ColumnElement, Select, and_, case, func, not_, or_, select, true
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    and_,
+    case,
+    func,
+    not_,
+    or_,
+    select,
+    true,
+    tuple_,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import (
@@ -815,28 +826,248 @@ async def heard_by(
     return await _heard_by(session, require_node_num(node_id), since)
 
 
+# The columns the packet timeline may be ordered by (#54). A whitelist,
+# as `SORTS` is for the node list: nothing a caller sends reaches the
+# query.
+PACKET_SORTS = ("time", "type", "to", "channel", "size", "hops", "gateways", "snr", "rssi")
+
+# The sorts that read the observations rather than the packet row. Each
+# one has to summarise every observation in the window before it can
+# order anything, so it needs a window, and a bounded one.
+SEEN_SORTS = frozenset({"hops", "gateways", "snr", "rssi"})
+SEEN_SORT_MAX_HOURS = 168
+
+# The window a `heard` listing reads when none is given, and the most it
+# may read. It walks one gateway's uploads, which run to tens of
+# thousands a day on a busy gateway.
+HEARD_DEFAULT_HOURS = 24
+HEARD_MAX_HOURS = 168
+
+
+def _parse_packet_type(value: str) -> int:
+    """Return the port number a type filter names: a number or a protobuf name."""
+    if value.isdecimal():
+        return int(value)
+    try:
+        return portnums_pb2.PortNum.Value(value)  # type: ignore[attr-defined]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid portnum") from exc
+
+
+def _observations(keys: Any) -> Any:
+    """Return the observation summary of the packets `keys` selects.
+
+    `keys` is a select of (`from_node_num`, `packet_id`) pairs. The
+    summary counts gateways that are not the sender (AGENTS.md 9.5.1)
+    and takes a signal reading only where no hop was used (9.5).
+    """
+    uploaded_by_other = PacketSeen.gateway_node_num != PacketSeen.from_node_num
+    direct = and_(Packet.hop_start == PacketSeen.hop_limit, uploaded_by_other)
+    wanted = keys.subquery()
+    return (
+        select(
+            PacketSeen.from_node_num,
+            PacketSeen.packet_id,
+            func.count(func.distinct(PacketSeen.gateway_node_num))
+            .filter(uploaded_by_other)
+            .label("gateways"),
+            func.min(Packet.hop_start - PacketSeen.hop_limit)
+            .filter(uploaded_by_other)
+            .label("fewest_hops"),
+            func.max(PacketSeen.rx_snr).filter(direct).label("direct_snr"),
+            func.max(PacketSeen.rx_rssi).filter(direct).label("direct_rssi"),
+        )
+        .select_from(PacketSeen)
+        .join(
+            wanted,
+            and_(
+                wanted.c.from_node_num == PacketSeen.from_node_num,
+                wanted.c.packet_id == PacketSeen.packet_id,
+            ),
+        )
+        .join(
+            Packet,
+            and_(
+                Packet.from_node_num == PacketSeen.from_node_num,
+                Packet.packet_id == PacketSeen.packet_id,
+            ),
+        )
+        .group_by(PacketSeen.from_node_num, PacketSeen.packet_id)
+        .subquery()
+    )
+
+
 @router.get("/{node_id}/packets")
 async def node_packets(
     node_id: str,
+    response: Response,
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    hours: int | None = Query(default=None, ge=1, le=720),
+    portnum: str | None = None,
+    channel: str | None = None,
+    direction: str = Query(default="sent", pattern="^(sent|heard)$"),
+    sort: str = Query(default="time"),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
-    """Return recent packets from one node."""
-    rows = await session.scalars(
-        select(Packet)
-        .where(Packet.from_node_num == require_node_num(node_id))
-        .order_by(Packet.first_seen_at.desc())
-        .limit(limit)
+    """Return the packets of one node, sorted and filtered (#54).
+
+    `direction=sent` lists what the node sent. `direction=heard` lists
+    what it uploaded as an MQTT gateway on behalf of other nodes: the
+    packets it heard. A `heard` listing reads at most
+    `HEARD_MAX_HOURS`, and `HEARD_DEFAULT_HOURS` when no window is
+    given.
+
+    The body stays a bare array, as it was, and the count of everything
+    that matches travels in `X-Total-Count`, as it does for the node
+    list. A page that counted the rows it received would report the cap
+    as the whole history.
+
+    Each row carries a summary of its observations:
+
+    - `gateways`: distinct gateways that uploaded it, never the sender
+      uploading its own packet (AGENTS.md 9.5.1).
+    - `fewest_hops`: the fewest relays any such gateway saw it use.
+    - `direct_snr` and `direct_rssi`: the best reading at a gateway that
+      heard it with no hop used. A relayed reading belongs to the last
+      hop, not to the sender (AGENTS.md 9.5).
+    - `size_bytes`: the stored protobuf.
+
+    **The summary is worked out for the rows returned, and no more.** A
+    sort by one of those columns has to summarise the whole window
+    first, so it needs `hours` of `SEEN_SORT_MAX_HOURS` or less. That
+    keeps a 30 day sort off a shared database.
+    """
+    if sort not in PACKET_SORTS:
+        raise HTTPException(
+            status_code=422, detail=f"sort must be one of: {', '.join(PACKET_SORTS)}"
+        )
+    if sort in SEEN_SORTS and (hours is None or hours > SEEN_SORT_MAX_HOURS):
+        raise HTTPException(
+            status_code=422,
+            detail=f"sorting by {sort} needs hours of {SEEN_SORT_MAX_HOURS} or less",
+        )
+    if direction == "heard":
+        hours = min(hours or HEARD_DEFAULT_HOURS, HEARD_MAX_HOURS)
+    node_num = require_node_num(node_id)
+    since = None if hours is None else datetime.now(UTC) - timedelta(hours=hours)
+
+    filters: list[ColumnElement[bool]] = []
+    if direction == "sent":
+        filters.append(Packet.from_node_num == node_num)
+        if since is not None:
+            filters.append(Packet.first_seen_at >= since)
+    else:
+        # The packets this gateway uploaded for other senders. Its own
+        # packets are on the `sent` listing.
+        uploads = (
+            select(PacketSeen.from_node_num, PacketSeen.packet_id)
+            .where(
+                PacketSeen.gateway_node_num == node_num,
+                PacketSeen.from_node_num != node_num,
+                PacketSeen.seen_at >= since,
+            )
+            .distinct()
+            .subquery()
+        )
+        filters.append(
+            tuple_(Packet.from_node_num, Packet.packet_id).in_(
+                select(uploads.c.from_node_num, uploads.c.packet_id)
+            )
+        )
+        # A packet row is dated by its first upload, which may be a
+        # little before this gateway's. The lower bound keeps the scan
+        # to the chunks that can hold it.
+        filters.append(Packet.first_seen_at >= since - timedelta(hours=1))  # type: ignore[operator]
+    if portnum is not None:
+        filters.append(Packet.portnum == _parse_packet_type(portnum))
+    if channel:
+        filters.append(Packet.channel == channel)
+
+    total = await session.scalar(select(func.count()).select_from(Packet).where(*filters))
+    response.headers["X-Total-Count"] = str(total or 0)
+
+    packet_columns = {
+        "time": Packet.first_seen_at,
+        "type": Packet.portnum,
+        "to": Packet.to_node_num,
+        "channel": Packet.channel,
+        "size": func.octet_length(Packet.raw_bytes),
+    }
+    if sort in SEEN_SORTS:
+        # Summarise the whole window, then order by the summary.
+        seen = _observations(select(Packet.from_node_num, Packet.packet_id).where(*filters))
+        column = {
+            "hops": seen.c.fewest_hops,
+            "gateways": seen.c.gateways,
+            "snr": seen.c.direct_snr,
+            "rssi": seen.c.direct_rssi,
+        }[sort]
+        statement = (
+            select(Packet)
+            .outerjoin(
+                seen,
+                and_(
+                    seen.c.from_node_num == Packet.from_node_num,
+                    seen.c.packet_id == Packet.packet_id,
+                ),
+            )
+            .where(*filters)
+        )
+    else:
+        column = packet_columns[sort]
+        statement = select(Packet).where(*filters)
+
+    ordered = column.asc() if order == "asc" else column.desc()
+    # Nulls last and a total order, exactly as the node list does, so a
+    # row never lands on two pages or on none.
+    page = (
+        await session.scalars(
+            statement.order_by(ordered.nullslast(), Packet.first_seen_at.desc(), Packet.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    if not page:
+        return []
+
+    keys = [(item.from_node_num, item.packet_id) for item in page]
+    summary = _observations(
+        select(Packet.from_node_num, Packet.packet_id).where(
+            tuple_(Packet.from_node_num, Packet.packet_id).in_(keys)
+        )
     )
-    return [
-        {
-            "packet_id": item.packet_id,
-            "portnum": _portnum_name(item.portnum),
-            "channel": item.channel,
-            "seen_at": item.first_seen_at,
-        }
-        for item in rows.all()
-    ]
+    observed = {
+        (row.from_node_num, row.packet_id): row
+        for row in (await session.execute(select(summary))).all()
+    }
+    names = await resolve_names(
+        session, {end for item in page for end in (item.from_node_num, item.to_node_num)}
+    )
+    rows: list[dict[str, object]] = []
+    for item in page:
+        facts = observed.get((item.from_node_num, item.packet_id))
+        rows.append(
+            {
+                "packet_id": item.packet_id,
+                "portnum": _portnum_name(item.portnum),
+                "channel": item.channel,
+                "seen_at": item.first_seen_at,
+                "from_node": format_node_id(item.from_node_num),
+                "from_name": name_of(names, item.from_node_num),
+                "to_node": format_node_id(item.to_node_num),
+                "to_name": name_of(names, item.to_node_num),
+                "hop_start": item.hop_start,
+                "hop_limit": item.hop_limit,
+                "gateways": facts.gateways if facts else 0,
+                "fewest_hops": facts.fewest_hops if facts else None,
+                "direct_snr": facts.direct_snr if facts else None,
+                "direct_rssi": facts.direct_rssi if facts else None,
+                "size_bytes": None if item.raw_bytes is None else len(item.raw_bytes),
+            }
+        )
+    return rows
 
 
 @router.get("/{node_id}/telemetry")

@@ -676,6 +676,49 @@ def test_a_drawn_link_always_has_its_evidence(migrated_engine, timescale_url: st
             assert link["report_count"] > 0, f"{source} to {target} was drawn with no evidence"
 
 
+def test_a_reply_counts_its_way_back(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A reply's return path is evidence in the other direction (#73).
+
+    A hop that only the way back names must still open a link page that
+    explains it, so the graph and the link page keep agreeing.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for node_num in (6401, 6402, 6403):
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, first_seen, updated_at, "
+                    "last_heard) VALUES (:n, :nid, :sn, :now, :now, :now) "
+                    "ON CONFLICT (node_num) DO NOTHING"
+                ),
+                {"n": node_num, "nid": f"!{node_num:08x}", "sn": f"W{node_num}", "now": now},
+            )
+        # A direct reply: 6401 asked 6402, which answered by way of 6403.
+        connection.execute(
+            text(
+                "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                "request_id, route, route_back, snr_towards, snr_back, seen_at) "
+                "VALUES (6402, 6401, 'LongModerate', 640001, 640000, CAST('[]' AS jsonb), "
+                "CAST('[6403]' AS jsonb), CAST('[12]' AS jsonb), CAST('[8, 4]' AS jsonb), :now)"
+            ),
+            {"now": now},
+        )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        links = client.get("/api/graph?hours=24&channel=LongModerate").json()["links"]
+        by_pair = {frozenset((link["source"], link["target"])): link for link in links}
+        back = by_pair[frozenset(("!00001902", "!00001903"))]
+        evidence = client.get(
+            "/api/graph/link?a=!00001902&b=!00001903&hours=24&channel=LongModerate"
+        ).json()
+
+    assert sorted(by_pair[frozenset(("!00001901", "!00001902"))]["each_way"]) == [0, 1]
+    assert back["snr"] == 2.0
+    assert back["strength"] == "weak"
+    assert evidence["report_count"] == 1, "a hop only the way back names still has evidence"
+
+
 def test_a_reply_does_not_draw_links_to_its_own_endpoints(
     migrated_engine, timescale_url: str
 ) -> None:  # type: ignore[no-untyped-def]

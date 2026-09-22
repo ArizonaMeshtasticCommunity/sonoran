@@ -48,6 +48,13 @@
     loaded: false,
     map: null,
     markers: null,
+    // Which rows the one table shows (#62). `measured` holds the nodes
+    // with a finding, `unknown` the nodes we cannot judge. A tile click
+    // sets `filter`, which looks across both.
+    view: 'measured',
+    filter: null,
+    query: '',
+    sort: null,
   };
 
   async function fetchJson(path) {
@@ -142,16 +149,32 @@
 
   /* One tile per signal, with `bad` and `unknown` side by side. The
      unknown number is never hidden: it is the honest half of the count. */
-  function signalTile(name, label, counts) {
+  function signalTile(name, label, counts, page) {
+    /* Each half opens the nodes behind its number (#62). A tile that
+       could not be opened left the reader with a count and no names. */
+    const half = (kind, n, word) => {
+      const active = state.filter && state.filter.signal === name && state.filter.state === kind;
+      return el('button', {
+        type: 'button',
+        class: `gap-half ${kind}${active ? ' active' : ''}`,
+        'aria-pressed': String(Boolean(active)),
+        title: `Show the ${n} nodes where "${label || name}" is ${kind === 'bad' ? 'found' : 'not known'}`,
+        onclick: () => {
+          state.filter = active ? null : { signal: name, state: kind, label: label || name };
+          drawCounts(page, state.summary);
+          drawNodes(page);
+          const table = $('[data-gaps-table]', page);
+          if (table && !active) table.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        },
+      },
+      el('span', { class: 'gap-n', text: String(n) }),
+      el('span', { class: 'gap-k', text: word }));
+    };
     return el('div', { class: 'panel gap-tile' },
       el('div', { class: 'stat' },
         el('div', { class: 'gap-pair' },
-          el('div', { class: 'gap-half bad' },
-            el('span', { class: 'gap-n', text: String(counts.bad || 0) }),
-            el('span', { class: 'gap-k', text: 'found' })),
-          el('div', { class: 'gap-half unknown' },
-            el('span', { class: 'gap-n', text: String(counts.unknown || 0) }),
-            el('span', { class: 'gap-k', text: 'cannot tell' }))),
+          half('bad', counts.bad || 0, 'found'),
+          half('unknown', counts.unknown || 0, 'cannot tell')),
         el('span', { class: 'gap-label', text: label || name })));
   }
 
@@ -162,7 +185,7 @@
     const labels = summary.signal_labels || {};
     const counts = summary.signals || {};
     replace(target, order.map((name) =>
-      signalTile(name, labels[name], counts[name] || {})));
+      signalTile(name, labels[name], counts[name] || {}, page)));
   }
 
   /* ---------------------------------------------------------- table */
@@ -188,7 +211,7 @@
     /* Where a reader goes next. The node page for the node itself; no
        link page, because no signal here names a link to open. */
     const links = el('div', { class: 'gap-links' },
-      el('a', { class: 'linky', href: `#node/${row.node_id}`, text: 'Open this node' }),
+      el('a', { class: 'linky', href: `#node/${row.node_id}`, text: 'Open this node and its potential issues' }),
       el('span', { class: 'muted', text: `${row.packets} packets over ${row.active_hours} hours` }),
       row.position_confidence === 'coarse'
         ? el('span', {
@@ -215,9 +238,24 @@
   function drawTable(target, rows, summary, emptyMessage) {
     const order = summary.signal_order || [];
     const labels = summary.signal_labels || {};
+    const sortState = state.sort || { key: null, order: null };
+    const onSort = (key, order) => {
+      state.sort = { key, order };
+      drawNodes($('[data-page="gaps"]'));
+    };
+    const sortable = (key) => ({ sort: key, sortState, onSort });
     const columns = [
       {
+        label: 'Evidence',
+        /* A visible way in (#62). The row still opens on a click, but a
+           bare click target is one nobody finds. */
+        cell: () => el('button', {
+          type: 'button', class: 'linky gap-open', 'aria-expanded': 'false', text: 'Open \u25b8',
+        }),
+      },
+      {
         label: 'Node',
+        ...sortable('name'),
         cell: (row) => el('span', {}, nodeChip(row)),
       },
       /*
@@ -225,12 +263,13 @@
        * value on hover. This column printed the enum, so the same node
        * read "Client base" on the nodes page and `CLIENT_BASE` here.
        */
-      { label: 'Role', cell: (row) => roleCell(row.role) },
+      { label: 'Role', ...sortable('role'), cell: (row) => roleCell(row.role) },
       ...order.map((name) => ({
         label: labels[name] || name,
+        ...sortable(name),
         cell: (row) => chip((row.signals || {})[name]),
       })),
-      { label: 'Packets', num: true, cell: (row) => row.packets },
+      { label: 'Packets', num: true, ...sortable('packets'), cell: (row) => row.packets },
     ];
 
     const built = table(columns, rows, emptyMessage);
@@ -248,8 +287,13 @@
       tr.setAttribute('role', 'button');
       tr.setAttribute('aria-expanded', 'false');
       tr.title = 'Open the evidence';
+      const opener = tr.querySelector('.gap-open');
       const toggle = () => {
         const open = tr.getAttribute('aria-expanded') === 'true';
+        if (opener) {
+          opener.setAttribute('aria-expanded', String(!open));
+          opener.textContent = open ? 'Open \u25b8' : 'Close \u25be';
+        }
         if (open) {
           if (tr.nextElementSibling && tr.nextElementSibling.classList.contains('gap-detail')) {
             tr.nextElementSibling.remove();
@@ -266,6 +310,7 @@
       };
       tr.addEventListener('click', (event) => {
         /* A click on the node chip opens the node page. Let it. */
+        if (event.target.closest('.gap-open')) { toggle(); return; }
         if (event.target.closest('button, a')) return;
         toggle();
       });
@@ -276,6 +321,113 @@
         }
       });
     });
+  }
+
+  /* ------------------------------------------------ the one table */
+
+  /*
+   * The two views, and the order a signal column sorts in.
+   *
+   * A node with a fault we can measure and a node we cannot measure at
+   * all are different answers, so they stay two views, each with its
+   * own count on its own button. `unknown` sorts between the two
+   * others, never with `ok`: not measured is not fine.
+   */
+  const VIEWS = [
+    ['measured', 'Something we can measure', (row) => row.bad_count > 0],
+    ['unknown', 'Not enough evidence', (row) => row.bad_count === 0 && row.unknown_count > 0],
+  ];
+  const STATE_ORDER = { bad: 0, unknown: 1, ok: 2 };
+
+  /*
+   * Sorting in the browser is safe here, where it is not on the node
+   * list, because this page holds every assessed row: the endpoint
+   * returns up to 500 and says how many matched. If that ever stops
+   * being every row, `drawNodes` says so rather than sort a sample.
+   */
+  function sortRows(rows) {
+    if (!state.sort || !state.sort.key) return rows;
+    const { key, order } = state.sort;
+    const value = (row) => {
+      if (key === 'name') return (row.display_name || row.node_id || '').toLowerCase();
+      if (key === 'role') return row.role || '\uffff';
+      if (key === 'packets') return row.packets || 0;
+      const signal = (row.signals || {})[key];
+      return signal ? STATE_ORDER[signal.state] ?? 3 : 3;
+    };
+    const sign = order === 'desc' ? -1 : 1;
+    // The server's order breaks every tie, so equal rows keep it.
+    const rank = new Map(rows.map((row, index) => [row, index]));
+    return rows.slice().sort((a, b) => {
+      const x = value(a);
+      const y = value(b);
+      if (x < y) return -sign;
+      if (x > y) return sign;
+      return rank.get(a) - rank.get(b);
+    });
+  }
+
+  function drawNodes(page) {
+    const summary = state.summary;
+    if (!summary) return;
+    const all = state.rows;
+    const counts = Object.fromEntries(VIEWS.map(([key, , test]) => [key, all.filter(test).length]));
+
+    replace($('[data-gaps-view]', page), VIEWS.map(([key, label]) => el('button', {
+      type: 'button',
+      class: 'toggle',
+      'aria-pressed': String(!state.filter && state.view === key),
+      text: `${label} (${counts[key]})`,
+      onclick: () => {
+        state.view = key;
+        state.filter = null;
+        drawCounts(page, summary);
+        drawNodes(page);
+      },
+    })));
+
+    let rows;
+    let note;
+    const filterChip = $('[data-gaps-filter]', page);
+    if (state.filter) {
+      const { signal, label } = state.filter;
+      rows = all.filter((row) => {
+        const found = (row.signals || {})[signal];
+        return found && found.state === state.filter.state;
+      });
+      note = state.filter.state === 'bad'
+        ? `Nodes where "${label}" is found.`
+        : `Nodes where "${label}" cannot be told. That is not the same as fine.`;
+      filterChip.hidden = false;
+      replace(filterChip,
+        el('span', { text: label }),
+        el('button', {
+          type: 'button', class: 'linky', text: 'Clear',
+          onclick: () => { state.filter = null; drawCounts(page, summary); drawNodes(page); },
+        }));
+    } else {
+      const [, , test] = VIEWS.find(([key]) => key === state.view) || VIEWS[0];
+      rows = all.filter(test);
+      note = state.view === 'unknown'
+        ? 'No fault we can measure, and at least one thing we cannot judge. Not a clean bill of health.'
+        : 'Worst first. Open a row for the evidence behind it.';
+      filterChip.hidden = true;
+      replace(filterChip);
+    }
+    if (state.query) {
+      rows = rows.filter((row) =>
+        (row.display_name || '').toLowerCase().includes(state.query)
+        || (row.node_id || '').toLowerCase().includes(state.query));
+    }
+    if (state.matched > all.length) {
+      note += ` Only the first ${all.length} of ${state.matched} assessed nodes are loaded, so sorting and finding cover those alone.`;
+    }
+    const heading = $('[data-gaps-table-heading]', page);
+    if (heading) heading.textContent = `Nodes: ${rows.length}`;
+    const viewNote = $('[data-gaps-view-note]', page);
+    if (viewNote) viewNote.textContent = note;
+    drawTable($('[data-gaps-table]', page), sortRows(rows), summary,
+      state.query ? 'No node here matches that name.' : 'No node on this preset is in this view.');
   }
 
   /* ------------------------------------------------------------ map */
@@ -405,8 +557,8 @@
           'run sonoran-gaps-once to make one now.';
       notice(page, why, '');
       replace($('[data-gaps-counts]', page));
+      replace($('[data-gaps-view]', page));
       replace($('[data-gaps-table]', page), empty('Nothing measured yet.'));
-      replace($('[data-gaps-unknown-table]', page), empty('Nothing measured yet.'));
       const lead = $('[data-gaps-lead]', page);
       if (lead) lead.textContent = '';
       const window_ = $('[data-gaps-window]', page);
@@ -450,32 +602,8 @@
 
     const rows = listing.nodes || [];
     state.rows = rows;
-
-    /*
-     * Two tables, on purpose.
-     *
-     * A node with a fault we can measure and a node we cannot measure at
-     * all are different answers, and a single list sorted by severity
-     * hides the second behind the first. The unknown bucket gets its own
-     * section with its own count, not a filter a reader has to find.
-     */
-    const faulty = rows.filter((row) => row.bad_count > 0);
-    const unmeasured = rows.filter((row) => row.bad_count === 0 && row.unknown_count > 0);
-
-    const heading = $('[data-gaps-table-heading]', page);
-    if (heading) {
-      heading.textContent = `Nodes with something we can measure: ${faulty.length}`;
-    }
-    const unknownHeading = $('[data-gaps-unknown-heading]', page);
-    if (unknownHeading) {
-      unknownHeading.textContent = `Not enough evidence: ${unmeasured.length} nodes`;
-    }
-
-    drawTable($('[data-gaps-table]', page), faulty, summary,
-      'No node on this preset shows a fault this can measure.');
-    drawTable($('[data-gaps-unknown-table]', page), unmeasured, summary,
-      'Every assessed node had enough evidence to judge.');
-
+    state.matched = listing.matched_count ?? rows.length;
+    drawNodes(page);
     drawMap(rows);
 
     /* The siting half, in its own file. It is handed this page's preset
@@ -490,10 +618,18 @@
     }
 
     if (!state.loaded) {
+      const search = $('[data-gaps-search]', page);
+      if (search) {
+        search.addEventListener('input', () => {
+          state.query = search.value.trim().toLowerCase();
+          drawNodes(page);
+        });
+      }
       const picker = $('[data-gaps-preset]', page);
       if (picker) {
         picker.addEventListener('change', () => {
           state.preset = picker.value;
+          state.filter = null;
           show(page);
         });
       }

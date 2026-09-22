@@ -110,6 +110,9 @@ attribution beside it. See `docs/PLANNER.md` section 6.
 
 ### Update the vendored config checker
 
+0. Run `tools/check_config_checker_pin.sh` to see whether upstream has
+   moved past the pin. It needs read access to the upstream repository;
+   set `CONFIG_CHECKER_REPO` to a URL you can read.
 1. Copy the new files over `web/static/vendor/config-checker/`, leaving
    out `tests/`, `.github/`, and `wrangler.jsonc`. Never edit them here.
 2. Record the new commit in that directory's `PROVENANCE.md`.

@@ -667,6 +667,9 @@ def test_the_gaps_routes_are_get_only(tmp_path: Path) -> None:
         # it can be served.
         "/api/gaps/areas",
         "/api/gaps/candidates",
+        # The node page reads one node's rows from the same artefact
+        # (#56). It opens no database session either.
+        "/api/nodes/{node_id}/gaps",
     }
     for path, methods in found:
         assert methods <= {"GET"}, path
@@ -768,13 +771,25 @@ def test_the_page_uses_base_relative_api_paths() -> None:
 
 
 def test_the_page_names_the_unknown_bucket_and_the_limits() -> None:
-    """Neither may be cut, and neither may be hidden behind a toggle."""
+    """Neither may be cut, and the unknown count is never hidden.
+
+    Since #62 the two lists are two views of one table rather than two
+    tables stacked on one screen. The unknown view keeps its own button
+    with its own count, so the number is always on the page, and its
+    rows are never merged into the measured ones. The limits moved into
+    a "How this is measured" disclosure; the list itself still carries
+    no `hidden` attribute.
+    """
     index = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "data-gaps-unknown-table" in index
+    page = (STATIC / "gaps.js").read_text(encoding="utf-8")
+    assert "data-gaps-view" in index
+    assert "'Not enough evidence'" in page
+    # Each view button says how many rows it holds.
+    assert "`${label} (${counts[key]})`" in page
+    # An unknown row is a row with no finding and something not judged.
+    assert "row.bad_count === 0 && row.unknown_count > 0" in page
     assert "data-gaps-limits" in index
-    # The limits list carries no `hidden` attribute of its own.
     assert "data-gaps-limits hidden" not in index
-    assert "data-gaps-unknown-table hidden" not in index
 
 
 def test_the_page_draws_no_link_between_two_nodes() -> None:

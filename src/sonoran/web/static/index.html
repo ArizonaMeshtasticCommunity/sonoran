@@ -3,6 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <!--
+      The theme, set before anything paints (#50). "system" follows the
+      operating system and is the default. The choice is kept per
+      browser. Storage can be refused, and then the system decides.
+      The attribute is always set to light or dark, so app.css needs one
+      block of light values and not a second copy inside a media query.
+    -->
+    <script>
+      (function () {
+        var mode = 'system';
+        try { mode = localStorage.getItem('sonoran.theme') || 'system'; } catch (error) {}
+        var light = mode === 'light'
+          || (mode === 'system' && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme-mode', mode);
+      }());
+    </script>
+    <!--
       The viewport declaration carries no `user-scalable` and no
       `maximum-scale`, so the page may always be pinched to 200 percent
       and beyond. W3C ACT rule b4f0c3 "Meta viewport allows for zoom",
@@ -132,6 +149,13 @@
         <p class="status" data-status>
           <span class="dot"></span><span data-status-text>Connecting</span>
         </p>
+        <label class="theme-switch">Theme
+          <select data-theme-choice aria-label="Colour theme">
+            <option value="system">Follow the system</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
       </aside>
 
       <main class="content" id="main" tabindex="-1">
@@ -493,23 +517,41 @@
           <p class="notice" data-gaps-notice hidden></p>
 
           <p class="gap-lead" data-gaps-lead></p>
-          <p class="gap-window" data-gaps-window></p>
 
           <!-- One tile per signal. Each carries the count we found and
                the count we cannot judge, side by side. The second number
-               is never hidden. -->
+               is never hidden. Each half is a button that filters the
+               table below to those nodes (#62). -->
           <div class="grid" data-gaps-counts></div>
 
+          <!--
+            One table, not two (#62). "Something we can measure" and "not
+            enough evidence" stay two different answers: they are two
+            views, each with its own count on its button, and unknown is
+            never merged into fine. They stopped being two walls of rows
+            stacked on one screen.
+          -->
+          <div class="panel span-2 gap-nodes">
+            <h3 data-gaps-table-heading>Nodes</h3>
+            <div class="gap-toolbar">
+              <div class="segmented" role="group" aria-label="Which nodes" data-gaps-view></div>
+              <input type="search" placeholder="Find a node" aria-label="Find a node" data-gaps-search>
+              <span class="gap-filter" data-gaps-filter hidden></span>
+            </div>
+            <p class="sub" data-gaps-view-note style="margin:.4rem 0 .6rem"></p>
+            <div class="table-wrap" data-gaps-table></div>
+          </div>
+
           <div class="panel span-2">
-            <h3>Where they are</h3>
+            <h3>Where a node would help, and who it would help</h3>
             <div class="gap-map-shell">
               <div id="gaps-map"></div>
             </div>
             <div class="gap-legend">
-              <span><i class="bad"></i>A fault we can measure</span>
-              <span><i class="unknown"></i>Not enough evidence</span>
               <span><i class="area"></i>An area worth siting against</span>
               <span><i class="candidate"></i>A place a node could go</span>
+              <span><i class="bad"></i>A node with a fault we can measure</span>
+              <span><i class="unknown"></i>A node with not enough evidence</span>
               <span class="muted">No line is drawn between nodes: no signal on this page names both ends of one link.</span>
             </div>
             <p class="sub" data-gaps-map-note style="margin:.5rem 0 0"></p>
@@ -520,33 +562,30 @@
                the map, and its own list of what it cannot know. -->
           <div class="panel span-2 gap-siting">
             <h3 data-siting-heading>Where a node would help</h3>
-            <p class="sub" style="margin:0 0 .6rem">The struggling nodes are grouped into neighbourhoods, and each neighbourhood is offered places a 1&nbsp;W node could stand: a node that is already there on a taller mast, or high ground taken from the terrain. <strong>This half is predicted, not measured.</strong></p>
+            <p class="sub" style="margin:0 0 .6rem">Places a 1&nbsp;W node could stand near the nodes that struggle. <strong>This half is predicted, not measured.</strong></p>
             <p class="gap-lead" data-siting-lead></p>
             <p class="gap-window" data-siting-note></p>
             <div class="table-wrap" data-siting-table></div>
-            <h4 style="margin:1rem 0 .4rem">What a siting suggestion cannot know</h4>
-            <ul class="gap-limits" data-siting-limits></ul>
+            <details class="gap-more">
+              <summary>What a siting suggestion cannot know</summary>
+              <p class="sub">The struggling nodes are grouped into neighbourhoods, and each neighbourhood is offered places a node could stand: a node that is already there on a taller mast, or high ground taken from the terrain.</p>
+              <ul class="gap-limits" data-siting-limits></ul>
+            </details>
           </div>
 
-          <div class="panel">
-            <h3 data-gaps-table-heading>Nodes with something we can measure</h3>
-            <p class="sub" style="margin:0 0 .6rem">Worst first. The order is the number of findings, then a fixed order between them, then how much we know about the node. It is not a score, and no colour here comes from a number. Open a row for the evidence.</p>
-            <div class="table-wrap" data-gaps-table></div>
-          </div>
-
-          <!-- Its own section, not a filter somebody has to find. A node
-               we cannot measure is a different answer from a node that is
-               well connected, and it must never read as the second. -->
-          <div class="panel">
-            <h3 data-gaps-unknown-heading>Not enough evidence</h3>
-            <p class="sub" style="margin:0 0 .6rem">These nodes show no fault we can measure and at least one thing we cannot judge. That is not a clean bill of health. A node that reports almost nothing is usually a node that is switched off.</p>
-            <div class="table-wrap" data-gaps-unknown-table></div>
-          </div>
-
-          <div class="panel">
-            <h3>What this cannot tell you</h3>
+          <!--
+            The reasoning that keeps this page honest, kept but moved out
+            of the way (#62). The full reasoning also lives as comments in
+            gaps/signals.py and gaps.js, for whoever works on this next.
+          -->
+          <details class="panel gap-more">
+            <summary>How this is measured</summary>
+            <p class="gap-window" data-gaps-window></p>
+            <p class="sub">Nodes are listed worst first: the number of findings, then a fixed order between them, then how much we know about the node. It is not a score, and no colour here comes from a number.</p>
+            <p class="sub">A node in "not enough evidence" shows no fault we can measure and at least one thing we cannot judge. That is not a clean bill of health. A node that reports almost nothing is usually a node that is switched off.</p>
+            <h4>What this cannot tell you</h4>
             <ul class="gap-limits" data-gaps-limits></ul>
-          </div>
+          </details>
         </section>
 
         <section class="page" data-page="planner">
@@ -649,6 +688,13 @@
             <div>
               <h2>Config check</h2>
               <p class="sub">Check a node against the azmsh.net recommendations. Nothing leaves your device.</p>
+              <!--
+                Reading a config straight off a node over USB, and writing
+                the recommended settings back, live in the community tool
+                (#61). Web Serial needs Chrome or Edge on a computer. This
+                page keeps to the parts it draws itself.
+              -->
+              <p class="sub">Node plugged in by USB? <a class="linky" href="https://cfgtest.azmsh.dev" target="_blank" rel="noopener">cfgtest.azmsh.dev</a> reads the config straight off it, with no export step (Chrome or Edge on a computer).</p>
             </div>
             <div class="controls" data-config-exports hidden>
               <button type="button" class="primary" data-config-fix>Download corrected config</button>
@@ -747,7 +793,7 @@
                 </select>
               </label>
               <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
-              <button type="button" class="toggle" data-graph-oneway aria-pressed="true">Show one-way traceroutes</button>
+              <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show weak links</button>
               <button type="button" data-graph-reset>Reset layout</button>
               <a class="linky" data-graph-external target="_blank" rel="noopener">Open mesh-graph</a>
             </div>
@@ -758,10 +804,10 @@
             <p class="notice" data-graph-warning hidden></p>
             <div class="chart tall" data-graph-chart></div>
             <p class="legend" style="margin: .5rem 0 0">
-              <span><span class="line solid"></span>Neighbour report, SNR measured</span>
-              <span><span class="line dashed"></span>Traceroute hop, reply confirmed it</span>
-              <span data-legend-oneway hidden><span class="line faint"></span>Traceroute hop, request never answered</span>
-              <span data-legend-unconfirmed hidden><span class="line dotted"></span>Path seen, no signal reading</span>
+              <span><span class="line solid"></span>Two-way: packets crossed it both ways</span>
+              <span><span class="line dashed"></span>One-way: packets crossed it mostly one way</span>
+              <span data-legend-weak hidden><span class="line weak"></span>Weak: under 10 packets seen</span>
+              <span data-legend-unconfirmed hidden><span class="line grey"></span>No signal reading</span>
             </p>
           </div>
         </section>
@@ -986,7 +1032,20 @@
                 <span class="muted head-note" data-activity-note></span></h3>
               <div class="chart" data-activity-chart></div>
             </div>
-            <div class="panel span-2"><h3>Busiest nodes (24 h)</h3><div class="table-wrap" data-top-talkers></div></div>
+            <!--
+              Leaderboards that reward what helps the mesh (#60). A packet
+              count is not one of them: on a shared channel the busiest
+              node is often the one hurting everybody else.
+            -->
+            <div class="leaderboards-wrap">
+              <h3 class="section-head">Leaderboards <span class="muted head-note" data-leaderboards-note></span></h3>
+              <div class="grid" data-leaderboards></div>
+            </div>
+            <div class="panel span-2">
+              <h3><span>Busiest senders (24 h)</span>
+                <span class="muted head-note">a diagnostic, not a prize: air time is shared</span></h3>
+              <div class="table-wrap" data-top-talkers></div>
+            </div>
             <div class="panel span-2">
               <h3><span>Nodes worth a look</span>
                 <span class="muted head-note" data-broadcast-note></span></h3>

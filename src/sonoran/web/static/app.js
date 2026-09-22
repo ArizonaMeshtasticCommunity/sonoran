@@ -715,7 +715,59 @@ async function loadTopTalkers(page) {
   replace(target, table([
     { label: 'Node', cell: (row) => nodeChip(row) },
     { label: 'Packets', num: true, cell: (row) => count(row.packet_count) },
+    {
+      label: 'Air time sending',
+      num: true,
+      hint: 'The share of the channel this node spent sending, from its own telemetry. Air time is shared, so a high figure is time nobody else can use.',
+      cell: (row) => (row.air_util_tx == null ? '-' : `${round(row.air_util_tx, 1)} %`),
+    },
   ], rows, 'No packets in the window.'));
+}
+
+/*
+ * Leaderboards that reward what helps the mesh (#60).
+ *
+ * None of them counts packets. Each board says what it measures, over
+ * what window, and what it cannot know, because a board that hides what
+ * it cannot see is an argument and not a measurement.
+ */
+let leaderboardPreset = '';
+
+async function loadLeaderboards(page) {
+  const target = $('[data-leaderboards]', page);
+  if (!target) return;
+  const query = leaderboardPreset ? `?channel=${encodeURIComponent(leaderboardPreset)}` : '';
+  const data = await get(`api/stats/leaderboards${query}`).catch(() => null);
+  if (!data) return replace(target, failure(new Error('Cannot load the leaderboards.')));
+  if (!data.available) {
+    return replace(target, empty('No gap assessment has been written yet, so there is nothing to rank.'));
+  }
+  const note = $('[data-leaderboards-note]', page);
+  if (note) {
+    // One preset at a time: nodes on different presets cannot hear each
+    // other, so a merged board would rank links that cannot exist.
+    replace(note,
+      data.presets.length > 1
+        ? el('select', {
+            'aria-label': 'Modem preset',
+            onchange: (event) => { leaderboardPreset = event.target.value; loadLeaderboards(page); },
+          }, data.presets.map((preset) => el('option', { value: preset, text: preset, selected: preset === data.preset })))
+        : data.preset,
+      ' one preset at a time');
+  }
+  replace(target, data.boards.map((board) => el('div', { class: 'panel leaderboard' },
+    el('h3', {}, board.title,
+      board.window_hours ? el('span', { class: 'muted', text: `last ${board.window_hours} h` }) : null),
+    el('p', { class: 'muted', text: board.measure }),
+    board.rows.length
+      ? el('ol', { class: 'board' }, board.rows.map((row) => el('li', {},
+          el('span', { class: 'who' }, nodeChip(row),
+            row.other_id ? [' to ', nodeChip({ node_id: row.other_id, display_name: row.other_name })] : null),
+          el('span', { class: 'value', text: `${count(row.value)} ${row.unit}` }),
+          el('span', { class: 'muted detail', text: row.detail }))))
+      : empty('Nothing qualifies in the window.'),
+    el('details', {}, el('summary', { text: 'What this cannot know' }),
+      el('p', { class: 'muted', text: board.cannot_know })))));
 }
 
 const PAGES = {};
@@ -1005,6 +1057,7 @@ function ensureMap() {
    */
   mapState.stats = mapState.live.stats;
   installWatchMode(map);
+  installMapKey(map);
   return map;
 }
 
@@ -1750,7 +1803,21 @@ function familySwatch(family) {
  * collapses, so it is not repeated here.
  */
 function watchLegend(target) {
-  replace(target,
+  replace(target, ...mapKeyBody(),
+    el('p', { class: 'muted', text: 'Press ? to close. F leaves watch mode, T switches tab, E changes the panel height.' }));
+}
+
+/**
+ * What every mark on the live map means, in one place (#46).
+ *
+ * The watch legend and the key docked on the map both draw this, so
+ * the two can never describe the map differently. It names all four
+ * encodings the map uses: the shape of a mark, its colour, the colour
+ * of a line, and the halo and ring. It also says what a line is not.
+ */
+function mapKeyBody() {
+  return [
+    el('p', { class: 'muted', text: 'Dots are nodes, coloured by role. The role key under the map filters them.' }),
     el('h4', { text: 'What the marks mean' }),
     el('div', { class: 'legend' },
       el('span', { class: 'legend-note' }, el('span', { class: 'line direct' }),
@@ -1761,6 +1828,8 @@ function watchLegend(target) {
         'Stippled: not measured, for a hop count and for a signal alike'),
       el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }),
         'Neighbour link, a node naming a node it hears itself')),
+    el('p', { class: 'muted', text: 'A flat line takes the colour of its signal: green good, yellow fair, red weak. Every other line takes the colour of its packet.' }),
+    el('h4', { text: 'What a packet was' }),
     el('div', { class: 'legend' },
       SonoranLive.FAMILY_ORDER.map((key) => {
         const family = SonoranLive.FAMILIES[key];
@@ -1795,8 +1864,51 @@ function watchLegend(target) {
      * See AGENTS.md 9.5.1.
      */
     el('p', { class: 'muted', text: 'Uploads, not listeners. Only a gateway reports, so a node that heard a packet and did not upload it is invisible here. A "+N" beside a sender counts the gateways whose arcs are not drawn.' }),
+    el('p', { class: 'muted', text: 'A line from a node to a gateway is an upload, not a radio link. The packet may have crossed several relays on the way, and their route is not recorded.' }),
     el('p', { class: 'muted', text: 'Every mark flies for the same time, whatever the distance. Speed is not data: each gateway stamps its own clock, so latency cannot be measured.' }),
-    el('p', { class: 'muted', text: 'Press ? to close. F leaves watch mode, T switches tab, E changes the panel height.' }));
+  ];
+}
+
+/* The key's open or closed state, kept for this browser only. */
+const MAP_KEY_STORE = 'sonoran.mapKey';
+
+function mapKeyOpen() {
+  try {
+    return localStorage.getItem(MAP_KEY_STORE) !== 'closed';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Dock the key on the map, where the reader is already looking (#46).
+ *
+ * It opens on a first visit and remembers the choice after that. It is
+ * a `details`, so it opens with a tap or a key and needs no hover. On a
+ * phone it starts closed whatever was stored, because an open key would
+ * cover most of a small map.
+ */
+function installMapKey(map) {
+  const Key = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      const small = matchMedia('(max-width: 40rem)').matches;
+      const box = el('details', { class: 'map-key leaflet-control', open: !small && mapKeyOpen() },
+        el('summary', { text: 'Key' }),
+        el('div', { class: 'map-key-body' }, mapKeyBody()));
+      box.addEventListener('toggle', () => {
+        try {
+          localStorage.setItem(MAP_KEY_STORE, box.open ? 'open' : 'closed');
+        } catch {
+          // Storage can be refused. The key still works; it only forgets.
+        }
+      });
+      L.DomEvent.disableClickPropagation(box);
+      L.DomEvent.disableScrollPropagation(box);
+      return box;
+    },
+  });
+  new Key().addTo(map);
 }
 
 /*
@@ -2370,6 +2482,19 @@ function focusNode(data, query) {
  * hidden and every node keeps its links.
  */
 
+/* How each strength of link draws on the graph page, and reads in its
+ * tooltip. The strengths come from the graph endpoint. */
+const LINK_LINE = {
+  two_way: { width: 1.7, type: 'solid', opacity: 0.6 },
+  one_way: { width: 1.1, type: 'dashed', opacity: 0.42 },
+  weak: { width: 0.8, type: 'dotted', opacity: 0.3 },
+};
+const LINK_STRENGTH = {
+  two_way: 'Two-way link',
+  one_way: 'One-way link: packets crossed it mostly one way',
+  weak: 'Weak link: few packets crossed it',
+};
+
 /* Layout units. The graph fits whatever bounds it is given, so this
  * only sets the resolution the seed is worked out in. */
 const GRAPH_SPAN = 1000;
@@ -2645,8 +2770,8 @@ PAGES.graph = async (page) => {
   const selected = channels.find((item) => item.channel === graphChannel);
   const showUnconfirmed =
     $('[data-graph-unconfirmed]', page).getAttribute('aria-pressed') === 'true';
-  const showOneWay =
-    $('[data-graph-oneway]', page).getAttribute('aria-pressed') === 'true';
+  const showWeak =
+    $('[data-graph-weak]', page).getAttribute('aria-pressed') === 'true';
   const allLinks = data.links;
   const confirmed = allLinks.filter((link) => link.snr != null);
   const unconfirmed = allLinks.length - confirmed.length;
@@ -2682,18 +2807,17 @@ PAGES.graph = async (page) => {
    * it. A traceroute hop with no reading is not proof of a working
    * radio link, so it is hidden by default.
    *
-   * A link is one-way when only a traceroute request evidences it. The
-   * broker saw the request in flight, so the hop really happened and
-   * was really measured, but nothing came back to confirm the round
-   * trip. Those are shown by default, because they are true, and the
-   * toggle takes them away for anyone who wants the mesh that answered.
+   * A link is weak when too few packets crossed it to call it usable,
+   * whichever way they went (see `strength` in the graph endpoint).
+   * Those are shown by default, because they are true, and the toggle
+   * takes them away for anyone who wants only the links that carry.
    *
    * Nodes left with no visible link are dropped too, so the graph does
    * not show a crowd of unconnected dots.
    */
   let visible = showUnconfirmed ? allLinks : confirmed;
-  const oneWay = visible.filter((link) => link.confirmed === false).length;
-  if (!showOneWay) visible = visible.filter((link) => link.confirmed !== false);
+  const weak = visible.filter((link) => link.strength === 'weak').length;
+  if (!showWeak) visible = visible.filter((link) => link.strength !== 'weak');
   data.links = visible;
 
   /*
@@ -2733,17 +2857,17 @@ PAGES.graph = async (page) => {
     + (view === 'focus' ? ' - one hop' : view === 'backbone' ? ` - strongest ${BACKBONE_LINKS_PER_NODE} per node` : '')
     + (hiddenByView ? `, ${count(hiddenByView)} more not drawn` : '')
     + (showUnconfirmed ? '' : unconfirmed ? `, ${count(unconfirmed)} unconfirmed hidden` : '')
-    + (oneWay
-      ? showOneWay
-        ? `, ${count(oneWay)} one-way`
-        : `, ${count(oneWay)} one-way hidden`
+    + (weak
+      ? showWeak
+        ? `, ${count(weak)} weak`
+        : `, ${count(weak)} weak hidden`
       : '');
   // Links stored before channel tracking mix every preset together, so
   // this one graph does show links that cannot exist. Say so plainly.
   const dotted = $('[data-legend-unconfirmed]', page);
   if (dotted) dotted.hidden = !showUnconfirmed;
-  const faint = $('[data-legend-oneway]', page);
-  if (faint) faint.hidden = !(showOneWay && oneWay);
+  const faint = $('[data-legend-weak]', page);
+  if (faint) faint.hidden = !(showWeak && weak);
 
   const warning = $('[data-graph-warning]', page);
   if (warning) {
@@ -2765,6 +2889,14 @@ PAGES.graph = async (page) => {
    * to the force layout.
    */
   const onGround = graphSeeds.size > 0;
+  /*
+   * Real positions are a layout in themselves, so the solver is told to
+   * leave them alone. Dragging still works: ECharts moves the node and
+   * redraws its links whatever the layout. Geo-seeded force starts the
+   * solver from them instead (#74). With no positions at all there is
+   * no ground, and every layout falls back to force.
+   */
+  const solved = !onGround || layout === 'force-geo';
   const seeds = new Map(graphSeeds);
   for (const [id, point] of graphPinned) {
     // On the ground the seed is already there and the pin moves it. In
@@ -2808,10 +2940,16 @@ PAGES.graph = async (page) => {
       formatter: (item) => {
         if (item.dataType === 'edge') {
           const snr = item.data.snr == null ? 'no SNR' : `${round(item.data.snr, 1)} dB`;
-          return `${item.data.kind} link<br/>${snr}, seen ${item.data.count} times`
-            + (item.data.confirmed === false
-              ? '<br/>one way: the request was never answered'
-              : '');
+          const [there, back] = item.data.eachWay || [item.data.count, 0];
+          const ends = [item.data.source, item.data.target].map((id) => {
+            const node = data.nodes.find((each) => each.node_id === id);
+            return node ? (node.short_name || node.display_name) : id;
+          });
+          return `${LINK_STRENGTH[item.data.strength] || 'Link'}<br/>`
+            + `${snr}, seen ${item.data.count} times<br/>`
+            + `${ends[0]} → ${ends[1]}: ${count(there)}<br/>`
+            + `${ends[1]} → ${ends[0]}: ${count(back)}<br/>`
+            + `from ${(item.data.kinds || [item.data.kind]).join(' and ')} reports`;
         }
         const node = item.data.raw;
         return [
@@ -2840,10 +2978,7 @@ PAGES.graph = async (page) => {
     }],
     series: [{
       type: 'graph',
-      // Real positions are a layout in themselves, so the solver is
-      // told to leave them alone. Dragging still works: ECharts moves
-      // the node and redraws its links whatever the layout.
-      layout: (layout === 'spread' || layout === 'ground') ? 'none' : 'force',
+      layout: solved ? 'force' : 'none',
       roam: true,
       draggable: true,
       categories,
@@ -2912,7 +3047,7 @@ PAGES.graph = async (page) => {
           // A dragged node stays where it was put while the layout
           // solver is running. Real positions are not solved at all,
           // so there is nothing to hold it against.
-          fixed: (layout === 'free' || layout === 'force-geo') && graphPinned.has(node.node_id),
+          fixed: solved && graphPinned.has(node.node_id),
           /*
            * The role gives the colour. On top of it:
            *
@@ -2942,34 +3077,32 @@ PAGES.graph = async (page) => {
         };
       }),
       /*
-       * Three strengths of evidence, three weights of line.
+       * The line says how much the evidence supports the link (#73). A
+       * neighbour report and a traceroute hop are the same evidence, one
+       * packet heard across the link, so the source of it does not
+       * change the line.
        *
-       * A link with no SNR is still a real link: a packet crossed it.
-       * The mesh just did not report a reading for that hop. Those draw
-       * faint and dotted, so a measured link is never confused with one
-       * inferred from a traceroute path.
+       *   solid    enough packets crossed it both ways to call it usable
+       *   dashed   plenty crossed it, but nearly all one way
+       *   dotted   too few crossed it to say
        *
-       * A one-way link was measured, but only a request evidences it.
-       * Nothing came back to confirm the round trip, so it draws
-       * thinner and fainter than a hop a reply proved.
+       * A link with no SNR is still a real link, but the mesh reported
+       * no reading for it. It keeps its line and turns grey, so a
+       * measured link is never confused with an unmeasured one.
        */
       links: data.links.map((link) => ({
         source: link.source,
         target: link.target,
         kind: link.kind,
+        kinds: link.kinds,
         snr: link.snr,
         count: link.count,
-        confirmed: link.confirmed,
-        lineStyle:
-          link.snr == null
-            ? { width: 0.7, type: 'dotted', opacity: 0.18, color: PALETTE.stale }
-            : link.confirmed === false
-              ? { width: 0.9, type: 'dashed', opacity: 0.26 }
-              : {
-                  width: link.kind === 'neighbor' ? 1.8 : 1.1,
-                  type: link.kind === 'neighbor' ? 'solid' : 'dashed',
-                  opacity: link.kind === 'neighbor' ? 0.6 : 0.42,
-                },
+        eachWay: link.each_way,
+        strength: link.strength,
+        lineStyle: {
+          ...(LINK_LINE[link.strength] || LINK_LINE.weak),
+          ...(link.snr == null ? { color: PALETTE.stale, opacity: 0.2 } : {}),
+        },
       })),
     }],
   });
@@ -3528,6 +3661,520 @@ async function drawSignalChart(target, nodeId, hours) {
   });
 }
 
+/* --- Node health cards and potential issues (#52, #56) ----------- */
+
+/*
+ * Four states, and every one carries a word and a shape as well as a
+ * colour (WCAG 1.4.1). `unknown` is never green: a node with nothing to
+ * measure is not a node in good health, which is the line
+ * `gaps/signals.py` holds for every signal.
+ */
+const HEALTH_STATES = {
+  ok: { word: 'Good', glyph: '✓' },
+  warn: { word: 'Check', glyph: '!' },
+  bad: { word: 'Needs help', glyph: '✕' },
+  unknown: { word: 'Unknown', glyph: '?' },
+};
+
+/* The battery band stats.py calls a brownout risk, and the level the
+ * firmware reports for a node on external power. Same numbers, so the
+ * two pages agree. */
+const BATTERY_LOW = 5;
+const BATTERY_WEAK = 35;
+const ON_MAINS_ABOVE = 100;
+
+/** Scroll to the potential issues panel, which holds every card's evidence. */
+function showIssues() {
+  const target = $('#node-issues');
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/**
+ * One health card: a name, a state in words and a shape, the measurement
+ * behind it, and what would make it green.
+ */
+function healthCard({ name, state, measure, green, evidence }) {
+  const look = HEALTH_STATES[state] || HEALTH_STATES.unknown;
+  return el('div', { class: `health-card state-${state}` },
+    el('div', { class: 'health-head' },
+      el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: look.glyph }),
+      el('h4', { text: name })),
+    el('p', { class: 'health-state', text: look.word }),
+    el('p', { class: 'health-measure', text: measure }),
+    el('p', { class: 'health-green muted', text: green }),
+    evidence
+      ? el('button', { class: 'linky', type: 'button', text: 'See the evidence', onclick: showIssues })
+      : null);
+}
+
+/** The state of one gaps signal, as a card state. */
+const signalState = (signal) => (signal ? signal.state : 'unknown');
+
+/**
+ * The health cards.
+ *
+ * Every card that reads a gap signal reads the same row the potential
+ * issues panel draws, from `/api/nodes/<id>/gaps`. Nothing here decides
+ * what a signal means; it only picks which signals each card shows.
+ * Power and position come from the node record, as #52 proposes.
+ */
+function healthCards(gaps, detail) {
+  const primary = gaps && gaps.available && gaps.assessments.length ? gaps.assessments[0] : null;
+  const row = primary ? primary.node : null;
+  const signal = (name) => (row && row.signals ? row.signals[name] : null);
+  const notAssessed = gaps && gaps.available
+    ? 'The gap assessment does not list this node.'
+    : 'No gap assessment has been written yet.';
+
+  const isolated = signal('radio_isolated');
+  const sole = signal('sole_observer');
+  let heardState = signalState(isolated);
+  if (heardState === 'ok' && sole && sole.state === 'bad') heardState = 'warn';
+
+  const margin = signal('weak_best_link');
+  const marginEvidence = margin ? margin.evidence || {} : {};
+  const intermittent = signal('rf_intermittent');
+  const heardBack = signal('hears_but_is_not_heard');
+
+  const device = detail.device || {};
+  const battery = device.battery_level;
+  let powerState = 'unknown';
+  let powerMeasure = 'This node sends no device telemetry.';
+  if (battery != null) {
+    if (battery > ON_MAINS_ABOVE) {
+      powerState = 'ok';
+      powerMeasure = 'On external power.';
+    } else {
+      powerState = battery > BATTERY_WEAK ? 'ok' : battery >= BATTERY_LOW ? 'warn' : 'bad';
+      powerMeasure = `Battery ${round(battery, 0)} %`
+        + (device.voltage != null ? `, ${round(device.voltage, 2)} V` : '')
+        + (powerState === 'warn' ? '. Low enough to restart under load.' : '.');
+    }
+  } else if (device.voltage != null) {
+    powerMeasure = `${round(device.voltage, 2)} V. It reports no battery level.`;
+  }
+
+  const confidence = detail.node.position_confidence || 'none';
+  const deviation = row && row.position_deviation_m;
+  const position = {
+    exact: ['ok', 'Shares a full precision position.'],
+    coarse: ['warn', deviation
+      ? `Shares a position rounded to about ${count(Math.round(deviation))} m.`
+      : 'Shares a position at reduced precision.'],
+    none: ['unknown', 'Shares no position.'],
+  }[confidence] || ['unknown', 'Shares no position.'];
+
+  const measured = (value, fallback) => (row ? value : fallback);
+  return el('div', { class: 'health-cards' },
+    healthCard({
+      name: 'Heard over the air',
+      state: heardState,
+      measure: measured(
+        `${count(row && row.direct_gateways)} gateways heard it directly. `
+          + `${count(row && row.rf_packets)} of ${count(row && row.packets)} packets reached a gateway over the air.`,
+        notAssessed),
+      green: 'Green when a gateway other than itself hears it over the air, and more than one gateway hears it directly.',
+      evidence: Boolean(row),
+    }),
+    healthCard({
+      name: 'Signal margin',
+      state: signalState(margin),
+      measure: measured(
+        marginEvidence.best_snr_db != null
+          ? `Best link ${round(marginEvidence.best_snr_db, 1)} dB. ${primary && primary.preset} needs ${round(marginEvidence.required_snr_db, 1)} dB.`
+          : (margin && margin.sentence) || 'No measured signal reading.',
+        notAssessed),
+      green: `Green when its best measured link is at least ${marginEvidence.margin_bad_db ?? 5} dB above what the preset needs.`,
+      evidence: Boolean(row),
+    }),
+    healthCard({
+      name: 'Gets out consistently',
+      state: signalState(intermittent),
+      measure: measured(
+        row && row.active_hours
+          ? `Heard over the air in ${count(row.rf_hours)} of the ${count(row.active_hours)} hours it was awake.`
+          : 'Not awake long enough in the window to judge.',
+        notAssessed),
+      green: 'Green when something on the air hears it in most of the hours it is awake.',
+      evidence: Boolean(row),
+    }),
+    healthCard({
+      name: 'Heard back',
+      state: signalState(heardBack),
+      measure: measured((heardBack && heardBack.sentence) || 'Not measured.', notAssessed),
+      green: 'Green when the nodes it hears also hear it.',
+      evidence: Boolean(row),
+    }),
+    healthCard({
+      name: 'Power',
+      state: powerState,
+      measure: powerMeasure,
+      green: `Green on external power, or with the battery above ${BATTERY_WEAK} %.`,
+    }),
+    healthCard({
+      name: 'Position',
+      state: position[0],
+      measure: position[1],
+      green: 'Green when it shares its position at full precision.',
+    }),
+    el('div', { class: 'health-card state-none' },
+      el('div', { class: 'health-head' },
+        el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: '⚙' }),
+        el('h4', { text: 'Settings' })),
+      el('p', { class: 'health-measure', text: 'Check a config file against the community recommendations. Nothing leaves the browser.' }),
+      el('a', { class: 'linky', href: '#config', text: 'Open Config check' })));
+}
+
+/** Say an evidence key in words: `rf_packets` is "rf packets". */
+const evidenceLabel = (key) => key.replace(/_/g, ' ').replace(/\bsnr\b/, 'SNR').replace(/\brf\b/, 'RF')
+  .replace(/\bdb\b/, 'dB').replace(/\bdbm\b/, 'dBm');
+
+function evidenceValue(value) {
+  if (value == null) return 'none';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'none';
+  if (typeof value === 'number') return count(round(value, 2));
+  return String(value);
+}
+
+/** One signal of one assessment: state, name, sentence, evidence. */
+/*
+ * A gaps signal is named for the fault it looks for ("Reaches us only
+ * through MQTT"), so its state reads as an answer to that question, in
+ * the words the gaps page uses. "Good" beside a fault's name reads as
+ * the fault being good.
+ */
+const ISSUE_WORDS = { bad: 'Found', ok: 'Not found', unknown: 'Cannot tell' };
+
+function issueItem(name, found, labels) {
+  const look = HEALTH_STATES[found.state] || HEALTH_STATES.unknown;
+  const evidence = Object.entries(found.evidence || {});
+  return el('li', { class: `issue state-${found.state}` },
+    el('div', { class: 'issue-head' },
+      el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: look.glyph }),
+      el('strong', { text: labels[name] || evidenceLabel(name) }),
+      el('span', { class: 'issue-state', text: ISSUE_WORDS[found.state] || look.word })),
+    el('p', { text: found.sentence || '' }),
+    evidence.length
+      ? el('details', {},
+          el('summary', { text: 'What this is measured from' }),
+          el('dl', { class: 'kv' }, evidence.flatMap(([key, value]) =>
+            [el('dt', { text: evidenceLabel(key) }), el('dd', { text: evidenceValue(value) })])))
+      : null);
+}
+
+/**
+ * The potential issues panel: the per node report the gaps page already
+ * holds, put where the owner looks for it.
+ *
+ * When nothing is flagged it says which checks ran and passed, because
+ * silence must not read as approval. An unknown is listed as unknown.
+ */
+function issuesPanel(gaps) {
+  const head = el('h3', {}, 'Potential issues',
+    el('span', { class: 'muted', text: 'from the coverage gaps assessment' }));
+  const links = el('p', { class: 'more-wrap' },
+    el('a', { class: 'linky', href: '#gaps', text: 'The whole mesh on Coverage gaps' }),
+    ' · ',
+    el('a', { class: 'linky', href: '#config', text: 'Check its settings' }));
+  const panel = (...body) => el('div', { class: 'panel span-2', id: 'node-issues' }, head, ...body, links);
+  if (!gaps || !gaps.available) {
+    return panel(empty('No gap assessment has been written yet. The gaps job writes one every half hour.'));
+  }
+  if (!gaps.assessments.length) {
+    return panel(empty(
+      `The gap assessment${gaps.not_listed.length ? ` for ${gaps.not_listed.join(', ')}` : ''} does not list this node. `
+      + 'It was not heard on those presets in the assessment window.'));
+  }
+  return panel(gaps.assessments.map((assessment) => {
+    const row = assessment.node;
+    const order = (assessment.signal_order || []).filter((name) => row.signals && row.signals[name]);
+    const states = order.map((name) => row.signals[name].state);
+    const flagged = states.filter((state) => state === 'bad').length;
+    const passed = states.filter((state) => state === 'ok').length;
+    const unknown = states.length - flagged - passed;
+    const summary = flagged
+      ? `${flagged} of ${states.length} checks flag something.`
+      : `Nothing flagged. ${passed} of ${states.length} checks ran and passed.`;
+    return el('section', { class: 'issue-preset' },
+      el('h4', { text: `${assessment.preset} - last ${assessment.window_hours} h` }),
+      el('p', { class: 'muted' },
+        `${summary}${unknown ? ` ${unknown} could not be measured, which is not the same as passing.` : ''}`
+        + (row.mobile ? ' This node moves, so the position checks do not apply to it.' : '')
+        + ` Assessed ${ago(assessment.generated_at)} ago.`),
+      el('ul', { class: 'issues' }, order.map((name) =>
+        issueItem(name, row.signals[name], assessment.signal_labels || {}))));
+  }));
+}
+
+/* --- Node charts over time (#53) --------------------------------- */
+
+/** A chart panel, left out entirely when it has nothing to draw. */
+function historyChart(title, sub) {
+  const box = el('div', { class: 'chart' });
+  return [el('div', { class: 'panel' },
+    el('h3', {}, title, sub ? el('span', { class: 'muted', text: sub }) : null), box), box];
+}
+
+function drawNodeHistory(target, history) {
+  if (!history) return replace(target, el('div', { class: 'panel span-2' }, failure(new Error('Cannot load the history.'))));
+  const panels = [];
+  const draws = [];
+  const time = (value) => new Date(value).getTime();
+  const device = history.device || [];
+
+  /*
+   * A node on external power reports a battery above 100 % and often a
+   * voltage of 0, and two flat lines say nothing the Power card does not.
+   */
+  const onBattery = device.some((row) => row.battery_level != null && row.battery_level <= 100);
+  const hasVoltage = device.some((row) => row.voltage);
+  if (onBattery || hasVoltage) {
+    const [panel, box] = historyChart('Battery and voltage', 'from device telemetry');
+    panels.push(panel);
+    draws.push(() => chart(box, {
+      ...CHART_BASE,
+      tooltip: { ...CHART_BASE.tooltip, trigger: 'axis' },
+      legend: { textStyle: { color: PALETTE.muted }, top: 0 },
+      xAxis: { type: 'time', ...AXIS },
+      // Above 100 % is how the firmware says "on external power".
+      yAxis: [
+        { type: 'value', name: '%', min: 0, max: 101, ...AXIS },
+        { type: 'value', name: 'V', scale: true, ...AXIS, splitLine: { show: false } },
+      ],
+      series: [
+        { name: 'Battery', type: 'line', showSymbol: false, connectNulls: false, yAxisIndex: 0,
+          data: device.map((row) => [time(row.time), row.battery_level == null ? null : Math.min(row.battery_level, 101)]),
+          itemStyle: { color: PALETTE.good } },
+        { name: 'Voltage', type: 'line', showSymbol: false, connectNulls: false, yAxisIndex: 1,
+          data: device.map((row) => [time(row.time), row.voltage]), itemStyle: { color: PALETTE.warn } },
+      ],
+    }));
+  }
+
+  if (device.some((row) => row.channel_utilization != null || row.air_util_tx != null)) {
+    const [panel, box] = historyChart('Channel use and air time', 'from device telemetry');
+    panels.push(panel);
+    draws.push(() => chart(box, {
+      ...CHART_BASE,
+      tooltip: { ...CHART_BASE.tooltip, trigger: 'axis' },
+      legend: { textStyle: { color: PALETTE.muted }, top: 0 },
+      xAxis: { type: 'time', ...AXIS },
+      yAxis: { type: 'value', name: '%', min: 0, ...AXIS },
+      series: [
+        { name: 'Channel use', type: 'line', showSymbol: false,
+          data: device.map((row) => [time(row.time), row.channel_utilization]), itemStyle: { color: PALETTE.link } },
+        { name: 'Air time sending', type: 'line', showSymbol: false,
+          data: device.map((row) => [time(row.time), row.air_util_tx]), itemStyle: { color: PALETTE.accent } },
+      ],
+    }));
+  }
+
+  const packets = history.packets || { buckets: [], families: [] };
+  if (packets.families.length) {
+    // One band per packet family, in the family colours the live map
+    // uses, so the two read the same.
+    const live = window.SonoranLive;
+    const bands = new Map();
+    for (const family of packets.families) {
+      const key = live ? live.familyKey(family.name) : 'OTHER';
+      const counts = bands.get(key) || packets.buckets.map(() => 0);
+      family.counts.forEach((value, index) => { counts[index] += value; });
+      bands.set(key, counts);
+    }
+    const order = live ? live.FAMILY_ORDER.filter((key) => bands.has(key)) : [...bands.keys()];
+    const [panel, box] = historyChart('What it sent', 'a gap is a quiet stretch');
+    panels.push(panel);
+    draws.push(() => chart(box, {
+      ...CHART_BASE,
+      legend: { textStyle: { color: PALETTE.muted }, top: 0, type: 'scroll' },
+      grid: { ...CHART_BASE.grid, top: 36 },
+      xAxis: { type: 'time', ...AXIS },
+      yAxis: { type: 'value', minInterval: 1, ...AXIS },
+      series: order.map((key) => {
+        const family = live ? live.FAMILIES[key] : null;
+        return {
+          name: family ? family.label : key,
+          type: 'bar',
+          stack: 'all',
+          barMaxWidth: 14,
+          data: packets.buckets.map((bucket, index) => [time(bucket), bands.get(key)[index]]),
+          itemStyle: { color: family ? colour(family.token, family.fallback) : PALETTE.muted },
+        };
+      }),
+    }));
+  }
+
+  const signal = history.direct_signal || [];
+  if (signal.length) {
+    const [panel, box] = historyChart('Signal at gateways', 'heard directly, no hop used');
+    panels.push(panel);
+    draws.push(() => chart(box, {
+      ...CHART_BASE,
+      tooltip: { ...CHART_BASE.tooltip, trigger: 'axis' },
+      legend: { textStyle: { color: PALETTE.muted }, top: 0, type: 'scroll' },
+      grid: { ...CHART_BASE.grid, top: 36 },
+      xAxis: { type: 'time', ...AXIS },
+      yAxis: { type: 'value', axisLabel: { ...AXIS.axisLabel, formatter: '{value} dB' }, axisLine: AXIS.axisLine, splitLine: AXIS.splitLine },
+      series: signal.map((gateway) => ({
+        name: gateway.display_name,
+        type: 'line',
+        showSymbol: true,
+        symbolSize: 4,
+        data: gateway.points.map(([moment, snr]) => [time(moment), snr]),
+      })),
+    }));
+  }
+
+  if (!panels.length) {
+    return replace(target, el('div', { class: 'panel span-2' },
+      el('h3', { text: 'Over time' }),
+      empty('This node reported no device telemetry and sent no packets in the window.')));
+  }
+  replace(target, panels);
+  draws.forEach((draw) => draw());
+}
+
+/* --- Route and neighbour widgets (#55) ---------------------------- */
+
+const km = (value) => (value == null ? '-' : `${round(value, value < 10 ? 1 : 0)} km`);
+
+function routesPanel(routes) {
+  if (!routes) return el('div', { class: 'panel span-2' }, failure(new Error('Cannot load the routes.')));
+  const tile = (label, value, detail, hint) => el('div', { class: 'route-tile' },
+    el('span', { class: 'label', text: label, title: hint || null }),
+    el('span', { class: 'value', text: value }),
+    detail ? el('span', { class: 'muted', text: detail }) : null);
+  const longest = routes.longest_segment;
+  const heardBy = routes.furthest_heard_by;
+  const heard = routes.furthest_heard;
+  const depth = routes.hop_depth || { packets: 0, counts: [] };
+  const columns = [
+    { label: 'Node', cell: (row) => nodeChip(row) },
+    { label: 'Reports', num: true, hint: 'Neighbour reports and traceroute hops that show the link in this direction.', cell: (row) => count(row.count) },
+    { label: 'Best SNR', num: true, cell: (row) => snrCell(row.best_snr) },
+    { label: 'From', cell: (row) => row.kinds.map((kind) => (kind === 'neighbor' ? 'neighbour report' : 'traceroute')).join(', ') },
+    { label: 'Distance', num: true, hint: 'Only where both nodes share an exact position.', cell: (row) => km(row.distance_km) },
+  ];
+  return el('div', { class: 'panel span-2' },
+    el('h3', {}, 'Links and routes',
+      el('span', { class: 'muted', text: `from neighbour reports and traceroutes, last ${routes.window_hours} h` })),
+    el('div', { class: 'route-tiles' },
+      tile('Longest route segment',
+        longest ? km(longest.distance_km) : '-',
+        longest ? `${longest.from.display_name} to ${longest.to.display_name}` : 'No traceroute segment with two exact positions.',
+        'The longest single hop of any traceroute this node took part in.'),
+      tile('Furthest node that heard it', heardBy ? km(heardBy.distance_km) : '-',
+        heardBy ? `${heardBy.display_name}${heardBy.best_snr != null ? `, ${round(heardBy.best_snr, 1)} dB` : ''}` : 'None with an exact position.'),
+      tile('Furthest node it heard', heard ? km(heard.distance_km) : '-',
+        heard ? `${heard.display_name}${heard.best_snr != null ? `, ${round(heard.best_snr, 1)} dB` : ''}` : 'None with an exact position.'),
+      tile('Hops to the nearest gateway', depth.median == null ? '-' : String(depth.median),
+        depth.packets
+          ? `typical, over ${count(depth.packets)} packets: ${depth.counts.map((item) => `${item.hops} hop${item.hops === 1 ? '' : 's'} ${count(item.packets)}`).join(', ')}`
+          : 'No other gateway heard it in the window.',
+        'The fewest hops any gateway saw each packet use. Its own uploads are left out.')),
+    el('p', { class: 'muted' },
+      'Distances need an exact position at both ends. A rounded position can be kilometres out, so such pairs are left out'
+      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')
+      + (routes.trace_limit_reached ? ` Only the newest ${count(routes.traces_read)} traceroutes were read.` : '')),
+    el('div', { class: 'grid two' },
+      el('div', {},
+        el('h4', { text: `Who hears it (${count(routes.heard_by.length)})` }),
+        expandingTable(columns, routes.heard_by, 'No node reports hearing it in the window.', { noun: 'nodes' })),
+      el('div', {},
+        el('h4', { text: `Who it hears (${count(routes.hears.length)})` }),
+        expandingTable(columns, routes.hears, 'It reports hearing no node in the window.', { noun: 'nodes' }))));
+}
+
+/* --- Packet timeline (#54) ---------------------------------------- */
+
+const TIMELINE_STEP = 50;
+/* The observation sorts need a window of a week or less. See
+ * `node_packets` in routes/nodes.py. */
+const TIMELINE_SEEN_SORTS = new Set(['hops', 'gateways', 'snr', 'rssi']);
+const TIMELINE_SEEN_MAX_HOURS = 168;
+let timeline = null;
+
+function resetTimeline(nodeId) {
+  timeline = { nodeId, sort: 'time', order: 'desc', offset: 0, direction: 'sent', portnum: '', channel: '' };
+}
+
+async function drawTimeline(target, nodeId, hours, types) {
+  if (!timeline || timeline.nodeId !== nodeId) resetTimeline(nodeId);
+  const state = timeline;
+  const seenSortable = Number(hours) <= TIMELINE_SEEN_MAX_HOURS;
+  if (!seenSortable && TIMELINE_SEEN_SORTS.has(state.sort)) Object.assign(state, { sort: 'time', order: 'desc' });
+  const params = new URLSearchParams({
+    hours: String(hours), limit: String(TIMELINE_STEP), offset: String(state.offset),
+    sort: state.sort, order: state.order, direction: state.direction,
+  });
+  if (state.portnum) params.set('portnum', state.portnum);
+  if (state.channel) params.set('channel', state.channel);
+
+  const redraw = () => drawTimeline(target, nodeId, hours, types);
+  const response = await fetch(`api/nodes/${encodeURIComponent(nodeId)}/packets?${params}`)
+    .catch((error) => error);
+  const body = el('div', {});
+  let rows = [];
+  let total = 0;
+  if (response instanceof Error || !response.ok) {
+    body.append(failure(new Error('Cannot load the packets.')));
+  } else {
+    rows = await response.json();
+    total = Number(response.headers.get('X-Total-Count') || rows.length);
+  }
+
+  const sortState = { key: state.sort, order: state.order };
+  const onSort = (key, order) => { Object.assign(state, { sort: key, order, offset: 0 }); redraw(); };
+  const sortable = (key) => (TIMELINE_SEEN_SORTS.has(key) && !seenSortable
+    ? {} : { sort: key, sortState, onSort });
+  const heard = state.direction === 'heard';
+  const packetHref = (row) => `#packet/${encodeURIComponent(row.from_node)}/${row.packet_id}`;
+  const columns = [
+    { label: 'Time', ...sortable('time'), cell: (row) => el('a', { class: 'linky', href: packetHref(row), title: stamp(row.seen_at), text: stamp(row.seen_at) }) },
+    heard ? { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) } : null,
+    { label: 'Type', ...sortable('type'), hint: 'What the packet carried: a position, telemetry, a message, and so on.', cell: (row) => portnumCell(row.portnum) },
+    { label: 'To', ...sortable('to'), hint: 'Everyone for a broadcast, or the one node it was addressed to.', cell: (row) => (row.to_node === '^all' ? 'everyone' : row.to_name || row.to_node) },
+    { label: 'Channel', ...sortable('channel'), cell: (row) => row.channel || '-' },
+    { label: 'Hops', num: true, ...sortable('hops'), hint: 'The fewest relays any gateway saw it use before it was uploaded.', cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
+    { label: 'Gateways', num: true, ...sortable('gateways'), hint: 'How many different gateways uploaded it, not counting the sender uploading its own packet.', cell: (row) => count(row.gateways) },
+    { label: 'SNR', num: true, ...sortable('snr'), hint: 'The best signal at a gateway that heard it with no hop used. A relayed reading belongs to the last relay, so it is not shown.', cell: (row) => snrCell(row.direct_snr) },
+    { label: 'RSSI', num: true, ...sortable('rssi'), cell: (row) => (row.direct_rssi == null ? '-' : `${row.direct_rssi} dBm`) },
+    { label: 'Size', num: true, ...sortable('size'), cell: (row) => (row.size_bytes == null ? '-' : `${row.size_bytes} B`) },
+  ].filter(Boolean);
+
+  const typeSelect = el('select', { 'aria-label': 'Packet type', onchange: (event) => { Object.assign(state, { portnum: event.target.value, offset: 0 }); redraw(); } },
+    el('option', { value: '', text: 'Every type' }),
+    types.map((type) => el('option', { value: type, text: portnumLabel(type), selected: type === state.portnum })));
+  const directionSelect = el('select', { 'aria-label': 'Direction', onchange: (event) => { Object.assign(state, { direction: event.target.value, offset: 0 }); redraw(); } },
+    el('option', { value: 'sent', text: 'Sent by this node', selected: !heard }),
+    el('option', { value: 'heard', text: 'Heard by it, as a gateway', selected: heard }));
+  const channelInput = el('input', { type: 'search', placeholder: 'Channel', 'aria-label': 'Channel', value: state.channel,
+    onchange: (event) => { Object.assign(state, { channel: event.target.value.trim(), offset: 0 }); redraw(); } });
+
+  const first = total ? state.offset + 1 : 0;
+  const last = state.offset + rows.length;
+  const pager = el('p', { class: 'more-wrap' },
+    el('span', { class: 'muted', text: total ? `${count(first)} to ${count(last)} of ${count(total)}` : '' }),
+    state.offset > 0 ? el('button', { class: 'more', type: 'button', text: 'Newer', onclick: () => { state.offset = Math.max(0, state.offset - TIMELINE_STEP); redraw(); } }) : null,
+    last < total ? el('button', { class: 'more', type: 'button', text: 'Older', onclick: () => { state.offset += TIMELINE_STEP; redraw(); } }) : null);
+
+  if (!body.childNodes.length) {
+    body.append(el('div', { class: 'table-wrap' }, table(columns, rows,
+      heard ? 'It uploaded no packet from another node in the window.' : 'It sent no packet in the window that matches.',
+      { rowHref: packetHref })));
+  }
+  replace(target,
+    el('h3', {}, 'Packet timeline', el('span', { class: 'muted', text: `last ${heard ? Math.min(Number(hours), TIMELINE_SEEN_MAX_HOURS) : hours} h` })),
+    el('p', { class: 'muted' },
+      'A packet is one transmission: a position, a reading, a message, or a routine announcement. '
+      + 'Open a row to see what it carried and which gateways heard it.'
+      + (seenSortable ? '' : ' Sorting by hops, gateways or signal needs a window of 7 days or less.')),
+    el('div', { class: 'controls' }, directionSelect, typeSelect, channelInput),
+    body, pager);
+  markScrollableTables(target);
+  revealHints(target);
+}
+
 async function loadNodeDetail(nodeId) {
   const page = $('[data-page="node"]');
   const hours = $('[data-node-hours]', page).value || '24';
@@ -3567,17 +4214,46 @@ async function loadNodeDetail(nodeId) {
    * came for — below the fold on a busy node. Both are capped at five
    * rows now and say how many more there are.
    */
-  replace(body, el('div', { class: 'grid two' },
+  const cards = el('div', { class: 'health-slot' }, el('p', { class: 'loading', text: 'Loading health checks' }));
+  const issues = el('div', { class: 'panel span-2', id: 'node-issues' },
+    el('h3', { text: 'Potential issues' }), el('p', { class: 'loading', text: 'Loading' }));
+  const routes = el('div', { class: 'panel span-2' },
+    el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' }));
+  const history = el('div', { class: 'grid two span-2 history-grid' });
+  const packets = el('div', { class: 'panel span-2 timeline' },
+    el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' }));
+
+  replace(body, cards, el('div', { class: 'grid two' },
+    issues,
     identityPanel(node),
     devicePanel(detail),
     activityPanel(detail),
     weatherPanel(detail),
+    routes,
+    history,
     messagesPanel(detail),
     neighborPanel(detail.neighbors, detail.window_hours),
     heardByPanel(detail.heard_by),
-    signalPanel));
+    signalPanel,
+    packets));
 
-  await drawSignalChart($('[data-signal-chart]', body), nodeId, hours);
+  const id = encodeURIComponent(nodeId);
+  const [gaps, historyData, routesData] = await getAll([
+    `api/nodes/${id}/gaps`,
+    `api/nodes/${id}/history?hours=${hours}`,
+    `api/nodes/${id}/routes?hours=${hours}`,
+  ]);
+  // The page may have moved on to another node while these loaded.
+  if (currentNodeId !== nodeId) return;
+  cards.replaceWith(healthCards(gaps, detail));
+  issues.replaceWith(issuesPanel(gaps));
+  routes.replaceWith(routesPanel(routesData));
+  drawNodeHistory(history, historyData);
+  const types = (detail.activity.by_portnum || []).map((row) => row.portnum);
+  await Promise.all([
+    drawSignalChart($('[data-signal-chart]', body), nodeId, hours),
+    drawTimeline(packets, nodeId, hours, types),
+  ]);
 }
 
 PAGES.node = async () => {
@@ -4090,7 +4766,7 @@ function drawActivityChart(page, data) {
 }
 
 PAGES.stats = async (page) => {
-  await Promise.all([loadSummary(page), loadTopTalkers(page)]);
+  await Promise.all([loadSummary(page), loadTopTalkers(page), loadLeaderboards(page)]);
   const [daily, hardware, activity, broadcast] = await getAll([
     'api/stats/snapshots/daily?days=30',
     'api/stats/hardware',
@@ -4132,11 +4808,20 @@ PAGES.stats = async (page) => {
     chartEmpty(hardwareChart, 'No node has reported its board model.');
   } else {
     const top = hardware.slice(0, 12).reverse();
+    // Every bar carries its name (#72). ECharts drops every other label
+    // when they do not fit, so the chart grows with the bars instead,
+    // and `interval: 0` tells it never to skip one.
+    hardwareChart.style.height = `${Math.max(15, top.length * 1.75 + 3)}rem`;
     chart(hardwareChart, {
       ...CHART_BASE,
       tooltip: { ...CHART_BASE.tooltip, trigger: 'item' },
       xAxis: { type: 'value', ...AXIS },
-      yAxis: { type: 'category', data: top.map((row) => row.hw_model || 'unknown'), ...AXIS },
+      yAxis: {
+        type: 'category',
+        data: top.map((row) => row.hw_model || 'unknown'),
+        ...AXIS,
+        axisLabel: { ...AXIS.axisLabel, interval: 0 },
+      },
       series: [{ type: 'bar', data: top.map((row) => row.count), itemStyle: { color: PALETTE.accent, borderRadius: [0, 3, 3, 0] } }],
     });
   }
@@ -4992,7 +5677,40 @@ async function route() {
   if (known === 'map') SonoranWatch.restore();
 }
 
+/**
+ * The theme control (#50).
+ *
+ * Charts and map layers read the palette once, when the page loads, so
+ * a change of theme reloads the page rather than chase every colour
+ * that was already drawn. The address keeps its fragment, so the reader
+ * lands back on the page they were on.
+ *
+ * With "follow the system", a change in the system setting is followed
+ * the same way.
+ */
+function wireTheme() {
+  const select = $('[data-theme-choice]');
+  if (!select) return;
+  const mode = document.documentElement.getAttribute('data-theme-mode') || 'system';
+  select.value = mode;
+  select.addEventListener('change', () => {
+    try {
+      localStorage.setItem('sonoran.theme', select.value);
+    } catch {
+      // Refused storage: the choice lasts for this load only.
+      document.documentElement.setAttribute('data-theme',
+        select.value === 'light' ? 'light' : 'dark');
+      return;
+    }
+    location.reload();
+  });
+  if (mode === 'system' && window.matchMedia) {
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => location.reload());
+  }
+}
+
 function wire() {
+  wireTheme();
   wireFamilyFilter();
   for (const button of $$('[data-chat-view-choice]')) {
     button.addEventListener('click', () => {

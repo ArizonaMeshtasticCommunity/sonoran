@@ -129,9 +129,111 @@ Includes names, hardware, role, last position, last heard time, gateway status, 
 
 ### 3.3 `GET /api/nodes/{node_id}/packets`
 
-Returns recent packets from this node.
+Returns the packets of one node, sorted and filtered. The node page
+draws its packet timeline from this (#54).
 
-Query parameters: `portnum`, `before`, `limit`.
+The body is a bare array. The count of every row that matches the
+filters is in the `X-Total-Count` header, as for `GET /api/nodes`.
+
+Query parameters:
+
+- `direction` — `sent` (default): what the node sent. `heard`: what the
+  node uploaded as an MQTT gateway for other senders. A `heard` listing
+  reads 24 hours when no window is given, and at most 168 hours.
+- `hours` — the time window. Optional for `sent`. At most 720.
+- `portnum` — a port number, or its protobuf name.
+- `channel` — one channel.
+- `sort` — `time` (default), `type`, `to`, `channel`, `size`, `hops`,
+  `gateways`, `snr`, `rssi`. Nulls sort last, whichever the order.
+- `order` — `desc` (default) or `asc`.
+- `offset`, `limit` — paging. Default limit 100. Maximum 500.
+
+A sort by `hops`, `gateways`, `snr` or `rssi` has to summarise every
+observation in the window before it can order anything. It needs
+`hours` of 168 or less, and returns 422 otherwise.
+
+Item: `packet_id`, `portnum`, `channel`, `seen_at`, `from_node`,
+`from_name`, `to_node`, `to_name`, `hop_start`, `hop_limit`, `gateways`,
+`fewest_hops`, `direct_snr`, `direct_rssi`, `size_bytes`.
+
+- `gateways` counts distinct gateways that uploaded the packet. The
+  sender uploading its own packet is not counted (AGENTS.md 9.5.1).
+- `fewest_hops` is the fewest relays any such gateway saw it use.
+- `direct_snr` and `direct_rssi` are the best readings at a gateway that
+  heard it with no hop used. A relayed reading belongs to the last hop,
+  so it is never shown here (AGENTS.md 9.5).
+- `size_bytes` is the length of the stored protobuf.
+
+### 3.3.1 `GET /api/nodes/{node_id}/gaps`
+
+Returns what the gaps assessment says about one node, one entry for
+each preset (#56). It reads the file the gaps job wrote and opens no
+database session. The node page's health cards (#52) and its potential
+issues panel read this one response, so the two cannot disagree.
+
+Response: `available`, `reason`, `assessments`, `not_listed`.
+
+- `available: false` with `reason: "no_assessment"` is a working state:
+  the job has not written an assessment yet.
+- Each item of `assessments` holds `preset`, `window_hours`,
+  `generated_at`, `gateways_active`, `signal_order`, `signal_labels`,
+  and `node`: the node's row exactly as `GET /api/gaps/nodes` serves it.
+  The preset the node sends most on comes first.
+- `not_listed` names the assessed presets that do not list the node.
+  "Not assessed" is a different answer from "assessed and fine".
+
+### 3.3.2 `GET /api/nodes/{node_id}/history`
+
+Returns the series behind the node page charts (#53).
+
+Query parameters: `hours` — default 24, at most 720.
+
+Response: `window_hours`, `bucket_seconds`, `device`, `packets`,
+`direct_signal`.
+
+- The window is cut into buckets of 5 minutes (up to 6 h), 15 minutes
+  (up to 24 h), 1 hour (up to 7 days) or 6 hours, so no series holds
+  more than about 300 points.
+- `device` — one item a bucket: `time`, `battery_level`, `voltage`,
+  `channel_utilization`, `air_util_tx`, each an average. Empty when the
+  node sends no device telemetry.
+- `packets` — `buckets` (every bucket of the window, so a silent stretch
+  reads as zero) and `families`: `name`, `total`, `counts`.
+- `direct_signal` — the six gateways that heard the node directly most
+  often: `node_id`, `display_name`, `direct_count`, and `points` of
+  `[time, snr, rssi]`. Direct means no hop used and a gateway that is
+  not the node itself.
+
+Every series stops at the present. Node clocks run wrong, and a row
+dated tomorrow would otherwise stretch the axis (AGENTS.md 9.4).
+
+### 3.3.3 `GET /api/nodes/{node_id}/routes`
+
+Returns the route and neighbour widgets of the node page (#55).
+
+Query parameters: `hours` — default 24, at most 720.
+
+Response: `window_hours`, `position`, `hears`, `heard_by`,
+`longest_segment`, `furthest_heard_by`, `furthest_heard`,
+`coarse_excluded`, `traces_read`, `trace_limit_reached`, `hop_depth`.
+
+- `hears` — nodes this node heard: its own neighbour reports, and
+  traceroute hops that arrived at it. `heard_by` — nodes that heard it:
+  their neighbour reports that name it, and traceroute hops that left
+  it. Item: `node_id`, `display_name`, `count`, `best_snr`, `kinds`,
+  `last`, `distance_km`.
+- `longest_segment` — the longest single hop of any traceroute the node
+  took part in: `from`, `to`, `distance_km`, `snr`.
+- `furthest_heard_by` and `furthest_heard` — the most distant row of
+  each list.
+- `hop_depth` — `packets`, `median`, and `counts` of `hops` and
+  `packets`: the fewest hops each packet took to the nearest gateway.
+  The node's own uploads are left out.
+
+A distance needs an exact position at both ends, by the rule the gaps
+page uses. A pair with a coarse or missing position has no distance and
+is counted in `coarse_excluded`. At most the newest 2000 traceroutes
+are read, and `trace_limit_reached` says when that cap was hit.
 
 ### 3.4 `GET /api/nodes/{node_id}/heard-by`
 
@@ -1160,9 +1262,11 @@ graph to draw.
 Returns the mesh of one channel as nodes and links. The response is
 ready to draw. The browser does no join.
 
-A link comes from a neighbor report or from a traceroute hop. A
-neighbor link replaces a traceroute link between the same two nodes,
-because the neighbor report carries a measured SNR.
+A link comes from neighbor reports and traceroute hops. Both are the
+same kind of evidence, one packet heard across the link, so they add up
+to one link and neither outranks the other (#73). A reply's way back
+counts as well: each hop of it is a packet heard in the other
+direction.
 
 A traceroute row becomes hops through `sonoran.api.traces`, which
 applies three rules. A reply reads in the request direction, because
@@ -1184,8 +1288,23 @@ Response: `window_hours`, `channel`, `node_count`, `link_count`,
 - Node item: `node_id`, `node_num`, `display_name`, `short_name`,
   `role`, `hw_model`, `is_mqtt_gateway`, `lat`, `lon`, `has_position`,
   `last_heard`, `packet_count`, `known`.
-- Link item: `source`, `target`, `kind`, `snr`, `count`, `confirmed`,
-  `time`.
+- Link item: `source`, `target`, `kind`, `kinds`, `snr`, `count`,
+  `each_way`, `strength`, `confirmed`, `time`.
+
+`source` and `target` give the direction of the first report: `target`
+heard `source`. `each_way` counts the reports in each direction,
+`[source to target, target to source]`. `kinds` lists the kinds of
+report behind the link.
+
+`strength` grades that evidence:
+
+- `weak` — fewer than 10 reports in total.
+- `one_way` — enough reports, but fewer than 3 in one direction.
+- `two_way` — at least 3 reports in each direction.
+
+The graph page draws `two_way` solid, `one_way` dashed and `weak`
+dotted. The limits are `WEAK_LINK_SAMPLES` and `TWO_WAY_MIN_SAMPLES` in
+`routes/graph.py`.
 
 `lat` and `lon` are the node's last known position, or null. They come
 with the node so the page can lay the graph out over the ground it sits
@@ -1202,8 +1321,8 @@ far end and came back.
 `confirmed` is false when only an unanswered request evidences the
 link. The broker saw the request in flight, so the hops it had already
 made are real and were really measured. Nothing confirmed the round
-trip, so the evidence runs one way. Such links are true but weaker.
-The graph page draws them fainter and can hide them.
+trip. `strength` has replaced it on the graph page, and it stays in the
+response for any other reader.
 
 ### 7.3 `GET /api/graph/link`
 
@@ -1212,7 +1331,8 @@ names the packet that carried it, so the packet page opens from here.
 
 Both nodes are read through the same rules as `GET /api/graph`, so a
 link the graph draws always has at least one report here. The query
-selects traceroutes that name both nodes, rather than the newest rows
+selects traceroutes that name both nodes, in the outward route or the
+way back, rather than the newest rows
 in the window. Selecting by recency let the row limit hide the
 evidence of a link that the graph had already drawn.
 
@@ -1306,6 +1426,37 @@ Held for `STATS_CACHE_SECONDS`. See 8.0.
 Returns top talkers by unique packet count.
 
 Query parameters: `hours` (default 24), `limit` (default 20).
+
+Item: `node_id`, `display_name`, `packet_count`, `air_util_tx`.
+`air_util_tx` is the node's own average share of air time spent
+sending, from its device telemetry, or null. On a shared channel a busy
+sender is a cost to everybody else, and the page shows the two side by
+side (#60).
+
+### 8.2.1 `GET /api/stats/leaderboards`
+
+Returns leaderboards that reward what helps the mesh (#60). None of them
+counts packets.
+
+Query parameters: `channel` — the preset. Without it, the assessed
+preset with the most nodes.
+
+Response: `available`, `preset`, `presets`, `assessed`, `boards`.
+
+Each board: `key`, `title`, `measure`, `window_hours`, `cannot_know`,
+`rows`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
+a link row also carries `other_id` and `other_name`.
+
+- `reachable` — the share of the hours a node was awake in which
+  something on the air heard it. At least 24 hours awake. Read from the
+  gaps assessment.
+- `direct_gateways` — distinct gateways that heard the node with no hop
+  used, never its own upload. Read from the gaps assessment.
+- `longest_link` — the longest links graded `two_way` by
+  `GET /api/graph`, with an SNR at least `GAPS_MARGIN_BAD_DB` above what
+  the preset needs, and an exact position at both ends. It reads 72
+  hours, at most 10,000 reports of each kind, and is held for 15
+  minutes.
 
 ### 8.3 `GET /api/stats/hardware`
 
