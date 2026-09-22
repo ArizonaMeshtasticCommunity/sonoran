@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from sonoran.rf.ingest import decode
-from sonoran.rf.schema import Batch, Status, TopicError, json_schema, parse_topic
+from sonoran.rf.schema import Batch, Spectrum, Status, TopicError, json_schema, parse_topic
 from sonoran.rf.store import Rules, floor_time, guarded_time
 
 NOW = datetime(2026, 9, 22, 18, 0, 0, tzinfo=UTC)
@@ -124,6 +124,64 @@ def test_buckets_start_on_the_step() -> None:
     assert floor_time(datetime(2026, 9, 22, 18, 0, 39, 900000, tzinfo=UTC), step) == datetime(
         2026, 9, 22, 18, 0, 20, tzinfo=UTC
     )
+
+
+def _spectrum(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "v": 1,
+        "station": "tempe-roof",
+        "kind": "spectrum",
+        "t": "2026-09-22T18:00:00Z",
+        "f_start_hz": 902_000_000,
+        "bin_hz": 50_000,
+        "sweeps": 12,
+        "gain_db": 32.8,
+        "p50": [-512, -509, None],
+        "p95": [-470, -468, None],
+        "peak": [-402, -401, None],
+        "busy": [3, 0, None],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_a_good_spectrum_is_read() -> None:
+    spectrum = Spectrum.model_validate(_spectrum())
+    assert spectrum.p50[2] is None
+    assert isinstance(
+        decode("rf/v1/tempe-roof/spectrum", json.dumps(_spectrum()).encode()), Spectrum
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"kind": "adsb"},
+        {"t": "2026-09-22T18:00:00"},
+        {"sweeps": 0},
+        {"bin_hz": 0},
+        {"p50": [-512, -509]},  # one entry short
+        {"busy": [3, 0, 101]},
+        {"peak": [-402, -401, 2000]},
+        {"p50": [], "p95": [], "peak": [], "busy": []},
+    ],
+)
+def test_a_bad_spectrum_is_refused(change: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        Spectrum.model_validate(_spectrum(**change))
+
+
+def test_a_spectrum_must_name_the_station_its_topic_names() -> None:
+    with pytest.raises(ValueError, match="station"):
+        decode("rf/v1/other-site/spectrum", json.dumps(_spectrum()).encode())
+
+
+def test_the_heartbeat_may_name_the_mesh_node_on_its_site() -> None:
+    body = {"v": 1, "station": "tempe-roof", "sent": "2026-09-22T18:00:00Z"}
+    assert Status.model_validate(body).mesh_node is None
+    assert Status.model_validate({**body, "mesh_node": "!a1b2c3d4"}).mesh_node == "!a1b2c3d4"
+    with pytest.raises(ValidationError):
+        Status.model_validate({**body, "mesh_node": "a1b2c3d4"})
 
 
 def test_the_published_json_schema_matches_the_code() -> None:
