@@ -128,6 +128,49 @@ yellows, blues and purples, the TAK family is pinks.
 - The public coverage embed stays dark. It is framed on other people's
   pages, and following the host page's scheme is still open.
 
+## 7.5 Controls: pressed, hover, disabled
+
+A toggle's state must be readable **without colour** and **without
+pointing at it**. Two failures made the old rule untrustworthy:
+
+- On was an accent border and accent text; off was a line border and
+  cream text. Colour was the only difference, against rule 1.
+- `button:hover` set the *same* accent border, so hovering an off
+  button to read it made it look on. The act of checking changed the
+  answer.
+
+So the chosen state is **filled**, following what `.coverage-layers`
+already did. A fill is legible at a glance and cannot be produced by
+hovering.
+
+| State | Surface | Ink | Extra |
+|---|---|---|---|
+| pressed | `--toggle-fill` (default `--accent`) | `--on-accent` | `✓` and 600 weight |
+| not pressed | `--panel` | `--text` | — |
+| not pressed, hover | `--panel-2` | `--text` | border `--accent-soft`, **never** `--accent` |
+| pressed, hover | `--toggle-fill` | `--on-accent` | unchanged |
+| disabled | unchanged | unchanged | `opacity: .5`, `cursor: not-allowed`, no hover |
+
+Measured on the live dashboard, label against its own surface:
+
+| | dark | light |
+|---|---|---|
+| pressed (`--on-accent` on `--accent`) | **6.40** | **5.27** |
+| not pressed (`--text` on `--panel`) | **13.21** | **14.27** |
+
+Both clear the 4.5 floor. The old pressed state measured **4.38 in the
+light theme**, below it, because it put `--accent` text on `--panel-2`.
+
+`--toggle-fill` is a per-control variable, so a group can take a
+different colour without a new rule. The Live control uses
+`--status-ok`, because it reports whether the page is running and
+green already means running in the sidebar dot.
+
+The `✓` is `content: "✓" / ""`. Generated content **is** announced by
+screen readers — it is not decorative by default — and `aria-pressed`
+already carries the state, so the empty alternative text stops the
+control reading as "tick Traffic, pressed".
+
 ## 8. Checking contrast
 
 The figures above use the WCAG 2.2 relative luminance formula. To

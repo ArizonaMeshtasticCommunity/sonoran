@@ -69,3 +69,76 @@ def test_the_theme_is_set_before_the_page_paints() -> None:
     head = INDEX[: INDEX.index("</head>")]
     assert head.index("data-theme") < head.index('rel="stylesheet"')
     assert "sonoran.theme" in head
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_a_pressed_toggle_label_clears_the_text_floor(theme: str) -> None:
+    """#120. The pressed state is `--on-accent` on `--accent`.
+
+    The state it replaced put `--accent` text on `--panel-2` and
+    measured 4.38 in the light theme, under the 4.5 floor. That was
+    invisible to this file because nothing tested against `--panel-2`.
+    """
+    values = THEMES[theme]
+    found = _ratio(values["on-accent"], values["accent"])
+    assert found >= 4.5, f"{theme}: a pressed toggle reads {found:.2f}:1, under 4.5"
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_the_live_toggle_label_clears_the_text_floor(theme: str) -> None:
+    """Live takes `--status-ok` rather than the accent, so check it too."""
+    values = THEMES[theme]
+    found = _ratio(values["on-accent"], values["good"])
+    assert found >= 4.5, f"{theme}: the Live toggle reads {found:.2f}:1, under 4.5"
+
+
+@pytest.mark.parametrize("token", ["accent", "good"])
+def test_every_documented_surface_is_checked_not_just_panel(token: str) -> None:
+    """`--panel-2` is a documented surface and was never tested.
+
+    palette.md section 2 lists it -- "a panel inside a panel, a hover"
+    -- and the contrast tests only ever measured against `--panel`.
+    That is how a 4.38 shipped. This does not assert the pair passes,
+    because `--accent` on `--panel-2` genuinely does not in the light
+    theme; it asserts we have stopped pretending the surface is not
+    there, by requiring the measurement to exist and be recorded.
+    """
+    for theme, values in THEMES.items():
+        found = _ratio(values[token], values["panel-2"])
+        assert found > 1.0, f"{theme}: {token} on panel-2 did not measure"
+
+
+def test_a_pressed_toggle_does_not_rely_on_colour_alone() -> None:
+    """WCAG 1.4.1, and rule 1 of palette.md."""
+    start = CSS.index('button.toggle[aria-pressed="true"]::before')
+    rule = CSS[start : CSS.index("}", start)]
+    assert "content:" in rule and "✓" in rule, (
+        "the pressed state has no non-colour carrier; on and off differ "
+        "only by colour, which rule 1 forbids"
+    )
+
+
+def test_hovering_an_unpressed_toggle_cannot_look_pressed() -> None:
+    """The bug that made the control untrustworthy.
+
+    `button:hover` sets `border-color: var(--accent)`, which was
+    exactly the old pressed style. Pointing at an off button to read it
+    made it look on.
+    """
+    start = CSS.index('button.toggle[aria-pressed="false"]:hover')
+    rule = CSS[start : CSS.index("}", start)]
+    assert "--accent-soft" in rule, (
+        "an unpressed toggle still takes the full accent on hover, which "
+        "is what the pressed state uses"
+    )
+    assert "var(--accent)" not in rule.replace("var(--accent-soft)", ""), (
+        "the hover border is the same colour as the pressed border"
+    )
+
+
+def test_a_disabled_button_looks_disabled() -> None:
+    """There was no disabled style at all, so a dead control looked live."""
+    assert "button:disabled" in CSS, "no disabled style exists"
+    start = CSS.index("button:disabled")
+    rule = CSS[start : CSS.index("}", start)]
+    assert "opacity" in rule and "not-allowed" in rule

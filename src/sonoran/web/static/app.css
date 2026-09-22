@@ -430,7 +430,87 @@ button { cursor: pointer; }
 a, button, summary, [role="tab"], .chip, .legend-key { touch-action: manipulation; }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+/*
+ * Toggles: on and off have to differ by more than a colour.
+ *
+ * The old rule gave "on" an accent border and accent text, and "off" a
+ * line border and cream text. Two problems, and the second is the one
+ * that made it untrustworthy:
+ *
+ * 1. The only difference was colour, which fails WCAG 1.4.1 and is
+ *    against rule 1 of docs/design/palette.md.
+ * 2. `button:hover` sets the SAME accent border. So pointing at an
+ *    "off" button to read it made it look "on" -- the act of checking
+ *    changed the answer.
+ *
+ * The pattern here is the one `.coverage-layers` already proved: the
+ * chosen state is FILLED, not outlined. Fill is visible at a glance
+ * and across the room, and it cannot be produced by hovering.
+ *
+ * The check mark is the non-colour carrier, for sighted readers.
+ * `aria-pressed` already carries the state for everyone else, so the
+ * glyph is given empty alternative text with `content: "\2713" / ""`.
+ * Generated content IS announced by screen readers -- it is not
+ * decorative by default -- and without the alt text the control would
+ * read as "tick Traffic, pressed". Browsers that do not support the
+ * alt-text syntax announce the tick, which is redundant but harmless.
+ */
+button.toggle,
+.view-switch button {
+  --toggle-fill: var(--accent);
+  --toggle-ink: var(--on-accent);
+}
+
+button.toggle[aria-pressed="true"],
+.view-switch button[aria-pressed="true"] {
+  background: var(--toggle-fill);
+  border-color: var(--toggle-fill);
+  color: var(--toggle-ink);
+  font-weight: 600;
+}
+
+button.toggle[aria-pressed="true"]::before,
+.view-switch button[aria-pressed="true"]::before {
+  content: "✓" / "";
+  margin-right: .35rem;
+  font-weight: 700;
+}
+
+/* Off, and hovering off. Neither may resemble the filled state: the
+   border moves to the soft accent, never the full one, and the surface
+   lifts to panel-2 instead of taking a fill. */
+button.toggle[aria-pressed="false"]:hover,
+.view-switch button[aria-pressed="false"]:hover {
+  background: var(--panel-2);
+  border-color: var(--accent-soft);
+  color: var(--text);
+}
+
+/* Hovering an on toggle keeps it on. Without this the global
+   `button:hover` border lands on top of the fill and thins it. */
+button.toggle[aria-pressed="true"]:hover,
+.view-switch button[aria-pressed="true"]:hover {
+  border-color: var(--toggle-fill);
+}
+
+/*
+ * Live is a statement about the page, not about a layer, so it gets
+ * the status colour rather than the accent. Green reads as "running"
+ * everywhere else on this site, including the sidebar dot.
+ */
+button.toggle[data-live] {
+  --toggle-fill: var(--status-ok);
+  --toggle-ink: var(--on-accent);
+}
+
+/* There was no disabled style at all, so a dead control looked live. */
+button:disabled,
+button.toggle:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+button:disabled:hover { border-color: var(--line); background: none; }
 
 .linky {
   background: none; border: 0; padding: 0;
@@ -1299,7 +1379,7 @@ body.watch-mode { overflow: hidden; }
 .view-switch button { border-radius: 0; }
 .view-switch button:first-child { border-radius: .4rem 0 0 .4rem; }
 .view-switch button:last-child { border-radius: 0 .4rem .4rem 0; margin-left: -1px; }
-.view-switch button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); position: relative; }
+.view-switch button[aria-pressed="true"] { position: relative; }
 a.more { text-decoration: none; display: inline-block; }
 
 .reply-quote {
