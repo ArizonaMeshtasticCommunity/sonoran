@@ -49,11 +49,11 @@ Drop the column in a migration once nothing reads it.
 
 ### 1.3 `packet.payload_json` is never written
 
-**State:** Open.
+**State:** Done (2026-09-22).
 
-The column exists and stays NULL. Decoded values live in the typed
-tables. Either drop the column, or populate it during ingest if a raw
-view is wanted.
+Ingest now writes it for the families with no typed table: node info,
+routing, traceroute, map report and pax counter. The packet page shows
+it. Rows stored before then stay NULL. See AGENTS.md 9.11.
 
 ### 1.4 Telemetry rows cannot always be matched to a packet
 

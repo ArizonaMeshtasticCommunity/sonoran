@@ -911,11 +911,18 @@ as by hop count.
 node. Only then does the signal reading describe the sender's own link.
 See AGENTS.md 9.5.
 
+`payload_json` is what the packet carried, for node info, routing,
+traceroute, map report and pax counter. Field names are the protobuf's
+own, and an enum is its name. It is null for every other family, which
+either has a typed table read into `decoded` or is never kept, and for
+packets stored before 2026-09-22. The API holds no channel key, so it
+cannot decode a packet itself.
+
 Response:
 
 ```json
 {
-  "packet": { "...": "as in /api/packets, plus payload_json" },
+  "packet": { "...": "as in /api/packets, plus decoded and payload_json" },
   "gateway_count": 2,
   "observations": [
     {

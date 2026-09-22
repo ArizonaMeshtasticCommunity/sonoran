@@ -28,6 +28,10 @@ class PacketInput:
     rx_time: int | None
     first_seen_at: datetime
     raw_bytes: bytes
+    # What the packet carried, for the families `decode.stored` keeps.
+    # Only ingest holds the channel keys, so this is the one place it
+    # can be written. None for every other family.
+    payload_json: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,7 @@ async def store_packet(
                         rx_time=packet.rx_time,
                         first_seen_at=packet.first_seen_at,
                         raw_bytes=packet.raw_bytes,
+                        payload_json=packet.payload_json,
                     )
                 )
         except IntegrityError:

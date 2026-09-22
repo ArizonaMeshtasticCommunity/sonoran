@@ -365,10 +365,19 @@ public key applies. Any offline script must read keys through
 `get_settings()`. Passing an empty environment variable silently
 decodes nothing.
 
-### 9.11 `packet.payload_json` is never written
+### 9.11 `packet.payload_json` holds only an allowlist
 
-The ingest pipeline does not populate it. Decoded values live in the
-typed table of their family. Read them back by (`node`, `packet_id`).
+Decoded values live in the typed table of their family. Read them back
+by (`node`, `packet_id`). Since 2026-09-22 ingest also writes
+`payload_json` for the families with no table of their own: node info
+(without the MAC address), routing, traceroute, map report and pax
+counter. `sonoran/decode/stored.py` holds the allowlist.
+
+The public API holds no channel key, so it can never decode a packet
+after the fact. What ingest does not keep is gone. Never add a family
+that can carry what a person typed: text, store and forward, waypoint,
+range test. Never add admin. Only `STORE_TEXT_MESSAGES` decides whether a
+message body is kept. Older rows stay NULL.
 
 ### 9.12 A replay test can skip the code it means to test
 

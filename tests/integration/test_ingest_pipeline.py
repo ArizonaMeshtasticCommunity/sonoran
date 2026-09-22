@@ -97,9 +97,20 @@ async def _replay(timescale_url: str) -> None:
                     MeshPacketMetrics.packet_id == packet.id,
                 )
             )
+            # The recorded packet is a node info. The public API holds no
+            # channel key, so what it said is kept here or never shown.
+            payload = await session.scalar(
+                select(Packet.payload_json).where(
+                    Packet.from_node_num == getattr(packet, "from"),
+                    Packet.packet_id == packet.id,
+                )
+            )
         assert packet_count == 1
         assert observation_count == 2
         assert metric_count == 1
+        assert isinstance(payload, dict)
+        assert payload.get("long_name")
+        assert "macaddr" not in payload
     finally:
         await engine.dispose()
 
