@@ -2062,3 +2062,5 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 }
 .rf-scale { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .75rem; margin-top: .35rem; }
 .rf-ramp { display: inline-block; width: 8rem; height: .6rem; border-radius: 999px; }
+.rf-where { margin: .4rem 0; padding: .45rem .7rem; border-left: 3px solid var(--accent-2); background: var(--panel-2); border-radius: .3rem; }
+.rf-where.unknown { border-left-color: var(--warn); }

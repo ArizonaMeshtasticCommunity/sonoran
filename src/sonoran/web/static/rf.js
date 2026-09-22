@@ -170,6 +170,7 @@
       counts.heard == null ? null
         : el('div', { text: `last minute: heard ${counts.heard}, sent ${counts.sent}, thinned ${counts.dropped}` }),
       row.precision_m ? el('div', { class: 'muted', text: `position rounded to ${row.precision_m} m` }) : null,
+      row.spectrum_last ? el('div', { text: `sweeps the 900 MHz band, newest minute ${ago(row.spectrum_last)}` }) : null,
       el('div', { class: 'muted', text: 'Click to show where it hears aircraft.' }));
   }
 
@@ -380,7 +381,7 @@
   /* The presets drawn on the busy chart before a reader picks others. */
   const BAND_DEFAULT_CHANNELS = new Set(['LongFast', 'MediumFast']);
 
-  const band = { station: null, hours: '6', view: 'p50', data: null, channels: null, drawnAt: 0, wired: false };
+  const band = { station: null, hours: '6', view: 'p50', data: null, channels: null, drawnAt: 0, wired: false, where: null };
 
   function rampColour(fraction) {
     const f = Math.max(0, Math.min(1, fraction));
@@ -511,6 +512,48 @@
       + ' Levels are relative to this station’s own receiver and never compare two stations.';
   }
 
+  /* A distance in words: "1 km", "500 m". */
+  const metres = (value) => (value >= 1000 ? `${Math.round(value / 100) / 10} km` : `${value} m`);
+
+  /**
+   * Say where the waterfall was measured.
+   *
+   * The position is the station's own, rounded by its agent before it
+   * was sent, so it is given with its rounding and never as a point. A
+   * station that shared no position is said to have none, because a
+   * waterfall with no place is noise with no address.
+   */
+  function drawWhere(page, row) {
+    const target = $('[data-rf-band-where]', page);
+    if (!target) return;
+    if (!row || row.lat == null || row.lon == null) {
+      target.className = 'rf-where unknown';
+      target.replaceChildren(
+        el('strong', { text: 'Where: not shared. ' }),
+        `${band.station} has not shared its position, so where these samples were taken is unknown. `
+        + 'Its operator can set STATION_LAT and STATION_LON on the agent; it is rounded before it is sent.');
+      return;
+    }
+    const around = row.precision_m ? `within about ${metres(row.precision_m)} of ` : 'at ';
+    const button = el('button', { type: 'button', class: 'linky', text: 'Show on map' });
+    button.addEventListener('click', () => {
+      const map = ensureMap();
+      if (band.where) band.where.remove();
+      band.where = L.circle([row.lat, row.lon], {
+        radius: Math.max(row.precision_m || 0, 300), color: '#f9a53f', weight: 2, fill: false,
+        interactive: false,
+      }).addTo(map);
+      map.setView([row.lat, row.lon], row.precision_m > 3000 ? 10 : 12);
+      $('#rf-map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    target.className = 'rf-where';
+    target.replaceChildren(
+      el('strong', { text: 'Where: ' }),
+      `measured at ${band.station}, ${around}${row.lat.toFixed(3)}, ${row.lon.toFixed(3)}`
+      + (row.precision_m ? ' (the operator rounded it). ' : '. '),
+      button);
+  }
+
   async function drawBand(page, stations, force) {
     const panel = $('[data-rf-band]', page);
     if (!panel) return;
@@ -539,6 +582,7 @@
       }
     }
     explain(page);
+    drawWhere(page, stations.find((row) => row.station === band.station));
     try {
       if (!band.channels) band.channels = (await getJson('api/rf/channels')).body.channels;
       band.data = (await getJson(`api/rf/spectrum/${encodeURIComponent(band.station)}?hours=${band.hours}`)).body;
