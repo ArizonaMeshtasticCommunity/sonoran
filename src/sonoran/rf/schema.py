@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.json_schema import models_json_schema
 
 STATION_ID = re.compile(r"^[a-z0-9-]{3,32}$")
@@ -34,6 +34,11 @@ STORED_KINDS = AIRCRAFT_KINDS
 
 MAX_OBS = 100
 MAX_META_BYTES = 1024
+# A Meshtastic node ID, as the firmware prints it.
+MESH_NODE = re.compile(r"^![0-9a-f]{8}$")
+# 902 to 928 MHz in 50 kHz bins is 520. This leaves room for finer bins
+# or a wider band without letting one message grow without bound.
+MAX_BINS = 4096
 
 
 class _Model(BaseModel):
@@ -106,6 +111,48 @@ class Status(_Model):
     kinds: list[Kind] = []
     agent_version: Annotated[str | None, Field(max_length=64)] = None
     counts: Counts = Counts()
+    # The Meshtastic node on the same site, if any (design 3.5), so the
+    # minutes it was transmitting are not read as interference.
+    mesh_node: Annotated[str | None, Field(pattern=MESH_NODE.pattern)] = None
+
+
+# A level in tenths of a dB relative to the dongle's full scale. None is
+# a bin no sweep reached in that minute.
+Level = Annotated[int, Field(ge=-2000, le=1000)] | None
+Busy = Annotated[int, Field(ge=0, le=100)] | None
+
+
+class Spectrum(_Model):
+    """One minute of the 900 MHz band from one station, on `rf/v1/<station>/spectrum`.
+
+    Bin `i` covers `f_start_hz + i * bin_hz` to the next bin. Per bin: the
+    median, the 95th percentile and the peak level over the minute's
+    sweeps, and `busy`, the share of sweeps in percent in which the bin
+    stood more than 6 dB above its own median. The four arrays have one
+    entry per bin. Levels compare one station with itself over time,
+    never two stations (design 3.5).
+    """
+
+    v: Literal[1]
+    station: StationId
+    kind: Literal["spectrum"]
+    # The start of the minute summarised.
+    t: AwareDatetime
+    f_start_hz: Annotated[int, Field(ge=0, le=6_000_000_000)]
+    bin_hz: Annotated[int, Field(ge=1, le=10_000_000)]
+    sweeps: Annotated[int, Field(ge=1, le=100_000)]
+    # The fixed gain the dongle ran at. Never automatic (design 3.5).
+    gain_db: Annotated[float, Field(ge=-10, le=100)]
+    p50: Annotated[list[Level], Field(min_length=1, max_length=MAX_BINS)]
+    p95: Annotated[list[Level], Field(min_length=1, max_length=MAX_BINS)]
+    peak: Annotated[list[Level], Field(min_length=1, max_length=MAX_BINS)]
+    busy: Annotated[list[Busy], Field(min_length=1, max_length=MAX_BINS)]
+
+    @model_validator(mode="after")
+    def _one_entry_per_bin(self) -> Spectrum:
+        if not len(self.p50) == len(self.p95) == len(self.peak) == len(self.busy):
+            raise ValueError("p50, p95, peak and busy must have one entry per bin")
+        return self
 
 
 class TopicError(ValueError):
@@ -126,25 +173,36 @@ def parse_topic(topic: str) -> tuple[str, str]:
 
 
 def json_schema() -> dict[str, object]:
-    """Return the JSON Schema of both messages, for agent builders."""
+    """Return the JSON Schema of every message, for agent builders.
+
+    JSON Schema cannot say that a spectrum's four arrays are the same
+    length. `Spectrum` checks it; an agent must too.
+    """
     _, top = models_json_schema(
-        [(Batch, "validation"), (Status, "validation")], ref_template="#/$defs/{model}"
+        [(Batch, "validation"), (Status, "validation"), (Spectrum, "validation")],
+        ref_template="#/$defs/{model}",
     )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "rf-agent message, version 1",
         "description": (
             "Published by rf-agent. Observations go to rf/v1/<station>/<kind>, "
-            "the heartbeat to rf/v1/<station>/status, retained. "
+            "the heartbeat to rf/v1/<station>/status, retained, and a minute of "
+            "the 900 MHz band to rf/v1/<station>/spectrum. "
             "See docs/design/rf-map.md section 4. Generated from sonoran/rf/schema.py."
         ),
-        # A message with `obs` is a batch; anything else is a heartbeat.
-        # Not `oneOf`: a heartbeat ignores unknown fields, so every batch
-        # would also pass as one, and `anyOf` would let a batch with bad
-        # observations through as a "heartbeat". sonoran itself decides
-        # by the topic; this is the same split for a file on its own.
+        # A message with `obs` is a batch, one of kind `spectrum` is a
+        # spectrum, and anything else is a heartbeat. Not `oneOf`: a
+        # heartbeat ignores unknown fields, so every batch would also pass
+        # as one, and `anyOf` would let a batch with bad observations
+        # through as a "heartbeat". sonoran itself decides by the topic;
+        # this is the same split for a file on its own.
         "if": {"required": ["obs"]},
         "then": {"$ref": "#/$defs/Batch"},
-        "else": {"$ref": "#/$defs/Status"},
+        "else": {
+            "if": {"required": ["kind"], "properties": {"kind": {"const": "spectrum"}}},
+            "then": {"$ref": "#/$defs/Spectrum"},
+            "else": {"$ref": "#/$defs/Status"},
+        },
         "$defs": top["$defs"],
     }

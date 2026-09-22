@@ -24,7 +24,7 @@ from pydantic import ValidationError
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.logging import configure_logging, get_logger
-from sonoran.rf.schema import Batch, Status, TopicError, parse_topic
+from sonoran.rf.schema import Batch, Spectrum, Status, TopicError, parse_topic
 from sonoran.rf.store import Rules, store_batch, store_status
 
 logger = get_logger(__name__)
@@ -74,7 +74,7 @@ async def _messages(settings: Settings) -> AsyncIterator[tuple[str, bytes]]:
             delay = min(delay * 2, 60)
 
 
-def decode(topic: str, payload: bytes) -> Batch | Status:
+def decode(topic: str, payload: bytes) -> Batch | Status | Spectrum:
     """Parse and validate one message.
 
     Raises `TopicError` or `ValueError` for a message that is not one. A
@@ -84,9 +84,13 @@ def decode(topic: str, payload: bytes) -> Batch | Status:
     """
     station, kind = parse_topic(topic)
     data = json.loads(payload)
-    message: Batch | Status = (
-        Status.model_validate(data) if kind == "status" else Batch.model_validate(data)
-    )
+    message: Batch | Status | Spectrum
+    if kind == "status":
+        message = Status.model_validate(data)
+    elif kind == "spectrum":
+        message = Spectrum.model_validate(data)
+    else:
+        message = Batch.model_validate(data)
     if message.station != station:
         raise ValueError(f"message names station {message.station!r} on {station!r}'s topic")
     if isinstance(message, Batch) and message.kind != kind:
@@ -110,6 +114,10 @@ async def main() -> None:
             except (TopicError, ValueError, ValidationError) as exc:
                 totals["invalid"] += 1
                 logger.info("drop invalid RF message on %s: %s", topic, str(exc)[:200])
+                continue
+            if isinstance(message, Spectrum):
+                # Valid, and counted. Stored once `rf_spectrum` lands.
+                totals["spectrum_not_stored"] += 1
                 continue
             async with session_factory() as session:
                 try:
