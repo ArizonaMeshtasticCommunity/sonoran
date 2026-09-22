@@ -46,18 +46,34 @@ const SonoranLive = (() => {
    * distant link look slow and a viewer would read that as latency.
    */
   const FLIGHT_MS = 850;
-  const TRAIL_MS = 1400;
-  const TRAIL_TAU_MS = 420;
   const EMIT_PULSE_MS = 320;
   const ARRIVE_PULSE_MS = 260;
-  /* A mark holds the sender's `+N` numeral for as long as its trail. */
-  const ARC_LIFE_MS = FLIGHT_MS + TRAIL_MS;
-  const TRACE_HOLD_MS = 2600;
-  const TRACE_FADE_MS = 1200;
+  /*
+   * A mark flies twice, then stays solid, then fades out.
+   *
+   * It used to fly once and be gone in about two seconds, which is
+   * shorter than a glance away from the screen. Now the particle runs
+   * the arc twice, the whole line then holds solid, and it fades over a
+   * few seconds rather than vanishing, so a reader who looks up late
+   * still sees what just happened. Each pass takes the same constant
+   * time, so flight time still says nothing about distance.
+   */
+  const FLIGHT_PASSES_MS = FLIGHT_MS + FLIGHT_MS;
+  const HOLD_MS = 5000;
+  const FADE_MS = 3000;
+  /* A mark holds the sender's `+N` numeral for as long as its line. */
+  const ARC_LIFE_MS = FLIGHT_PASSES_MS + HOLD_MS + FADE_MS;
+  const TRAIL_MS = HOLD_MS + FADE_MS;
+  const TRACE_HOLD_MS = 6000;
+  const TRACE_FADE_MS = 3000;
   const TRACE_LIFE_MS = TRACE_HOLD_MS + TRACE_FADE_MS;
   const TRACE_STEP_MS = 180;
-  /* With motion reduced a mark is painted whole, held, and then gone. */
-  const STATIC_LIFE_MS = 900;
+  /*
+   * With motion reduced a mark is painted whole, held, and faded out.
+   * It used to be gone in one step after under a second. A change of
+   * opacity is not movement, so the fade stays when motion is reduced.
+   */
+  const STATIC_LIFE_MS = HOLD_MS + FADE_MS;
 
   /* --- Caps ------------------------------------------------------- */
 
@@ -963,6 +979,8 @@ const SonoranLive = (() => {
         offered: stats.offered,
         drawn: stats.drawn,
         dropped: stats.droppedBatch,
+        /* Marks on screen now: arcs, pulses and traceroute hops. */
+        live: liveCount,
         queued: queue.length,
         lagMs: inFlight ? stats.lagMs : null,
         /*
@@ -1386,8 +1404,20 @@ const SonoranLive = (() => {
      * halo still says which node is talking most, which is the whole
      * accessibility requirement met by construction.
      */
+    /*
+     * How much of the heat is left to show above the floor. A node is
+     * dropped when its heat falls under `HEAT_FLOOR`, and drawing it at
+     * full strength until then made the halo and the ring vanish in one
+     * step. This fades them out over the last stretch instead, so the
+     * mark is already gone when the node is dropped.
+     */
+    function aboveFloor(value) {
+      return Math.max(0, Math.min(1, (value - HEAT_FLOOR) / HEAT_FLOOR));
+    }
+
     function halo(x, y, value) {
       const full = heatScale(value, HEAT_FULL);
+      const fading = aboveFloor(value);
       const outer = HALO_MIN_PX + (HALO_MAX_PX - HALO_MIN_PX) * full;
       /*
        * Each step is an annulus from its own radius down to the hole, so
@@ -1397,7 +1427,7 @@ const SonoranLive = (() => {
        * like a ring, because a gateway wears a ring already and the two
        * say different things.
        */
-      const alpha = 0.06 + 0.06 * full;
+      const alpha = (0.06 + 0.06 * full) * fading;
       ctx.fillStyle = palette.emit;
       ctx.strokeStyle = palette.emit;
       for (let step = 0; step < HALO_STEPS; step += 1) {
@@ -1442,7 +1472,7 @@ const SonoranLive = (() => {
     function uploadRing(x, y, value) {
       const full = heatScale(value, UPLOAD_FULL);
       const weight = RING_MIN_PX + RING_GAIN_PX * full;
-      ctx.globalAlpha = 0.45 + 0.4 * full;
+      ctx.globalAlpha = (0.45 + 0.4 * full) * aboveFloor(value);
       ctx.strokeStyle = palette.upload;
       ctx.lineWidth = weight;
       ctx.beginPath();
@@ -1465,39 +1495,52 @@ const SonoranLive = (() => {
       const c = control(a.x, a.y, b.x, b.y, slot.bow, side);
 
       if (reduced) {
-        // Painted whole, held, then gone in one step. No particle and no
-        // pulse, and everything the mark says is still said: the bow is
-        // the hop count, the stipple is the unknown, the taper and the
-        // chevron are the direction.
-        const alpha = 0.85;
+        // Painted whole, held, then faded. No particle and no pulse, and
+        // everything the mark says is still said: the bow is the hop
+        // count, the stipple is the unknown, the taper and the chevron
+        // are the direction.
+        const alpha = 0.85 * holdThenFade(age);
+        if (alpha <= 0.02) return;
         trail(a.x, a.y, c.x, c.y, b.x, b.y, 1, slot.colour, alpha, slot.stipple, slot.flat);
         return;
       }
 
-      const flightAge = Math.min(age, FLIGHT_MS);
-      const head = ease(flightAge / FLIGHT_MS);
-      const decay = age <= FLIGHT_MS ? 1 : Math.exp(-(age - FLIGHT_MS) / TRAIL_TAU_MS);
-      if (decay < 0.04) return;
+      const flying = age < FLIGHT_PASSES_MS;
+      // The first pass draws the line as the particle goes; the second
+      // runs the particle over the whole line again.
+      const firstPass = age < FLIGHT_MS;
+      const passAge = firstPass ? age : age - FLIGHT_MS;
+      const head = flying ? ease(Math.min(passAge, FLIGHT_MS) / FLIGHT_MS) : 1;
+      const alpha = 0.85 * (flying ? 1 : holdThenFade(age - FLIGHT_PASSES_MS));
+      if (alpha <= 0.02) return;
 
       if (chord >= MIN_CHORD_PX) {
-        trail(a.x, a.y, c.x, c.y, b.x, b.y, head, slot.colour, 0.85 * decay, slot.stipple, slot.flat);
-        if (age <= FLIGHT_MS) {
+        trail(a.x, a.y, c.x, c.y, b.x, b.y, firstPass ? head : 1, slot.colour, alpha, slot.stipple, slot.flat);
+        if (flying) {
           const at = along(a.x, a.y, c.x, c.y, b.x, b.y, head);
           shape(slot.shape, at.x, at.y, slot.size, slot.colour, 0.95, at.angle);
         }
       }
-      // The arrival pulse, on the gateway, when the particle lands.
-      if (age > FLIGHT_MS && age <= FLIGHT_MS + ARRIVE_PULSE_MS) {
-        const local = 1 - (age - FLIGHT_MS) / ARRIVE_PULSE_MS;
-        ringPulse(b.x, b.y, 3, 10, slot.colour, 0.8 * local);
+      // The arrival pulse, on the gateway, each time the particle lands.
+      const landed = firstPass ? -1 : age < FLIGHT_PASSES_MS ? age - FLIGHT_MS : age - FLIGHT_PASSES_MS;
+      if (landed >= 0 && landed <= ARRIVE_PULSE_MS) {
+        ringPulse(b.x, b.y, 3, 10, slot.colour, 0.8 * (1 - landed / ARRIVE_PULSE_MS));
       }
+    }
+
+    /** Full strength for the hold, then a straight fade to nothing. */
+    function holdThenFade(age) {
+      if (age <= HOLD_MS) return 1;
+      return Math.max(0, 1 - (age - HOLD_MS) / FADE_MS);
     }
 
     function drawPulse(slot, age) {
       const a = point(slot.lat0, slot.lng0);
       if (a.x < -40 || a.x > width + 40 || a.y < -40 || a.y > height + 40) return;
-      if (!reduced && age <= EMIT_PULSE_MS) {
-        ringPulse(a.x, a.y, 4, 14, slot.colour, 0.9 * (1 - age / EMIT_PULSE_MS));
+      // The sender pulses as each pass leaves it.
+      const sent = age < FLIGHT_MS ? age : age - FLIGHT_MS;
+      if (!reduced && age < FLIGHT_PASSES_MS && sent <= EMIT_PULSE_MS) {
+        ringPulse(a.x, a.y, 4, 14, slot.colour, 0.9 * (1 - sent / EMIT_PULSE_MS));
       }
       /*
        * `+N`: the gateways that uploaded this packet and did not get an
@@ -1523,7 +1566,9 @@ const SonoranLive = (() => {
     function drawHop(slot, age) {
       const a = point(slot.lat0, slot.lng0);
       const b = point(slot.lat1, slot.lng1);
-      const alpha = reduced || age <= TRACE_HOLD_MS
+      // Held, then faded, with motion reduced as well: it used to stay
+      // at full strength and then vanish in one step.
+      const alpha = age <= TRACE_HOLD_MS
         ? 0.95
         : 0.95 * (1 - (age - TRACE_HOLD_MS) / TRACE_FADE_MS);
       if (alpha <= 0.02) return;
