@@ -5387,8 +5387,11 @@ function envelopePanel(packet, packetId, observations) {
  * disclosure. The views above are the reading; this is for the person
  * who wants the fields themselves.
  */
+/* The JSON starts open: closed, it read as an empty panel. It is still
+ * a `details`, so it can be folded away, and it is still the last thing
+ * on the page. */
 function rawPanel(data) {
-  return el('details', { class: 'panel span-2 raw-data' },
+  return el('details', { class: 'panel span-2 raw-data', open: true },
     el('summary', {}, 'Raw data'),
     el('pre', { text: JSON.stringify({
       packet: data.packet,
