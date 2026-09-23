@@ -721,6 +721,18 @@
                 <label>Latitude <input data-planner="lat" inputmode="decimal" placeholder="click the map" /></label>
                 <label>Longitude <input data-planner="lon" inputmode="decimal" placeholder="click the map" /></label>
               </div>
+              <!--
+                Pick the board instead of typing its transmit power
+                (#110, #113). 54 of the 117 boards the flasher offers
+                have a hand-written RF profile; the rest get a family
+                rule, and the note says which one you got. A figure
+                guessed from a board name must not look like a figure
+                somebody measured.
+              -->
+              <div class="pair board-run" data-board-run hidden>
+                <label>Your radio <select data-board-type></select></label>
+              </div>
+              <p class="muted board-note" data-board-note hidden></p>
               <div class="pair">
                 <label>Antenna height (m) <input data-planner="tx_height" inputmode="decimal" /></label>
                 <label>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>

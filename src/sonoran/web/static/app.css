@@ -2121,6 +2121,8 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    so a failed fetch leaves no dead controls behind. */
 .cable-run[hidden] { display: none; }
 .antenna-run[hidden] { display: none; }
+.board-run[hidden] { display: none; }
+.board-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 .antenna-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 /* The link budget under the planner's summary tiles (#113). */
 .link-budget { margin: .9rem 0 .3rem; }

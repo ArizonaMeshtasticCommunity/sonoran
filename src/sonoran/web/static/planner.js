@@ -1195,6 +1195,92 @@ function cableLossDb(cable, feet) {
 }
 
 /*
+ * Pick the board instead of typing its transmit power (#110, #113).
+ *
+ * "Power (dBm)" is a number most people have never looked up. The board
+ * is on the desk in front of them.
+ *
+ * **The note says how well we know the answer.** 54 of the 117 boards
+ * the flasher offers have a hand-written RF profile; the other 63 get a
+ * family rule that reads the chipset out of the board's name and
+ * assumes the rest. Both are offered, because hiding two thirds of the
+ * catalogue would be less useful and no more honest -- but a figure
+ * guessed from a name must never look like one somebody measured, and a
+ * coverage map is very good at making a guess look authoritative.
+ *
+ * The stock antenna gain comes along with it, since that is the other
+ * thing a board decides, and boards with the antenna inside the case
+ * say so: there is nothing to unscrew and upgrade.
+ */
+let boardCatalogue = null;
+
+async function loadBoards() {
+  if (boardCatalogue) return boardCatalogue;
+  try {
+    const body = await get('api/radio/boards');
+    boardCatalogue = body && Array.isArray(body.boards) ? body.boards : null;
+  } catch {
+    boardCatalogue = null;
+  }
+  return boardCatalogue;
+}
+
+async function wireBoardRun() {
+  const run = document.querySelector('[data-board-run]');
+  const picker = document.querySelector('[data-board-type]');
+  const note = document.querySelector('[data-board-note]');
+  if (!run || !picker || !note) return;
+
+  const boards = await loadBoards();
+  if (!boards || !boards.length) return;
+
+  // Known profiles first: the boards we can actually answer for should
+  // be the ones somebody finds without scrolling.
+  const ordered = [...boards].sort((a, b) => {
+    if (a.profile_is_exact !== b.profile_is_exact) return a.profile_is_exact ? -1 : 1;
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  picker.replaceChildren(
+    el('option', { value: '', text: "I'll type the power myself" }),
+    ...ordered.map((board) => el('option', {
+      value: board.slug,
+      text: board.profile_is_exact ? board.name : `${board.name} (assumed)`,
+    })),
+  );
+
+  picker.addEventListener('change', () => {
+    const board = boards.find((item) => item.slug === picker.value);
+    if (!board) {
+      note.hidden = true;
+      return;
+    }
+    const power = field('tx_power');
+    if (power && board.assumed_tx_power_dbm != null) {
+      power.value = String(board.assumed_tx_power_dbm);
+      power.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const gain = field('tx_gain');
+    if (gain && board.assumed_antenna_gain_dbi != null) {
+      gain.value = String(board.assumed_antenna_gain_dbi);
+      gain.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    note.hidden = false;
+    const fixed = board.fixed_antenna
+      ? ' Its antenna is inside the case, so there is nothing to upgrade.'
+      : '';
+    note.textContent = board.profile_is_exact
+      ? `${board.chipset} at ${board.assumed_tx_power_dbm} dBm, with the antenna it ships with `
+        + `(${board.assumed_antenna_gain_dbi} dBi). The operator can set the power lower.${fixed}`
+      : `No measured profile for this board. Assuming ${board.assumed_tx_power_dbm} dBm and `
+        + `${board.assumed_antenna_gain_dbi} dBi from its family — check your radio's settings `
+        + `and correct the fields if you know better.${fixed}`;
+  });
+
+  run.hidden = false;
+}
+
+/*
  * Pick the antenna instead of typing its gain (#111, #113).
  *
  * "Antenna gain (dBi)" asks for a number printed on a box the buyer no
@@ -1334,6 +1420,7 @@ function wirePlanner() {
 
   // The cable helper reveals itself only once the catalogue has
   // arrived, so a failed fetch leaves no dead controls on the form.
+  wireBoardRun();
   wireCableRun();
   wireAntennaRun('tx', 'tx_gain');
   wireAntennaRun('rx', 'rx_gain');

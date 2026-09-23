@@ -81,9 +81,16 @@ def draft(boards: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 # `inferred` is the difference between a family rule's
                 # guess and UNKNOWN_PROFILE, which is nothing at all.
                 "profile_is_inferred": bool(profile.inferred) and not known,
-                "chipset": profile.chipset if known else None,
-                "assumed_tx_power_dbm": profile.assumed_tx_power_dbm if known else None,
-                "assumed_antenna_gain_dbi": profile.assumed_antenna_gain_dbi if known else None,
+                # The figures are carried for EVERY board, inferred ones
+                # included. A picker that showed nothing for two thirds
+                # of the catalogue would be less useful and no more
+                # honest than one that shows the family rule's answer
+                # and says it is a family rule's answer. The flag above
+                # is what makes that distinction available to say.
+                "chipset": profile.chipset,
+                "assumed_tx_power_dbm": profile.assumed_tx_power_dbm,
+                "assumed_antenna_gain_dbi": profile.assumed_antenna_gain_dbi,
+                "fixed_antenna": profile.fixed_antenna,
                 # Everything #110 asks for that the resource cannot give.
                 "pa_present": None,
                 "max_tx_power_dbm": None,
