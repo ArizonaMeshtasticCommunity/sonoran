@@ -47,8 +47,15 @@ def test_neither_reader_truncates_its_query() -> None:
 
 
 def test_the_endpoint_limits_what_is_drawn_not_what_is_counted() -> None:
-    """The cut has to happen after the edges are built."""
-    source = inspect.getsource(graph.mesh_graph)
+    """The cut has to happen after the edges are built.
+
+    This reads `_mesh_graph`, which is where the work moved when
+    `/api/graph` was given a cache (#148): `mesh_graph` is now the
+    wrapper that builds the key. The invariant is unchanged and is
+    AGENTS.md 9.19 — a row limit must never decide what evidence
+    exists.
+    """
+    source = inspect.getsource(graph._mesh_graph)
     built = source.index("_traceroute_edges(")
     cut = source.index("ranked[:limit]")
     assert built < cut, "the limit is applied before the evidence is aggregated"

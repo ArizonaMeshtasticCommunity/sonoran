@@ -19,6 +19,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from sonoran.api.cache import KeyedCache
 from sonoran.api.channels import CORE_TIER, UNKNOWN_CHANNEL, channel_filter, classify
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import BROADCAST_NODE_NUM, format_node_id, name_of, resolve_names
@@ -48,6 +49,27 @@ LINK_REPORTS_SHOWN = 50
 # but too rarely to say it is usable. Past that a link is two-way when
 # packets crossed it at least TWO_WAY_MIN_SAMPLES times in each
 # direction, and one-way when one direction falls short of that.
+# The graph pages ask for at most 7 days, and so does this API.
+#
+# The ceiling was 720 h while the only selector that drives these three
+# endpoints offers 6 h, 24 h, 3 days and 7 days. Measured against the
+# deployed instance, the cost is driven by the window and barely at all
+# by the row limit:
+#
+#     hours=24  limit=2000    1.7 s
+#     hours=168 limit=2000    3.3 s
+#     hours=168 limit=10000   4.0 s
+#     hours=720 limit=2000    9.2 s
+#     hours=720 limit=10000  10.1 s
+#
+# So 720 h bought nothing any page could ask for and left a ten-second
+# anonymous request on a one-core box. This is a deliberate narrowing of
+# a public surface: a caller who hand-wrote `hours=720` now gets a 422
+# rather than a slow answer. A 30-day graph is a feature with a
+# different shape -- prepared, not computed while somebody waits -- not
+# a query parameter.
+GRAPH_MAX_HOURS = 168
+
 WEAK_LINK_SAMPLES = 10
 TWO_WAY_MIN_SAMPLES = 3
 
@@ -363,7 +385,7 @@ async def _channel_packet_counts(session: AsyncSession, since: datetime) -> dict
 @router.get("/channels")
 async def graph_channels(
     request: Request,
-    hours: int = Query(default=24, ge=1, le=720),
+    hours: int = Query(default=24, ge=1, le=GRAPH_MAX_HOURS),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return every channel that has mesh links in the window.
@@ -509,7 +531,7 @@ async def _link_reports(
 async def graph_link(
     a: str,
     b: str,
-    hours: int = Query(default=24, ge=1, le=720),
+    hours: int = Query(default=24, ge=1, le=GRAPH_MAX_HOURS),
     channel: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
@@ -547,9 +569,26 @@ async def graph_link(
     }
 
 
+# One hold per (hours, limit, channel), with a ceiling on how many.
+#
+# The graph page costs 1.7 s at its default and 4.0 s at its widest, and
+# every reader who opens it pays that again. The hold collapses repeat
+# loads; the single-flight lock inside it collapses the more expensive
+# case, which is several readers opening the same page in the same
+# second on a one-core box.
+#
+# `KeyedCache` rather than a dict of `TimedCache`, because the key is
+# built from the query string: an unbounded dict here is the #160 bug in
+# the one place whose job is to protect the box. 64 entries covers every
+# combination the selector can produce (4 windows x the channels on this
+# mesh) many times over.
+_graph_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=64)
+
+
 @router.get("")
 async def mesh_graph(
-    hours: int = Query(default=24, ge=1, le=720),
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=GRAPH_MAX_HOURS),
     limit: int = Query(default=2000, ge=1, le=10000),
     channel: str | None = None,
     session: AsyncSession = Depends(get_session),
@@ -565,6 +604,36 @@ async def mesh_graph(
     holds every channel together. Nodes of different presets cannot hear
     each other, so a page must ask for one channel at a time.
     """
+    # Every parameter that changes the answer is in the key.
+    #
+    # A key that misses one serves a different question's answer, which
+    # is the worst thing a cache can do and the quietest --
+    # `test_graph_cache_key.py` builds this key by reading the
+    # signature, so a parameter added later fails a test instead of
+    # being silently ignored.
+    key = graph_cache_key(hours=hours, limit=limit, channel=channel)
+    return await _graph_cache.get(
+        key,
+        request.app.state.settings.stats_cache_seconds,
+        lambda: _mesh_graph(session, hours, limit, channel),
+    )
+
+
+def graph_cache_key(*, hours: int, limit: int, channel: str | None) -> str:
+    """The cache key for one graph request.
+
+    Written out rather than built from `locals()` so that adding a
+    parameter to `mesh_graph` without adding it here is a visible
+    omission, and so the test that compares the two has something to
+    compare.
+    """
+    return f"{hours}|{limit}|{channel or ''}"
+
+
+async def _mesh_graph(
+    session: AsyncSession, hours: int, limit: int, channel: str | None
+) -> dict[str, object]:
+    """The work behind `/api/graph`. Cached by its caller."""
     since = datetime.now(UTC) - timedelta(hours=hours)
     edges = await _traceroute_edges(session, since, channel)
     for edge in (await _neighbor_edges(session, since, channel)).values():
