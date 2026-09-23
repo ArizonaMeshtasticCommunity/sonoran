@@ -49,8 +49,16 @@ const results = [];
 const elsewhere = [];
 const errors = [];
 
-/* A tile that is not cached yet is a 404 by design, as in check_pages.js. */
-const IGNORE = /404|favicon|tile/i;
+/*
+ * A tile that is not cached yet is a 404 by design, as in check_pages.js.
+ *
+ * "No terrain is held for this area" is the same fact one level up. The
+ * planner logs its refusal before it prints it, and on an instance with
+ * an empty terrain cache — CI — that refusal is the page working
+ * correctly. It is matched by its own sentence, so any other planner
+ * failure still counts as an error.
+ */
+const IGNORE = /404|favicon|tile|No terrain is held for this area/i;
 
 /*
  * A console error is only ours if it came from our own origin.
@@ -157,6 +165,71 @@ const open = async (page, hash, settle = 3500) => {
   await page.goto(`${BASE}/#${hash}`, { waitUntil: 'load' });
   await page.waitForTimeout(settle);
 };
+
+/**
+ * Poll a condition in the page until it holds, or give up.
+ *
+ * NOT `page.waitForFunction`. That installs its poller with CDP
+ * `Runtime.evaluate`, which is a string of JavaScript and which this
+ * dashboard's Content-Security-Policy refuses: `script-src` carries
+ * 'self', a nonce and 'wasm-unsafe-eval', and deliberately not
+ * 'unsafe-eval'. On a CI instance it fails with
+ *
+ *   EvalError: Refused to evaluate a string as JavaScript
+ *
+ * and it fails only when the condition is not already true, because
+ * Playwright evaluates the predicate once before it starts polling. So
+ * it works on the developer's machine and breaks on the server, which
+ * is the worst shape a helper can have. `page.evaluate` goes through
+ * `Runtime.callFunctionOn` and is not subject to the policy, which is
+ * why every journey in this file uses it.
+ */
+async function waitFor(page, condition, timeout = 240000, step = 500) {
+  const until = Date.now() + timeout;
+  for (;;) {
+    if (await page.evaluate(condition)) return true;
+    if (Date.now() >= until) return false;
+    await page.waitForTimeout(step);
+  }
+}
+
+/** True once the planner has either drawn a summary or refused to. */
+const PLANNER_SETTLED = () => {
+  const summary = document.querySelector('[data-planner-summary]');
+  const notice = document.querySelector('[data-planner-notice]');
+  const refused = notice && notice.className.includes('bad') && notice.textContent.trim();
+  return (summary && summary.children.length > 0) || Boolean(refused);
+};
+
+/**
+ * Ask the planner for a prediction, and report whether it could give one.
+ *
+ * An instance with an empty terrain cache cannot predict anything: every
+ * page comes back 404 and the planner refuses, which is the deployment
+ * being new rather than the page being broken. CI is exactly that
+ * deployment. This waits for whichever comes first, a filled summary or
+ * a refusal, so a journey can carry on either way and say which it got.
+ *
+ * The first draft waited only for the summary, which turned a missing
+ * terrain cache into a five-minute timeout and a red suite.
+ */
+async function predict(page, timeout = 240000) {
+  await page.click('[data-planner-run]');
+  if (!(await waitFor(page, PLANNER_SETTLED, timeout))) {
+    return { ran: false, why: 'the run neither finished nor refused inside the time allowed' };
+  }
+  const filled = await page.evaluate(
+    () => document.querySelector('[data-planner-summary]').children.length > 0,
+  );
+  if (filled) {
+    await page.waitForTimeout(1200);
+    return { ran: true, why: '' };
+  }
+  // `textContent`, not `innerText`: the notice may be hidden again by
+  // the time this reads it, and a hidden element has no innerText.
+  const said = (await page.locator('[data-planner-notice]').textContent().catch(() => '')) || '';
+  return { ran: false, why: said.trim().slice(0, 90) || 'the planner refused and said nothing' };
+}
 
 async function main() {
   const browser = await chromium.launch();
@@ -429,6 +502,83 @@ async function main() {
     await open(page, 'planner', 5000);
     must((await page.locator('[data-planner-run]').count()) > 0, 'no run control');
     return 'run control present';
+  });
+
+  await journey(context, 'the planner sidebar stays flush after a run', async (page) => {
+    /*
+     * #108: the sidebar was reported to open a gap once the planner page
+     * grows, which it does by about 1800 px after a run. The sidebar is
+     * `position: sticky; top: 0; height: 100svh`, so a gap is the
+     * difference between that height and the visible viewport.
+     *
+     * This asserts the thing the eye would see: the sidebar's box covers
+     * the viewport top to bottom, at three scroll positions. It asks for
+     * a prediction first, because the height is what the report turns
+     * on: 1083 px before a run against a 1050 px viewport, 2838 px
+     * after one.
+     *
+     * An instance with no terrain cannot predict, and there the same
+     * measurement is still made on the shorter page. That keeps its
+     * teeth: a sidebar shortened to 92svh was 84 px short at scrollY 0,
+     * before any scrolling at all.
+     *
+     * The tolerance is 1 px. A sticky box lands on a fractional offset
+     * when `scrollTo` does, and 0.5 px was measured in Chromium and in
+     * Firefox at the foot of the page. A real gap is tens of pixels.
+     */
+    await open(page, 'planner', 5000);
+    const shape = () => page.evaluate(() => {
+      const box = document.querySelector('.sidebar').getBoundingClientRect();
+      const doc = document.documentElement;
+      return {
+        top: box.top,
+        bottom: box.bottom,
+        scrollY: Math.round(window.scrollY),
+        innerHeight: window.innerHeight,
+        docHeight: Math.round(doc.scrollHeight),
+        sideways: doc.scrollWidth - doc.clientWidth,
+        position: getComputedStyle(document.querySelector('.sidebar')).position,
+      };
+    });
+    const before = await shape();
+    // A gap can only show where the sidebar is the sticky column. At
+    // 60rem and under it is a static top bar that scrolls away, which is
+    // a different layout and not what #108 describes.
+    must(before.position === 'sticky', `the sidebar is ${before.position} at this width`);
+
+    // Phoenix, in the middle of the served region, and 10 km rather than
+    // the default 30: the run is the slow part of this journey and a
+    // short one still fills the summary and the table.
+    await page.fill('[data-planner="lat"]', '33.45');
+    await page.fill('[data-planner="lon"]', '-112.07');
+    await page.fill('[data-planner="radius"]', '10');
+    const started = Date.now();
+    const run = await predict(page);
+    const took = Math.round((Date.now() - started) / 1000);
+
+    const bad = [];
+    let after = null;
+    for (const part of [0, 0.5, 1]) {
+      await page.evaluate((fraction) => {
+        window.scrollTo(0, Math.round(document.documentElement.scrollHeight * fraction));
+      }, part);
+      await page.waitForTimeout(600);
+      const now = await shape();
+      after = now;
+      if (now.top > 1) bad.push(`top ${now.top.toFixed(1)} px at scrollY ${now.scrollY}`);
+      if (now.bottom < now.innerHeight - 1) {
+        bad.push(`${(now.innerHeight - now.bottom).toFixed(1)} px short at scrollY ${now.scrollY}`);
+      }
+      if (now.sideways > 1) bad.push(`${now.sideways} px of sideways scroll at scrollY ${now.scrollY}`);
+    }
+    if (run.ran) {
+      must(after.docHeight > before.docHeight + 200,
+        `the page did not grow after the run (${before.docHeight} -> ${after.docHeight} px)`);
+    }
+    must(bad.length === 0, `the sidebar left a gap: ${bad.join(', ')}`);
+    return run.ran
+      ? `${before.docHeight} -> ${after.docHeight} px, flush at three positions, run took ${took} s`
+      : `no prediction on this instance (${run.why}); flush at three positions on ${after.docHeight} px`;
   });
 
   /*
