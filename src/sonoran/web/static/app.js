@@ -1328,10 +1328,20 @@ function drawLinks(edges, positions) {
     seen.add(key);
     // A cool colour, so this layer reads as separate from the warm
     // traffic and traceroute lines rather than competing with them.
+    //
+    // 0.38 measured 2.04:1 against the page background in the dark
+    // theme and 1.73:1 in the light one, both under the 3:1 floor for
+    // meaningful non-text content (WCAG 1.4.11). At 0.85 it is 5.57
+    // and 3.96. The dash pattern still separates it from the solid
+    // traffic lines, and the cool colour still separates it by hue.
+    //
+    // The background here is basemap tiles rather than a panel, so the
+    // page background is a stand-in rather than an exact figure. The
+    // tiles are filtered dark, so the dark reading is the closer one.
     L.polyline([a, b], {
       color: PALETTE.link,
-      weight: 1.2,
-      opacity: 0.38,
+      weight: 1.3,
+      opacity: 0.85,
       dashArray: '4 5',
     }).addTo(mapState.links);
   }
@@ -2563,10 +2573,38 @@ function focusNode(data, query) {
 
 /* How each strength of link draws on the graph page, and reads in its
  * tooltip. The strengths come from the graph endpoint. */
+/*
+ * How each strength is drawn.
+ *
+ * Opacity used to carry the tier: .6 solid, .42 dashed, .3 dotted.
+ * Composited over `--panel`, that put every link under the 3:1 floor
+ * for meaningful non-text content (WCAG 1.4.11). Measured across all
+ * fifteen role colours:
+ *
+ *   alpha .30   worst 1.37 dark, 1.39 light
+ *   alpha .42   worst 1.59 dark, 1.61 light
+ *   alpha .60   worst 2.00 dark, 2.02 light
+ *
+ * The worst case was 1.22:1, for an unconfirmed link at .2. A dash
+ * pattern you cannot find is not a carrier of anything.
+ *
+ * Every role clears 3:1 only at alpha >= .92 dark and .89 light, so
+ * opacity cannot separate the tiers AND stay legible. It no longer
+ * tries. Width and dash pattern carry the strength -- they already
+ * did, and the legend already names them in words -- and the opacity
+ * is set once, high enough for the faintest role to clear the floor
+ * with a little room.
+ *
+ * The cost is a denser picture. That is the right trade: a link drawn
+ * so faintly that its dash pattern cannot be read is not conveying
+ * "weak", it is conveying nothing.
+ */
+const LINK_OPACITY = 0.95;
+
 const LINK_LINE = {
-  two_way: { width: 1.7, type: 'solid', opacity: 0.6 },
-  one_way: { width: 1.1, type: 'dashed', opacity: 0.42 },
-  weak: { width: 0.8, type: 'dotted', opacity: 0.3 },
+  two_way: { width: 2.0, type: 'solid', opacity: LINK_OPACITY },
+  one_way: { width: 1.4, type: 'dashed', opacity: LINK_OPACITY },
+  weak: { width: 1.0, type: 'dotted', opacity: LINK_OPACITY },
 };
 const LINK_STRENGTH = {
   two_way: 'Two-way link',
@@ -3196,7 +3234,11 @@ PAGES.graph = async (page) => {
         strength: link.strength,
         lineStyle: {
           ...(LINK_LINE[link.strength] || LINK_LINE.weak),
-          ...(link.snr == null ? { color: PALETTE.stale, opacity: 0.2 } : {}),
+          // Unconfirmed: the stale colour, not a fainter one. At .2 it
+          // measured 1.22:1, the worst value on the page. `--role-stale`
+          // at full strength is 3.31 dark and 4.59 light, so the colour
+          // alone is enough to set it apart without hiding it.
+          ...(link.snr == null ? { color: PALETTE.stale, opacity: LINK_OPACITY } : {}),
         },
       })),
     }],

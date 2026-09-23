@@ -142,3 +142,85 @@ def test_a_disabled_button_looks_disabled() -> None:
     start = CSS.index("button:disabled")
     rule = CSS[start : CSS.index("}", start)]
     assert "opacity" in rule and "not-allowed" in rule
+
+
+# --- Opacity: what the renderer actually composites (#127) ---------
+#
+# The tests above check each token at full strength. The graph draws
+# its links through an alpha, and at the old values every one of them
+# was under the 3:1 floor for meaningful non-text content -- the worst
+# at 1.22:1. This file could not see it, because nothing here modelled
+# the alpha. It does now, and it reads the alpha out of app.js rather
+# than repeating it, so lowering one there fails here.
+
+APP_JS = (Path(__file__).parents[2] / "src/sonoran/web/static/app.js").read_text(encoding="utf-8")
+
+
+def _over(colour: str, background: str, alpha: float) -> str:
+    """Composite `colour` at `alpha` over an opaque `background`."""
+    top = [int(colour[i : i + 2], 16) for i in (1, 3, 5)]
+    base = [int(background[i : i + 2], 16) for i in (1, 3, 5)]
+    mixed = [round(top[i] * alpha + base[i] * (1 - alpha)) for i in range(3)]
+    return "#{:02x}{:02x}{:02x}".format(*mixed)
+
+
+def _link_opacity() -> float:
+    found = re.search(r"const LINK_OPACITY = ([0-9.]+);", APP_JS)
+    assert found, "LINK_OPACITY is not declared in app.js"
+    return float(found.group(1))
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_every_graph_link_clears_the_non_text_floor(theme: str) -> None:
+    """WCAG 1.4.11: 3:1 for a mark that carries meaning.
+
+    Every role colour, at the alpha the graph actually draws with,
+    against the panel the chart sits on.
+    """
+    values = THEMES[theme]
+    alpha = _link_opacity()
+    panel = values["panel"]
+    worst = min(
+        (_ratio(_over(value, panel, alpha), panel), token)
+        for token, value in values.items()
+        if token.startswith("role-")
+    )
+    found, token = worst
+    assert found >= 3.0, (
+        f"{theme}: a {token} link draws at {found:.2f}:1 with alpha "
+        f"{alpha}, under the 3:1 floor. A dash pattern nobody can see "
+        f"is not carrying the strength."
+    )
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_the_map_neighbour_line_clears_the_non_text_floor(theme: str) -> None:
+    """The same rule for the map's own link layer.
+
+    Its background is basemap tiles rather than a panel, so `--bg` is a
+    stand-in. The tiles are filtered dark, which makes the dark reading
+    the closer of the two.
+    """
+    values = THEMES[theme]
+    found = re.search(r"color: PALETTE\.link,\s*weight: [0-9.]+,\s*opacity: ([0-9.]+)", APP_JS)
+    assert found, "the map neighbour line's opacity could not be read from app.js"
+    alpha = float(found.group(1))
+    measured = _ratio(_over(values["map-link"], values["bg"], alpha), values["bg"])
+    assert measured >= 3.0, (
+        f"{theme}: the map neighbour line draws at {measured:.2f}:1 with "
+        f"alpha {alpha}, under the 3:1 floor"
+    )
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("token", ["text", "muted"])
+def test_text_on_the_second_surface_is_checked_too(theme: str, token: str) -> None:
+    """`--panel-2` is a documented surface that was never tested.
+
+    palette.md section 2 lists it. Every contrast test here measured
+    against `--panel` only, which is how a 4.38:1 toggle label shipped
+    (#120).
+    """
+    values = THEMES[theme]
+    found = _ratio(values[token], values["panel-2"])
+    assert found >= 4.5, f"{theme}: {token} on panel-2 is {found:.2f}:1, under 4.5"
