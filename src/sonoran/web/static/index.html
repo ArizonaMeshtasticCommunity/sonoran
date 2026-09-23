@@ -890,13 +890,89 @@
               -->
               <p class="sub">Node plugged in by USB? <a class="linky" href="https://cfgtest.azmsh.dev" target="_blank" rel="noopener">cfgtest.azmsh.dev</a> reads the config straight off it, with no export step (Chrome or Edge on a computer).</p>
             </div>
-            <div class="controls" data-config-exports hidden>
+            <!--
+            Optional MQTT, and settings a reader can change before
+            exporting (#118). Both exist in cfgtest and were the last
+            interface gap between the two tools.
+
+            COLLAPSED by default and phrased as optional, because MQTT
+            is a choice with consequences -- it puts a node's traffic on
+            somebody else's broker -- and most readers want the
+            corrected config and nothing else.
+
+            PRIVACY: the password is typed here, goes into the
+            downloaded file, and goes nowhere else. It is never put in
+            `localStorage`, never sent, and the field is
+            `autocomplete="off"` so a browser does not offer to keep
+            it. See the note in `config-check.js`.
+          -->
+          <details class="panel" data-config-extras hidden>
+            <summary>Optional: connect this node to the azmsh.net MQTT broker, or change a recommended value</summary>
+            <p class="sub">
+              MQTT sends this node&rsquo;s traffic to a server over the internet, so
+              the mesh can be seen on a map and from other sites. It is optional
+              and the node works without it. Credentials for the community broker
+              come from the AZ Meshtastic Discord.
+            </p>
+            <div class="grid two">
+              <div>
+                <h4>MQTT</h4>
+                <label class="stack"><input type="checkbox" data-mqtt="enabled"> Enable MQTT</label>
+                <label class="stack">Server <input type="text" data-mqtt="address" placeholder="mqtt.azmsh.net" autocomplete="off"></label>
+                <label class="stack">Username <input type="text" data-mqtt="username" autocomplete="off"></label>
+                <label class="stack">Password <input type="password" data-mqtt="password" autocomplete="off"></label>
+                <p class="muted">Stays in this browser. It goes into the file you download and nowhere else.</p>
+              </div>
+              <div>
+                <h4>Recommended values</h4>
+                <p class="muted">Blank means use the recommendation. Accepts <code>30m</code>, <code>1.5h</code>, <code>2d</code> or a number of seconds.</p>
+                <label class="stack">Position broadcast <input type="text" data-override="position.positionBroadcastSecs" autocomplete="off"></label>
+                <label class="stack">Device telemetry <input type="text" data-override="telemetry.deviceUpdateInterval" autocomplete="off"></label>
+                <label class="stack">Neighbour info <input type="text" data-override="neighborInfo.updateInterval" autocomplete="off"></label>
+                <div class="controls">
+                  <button type="button" class="toggle" data-config-extras-reset>Reset to recommended</button>
+                </div>
+              </div>
+            </div>
+            <p class="notice" data-config-extras-error hidden></p>
+          </details>
+          <div class="controls" data-config-exports hidden>
               <button type="button" class="primary" data-config-fix>Download corrected config</button>
               <button type="button" class="toggle" data-config-report>Download report</button>
             </div>
           </div>
 
           <p class="notice" data-config-notice hidden></p>
+          <!--
+            Shown only when the checker has broken on somebody's file
+            (#119). Until then the reader has no reason to see it.
+
+            The report is printed IN FULL above the copy button, not
+            summarised and not behind a disclosure, because the only
+            thing that makes "this contains nothing private" credible
+            is being able to read it. Upstream builds it from a fixed
+            whitelist of scalars -- tool version, coarse browser, which
+            step failed, the error class, a scrubbed message, the
+            detected format, file size and extension, a timestamp --
+            and never from config contents, channel names, PSKs, MQTT
+            credentials or the file name.
+
+            Nothing is sent. The reader copies it if they choose to.
+          -->
+          <div class="panel" data-config-diagnostics hidden>
+            <h3>Something went wrong reading that file</h3>
+            <p class="sub">
+              This did not work, and we would not otherwise hear about it.
+              Below is everything the report contains &mdash; no settings, no
+              channel names, no keys, not even the file name. Nothing is sent
+              anywhere; copying it is up to you.
+            </p>
+            <pre data-config-diagnostics-text></pre>
+            <div class="controls">
+              <button type="button" class="toggle" data-config-diagnostics-copy>Copy diagnostic report</button>
+              <a class="linky" href="https://github.com/ArizonaMeshtasticCommunity/sonoran/issues/new" target="_blank" rel="noopener">Open an issue</a>
+            </div>
+          </div>
 
           <div class="panel">
             <h3>1. Where is the node</h3>
