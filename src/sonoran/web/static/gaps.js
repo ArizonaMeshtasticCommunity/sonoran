@@ -283,13 +283,26 @@
       if (!row) return;
       /* The row's colour comes from worst_state. Never from a number. */
       tr.classList.add('gap-row', row.worst_state);
-      tr.tabIndex = 0;
-      tr.setAttribute('role', 'button');
-      tr.setAttribute('aria-expanded', 'false');
+      /*
+       * The ROW is not the button. The button inside it is.
+       *
+       * This used to be `tabindex=0` plus `role="button"` plus
+       * `aria-expanded` on the `<tr>` itself, with two real buttons
+       * inside it. `role="button"` on a row destroys the row and cell
+       * semantics for everything within, and interactive content
+       * nested inside a button role is invalid ARIA -- a screen reader
+       * is told "button", then finds a button inside it.
+       *
+       * The `.gap-open` button already does the work and already
+       * worked by keyboard. The row keeps its click handler as a
+       * convenience for a mouse, which needs no role: a pointer
+       * shortcut that duplicates a real control is an enhancement,
+       * not the only way in.
+       */
       tr.title = 'Open the evidence';
       const opener = tr.querySelector('.gap-open');
       const toggle = () => {
-        const open = tr.getAttribute('aria-expanded') === 'true';
+        const open = tr.classList.contains('open');
         if (opener) {
           opener.setAttribute('aria-expanded', String(!open));
           opener.textContent = open ? 'Open \u25b8' : 'Close \u25be';
@@ -298,14 +311,12 @@
           if (tr.nextElementSibling && tr.nextElementSibling.classList.contains('gap-detail')) {
             tr.nextElementSibling.remove();
           }
-          tr.setAttribute('aria-expanded', 'false');
           tr.classList.remove('open');
           return;
         }
         const detail = el('tr', { class: 'gap-detail' },
           el('td', { colspan: String(columns.length) }, evidencePanel(row, summary)));
         tr.after(detail);
-        tr.setAttribute('aria-expanded', 'true');
         tr.classList.add('open');
       };
       tr.addEventListener('click', (event) => {
@@ -313,12 +324,6 @@
         if (event.target.closest('.gap-open')) { toggle(); return; }
         if (event.target.closest('button, a')) return;
         toggle();
-      });
-      tr.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          toggle();
-        }
       });
     });
   }

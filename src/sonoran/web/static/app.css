@@ -1981,7 +1981,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .health-card.state-unknown, .issue.state-unknown { --state: var(--role-stale); }
 .health-card.state-none { --state: var(--line); }
 .health-head { display: flex; align-items: center; gap: .5rem; }
-.health-head h4 { margin: 0; font-size: .95rem; }
+.health-head h3 { margin: 0; font-size: .95rem; }
 .health-glyph {
   display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; flex: none;
   border: 2px solid var(--state); color: var(--state); font-weight: 700; font-size: .85rem;
@@ -2038,7 +2038,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   display: flex; flex-direction: column; gap: .45rem;
   padding: 0 .7rem .6rem; max-height: min(42svh, 20rem); overflow: auto;
 }
-.map-key h4 { margin: .2rem 0 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.map-key h3 { margin: .2rem 0 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .map-key p { margin: 0; }
 .map-key .legend { margin: 0; }
 .map-shell.watch .map-key { display: none; }

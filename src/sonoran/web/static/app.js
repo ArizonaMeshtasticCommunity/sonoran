@@ -662,6 +662,25 @@ function chart(target, option) {
     charts.set(target, instance);
   }
   instance.setOption(option, true);
+  /*
+   * Name the region, and let ECharts describe the data inside it.
+   *
+   * `aria.enabled` in CHART_BASE generates the description of what was
+   * plotted. That says "a line chart with 2 series"; it does not say
+   * which question this chart answers. The panel's own heading does,
+   * and it is right above the canvas, so it is used as the label.
+   *
+   * `role="img"` stops a reader walking into the canvas and finding
+   * nothing, and gives the generated description something to attach
+   * to.
+   */
+  if (!target.getAttribute('role')) target.setAttribute('role', 'img');
+  if (!target.getAttribute('aria-label')) {
+    const panel = target.closest('.panel');
+    const heading = panel ? panel.querySelector('h3, h4') : null;
+    const title = heading ? heading.textContent.trim() : '';
+    if (title) target.setAttribute('aria-label', `Chart: ${title}`);
+  }
   return instance;
 }
 
@@ -691,6 +710,20 @@ function chartEmpty(target, message) {
 
 const CHART_BASE = {
   backgroundColor: 'transparent',
+  /*
+   * A canvas with no text alternative is nothing at all to a screen
+   * reader (WCAG 1.1.1, Level A). Every chart here was an unlabelled
+   * canvas: no role, no aria-label, empty textContent, and ECharts
+   * defaults `aria.enabled` to false so not even its own generated
+   * description existed.
+   *
+   * Turning it on makes ECharts build a description from the series
+   * and the data it was given, which is the honest thing to expose --
+   * it describes what was drawn rather than what we meant. Each chart
+   * also gets its own label where it is created, because "a line
+   * chart with 2 series" does not say which mesh question it answers.
+   */
+  aria: { enabled: true },
   textStyle: { color: PALETTE.muted, fontFamily: 'system-ui, sans-serif' },
   grid: { left: 48, right: 16, top: 24, bottom: 32, containLabel: true },
   tooltip: {
@@ -1882,7 +1915,7 @@ function watchLegend(target) {
 function mapKeyBody() {
   return [
     el('p', { class: 'muted', text: 'Dots are nodes, coloured by role. The role key under the map filters them.' }),
-    el('h4', { text: 'What the marks mean' }),
+    el('h3', { text: 'What the marks mean' }),
     el('div', { class: 'legend' },
       el('span', { class: 'legend-note' }, el('span', { class: 'line direct' }),
         'Flat line: a measured radio link'),
@@ -1893,7 +1926,7 @@ function mapKeyBody() {
       el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }),
         'Neighbour link, a node naming a node it hears itself')),
     el('p', { class: 'muted', text: 'A flat line takes the colour of its signal: green good, yellow fair, red weak. Every other line takes the colour of its packet.' }),
-    el('h4', { text: 'What a packet was' }),
+    el('h3', { text: 'What a packet was' }),
     el('div', { class: 'legend' },
       SonoranLive.FAMILY_ORDER.map((key) => {
         const family = SonoranLive.FAMILIES[key];
@@ -1912,7 +1945,7 @@ function mapKeyBody() {
      * drawing uploads as though they were something the node did, which
      * is the reading phase 1 spent its whole budget removing.
      */
-    el('h4', { text: 'How busy a node is' }),
+    el('h3', { text: 'How busy a node is' }),
     el('div', { class: 'legend' },
       el('span', { class: 'legend-note' }, el('span', { class: 'swatch halo' }),
         'Halo: how much this node said. Wider means more packets it sent itself, over the last half minute or so'),
@@ -3835,7 +3868,7 @@ function healthCard({ name, state, measure, green, evidence }) {
   return el('div', { class: `health-card state-${state}` },
     el('div', { class: 'health-head' },
       el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: look.glyph }),
-      el('h4', { text: name })),
+      el('h3', { text: name })),
     el('p', { class: 'health-state', text: look.word }),
     el('p', { class: 'health-measure', text: measure }),
     el('p', { class: 'health-green muted', text: green }),
@@ -3994,7 +4027,7 @@ function healthCards(gaps, detail) {
     el('div', { class: 'health-card state-none' },
       el('div', { class: 'health-head' },
         el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: '⚙' }),
-        el('h4', { text: 'Settings' })),
+        el('h3', { text: 'Settings' })),
       el('p', { class: 'health-measure', text: 'Check a config file against the community recommendations. Nothing leaves the browser.' }),
       el('a', { class: 'linky', href: '#config', text: 'Open Config check' })));
 }
@@ -5951,7 +5984,16 @@ async function route() {
   }
 
   for (const page of $$('[data-page]')) page.classList.toggle('active', page.dataset.page === known);
-  for (const link of $$('[data-nav]')) link.classList.toggle('current', link.dataset.nav === known);
+  for (const link of $$('[data-nav]')) {
+    const here = link.dataset.nav === known;
+    link.classList.toggle('current', here);
+    // `aria-current` as well as the class. The class is how the page
+    // LOOKS current; this is how it SAYS so. Without it a screen
+    // reader cannot tell which of fifteen pages it is on, because the
+    // only signal was a colour (WCAG 1.3.1).
+    if (here) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
   markNavHere(known);
   await render(known);
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.

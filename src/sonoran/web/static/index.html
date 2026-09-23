@@ -146,7 +146,21 @@
           <a href="#stats" data-nav="stats"><svg class="icon" aria-hidden="true"><use href="#i-stats"/></svg>Statistics</a>
           <a href="#rf" data-nav="rf"><svg class="icon" aria-hidden="true"><use href="#i-rf"/></svg>RF</a>
         </nav>
-        <p class="status" data-status>
+        <!--
+          The one live region on the site, and deliberately the only one.
+
+          Nothing announced anything before this: no `aria-live`, no
+          `role="status"`, anywhere. Meanwhile whole tables are replaced
+          every 15 s on five pages. The temptation is to mark those up
+          as live; that would read an entire table aloud four times a
+          minute, which is worse than silence.
+
+          This line already says what a reader needs -- whether the page
+          is still following the mesh and when it last did -- in a few
+          words, and it changes at the same moment the tables do.
+          `polite` waits for a pause, so it never interrupts.
+        -->
+        <p class="status" data-status role="status" aria-live="polite">
           <span class="dot"></span><span data-status-text>Connecting</span>
         </p>
         <label class="theme-switch">Theme
