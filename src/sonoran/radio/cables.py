@@ -62,6 +62,9 @@ class Cable:
     key: str
     name: str
     maker: str
+    # The product LINE, not the vendor. Diameter predicts loss inside
+    # one of these and nowhere else -- see `test_cable_loss.py`.
+    family: str
     # Times Microwave's own coefficients: dB/100ft = k*sqrt(f) + m*f.
     # Both zero where the datasheet printed no formula; `table` is then
     # the source and is interpolated.
@@ -84,7 +87,68 @@ class Cable:
 
 CABLES: tuple[Cable, ...] = (
     Cable(
+        key="belden-8216-rg174",
+        family="RG-174",
+        name="RG-174 (Belden 8216)",
+        maker="Belden",
+        k=0.0,
+        m=0.0,
+        printed_900_db_per_100ft=31.0,
+        outer_diameter_in=0.110,
+        good_for=(
+            "A pigtail of a few inches inside an enclosure. Over any real "
+            "distance it is the worst choice here."
+        ),
+        url="https://catalog.belden.com/techdata/EN/8216_techdata.pdf",
+        checked="2026-09-23",
+        caveat="Belden 8216 specifically. 31 dB/100ft at 900 MHz -- eight times LMR-400.",
+        table=(
+            (1, 1.9),
+            (10, 3.3),
+            (50, 5.8),
+            (100, 8.4),
+            (200, 12.5),
+            (400, 19.0),
+            (700, 27.0),
+            (900, 31.0),
+            (1000, 34.0),
+        ),
+    ),
+    Cable(
+        key="belden-84316-rg316",
+        family="RG-316",
+        name="RG-316 (Belden 84316)",
+        maker="Belden",
+        k=0.0,
+        m=0.0,
+        printed_900_db_per_100ft=27.3,
+        outer_diameter_in=0.098,
+        good_for=(
+            "A short pigtail that has to take heat or tight bends. PTFE, so "
+            "it survives more than RG-174 does."
+        ),
+        url="https://catalog.belden.com/techdata/EN/84316_techdata.pdf",
+        checked="2026-09-23",
+        caveat=(
+            "Thinner than RG-174 and yet less lossy: PTFE and silvered "
+            "copper beat polyethylene and copper-covered steel."
+        ),
+        table=(
+            (1, 1.2),
+            (10, 2.7),
+            (50, 5.6),
+            (100, 8.3),
+            (200, 12.0),
+            (400, 17.5),
+            (700, 23.7),
+            (900, 27.3),
+            (1000, 29.0),
+            (1500, 36.5),
+        ),
+    ),
+    Cable(
         key="lmr-195",
+        family="LMR",
         name="LMR-195",
         maker="Times Microwave",
         k=0.0,  # replaced below; see LMR195_NOTE
@@ -97,6 +161,7 @@ CABLES: tuple[Cable, ...] = (
     ),
     Cable(
         key="belden-8259-rg58",
+        family="RG-58",
         name="RG-58 (Belden 8259)",
         maker="Belden",
         k=0.0,
@@ -128,6 +193,7 @@ CABLES: tuple[Cable, ...] = (
     ),
     Cable(
         key="belden-9258-rg8x",
+        family="RG-8X",
         name="RG-8X (Belden 9258)",
         maker="Belden",
         k=0.0,
@@ -156,6 +222,7 @@ CABLES: tuple[Cable, ...] = (
     ),
     Cable(
         key="lmr-240",
+        family="LMR",
         name="LMR-240",
         maker="Times Microwave",
         k=0.242080,
@@ -168,6 +235,7 @@ CABLES: tuple[Cable, ...] = (
     ),
     Cable(
         key="lmr-400",
+        family="LMR",
         name="LMR-400",
         maker="Times Microwave",
         k=0.12229,

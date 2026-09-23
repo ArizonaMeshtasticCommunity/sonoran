@@ -88,34 +88,53 @@ def test_every_cable_records_where_its_figures_came_from() -> None:
         assert cable.checked, f"{cable.key} does not say when it was read"
 
 
-def test_thicker_loses_less_within_one_construction() -> None:
-    """Diameter predicts loss inside a family, and NOT across families.
+def test_thicker_loses_less_within_one_product_line() -> None:
+    """Diameter predicts loss inside a product line, and nowhere else.
 
-    The first version of this compared every cable by diameter and broke
-    the moment Belden's RG-8X was added: at 0.242 in it loses
-    10.78 dB/100ft against LMR-240's 7.62 at 0.240 in. That is not a
-    transcription error -- it is the point of LMR. Foam dielectric and a
-    bonded foil shield beat braid at the same size.
+    I got the scope of this wrong twice.
 
-    So the check is per maker, which is where the rule actually holds,
-    and the cross-family comparison is recorded here as the thing a
-    reader should not assume.
+    First it compared every cable by diameter, and Belden's RG-8X broke
+    it: 0.242 in losing 10.78 dB/100ft against LMR-240's 7.62 at
+    0.240 in. So I rescoped it per MANUFACTURER — which was also wrong,
+    and RG-316 proved it: at 0.098 in it loses 27.3 against RG-174's
+    31.0 at 0.110 in, and both are Belden. PTFE and silvered copper beat
+    polyethylene and copper-covered steel.
+
+    The axis is the product LINE. LMR-195/240/400 is one design scaled
+    up; Belden's RG types are four different MIL specs that happen to
+    share a vendor.
     """
-    by_maker: dict[str, list[Cable]] = {}
+    by_family: dict[str, list[Cable]] = {}
     for cable in CABLES:
-        by_maker.setdefault(cable.maker, []).append(cable)
+        by_family.setdefault(cable.family, []).append(cable)
     checked = 0
-    for maker, family in by_maker.items():
-        if len(family) < 2:
+    for family, members in by_family.items():
+        if len(members) < 2:
             continue
         checked += 1
-        ordered = sorted(family, key=lambda c: c.outer_diameter_in)
+        ordered = sorted(members, key=lambda c: c.outer_diameter_in)
         losses = [db_per_100ft(c, 915) for c in ordered]
         assert losses == sorted(losses, reverse=True), (
-            f"{maker}: loss does not fall as the cable gets thicker: "
+            f"{family}: loss does not fall as the cable gets thicker: "
             f"{[(c.name, round(db_per_100ft(c, 915), 2)) for c in ordered]}"
         )
-    assert checked >= 2, f"only {checked} families had enough cables to check"
+    assert checked >= 1, "no product line had two cables to compare"
+
+
+def test_diameter_does_not_predict_loss_across_product_lines() -> None:
+    """The counterexample, kept as a test.
+
+    Without this, the obvious "simplification" of the test above — drop
+    the grouping, compare everything — looks reasonable and is wrong.
+    This fails if somebody does it.
+    """
+    ordered = sorted(CABLES, key=lambda c: c.outer_diameter_in)
+    losses = [db_per_100ft(c, 915) for c in ordered]
+    assert losses != sorted(losses, reverse=True), (
+        "loss now falls monotonically with diameter across every cable, "
+        "which would mean the catalogue lost the cables that prove it "
+        "does not: RG-8X against LMR-240, and RG-316 against RG-174"
+    )
 
 
 def test_loss_rises_with_frequency() -> None:
