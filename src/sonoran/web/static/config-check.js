@@ -20,7 +20,6 @@
  * in a classic script is visible to a module.
  */
 
-import { meshtastic } from './meshtastic-static.js';
 import { ConfigParser } from './vendor/config-checker/js/parser.js';
 import { ConfigChecker } from './vendor/config-checker/js/checker.js';
 import { ConfigFixer } from './vendor/config-checker/js/fixer.js';
@@ -45,23 +44,51 @@ import { ConfigFixer } from './vendor/config-checker/js/fixer.js';
  * needs a third type is noticed here instead of failing deep inside a
  * parse.
  */
-const STATIC_TYPES = {
-  'meshtastic.DeviceProfile': meshtastic.DeviceProfile,
-  'meshtastic.ChannelSet': meshtastic.ChannelSet,
-};
+/*
+ * Loaded when a config is first read, not when the page is.
+ *
+ * `meshtastic-static.js` is 408 kB -- larger than app.js -- and it
+ * arrived through this module's import graph on EVERY page, because
+ * config-check.js is loaded unconditionally. Most visitors never open
+ * the Config check tab. Compression takes it to about 27 kB on the
+ * wire, so the transfer argument is mostly gone, but the parse cost
+ * is not, and it is paid on a phone by everybody.
+ *
+ * It has to be in place BEFORE parsing rather than during: the
+ * vendored parser calls `Root.fromJSON().lookupType()` synchronously,
+ * so the await belongs at the entry points, not inside the override.
+ * `ready()` is idempotent and holds the one promise, so two files
+ * dropped at once do not fetch it twice.
+ */
+let typesReady = null;
 
-window.protobuf.Root.fromJSON = () => ({
-  lookupType(name) {
-    const type = STATIC_TYPES[name];
-    if (!type) {
-      throw new Error(
-        `${name} is not in the pre-compiled protobuf types. ` +
-          'Add it to STATIC_TYPES in config-check.js.',
-      );
-    }
-    return type;
-  },
-});
+function ready() {
+  if (!typesReady) {
+    typesReady = import('./meshtastic-static.js').then(({ meshtastic }) => {
+      const STATIC_TYPES = {
+        'meshtastic.DeviceProfile': meshtastic.DeviceProfile,
+        'meshtastic.ChannelSet': meshtastic.ChannelSet,
+      };
+      // Only the two types the checker asks for are served. Anything
+      // else is an error rather than a silent undefined, so a change
+      // upstream that needs a third type is noticed here instead of
+      // failing deep inside a parse.
+      window.protobuf.Root.fromJSON = () => ({
+        lookupType(name) {
+          const type = STATIC_TYPES[name];
+          if (!type) {
+            throw new Error(
+              `${name} is not in the pre-compiled protobuf types. ` +
+                'Add it to STATIC_TYPES in config-check.js.',
+            );
+          }
+          return type;
+        },
+      });
+    });
+  }
+  return typesReady;
+}
 
 /** Where the checker's own settings live between visits. */
 const CHOICES = 'sonoran.config-check';
@@ -207,6 +234,7 @@ async function loadFile(page, file) {
   setNotice(page, '', '');
   try {
     const buffer = await file.arrayBuffer();
+    await ready();
     state.config = await ConfigParser.parse(buffer, file.name);
     state.fileName = file.name;
     await run(page);
@@ -350,6 +378,8 @@ function wire(page) {
   });
 
   $('[data-config-new]', page).addEventListener('click', async () => {
+    // The fixer encodes a channel URL, which needs the same types.
+    await ready();
     state.config = ConfigFixer.buildNewConfig({
       longName: '',
       shortName: '',
