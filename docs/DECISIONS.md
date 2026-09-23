@@ -453,6 +453,63 @@ red on a node they never seeded. A fixture that only ever adds rows is a
 slow-acting failure in whatever runs after it; it now cleans up in a
 `finally`.
 
+### CLIENT is a role, and was being stored as silence (#197)
+
+**Decided:** do **both** options the issue offered, in that order — fix
+the ingest so new rows are right, and resolve old NULLs in one place.
+
+`store_nodeinfo` read every enum with `if not value: return None`, and
+Meshtastic numbers `CLIENT` as zero. So the commonest node on the mesh
+was stored exactly like a node that had never spoken.
+
+**Measured on production before the fix:**
+
+| | |
+|---|---|
+| nodes total | 2,497 |
+| `role = 'CLIENT'` | **0** |
+| `role IS NULL` | 1,680 |
+| …of those, carrying a name | 985 |
+
+Zero is the whole argument. In the entire history of this database, the
+default role of a Meshtastic node has never once been recorded.
+
+**Why both halves.** Fixing ingest cannot repair old rows — nothing in
+the database says which NULLs were clients — and waiting for every node
+to re-announce would leave the map wrong for days. Resolving old NULLs
+alone would leave ingest still manufacturing them.
+
+**The inference, and its limit.** `resolve_role` reads a stored
+`long_name`/`short_name` as evidence a User message was processed,
+because `store_nodeinfo` writes those in one statement with the role
+and nothing else in the ingest writes either field — checked, not
+assumed. It lives in `roles.py` only, so a second page cannot grow a
+version that disagrees, and it **expires**: the set it touches only
+shrinks as nodes re-announce.
+
+**An unknown role now keeps its digits** (`ROLE_<n>`) instead of
+becoming NULL. Collapsing an unvendored role into NULL would feed it
+straight back into the bug being fixed. This is not hypothetical —
+`CLIENT_BASE` (12) was unvendored until recently, and the first draft
+of the test used 12 as its "unknown" example and failed, because the
+proto already knew it. The test now computes the first unvendored
+number from the descriptor, with a positive control that the number it
+picks really is unknown.
+
+**`_enum_name` keeps treating zero as None**, and should: `hw_model`
+zero is `UNSET`, which genuinely means nothing was reported. Fixing
+role through the shared helper would have made every unset hardware
+model read as whatever name zero carries.
+
+**This is the third instance of one pattern** — #157 (portnum 0 is both
+a real port and a sentinel), #149 (an unmeasured link labelled weak),
+and now this. The shape: *a value that means "absent" sharing storage
+with a value that means something*. Worth looking for a fourth.
+
+**Held by:** `tests/unit/test_client_is_a_role_not_a_silence.py`, which
+builds real `User` protobufs rather than mocks — the bug was in how a
+protobuf's defaults read, so a mock with a `role` attribute would
+reproduce the reasoning and not the bug.
 ### A job the kernel kills must not become a livelock
 
 **Decided:** record that a task was *attempted*, across restarts, and

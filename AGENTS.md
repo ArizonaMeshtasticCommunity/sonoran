@@ -584,16 +584,37 @@ happens to hold no lock at the moment of the fork works.
 Spawn starts a new interpreter and inherits no locks. It costs about a
 second for each worker, once, against a run of half an hour.
 
-### 9.22 A role of NULL is a client, not an unknown
+### 9.22 A role of NULL is a client, not an unknown (fixed at ingest, #197)
 
-`ingest/handlers/nodeinfo.py` reads an enum with
+**Fixed for new rows.** `ingest/handlers/nodeinfo.py` used to read every
+enum with
 
     if not value:
         return None
 
-and Meshtastic numbers `CLIENT` as zero. So the most common node on a
-mesh is stored with `role IS NULL`, exactly like a node that has never
-sent a NodeInfo at all.
+and Meshtastic numbers `CLIENT` as zero, so the most common node on a
+mesh was stored with `role IS NULL`, exactly like a node that had never
+sent a NodeInfo at all. The live map drew 167 clients on MediumFast in
+the grey it keeps for "no role reported".
+
+Roles now go through `_role_name`, which never returns None for a node
+that introduced itself: zero is `CLIENT` (config.proto calls it the
+"Default Role"), and a number this repository has not vendored keeps its
+digits as `ROLE_<n>` rather than collapsing back into NULL.
+
+`_enum_name` still treats zero as None, and still should -- `hw_model`
+zero is `UNSET`, which really does mean nothing was reported. Fixing
+role by changing the shared helper would have made every unset hardware
+model read as whatever name zero has.
+
+**Old rows are still NULL** and cannot be backfilled: nothing in the
+database says which NULLs were clients. `roles.resolve_role` reads a
+stored `long_name` or `short_name` as evidence that a User message was
+processed, because `store_nodeinfo` writes those in one statement with
+the role and nothing else in the ingest writes them. That inference
+lives in `roles.py` only -- never add a second copy in a page -- and it
+expires: when `SELECT count(*) FROM node WHERE role IS NULL AND
+long_name IS NOT NULL` reaches zero, it can go.
 
 Never read NULL as "unknown, so include it". The coverage map did, and
 predicted from 689 nodes where 50 were infrastructure. `sonoran/roles.py`
