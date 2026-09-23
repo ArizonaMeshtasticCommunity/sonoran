@@ -3120,7 +3120,9 @@ function graphTabs(page, all) {
   const channels = all.filter((item) => item.link_report_count > 0);
   if (!channels.length) return replace(target);
   if (!channels.some((item) => item.channel === graphChannel)) {
-    graphChannel = channels[0].channel;
+    // The deployment's preset where it has links, else the first with
+    // any -- an empty graph is worse than the wrong tab (#177).
+    graphChannel = SonoranLabels.preferredPreset(channels, (item) => item.channel).channel;
   }
   replace(target, channels.map((item) =>
     el('button', {

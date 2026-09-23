@@ -145,5 +145,39 @@
     return upper.endsWith('_APP') ? upper : `${upper}_APP`;
   }
 
-  window.SonoranLabels = { ROLES, roleLabel, portnumLabel, portnumWire, sentence };
+  /*
+   * Which preset a picker opens on (#177).
+   *
+   * Every page used to open on whichever preset came first in the data
+   * -- busiest, or first in a list -- so the landing view moved with
+   * the traffic rather than with what the community runs. MediumFast
+   * is this mesh's primary preset and it should be the one you land
+   * on.
+   *
+   * The name comes from the server (`window.SONORAN.defaultPreset`)
+   * rather than being written here, because the preference belongs to
+   * a deployment: another mesh running LongFast should not have to
+   * patch JavaScript.
+   *
+   * `items` is a list of anything carrying a preset name, and `nameOf`
+   * says how to read it, because the four callers hold four shapes --
+   * `{channel}`, `{preset}`, a plain string, an `<option>`.
+   *
+   * **Falls back to the first item when the preferred preset is not
+   * present**, which is the old behaviour. A deployment that does not
+   * run MediumFast, or a window with no MediumFast traffic in it, must
+   * not land on an empty page to honour a preference.
+   */
+  function preferredPreset(items, nameOf = (item) => item) {
+    const list = [...(items || [])];
+    if (!list.length) return null;
+    const wanted = (window.SONORAN && window.SONORAN.defaultPreset) || '';
+    if (!wanted) return list[0];
+    const match = list.find((item) => String(nameOf(item) ?? '') === wanted);
+    return match === undefined ? list[0] : match;
+  }
+
+  window.SonoranLabels = {
+    ROLES, roleLabel, portnumLabel, portnumWire, sentence, preferredPreset,
+  };
 }());
