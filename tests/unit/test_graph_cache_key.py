@@ -22,8 +22,12 @@ because the graph selector offers at most 7 days while 720 h cost
 9.2-10.1 s.
 """
 
+import asyncio
 import inspect
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from sonoran.api.routes import graph
 from sonoran.api.routes.graph import (
     GRAPH_CEILING_HOURS,
     GRAPH_MAX_HOURS,
@@ -108,3 +112,74 @@ def test_a_clamped_request_says_so_in_the_body() -> None:
         "a clamped window is not reported, so a caller asking for 720 h "
         "gets 168 h of data and no way to know"
     )
+
+
+def test_the_clamp_reaches_the_response_body() -> None:
+    """Exercised through the real wrapper, not just `clamp_hours`.
+
+    The contract-preserving claim is that a caller asking for 720 h gets
+    data and can tell it was narrowed. That is a property of the
+    RESPONSE, so testing the helper alone would not have shown it.
+
+        asked  24 h -> window_hours=24   window_clamped=None
+        asked 168 h -> window_hours=168  window_clamped=None
+        asked 720 h -> window_hours=168  window_clamped=720
+    """
+
+    async def fake(_session: object, hours: int, _limit: int, _channel: object) -> dict:
+        return {"window_hours": hours, "links": []}
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(stats_cache_seconds=0)))
+    )
+
+    async def run() -> None:
+        with patch.object(graph, "_mesh_graph", fake):
+            for asked, used, reported in ((24, 24, None), (168, 168, None), (720, 168, 720)):
+                graph._graph_cache.clear()
+                body = await graph.mesh_graph(
+                    request, hours=asked, limit=100, channel=None, session=None
+                )
+                assert body["window_hours"] == used, f"{asked} h ran as {body['window_hours']}"
+                assert body.get("window_clamped") == reported, (
+                    f"{asked} h reported window_clamped={body.get('window_clamped')}"
+                )
+
+    asyncio.run(run())
+
+
+def test_a_clamped_request_does_not_poison_the_cache() -> None:
+    """A 720 h ask and a 168 h ask share a cache key, and must not
+    share the `window_clamped` note.
+
+    They run the same query and get the same rows. Only the caller who
+    asked for more should be told it was cut — otherwise an honest 168 h
+    request starts claiming it was clamped, which is a lie about its own
+    data.
+    """
+    ran: list[int] = []
+
+    async def fake(_session: object, hours: int, _limit: int, _channel: object) -> dict:
+        ran.append(hours)
+        return {"window_hours": hours, "links": []}
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(stats_cache_seconds=60)))
+    )
+
+    async def run() -> None:
+        with patch.object(graph, "_mesh_graph", fake):
+            graph._graph_cache.clear()
+            clamped = await graph.mesh_graph(
+                request, hours=720, limit=100, channel=None, session=None
+            )
+            honest = await graph.mesh_graph(
+                request, hours=168, limit=100, channel=None, session=None
+            )
+            assert clamped["window_clamped"] == 720
+            assert honest.get("window_clamped") is None, (
+                "the honest 168 h request inherited the clamp note from the cached 720 h answer"
+            )
+            assert len(ran) == 1, "the two requests did not share the cached work"
+
+    asyncio.run(run())
