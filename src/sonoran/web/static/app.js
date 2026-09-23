@@ -4979,6 +4979,116 @@ PAGES.meshnet = async (page) => {
           week.messages.map((message) => messageItem(message, { showChannel: true })))))));
 };
 
+/*
+ * Redraw a live table without throwing away the rows that did not
+ * change.
+ *
+ * Five pages replace a whole table every 15 seconds. On the firehose
+ * that is 150 rows of 10 columns, four times a minute -- and a
+ * `replaceChildren` takes the reader's scroll position and any text
+ * selection with it. You cannot read the firehose and select a packet
+ * ID at the same time: the selection is gone before you finish.
+ *
+ * Skipping identical redraws is not enough, and I measured that before
+ * settling on this. The mesh is busy: a poll almost always brings a
+ * new packet, the signature changes, and a whole-table rebuild happens
+ * anyway. A selection still died every 15 seconds.
+ *
+ * So rows are matched by key. A row whose key is already on screen
+ * keeps its existing DOM node -- moved if its position changed, never
+ * recreated -- and a selection anchored inside it survives, because
+ * the text nodes it points at are the same objects. Only genuinely new
+ * rows are built, and only departed ones are removed.
+ *
+ * The scroll offsets are restored as well, for the case where the
+ * table shortens under the reader.
+ */
+function redrawLiveTable(target, rows, keyOf, build) {
+  if (!target) return;
+  const wrap = target.querySelector('.table-wrap');
+  const held = wrap ? { left: wrap.scrollLeft, top: wrap.scrollTop } : null;
+
+  const body = target.querySelector('tbody');
+
+  const fresh = build();
+
+  // No table yet, or the shape changed (a filter emptied it, an error
+  // replaced it). Nothing to reconcile against.
+  const freshBody = fresh.querySelector ? fresh.querySelector('tbody') : null;
+  // Key the rows on the way in, including the very first render. The
+  // first draft did not, so the next poll found nothing to match
+  // against, treated every row as new, and destroyed the selection
+  // exactly as before -- with more code.
+  if (freshBody) {
+    const keys = rows.map((row) => String(keyOf(row)));
+    Array.from(freshBody.rows).forEach((row, index) => {
+      if (keys[index] != null) row.dataset.rowKey = keys[index];
+    });
+  }
+  if (!body || !freshBody) {
+    replace(target, fresh);
+    const after = target.querySelector('.table-wrap');
+    if (after && held) { after.scrollLeft = held.left; after.scrollTop = held.top; }
+    return;
+  }
+
+  const existing = new Map();
+  for (const row of Array.from(body.rows)) {
+    const key = row.dataset.rowKey;
+    if (key) existing.set(key, row);
+  }
+
+  const wanted = Array.from(freshBody.rows);
+  const keys = rows.map((row) => String(keyOf(row)));
+  const ordered = [];
+  wanted.forEach((row, index) => {
+    const key = keys[index];
+    const kept = key != null ? existing.get(key) : null;
+    if (kept) {
+      existing.delete(key);
+      ordered.push(kept);
+    } else {
+      if (key != null) row.dataset.rowKey = key;
+      ordered.push(row);
+    }
+  });
+
+  // Whatever is left in `existing` has fallen off the end of the
+  // window.
+  for (const gone of existing.values()) gone.remove();
+
+  /*
+   * Touch only the rows that actually have to move.
+   *
+   * `replaceChildren(...ordered)` reuses the right nodes but MOVES
+   * every one of them, and a move removes and reinserts the node,
+   * which collapses any selection inside it. Measured: the nodes
+   * survived the poll and the selection still died.
+   *
+   * This feed is newest-first, so a poll prepends. Inserting a new row
+   * BEFORE an existing one does not move the existing one, so a reader
+   * partway down keeps both their place and their selection.
+   */
+  ordered.forEach((row, index) => {
+    const current = body.children[index];
+    if (current !== row) body.insertBefore(row, current || null);
+  });
+  while (body.children.length > ordered.length) body.lastElementChild.remove();
+
+  /*
+   * Deliberately NO manual scroll anchoring here.
+   *
+   * Because the mutation above is minimal, the browser's own scroll
+   * anchoring keeps the reader on the same row for free. An earlier
+   * draft measured the row's offset and called scrollBy() to correct
+   * it, which stacked on top of the browser's correction and drifted
+   * 280px -- WORSE than the 82px of doing nothing. Without it the same
+   * harness measures 0-1px. Leave this alone.
+   */
+
+  if (wrap && held) { wrap.scrollLeft = held.left; wrap.scrollTop = held.top; }
+}
+
 /* --- Firehose --------------------------------------------------- */
 
 /*
@@ -5030,7 +5140,7 @@ PAGES.firehose = async (page) => {
    */
   const packetHref = (row) =>
     `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
-  replace(target, table([
+  redrawLiveTable(target, rows, (row) => row.packet_key, () => table([
     {
       label: 'Packet',
       cell: (row) => el('a', {
