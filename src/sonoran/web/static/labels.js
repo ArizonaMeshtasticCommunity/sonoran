@@ -100,6 +100,29 @@
     ['ZPS_APP', 'ZPS'],
   ]);
 
+  /*
+   * Names for the things a `portnum` of 0 turns out to be (#157).
+   *
+   * 0 is both the real port `UNKNOWN_APP` and the sentinel the ingest
+   * writes when it could not read a packet. A census against the live
+   * database found that bucket was 91.7% PKI direct messages and 8.2%
+   * packets on a channel with no key, so calling all of it "Unknown
+   * app" was right about roughly one packet in a thousand -- and it
+   * told operators their mesh was full of unknown traffic when it was
+   * full of direct messages.
+   *
+   * Kept in their own table, NOT in `PORTNUM_LABELS`. That table is
+   * also read backwards by `portnumWire` to turn what somebody types
+   * in the firehose filter into a value the API takes. These are not
+   * port numbers, so the API answers 422 for them, and putting them in
+   * there would offer the filter three phrases that cannot work.
+   */
+  const TRAFFIC_LABELS = new Map([
+    ['UNREADABLE_PKI', 'Direct message, encrypted'],
+    ['UNREADABLE_NO_KEY', 'No key for this channel'],
+    ['UNREADABLE_UNRECORDED', 'Unreadable, reason not recorded'],
+  ]);
+
   /** A port number name as a label, without the shouting.
    *
    * The argument may be the enum name, a number, or nothing at all. A
@@ -109,7 +132,9 @@
   function portnumLabel(portnum) {
     if (portnum == null || portnum === '') return 'Packet';
     const key = String(portnum);
-    return PORTNUM_LABELS.get(key) || sentence(key.replace(/_APP$/, ''));
+    return TRAFFIC_LABELS.get(key)
+      || PORTNUM_LABELS.get(key)
+      || sentence(key.replace(/_APP$/, ''));
   }
 
   /** `CLIENT_MUTE` as `Client mute`: first letter up, the rest down. */

@@ -404,3 +404,51 @@ by mutation: mislabelling the PKI arm turns it red.
   and ruff had reformatted the line to end in `)`. A mutation that does
   not apply is indistinguishable from a mutation the test survives.
   Always confirm the mutation landed before trusting its verdict.
+
+### The unreadable bucket is named for what it is (#157)
+
+**Decided:** `traffic_label(portnum, payload_state)` replaces the three
+identical `_portnum_name` copies in the route modules, and port 0 now
+resolves to one of four names instead of always `UNKNOWN_APP`.
+
+| stored row | was drawn as | now |
+|---|---|---|
+| PKI direct message | `UNKNOWN_APP` | Direct message, encrypted |
+| no key for the channel | `UNKNOWN_APP` | No key for this channel |
+| readable, port really 0 | `UNKNOWN_APP` | Unknown |
+| stored before 0015 | `UNKNOWN_APP` | Unreadable, reason not recorded |
+
+**The fourth copy stays.** `decode/payloads.py` answers `UNKNOWN_{n}`
+where the route copies answered `str(n)`, because it names a decoded
+payload rather than a chart band. Merging two different contracts to
+make a count of duplicates go down would be a change nobody asked for.
+
+**The new names are kept out of `PORTNUM_LABELS`.** That table is read
+*backwards* by `portnumWire`, which turns what somebody types in the
+firehose filter into a value the API accepts. `UNREADABLE_PKI` is not a
+port number and the API answers 422 for it, so putting the new names
+there would offer the filter three phrases that cannot work — a bug
+nobody finds until somebody types one. They live in `TRAFFIC_LABELS`,
+which `portnumLabel` reads and `portnumWire` does not.
+
+That risk is what the browser tests are built around: the mutation they
+run is not a broken lookup but **the plausible, tidy-looking refactor**
+— moving the entries into the port table — and the cases go red on it.
+
+**What would change this:** firmware exposing the port number outside
+the encrypted part, which would retire the whole mechanism.
+
+**Held by:** `test_traffic_labels.py` (the helper, including that a
+real port is untouched whatever the state says, and that NULL is not
+folded into the commonest value); `test_traffic_labels_in_the_browser.py`
+(the shipped `labels.js` run under node, with both mutations);
+`test_api.py::test_port_zero_is_no_longer_one_bucket_called_unknown_app`
+(the endpoint, which is the only place that can show the `group_by`
+carries the state far enough for a name to be chosen — proven by
+mutation against the old single-column grouping).
+
+**One thing this got wrong first.** The endpoint test seeded a node and
+left it there. The container is session-scoped, so two siting tests went
+red on a node they never seeded. A fixture that only ever adds rows is a
+slow-acting failure in whatever runs after it; it now cleans up in a
+`finally`.

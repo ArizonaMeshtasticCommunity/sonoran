@@ -2061,3 +2061,98 @@ def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-unt
     assert by_id["790001"].startswith("33.4484, -112.0740, within about")
     assert by_id["790002"] == "on power, 4.20 V"
     assert by_id["790003"] is None, "node info stores nothing to show"
+
+
+def _seed_four_kinds_of_port_zero(migrated_engine) -> int:  # type: ignore[no-untyped-def]
+    """Insert one node with all four shapes of a stored `portnum = 0`.
+
+    Plus a real port, so the test can also say that the other bands did
+    not move. Returns the node number.
+    """
+    node_num = 7311
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO node (node_num, node_id, short_name, first_seen, updated_at, "
+                "last_heard) VALUES (:n, :nid, :sn, :now, :now, :now) "
+                "ON CONFLICT (node_num) DO NOTHING"
+            ),
+            {"n": node_num, "nid": f"!{node_num:08x}", "sn": "PZ", "now": now},
+        )
+        rows = (
+            (1, 0, "pki"),
+            (2, 0, "no_key"),
+            (3, 0, "readable"),
+            (4, 0, None),
+            (5, 1, "readable"),
+        )
+        for packet_id, portnum, state in rows:
+            connection.execute(
+                text(
+                    "INSERT INTO packet (from_node_num, packet_id, portnum, payload_state, "
+                    "channel, want_ack, first_seen_at) "
+                    "VALUES (:n, :pid, :p, :s, 'MediumFast', false, :now)"
+                ),
+                {"n": node_num, "pid": packet_id, "p": portnum, "s": state, "now": now},
+            )
+    return node_num
+
+
+def _forget_node(migrated_engine, node_num: int) -> None:  # type: ignore[no-untyped-def]
+    """Remove one seeded node and everything keyed to it."""
+    with migrated_engine.begin() as connection:
+        for table in ("packet_seen", "packet_key", "packet"):
+            connection.execute(
+                text(f"DELETE FROM {table} WHERE from_node_num = :n"), {"n": node_num}
+            )
+        connection.execute(text("DELETE FROM node WHERE node_num = :n"), {"n": node_num})
+
+
+def test_port_zero_is_no_longer_one_bucket_called_unknown_app(  # type: ignore[no-untyped-def]
+    migrated_engine,
+    timescale_url: str,
+) -> None:
+    """The user-visible half of #157, asserted on the endpoint.
+
+    A census against production found that a stored `portnum = 0` was
+    91.7% PKI direct messages, 8.2% packets on a channel with no key,
+    and 0.1% genuine `UNKNOWN_APP` -- and this activity listing drew all
+    of them as `UNKNOWN_APP`.
+
+    The helper that decides the name has its own unit tests. This is the
+    claim those cannot make: that the **query** carries the state far
+    enough for the name to be chosen, which is the part that needed a
+    `group_by` and is the part a refactor would quietly drop.
+    """
+    node_num = _seed_four_kinds_of_port_zero(migrated_engine)
+    try:
+        app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+        with TestClient(app) as client:
+            activity = client.get(f"/api/nodes/!{node_num:08x}/detail").json()["activity"]
+    finally:
+        # Put the database back. The container is session-scoped, so a
+        # node left behind is a node every later test can see -- and
+        # this one did exactly that: the siting tests count struggling
+        # nodes, and two of them went red on a node they never seeded.
+        # A fixture that only ever adds rows is a slow-acting failure
+        # in whatever runs after it.
+        _forget_node(migrated_engine, node_num)
+
+    names = {row["portnum"] for row in activity["by_portnum"]}
+    assert "UNREADABLE_PKI" in names, "a direct message nobody here can read is named as one"
+    assert "UNREADABLE_NO_KEY" in names, "a packet on a channel with no key is named as one"
+    assert "UNREADABLE_UNRECORDED" in names, (
+        "a row stored before revision 0015 says nobody asked, rather than "
+        "being folded into the commonest value"
+    )
+    assert "UNKNOWN_APP" in names, "the genuine UNKNOWN_APP keeps its name"
+    assert "TEXT_MESSAGE_APP" in names, "a real port is unaffected"
+
+    # Five packets in, five counted out: the split must not lose or
+    # double-count anything. The old query grouped by portnum alone, so
+    # a test that only checked the names would pass on a listing that
+    # had silently merged four rows into one.
+    assert activity["packet_count"] == 5
+    assert sum(row["count"] for row in activity["by_portnum"]) == 5
+    assert len(activity["by_portnum"]) == 5, activity["by_portnum"]
