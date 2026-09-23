@@ -448,6 +448,12 @@
         el('option', { value: item.preset, text: `${item.label} (${item.node_count})` }),
       ),
     );
+    // The deployment's preset first, then whatever the run published
+    // (#177). `state.preset` still wins once somebody has chosen.
+    if (!state.preset && presets.length) {
+      const wanted = SonoranLabels.preferredPreset(presets, (item) => item.preset);
+      if (wanted) state.preset = wanted.preset;
+    }
     if (state.preset) picker.value = state.preset;
   }
 

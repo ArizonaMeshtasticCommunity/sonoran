@@ -42,6 +42,20 @@ class Settings(BaseSettings):
         default_factory=lambda: [DEFAULT_CHANNEL_KEY]
     )
 
+    # The preset a page opens on when it has a choice (#177).
+    #
+    # MediumFast is this mesh's primary preset, and the pages used to
+    # open on whichever preset happened to be first or busiest in the
+    # data -- which means the landing view changed with the traffic
+    # rather than with what the community actually runs.
+    #
+    # A setting rather than a constant because the preference belongs
+    # to a deployment, not to the code: another mesh running LongFast
+    # should not have to patch JavaScript to land on it. When the named
+    # preset is absent from the data, the old behaviour is the
+    # fallback, so nothing ends up on an empty page.
+    default_preset: str = "MediumFast"
+
     # The channels this mesh claims as its own. A LoRa modem preset is
     # always core, so only the local names belong here. Everything else
     # is listed as extra in the channel pickers.
