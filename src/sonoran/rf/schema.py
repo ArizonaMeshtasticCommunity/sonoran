@@ -72,57 +72,61 @@ class Observation(_Model):
     @field_validator("meta")
     @classmethod
     def _small_meta(cls, value: dict[str, object] | None) -> dict[str, object] | None:
-        """Bound the shape of station-supplied `meta`, not just its size.
+        """Keep the parts of `meta` that are safe, drop the rest.
 
-        `meta` arrives from an MQTT station and was previously checked
-        for one thing: that `repr()` of it fits in a kilobyte. Inside
-        that kilobyte it could hold any keys, nested objects and arrays,
-        and values of any type -- and the RF page renders every key it
+        `meta` arrives from an MQTT station. It used to be checked for
+        one thing: that `repr()` of it fits in a kilobyte. Inside that
+        kilobyte it could hold any keys, nested objects and arrays, and
+        values of any type -- and the RF page renders every key it
         finds, because the non-aircraft tooltip is a generic viewer for
         sources whose fields we do not know in advance.
 
-        It is rendered safely today: `rf.js` builds DOM with
-        `el({ text })`. This is not a live vulnerability. It is
-        attacker-shaped JSON sitting on a public API, and it becomes one
-        the moment anybody renders it as a string -- which is exactly
-        how #81 happened, where a node's name reached an innerHTML sink.
+        It is rendered safely today (`rf.js` builds DOM with
+        `el({ text })`), so this was never a live vulnerability. It is
+        attacker-shaped JSON on a public API, and it becomes one the
+        moment somebody renders it as a string -- which is how #81
+        happened.
 
-        A key allowlist would close it hardest, and it is what #148
-        suggested. It would also delete the generic viewer, which is a
-        real feature for `aprs`, `sonde` and `ism`. So instead the
-        SHAPE is bounded, which removes the category without removing
-        the function:
+        **This FILTERS rather than rejects, and that is the whole
+        point.** Observations arrive in batches of up to 100. An earlier
+        version of this raised on a bad field, and measured:
 
-        * scalars only -- no nested dict or list, so nothing recursive
-          reaches a renderer
-        * a bounded number of keys, each a plain identifier-ish name
-        * bounded string lengths on both keys and values
+            100 good observations                -> accepted, 100 stored
+            1 nested-meta + 99 good observations -> WHOLE BATCH REJECTED
 
-        What survives is a small flat map of short scalars. There is
-        nothing left to smuggle through it.
+        A station whose firmware puts one nested object in `meta` would
+        have lost every observation in every batch, silently, for as
+        long as it ran -- and its operator would see "my station stopped
+        reporting" with nothing to explain it. That is a far worse
+        outcome than the shape it was defending against.
+
+        `meta` is decoration. The position, altitude and signal are the
+        measurement. Dropping an unusable key costs nothing; dropping
+        the batch costs a hundred real aircraft positions.
+
+        What survives is a small flat map of short scalars, which is the
+        same guarantee the raising version gave, without the collateral.
         """
         if value is None:
             return None
-        if len(repr(value).encode()) > MAX_META_BYTES:
-            raise ValueError(f"meta is larger than {MAX_META_BYTES} bytes")
-        if len(value) > MAX_META_KEYS:
-            raise ValueError(f"meta has more than {MAX_META_KEYS} keys")
+        kept: dict[str, object] = {}
         for key, item in value.items():
+            if len(kept) >= MAX_META_KEYS:
+                break
             if not META_KEY.match(key):
-                raise ValueError(f"meta key {key!r} is not a plain name")
+                continue
             if isinstance(item, bool) or item is None or isinstance(item, int | float):
-                continue
-            if isinstance(item, str):
-                if len(item) > MAX_META_VALUE_CHARS:
-                    raise ValueError(
-                        f"meta value for {key!r} is longer than {MAX_META_VALUE_CHARS}"
-                    )
-                continue
-            raise ValueError(
-                f"meta value for {key!r} is a {type(item).__name__}; "
-                f"only strings, numbers, booleans and null are allowed"
-            )
-        return value
+                kept[key] = item
+            elif isinstance(item, str) and len(item) <= MAX_META_VALUE_CHARS:
+                kept[key] = item
+            # Anything else -- a dict, a list, an over-long string -- is
+            # dropped. No recursion reaches a renderer.
+        if len(repr(kept).encode()) > MAX_META_BYTES:
+            # Bounded key count and value length make this close to
+            # unreachable, but the byte cap is the one promise the old
+            # code made and it is kept rather than assumed.
+            return {}
+        return kept
 
 
 def _station_id(value: str) -> str:

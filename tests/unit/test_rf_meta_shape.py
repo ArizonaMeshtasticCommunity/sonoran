@@ -1,97 +1,114 @@
-"""Station-supplied `meta` is a flat map of short scalars, or it is refused.
+"""Station-supplied `meta` is filtered to a flat map of short scalars.
 
-`meta` arrives from an MQTT station. It used to be checked for exactly
-one thing: that `repr()` of it fits in a kilobyte. Inside that kilobyte
-it could carry any keys, nested objects and arrays, and values of any
-type -- and the RF page renders every key it finds, because the
-non-aircraft tooltip is a generic viewer for sources whose fields are
-not known in advance.
+`meta` arrives from an MQTT station. It used to be checked for one
+thing: that `repr()` of it fits in a kilobyte. Inside that kilobyte it
+could carry any keys, nested objects and arrays, and values of any type
+— and the RF page renders every key it finds, because the non-aircraft
+tooltip is a generic viewer for sources whose fields are not known in
+advance.
 
 It is rendered safely today (`rf.js` builds DOM with `el({ text })`), so
 this was never a live vulnerability. It is attacker-shaped JSON on a
 public API, and it becomes one the moment somebody renders it as a
-string -- which is how #81 happened, when a node's name reached an
-innerHTML sink.
+string — which is how #81 happened.
 
-A key allowlist, which is what #148 suggested, would close it hardest
-and would also delete the generic viewer for `aprs`, `sonde` and `ism`.
-Bounding the shape removes the category and keeps the function.
+**It filters rather than rejects, and that correction matters more than
+the original fix.** Observations arrive in batches of up to 100. The
+first version of this raised on a bad field, and measured:
+
+    100 good observations                -> accepted, 100 stored
+    1 nested-meta + 99 good observations -> WHOLE BATCH REJECTED
+
+A station whose firmware puts one nested object in `meta` would have
+lost every observation in every batch, silently, for as long as it ran,
+and its operator would have seen "my station stopped reporting" with
+nothing to explain it. That is a worse outcome than the shape it was
+defending against — and it would have hit community members who are not
+in this conversation.
+
+`meta` is decoration; the position, altitude and signal are the
+measurement. Dropping an unusable key costs nothing. Dropping the batch
+costs a hundred real aircraft positions.
 """
 
-import pytest
-from pydantic import ValidationError
+from typing import Any
 
-from sonoran.rf.schema import MAX_META_KEYS, MAX_META_VALUE_CHARS, Observation
+from sonoran.rf.schema import MAX_META_KEYS, MAX_META_VALUE_CHARS, Batch, Observation
 
 BASE = {"kind": "adsb", "id": "abc123", "t": "2026-09-23T00:00:00Z", "lat": 33.4, "lon": -112.0}
 
 
-def _obs(meta: object) -> Observation:
-    return Observation.model_validate(BASE | {"meta": meta})
+def _meta(value: object) -> dict[str, Any] | None:
+    return Observation.model_validate(BASE | {"meta": value}).meta
 
 
-def test_a_real_looking_contact_still_validates() -> None:
-    """The control. A guard that refuses everything proves nothing."""
-    observation = _obs(
-        {"callsign": "SWA1234", "flight": "SWA1234", "squawk": 1200, "emergency": False}
+def _batch(obs: list[dict[str, Any]]) -> Batch:
+    return Batch.model_validate(
+        {
+            "v": 1,
+            "station": "testsite",
+            "kind": "adsb",
+            "sent": "2026-09-23T00:00:01Z",
+            "obs": obs,
+        }
     )
-    assert observation.meta is not None
-    assert observation.meta["callsign"] == "SWA1234"
 
 
-def test_none_and_empty_are_fine() -> None:
-    assert _obs(None).meta is None
-    assert _obs({}).meta == {}
+def test_one_bad_field_does_not_cost_a_whole_batch() -> None:
+    """The reason this filters instead of raising.
+
+    This is the regression that matters: it is silent, it is total, and
+    it lands on somebody who cannot see why.
+    """
+    good = [BASE | {"id": f"g{index}"} for index in range(99)]
+    bad = BASE | {"id": "bad", "meta": {"payload": {"deep": "value"}}}
+    batch = _batch([bad, *good])
+    assert len(batch.obs) == 100, "good observations were lost with the bad one"
+    assert batch.obs[0].meta == {}, "the unusable meta was kept"
 
 
-@pytest.mark.parametrize(
-    ("name", "meta"),
-    [
-        ("a nested object", {"payload": {"deep": "value"}}),
-        ("a list", {"payload": ["a", "b"]}),
-        ("a list of objects", {"payload": [{"a": 1}]}),
-        ("a nested list", {"payload": [[1, 2]]}),
-    ],
-)
-def test_nothing_recursive_gets_through(name: str, meta: dict[str, object]) -> None:
-    """A renderer that walks `meta` should not find a tree to walk."""
-    with pytest.raises(ValidationError):
-        _obs(meta)
+def test_a_batch_of_good_observations_is_untouched() -> None:
+    """The positive control. A filter that drops everything would pass
+    every test above it."""
+    batch = _batch([BASE | {"id": f"g{index}"} for index in range(100)])
+    assert len(batch.obs) == 100
 
 
-@pytest.mark.parametrize(
-    ("name", "key"),
-    [
-        ("a script tag", "<script>"),
-        ("a path", "../../etc/passwd"),
-        ("a dunder", "__proto__"),
-        ("a space", "call sign"),
-        ("a leading digit", "1key"),
-        ("empty", ""),
-    ],
-)
-def test_keys_must_be_plain_names(name: str, key: str) -> None:
-    """These are rendered as text beside the value, on the RF page."""
-    with pytest.raises(ValidationError):
-        _obs({key: "x"})
+def test_a_real_contact_keeps_its_fields() -> None:
+    kept = _meta({"callsign": "SWA1234", "squawk": 1200, "emergency": False})
+    assert kept == {"callsign": "SWA1234", "squawk": 1200, "emergency": False}
 
 
-def test_a_long_value_is_refused() -> None:
-    with pytest.raises(ValidationError):
-        _obs({"note": "x" * (MAX_META_VALUE_CHARS + 1)})
+def test_the_usable_keys_survive_beside_an_unusable_one() -> None:
+    """Filtering per key, not per observation: a station that sends one
+    odd field keeps the rest of what it knows."""
+    assert _meta({"<script>": "bad", "callsign": "SWA1"}) == {"callsign": "SWA1"}
+    assert _meta({"note": "y" * 300, "callsign": "SWA1"}) == {"callsign": "SWA1"}
 
 
-def test_a_value_at_the_limit_is_kept() -> None:
-    """The boundary in the direction that must not over-refuse."""
-    assert _obs({"note": "x" * MAX_META_VALUE_CHARS}).meta is not None
+def test_nothing_recursive_survives() -> None:
+    """A renderer walking `meta` should find no tree to walk."""
+    for shape in ({"payload": {"deep": "v"}}, {"payload": ["a"]}, {"payload": [{"a": 1}]}):
+        assert _meta(shape) == {}
 
 
-def test_too_many_keys_are_refused() -> None:
-    with pytest.raises(ValidationError):
-        _obs({f"k{index}": index for index in range(MAX_META_KEYS + 1)})
+def test_keys_that_are_not_plain_names_are_dropped() -> None:
+    """These are rendered as text beside the value on the RF page."""
+    for key in ("<script>", "../../etc/passwd", "__proto__", "call sign", "1key", ""):
+        assert _meta({key: "x"}) == {}
 
 
-def test_the_size_cap_still_applies() -> None:
-    """The check this replaced must not have been lost in replacing it."""
-    with pytest.raises(ValidationError):
-        _obs({f"k{index}": "y" * 100 for index in range(12)})
+def test_the_key_count_is_capped() -> None:
+    kept = _meta({f"k{index}": index for index in range(MAX_META_KEYS + 20)})
+    assert kept is not None
+    assert len(kept) == MAX_META_KEYS
+
+
+def test_a_value_at_the_limit_is_kept_and_one_past_it_is_not() -> None:
+    assert _meta({"note": "x" * MAX_META_VALUE_CHARS}) == {"note": "x" * MAX_META_VALUE_CHARS}
+    assert _meta({"note": "x" * (MAX_META_VALUE_CHARS + 1)}) == {}
+
+
+def test_none_stays_none() -> None:
+    assert _meta(None) is None
+    assert _meta({}) == {}
