@@ -39,10 +39,49 @@ const chromium = loadChromium();
 const BASE = process.env.SONORAN_URL || 'http://127.0.0.1:8000';
 
 const results = [];
+// Console errors from somebody else's host. Reported, never fatal.
+const elsewhere = [];
 const errors = [];
 
 /* A tile that is not cached yet is a 404 by design, as in check_pages.js. */
 const IGNORE = /404|favicon|tile/i;
+
+/*
+ * A console error is only ours if it came from our own origin.
+ *
+ * The suite treats any console error as a failure, which is right --
+ * it is how a silently broken page gets caught. But the dashboard
+ * makes one outbound request by design: the config check page asks
+ * api.github.com which firmware release is current. An unauthenticated
+ * runner gets rate-limited, GitHub answers 403, and the whole suite
+ * failed on somebody else's quota while reporting "19/19 journeys
+ * passed" -- a red run with nothing red in it, which is the worst kind.
+ *
+ * So a failed request to a host that is not the app under test is
+ * recorded and reported, and does not fail the run. A failure from our
+ * own origin still does.
+ *
+ * The URL is captured too. The message alone was "Failed to load
+ * resource: the server responded with a status of 403 ()", with no way
+ * to tell which host, which cost real time to diagnose.
+ */
+function ourOrigin() {
+  try {
+    return new URL(BASE).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isOurs(url) {
+  const origin = ourOrigin();
+  if (!origin || !url) return true;
+  try {
+    return new URL(url).origin === origin;
+  } catch {
+    return true;
+  }
+}
 
 function must(condition, message) {
   if (!condition) throw new Error(message);
@@ -52,9 +91,20 @@ async function journey(context, name, body) {
   const page = await context.newPage();
   page.on('pageerror', (error) => errors.push(`${name}: ${error.message}`));
   page.on('console', (message) => {
-    if (message.type() === 'error' && !IGNORE.test(message.text())) {
-      errors.push(`${name}: ${message.text()}`);
+    if (message.type() !== 'error' || IGNORE.test(message.text())) return;
+    // A console error carries the offending URL in its location, which
+    // the text does not.
+    const where = (message.location() || {}).url || '';
+    if (!isOurs(where)) {
+      elsewhere.push(`${name}: ${message.text()} [${where || 'unknown host'}]`);
+      return;
     }
+    errors.push(`${name}: ${message.text()}${where ? ` [${where}]` : ''}`);
+  });
+  page.on('requestfailed', (request) => {
+    const url = request.url();
+    if (!isOurs(url) || IGNORE.test(url)) return;
+    errors.push(`${name}: request failed ${url} (${(request.failure() || {}).errorText})`);
   });
   try {
     const detail = await body(page);
@@ -470,6 +520,9 @@ async function main() {
 
   console.log(results.join('\n'));
   console.log('\nconsole and page errors: ' + (errors.length ? '\n  ' + errors.slice(0, 8).join('\n  ') : 'none'));
+  if (elsewhere.length) {
+    console.log('\nerrors from other hosts (not counted): \n  ' + elsewhere.slice(0, 8).join('\n  '));
+  }
   const failed = results.filter((line) => line.startsWith('FAIL')).length;
   console.log(`\n${results.length - failed}/${results.length} journeys passed`);
   process.exit(failed || errors.length ? 1 : 0);
