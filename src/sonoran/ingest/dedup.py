@@ -32,6 +32,10 @@ class PacketInput:
     # Only ingest holds the channel keys, so this is the one place it
     # can be written. None for every other family.
     payload_json: dict[str, Any] | None = None
+    # Why the payload could or could not be read (#157). Ingest is the
+    # only place that knows: it has one code path per state, so this is
+    # recorded rather than inferred.
+    payload_state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,7 @@ async def store_packet(
                         # value null, not as SQL NULL. "Nothing kept" must
                         # be SQL NULL, so a query for it can use IS NULL.
                         payload_json=null() if packet.payload_json is None else packet.payload_json,
+                        payload_state=packet.payload_state,
                     )
                 )
         except IntegrityError:

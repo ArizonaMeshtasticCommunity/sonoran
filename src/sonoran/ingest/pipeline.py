@@ -9,6 +9,7 @@ from sonoran.config import get_settings
 from sonoran.crypto.decrypt import DecryptionError, decode_key, decrypt_packet
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.decode.envelope import ParsedEnvelope, parse_envelope
+from sonoran.decode.payload_state import PayloadState
 from sonoran.decode.payloads import decode_payload, parse_data
 from sonoran.decode.stored import stored_payload
 from sonoran.ingest.dedup import ObservationInput, PacketInput, StoredPacket, store_packet
@@ -124,12 +125,20 @@ async def _store_opaque(
     message: RawMqttMessage,
     envelope: ParsedEnvelope,
     from_node_num: int,
+    payload_state: PayloadState,
 ) -> StoredPacket:
     """Store a packet whose payload cannot be read.
 
     The port number is unknown, because it sits inside the encrypted
     part. The packet still counts as traffic, and both nodes were still
     heard, so presence is recorded.
+
+    `payload_state` is required rather than defaulted to `NO_KEY` (#157).
+    The two callers mean genuinely different things -- a PKI packet
+    could never be read by anyone here, while a no-key packet would be
+    readable the moment somebody adds the channel -- and a default would
+    let a third caller added later record the wrong one silently, which
+    is the exact failure this column exists to end.
     """
     packet = envelope.packet
     packet_input = PacketInput(
@@ -137,6 +146,7 @@ async def _store_opaque(
         packet_id=packet.id,
         to_node_num=packet.to or None,
         portnum=UNKNOWN_PORTNUM,
+        payload_state=payload_state,
         channel=message.topic.channel,
         hop_start=packet.hop_start or None,
         hop_limit=packet.hop_limit or None,
@@ -185,7 +195,7 @@ async def process_message(
     # the packet as traffic and stop there. Trying to decrypt it would
     # raise on every message and lose the packet.
     if _is_pki(packet, message):
-        return await _store_opaque(session, message, envelope, from_node_num)
+        return await _store_opaque(session, message, envelope, from_node_num, PayloadState.PKI)
 
     if packet.encrypted:
         try:
@@ -218,7 +228,9 @@ async def process_message(
                 from_node_num,
                 message.topic.channel or "an unnamed channel",
             )
-            return await _store_opaque(session, message, envelope, from_node_num)
+            return await _store_opaque(
+                session, message, envelope, from_node_num, PayloadState.NO_KEY
+            )
         data = parse_data(plaintext)
         decoded = decode_payload(data.portnum, data.payload)
     else:
@@ -238,6 +250,11 @@ async def process_message(
         rx_time=packet.rx_time or None,
         first_seen_at=heard_at(message),
         raw_bytes=envelope.raw_packet,
+        # A key opened it, or it arrived in the clear. Either way the
+        # port number on this row is the one the packet really carried,
+        # so a portnum of 0 here is a genuine UNKNOWN_APP and not a
+        # sentinel (#157).
+        payload_state=PayloadState.READABLE,
         # The public API cannot decrypt, so what the packet carried is
         # kept here for the families that have no table of their own.
         payload_json=stored_payload(decoded),

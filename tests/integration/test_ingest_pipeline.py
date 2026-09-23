@@ -460,3 +460,107 @@ async def _replay_one(timescale_url: str, message: RawMqttMessage) -> None:
             await session.commit()
     finally:
         await engine.dispose()
+
+
+def test_the_three_unreadable_cases_are_told_apart(
+    timescale_url: str,
+    migrated_engine,  # type: ignore[no-untyped-def]
+) -> None:
+    """One `portnum` of 0 used to mean three different things (#157).
+
+    A census over a 168 h production window found that 91.7% of stored
+    `portnum = 0` rows were PKI direct messages and 8.2% were on a
+    channel with no key, while 0.1% were genuine `UNKNOWN_APP`. Every
+    one of them was drawn as `UNKNOWN_APP`, so that bucket was about
+    99.9% mislabelled.
+
+    This replays the same recorded packet down all three code paths and
+    asserts two things: each records a different `payload_state`, and
+    `portnum` alone still cannot separate them. The second assertion is
+    the one that matters -- it is what makes the column necessary rather
+    than merely present, and it would fail if somebody later decided
+    the port number was enough after all.
+
+    Each arm runs against a cleared `packet_key`. Deduplication is on
+    `(from_node_num, packet_id)` and does **not** include the time, so
+    replaying one recorded packet three times otherwise stores the first
+    arm and silently drops the other two -- which is a test that passes
+    while measuring one row three times. The first version of this test
+    did exactly that, and said so: `three arms, three rows, got [one]`.
+    """
+    envelope = parse_envelope(_recorded_message(0).payload)
+    sender = getattr(envelope.packet, "from")
+    states = asyncio.run(_replay_three_states(timescale_url, migrated_engine, sender))
+
+    assert set(states) == {"readable", "no_key", "pki"}, (
+        f"each path records its own reason, spelled as PayloadState spells it: {sorted(states)}"
+    )
+    assert states["pki"].channel == "PKI"
+    assert states["no_key"].channel == "SomeoneElsesChannel"
+    assert states["readable"].portnum != 0, "a key opened it, so the real port is stored"
+
+    # The point of the column. Both unreadable arms stored portnum 0,
+    # so anything reading the port number alone sees one bucket.
+    assert states["no_key"].portnum == 0
+    assert states["pki"].portnum == 0
+    assert states["no_key"].portnum == states["pki"].portnum, (
+        "portnum cannot tell these apart, which is why payload_state exists"
+    )
+
+
+async def _replay_three_states(
+    timescale_url: str,
+    migrated_engine,  # type: ignore[no-untyped-def]
+    sender: int,
+) -> dict[str, object]:
+    """Send one packet down each path in turn, clearing between arms."""
+    url = timescale_url.replace("+psycopg", "+asyncpg")
+    engine = create_async_engine(url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    def clear() -> None:
+        with migrated_engine.begin() as connection:
+            for table in ("packet_key", "packet_seen", "packet"):
+                connection.execute(
+                    text(f"DELETE FROM {table} WHERE from_node_num = :s"), {"s": sender}
+                )
+
+    def on_channel(topic: str, offset: int) -> RawMqttMessage:
+        original = _recorded_message(offset)
+        return RawMqttMessage(
+            topic=parse_topic(topic),
+            payload=original.payload,
+            received_at=original.received_at,
+        )
+
+    arms = {
+        "readable": (_recorded_message(9000), [decode_key(DEFAULT_CHANNEL_KEY)]),
+        # No keys at all, so nothing opens it: the no-key path, not PKI.
+        "no_key": (on_channel("msh/US/AZ/Phoenix/2/e/SomeoneElsesChannel/!abcd1234", 9100), []),
+        "pki": (on_channel("msh/US/AZ/Phoenix/2/e/PKI/!abcd1234", 9200), []),
+    }
+
+    found: dict[str, object] = {}
+    try:
+        for name, (message, keys) in arms.items():
+            clear()
+            async with factory() as session:
+                stored = await process_message(session, message, keys)
+                await session.commit()
+            assert stored is not None and stored.is_new is True, (
+                f"the {name} arm must be a first sighting, or it measures nothing"
+            )
+            async with factory() as session:
+                row = (
+                    await session.execute(
+                        select(Packet.channel, Packet.portnum, Packet.payload_state).where(
+                            Packet.from_node_num == sender
+                        )
+                    )
+                ).one()
+            assert row.payload_state is not None, f"the {name} arm recorded nothing"
+            found[str(row.payload_state)] = row
+        clear()
+    finally:
+        await engine.dispose()
+    return found

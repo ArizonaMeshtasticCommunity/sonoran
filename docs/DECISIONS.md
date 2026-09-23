@@ -334,3 +334,73 @@ own socket, or a testcontainers reaper that does not need one.
 **Held by:** `tests/unit/test_integration_suite_runs.py`, which calls
 both helpers rather than grepping for them, and covers the spellings of
 the variable a workflow might use.
+
+### Why a payload could not be read is recorded, not inferred (#157)
+
+**Decided:** add `packet.payload_state`, set at ingest on all three
+paths, with no backfill and no default argument.
+
+**The measurement that drove it.** `tools/portnum_zero_census.py`
+against production, 168 h:
+
+| what a `portnum = 0` row actually was | count | share |
+|---|---|---|
+| PKI — a direct message nobody here could read | 8,342 | 91.7% |
+| no key we hold opens it | 743 | 8.2% |
+| a key opened it, real payload | 7 | 0.1% |
+| a key opened it, empty payload | 1 | 0.01% |
+
+Corroborated against something that does not read the same bytes: 99.5%
+of those rows are addressed to one node, against 35% of all other
+traffic. The control fires, so "addressed" is a property of *these*
+rows and not of packets generally.
+
+**This overturned the issue.** #157 was written around a wrong-key
+false-accept rate of roughly 1 in 800, and around 8,841 real packets a
+week as the cost of rejecting portnum 0. The real false-accept
+population at portnum 0 is **one packet a week**. The proposed
+empty-payload rejection rule is therefore dropped: it was designed
+against a problem that is not there, and a rule in the decrypt path
+should not be paid for one packet a week.
+
+**The real harm was the label**, and it is worse than the issue thought:
+that bucket is ~99.9% mislabelled, read by operators deciding what
+their mesh is doing.
+
+**Three decisions inside the change.**
+
+*Not called `payload_readable`.* The plan named it that. A three-valued
+answer must not wear a boolean's name — that is the same mistake as the
+label it fixes, and the one #149 made calling an unmeasured link weak.
+
+*No default on `_store_opaque`'s new argument.* Defaulting to `NO_KEY`
+would read fine and let a fourth caller silently record the wrong
+reason, which is precisely the failure this column ends.
+
+*No backfill.* The answer for an old row is in `raw_bytes` and needs a
+decryption attempt per row against the current keys — which would write
+today's key configuration onto packets ingested under a different one.
+NULL means "nobody asked at the time" and readers must show it as
+unknown rather than fold it into the commonest value.
+
+**What would change this:** a firmware that exposes the port number
+outside the encrypted part, which would make the whole column moot.
+
+**Held by:** `tests/integration/test_ingest_pipeline.py` replays one
+recorded packet down all three paths and asserts both that the reasons
+differ **and** that `portnum` still cannot separate them — the second
+is what makes the column necessary rather than merely present. Proven
+by mutation: mislabelling the PKI arm turns it red.
+
+**Two instrument failures caught while writing it**, both worth keeping:
+
+- The first version of the three-arm test stored one row and measured
+  it three times. Deduplication is on `(from_node_num, packet_id)` and
+  does *not* include time, so arms two and three were dropped. The
+  assertion that caught it was `len(rows) == 3`, which only existed
+  because the arms were counted rather than assumed.
+- The first mutation test **passed**, which would have been reported as
+  "the test is sound". It had not run: `sed` matched `PayloadState.PKI$`
+  and ruff had reformatted the line to end in `)`. A mutation that does
+  not apply is indistinguishable from a mutation the test survives.
+  Always confirm the mutation landed before trusting its verdict.
