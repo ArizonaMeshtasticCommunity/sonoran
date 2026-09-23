@@ -25,6 +25,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -87,12 +88,91 @@ async def _coverage_cycle(session: AsyncSession, settings: Settings, run_calibra
         await gaps_siting.run_once(settings)
 
 
-async def _run_forever(task: Task) -> None:
-    """Run one task on its own clock, for as long as the process lives."""
+def _attempt_file(settings: Settings, name: str) -> Path:
+    """Where the last attempt at one task is recorded."""
+    return Path(settings.coverage_cache_dir) / "attempts" / f"{name}.txt"
+
+
+def _read_last_attempt(settings: Settings, name: str) -> float | None:
+    """Return when this task was last tried, across process restarts."""
+    try:
+        return float(_attempt_file(settings, name).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        # No file, an unreadable one, or something that is not a number.
+        # All three mean the same thing -- nothing is known about a
+        # previous attempt -- and none of them may stop the process.
+        return None
+
+
+def _record_attempt(settings: Settings, name: str) -> None:
+    """Record that this task is being tried, BEFORE it is tried.
+
+    Before, not after, and that ordering is the whole point. A task
+    killed part-way through never reaches an "after". The coverage job
+    is killed part-way through on this deployment every time -- the
+    kernel OOM killer takes it, exit 137 -- so a success-only record
+    would stay empty for ever and the backoff would never engage.
+
+    A failure to write is logged and ignored. A read-only cache volume
+    must not stop the jobs process; it only costs the backoff.
+    """
+    path = _attempt_file(settings, name)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(datetime.now(UTC).timestamp()), encoding="utf-8")
+    except OSError:
+        logger.warning("could not record an attempt at the %s job at %s", name, path)
+
+
+def _startup_delay(task: Task, settings: Settings) -> float:
+    """Seconds to wait before the first run after the process starts.
+
+    `at_start` exists so a fresh box produces a coverage map without
+    waiting hours for the first timer. It also means that **every**
+    restart re-runs the job immediately, and that turned a job the
+    kernel kills into a livelock:
+
+        21:16:39  coverage starts
+        21:20:01  removed a coverage run that never finished
+        21:24:51  jobs running: ... (restart)
+        21:24:56  removed a coverage run that never finished
+
+    Eleven restarts, each one re-running a prediction that cannot
+    finish, on a box with one core. Coverage never completed once, and
+    the API -- sharing that core -- went from 0.32 s to 2.06 s on its
+    heaviest endpoint.
+
+    So `at_start` now means "if it is actually due". A task tried
+    recently waits out the rest of its interval instead of starting
+    again, which turns a tight loop into one attempt per interval and
+    leaves the core to the thing people are looking at.
+    """
     if not task.at_start:
-        await asyncio.sleep(task.next_delay())
+        return task.next_delay()
+    last = _read_last_attempt(settings, task.name)
+    if last is None:
+        return 0.0
+    interval = task.next_delay()
+    remaining = interval - (datetime.now(UTC).timestamp() - last)
+    if remaining <= 0:
+        return 0.0
+    logger.info(
+        "the %s job was tried %.0fs ago, so it is not due for another %.0fs",
+        task.name,
+        interval - remaining,
+        remaining,
+    )
+    return remaining
+
+
+async def _run_forever(task: Task, settings: Settings) -> None:
+    """Run one task on its own clock, for as long as the process lives."""
+    delay = _startup_delay(task, settings)
+    if delay > 0:
+        await asyncio.sleep(delay)
     while True:
         started = datetime.now(UTC)
+        _record_attempt(settings, task.name)
         try:
             await task.run()
         except asyncio.CancelledError:
@@ -202,7 +282,7 @@ async def service() -> None:
     settings = get_settings()
     tasks = build_tasks(settings)
     logger.info("jobs running: %s", ", ".join(task.name for task in tasks))
-    await asyncio.gather(*(_run_forever(task) for task in tasks))
+    await asyncio.gather(*(_run_forever(task, settings) for task in tasks))
 
 
 def run() -> None:

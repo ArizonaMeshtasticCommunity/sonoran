@@ -452,3 +452,64 @@ left it there. The container is session-scoped, so two siting tests went
 red on a node they never seeded. A fixture that only ever adds rows is a
 slow-acting failure in whatever runs after it; it now cleans up in a
 `finally`.
+
+### A job the kernel kills must not become a livelock
+
+**Decided:** record that a task was *attempted*, across restarts, and
+let `at_start` mean "if it is actually due".
+
+**What was happening on the dev box.** The coverage job is killed by
+the OOM killer part-way through every run. `unless-stopped` restarts
+the container, `at_start` re-runs coverage immediately, and the kernel
+kills it again:
+
+```
+21:16:39  coverage starts
+21:20:01  removed a coverage run that never finished
+21:24:51  jobs running: ...            (restart)
+21:24:56  removed a coverage run that never finished
+```
+
+Eleven restarts in one stretch. **Coverage has not completed once** —
+the last finished run on disk was 2.5 hours old when this was found.
+
+**The cost was not the wasted work.** The box has one core, so the
+storm starved the thing people look at. Measured on that box minutes
+apart:
+
+| endpoint | jobs stopped | jobs running |
+|---|---|---|
+| `/api/graph` | 0.32 s | **2.06 s** |
+| `/api/nodes?limit=300` | 0.04 s | 0.22 s |
+
+**The record is written before the run, not after**, and that is the
+whole design. A process killed part-way through never reaches an
+"after"; a success-only record would stay empty for ever on precisely
+the deployment that needs the backoff, and the livelock would continue
+behind a passing test. Proven by mutation: moving the call after
+`task.run()` turns the ordering case red.
+
+**What this does not fix.** Coverage still cannot complete on this box
+— 1 core, 3.4 GB RAM, swap pinned at 2047/2047 MB for an entire run.
+This makes it fail once an interval instead of continuously, which
+gives the core back to the API; it does not produce a coverage map.
+That needs either less memory in the prediction or more memory in the
+box, and the box is the owner's call.
+
+**Two instrument failures worth keeping.**
+
+- `docker inspect --format '{{.State.ExitCode}}'` on a **running**
+  container reports `0` — the code of the container now, not the code
+  it last exited with. That sent me looking for a silent clean exit
+  that never existed. The real answer, from a foreground `docker run`,
+  was **137**: SIGKILL.
+- `echo "EXIT=$?"` after a pipe reports the *last* command's status, so
+  a probe piped into `tail` reported the exit code of `tail`. It said
+  `EXIT=0` for a container that had been killed. Use
+  `${PIPESTATUS[0]}`, or do not pipe.
+
+**Held by:** `tests/unit/test_jobs_survive_being_killed.py` — ten cases
+including that a fresh box still runs at once, that a genuinely due job
+still runs, that a corrupt or unwritable record costs the backoff and
+never the process, and the ordering, checked against comment-stripped
+source.
