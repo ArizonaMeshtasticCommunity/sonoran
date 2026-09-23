@@ -461,6 +461,30 @@
   }
 
   /*
+   * A marker colour read from the theme, not written into the script.
+   *
+   * These two were hardcoded as `#ef6f5c` and `#8fa6c4`, which are the
+   * DARK values of `--gap-bad` and `--gap-unknown`. The light theme
+   * overrides both (`--bad` becomes #b7352a, `--gap-unknown` becomes
+   * #4d6891), so in light mode this page drew salmon and pale-blue
+   * dots while its own legend, chips, rows, findings and tiles all
+   * drew the darker light-theme colours -- on a page whose entire job
+   * is colour-coded severity.
+   *
+   * Leaflet is on a canvas here (`preferCanvas`), so it needs a real
+   * colour rather than a `var()`. Same shape as `cssColour` in
+   * coverage.js, which had this right already.
+   *
+   * The fallbacks are the dark values, so a browser that cannot
+   * resolve the property draws what it drew before rather than
+   * nothing.
+   */
+  function themeColour(name, fallback) {
+    return getComputedStyle(document.documentElement)
+      .getPropertyValue(`--${name}`).trim() || fallback;
+  }
+
+  /*
    * A tooltip as a DOM node, never as a string.
    *
    * Leaflet's `_updateContent` does `t.innerHTML = e` when the content
@@ -496,11 +520,14 @@
       if (row.position_confidence !== 'exact') continue;
       if (row.worst_state === 'ok') continue;
       const bad = row.worst_state === 'bad';
+      const colour = bad
+        ? themeColour('gap-bad', '#ef6f5c')
+        : themeColour('gap-unknown', '#8fa6c4');
       L.circleMarker([row.latitude, row.longitude], {
         radius: bad ? 7 : 5,
         weight: 2,
-        color: bad ? '#ef6f5c' : '#8fa6c4',
-        fillColor: bad ? '#ef6f5c' : '#8fa6c4',
+        color: colour,
+        fillColor: colour,
         fillOpacity: bad ? 0.75 : 0.35,
       })
         .bindTooltip(nameTooltip(

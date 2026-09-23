@@ -160,8 +160,6 @@
 
 /* A marker on the gaps map. Circles only: nothing here draws a line,
    because no signal on this page names two ends of one. */
-.gap-marker-bad { color: var(--gap-bad); }
-.gap-marker-unknown { color: var(--gap-unknown); }
 
 /*
  * The siting half.
