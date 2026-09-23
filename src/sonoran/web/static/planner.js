@@ -924,6 +924,61 @@ function showResult() {
   writeSummary(threshold);
 }
 
+/*
+ * The link budget, in sentences (#113).
+ *
+ * The summary tiles say how many nodes were reached. They do not say
+ * WHY, and "why" is the question somebody is actually asking when the
+ * answer disappoints: is it the radio, the antenna, the cable, or the
+ * hill?
+ *
+ * Every figure here is one the engine already used, restated in the
+ * order a person would say it aloud. Nothing is recomputed, so this
+ * cannot disagree with the prediction it sits beside.
+ *
+ * The cable line says "each end" because `system_loss` is applied at
+ * both -- see the note over `erpWatts` in planner-params.js. Saying it
+ * once here and twice in the arithmetic is how a reader ends up
+ * believing the planner is wrong.
+ */
+function linkBudget(request, threshold) {
+  const txPower = Number(request.tx_power);
+  const txGain = Number(request.tx_gain);
+  const rxGain = Number(request.rx_gain);
+  const loss = Number(request.system_loss);
+  const effective = txPower + txGain - loss;
+
+  const lines = [
+    `The radio sends ${txPower.toFixed(1)} dBm.`,
+    `Its antenna adds ${txGain.toFixed(1)} dB.`,
+  ];
+  if (loss > 0) {
+    lines.push(`The cable loses ${loss.toFixed(2)} dB at each end.`);
+  }
+  lines.push(`Effective power leaving the site: ${effective.toFixed(1)} dBm.`);
+  lines.push(
+    `At the far end, ${rxGain.toFixed(1)} dB of antenna gain is added and `
+    + `${loss.toFixed(2)} dB of cable is taken away, and the radio needs `
+    + `${threshold} dBm to hear it.`,
+  );
+
+  /*
+   * One observation, only when it is true and worth making.
+   *
+   * A cable that costs more than the antenna earns is the single most
+   * common way a well-meant upgrade makes a node worse, and it is
+   * invisible in a coverage map: the map just looks smaller than
+   * expected.
+   */
+  const note = loss > txGain
+    ? `Your cable loses more (${loss.toFixed(2)} dB) than your antenna gains `
+      + `(${txGain.toFixed(1)} dB). A shorter run, or a thicker cable, buys more `
+      + `than a bigger antenna would.`
+    : null;
+
+  return { lines, note };
+}
+
 function writeSummary(threshold) {
   const body = document.querySelector('[data-planner-summary]');
   if (!body) return;
@@ -951,12 +1006,18 @@ function writeSummary(threshold) {
     0,
   );
 
+  const budget = linkBudget(request, threshold);
+
   replace(body, [
     el('div', { class: 'grid' },
       statTile('Nodes reached', `${reached.length} of ${withPosition.length}`),
       statTile('Ground covered', `${area.toFixed(0)} km2`),
       statTile('Furthest node', furthest ? `${furthest.toFixed(1)} km` : 'none'),
       statTile('Receiver threshold', `${threshold} dBm`)),
+    el('section', { class: 'link-budget' },
+      el('h4', { text: 'Where the power goes' }),
+      el('ul', {}, ...budget.lines.map((line) => el('li', { text: line }))),
+      budget.note ? el('p', { class: 'link-budget-note', text: budget.note }) : null),
     el('p', { class: 'muted', style: 'margin:.75rem 0 .25rem;font-size:.82rem' },
       'A prediction, not a promise. It assumes clear ground and the ' +
       'receiver figures in the form. Real radios do worse.'),
@@ -1094,6 +1155,297 @@ function showLink(node, result, request) {
 
 let wired = false;
 
+/*
+ * Work the cable loss out from a cable and a length (#112).
+ *
+ * "Cable loss (dB)" asks a newcomer for a number they have no way to
+ * arrive at. They do know which cable they bought and roughly how long
+ * the run is, and the answer matters: at 915 MHz, 30 ft of LMR-195 is
+ * 3.33 dB and the same run of LMR-400 is 1.18 dB.
+ *
+ * This FILLS the existing box rather than replacing it. Somebody who
+ * already knows their figure can still type it, and the box remains
+ * what the share link and the engine read, so nothing downstream had to
+ * change.
+ *
+ * The figures come from `/api/radio/cables`, which computes them from
+ * the maker's own formula. They are deliberately not copied into this
+ * file: two tables of sourced numbers drifting apart is worse than one
+ * fetch, because neither copy would look wrong.
+ */
+const FEET_PER_100 = 100;
+let cableCatalogue = null;
+
+async function loadCables() {
+  if (cableCatalogue) return cableCatalogue;
+  try {
+    const body = await get('api/radio/cables');
+    cableCatalogue = body && Array.isArray(body.cables) ? body.cables : null;
+  } catch {
+    // The planner works without this. A newcomer loses the help; an
+    // advanced user types the dB as they always did.
+    cableCatalogue = null;
+  }
+  return cableCatalogue;
+}
+
+function cableLossDb(cable, feet) {
+  if (!cable || !(feet > 0)) return 0;
+  return (cable.db_per_100ft * feet) / FEET_PER_100;
+}
+
+/*
+ * Simple or Advanced (#113).
+ *
+ * Simple hides the boxes the pickers fill -- transmit power, both
+ * antenna gains, cable loss -- and leaves the pickers, the site and the
+ * height. Advanced is today's form, unchanged.
+ *
+ * NOTHING IS REMOVED FROM THE DOM and no value is cleared. Hiding is
+ * `display: none` on the label, so every field keeps whatever the
+ * pickers put in it, `readForm` still reads it, and the share link
+ * still carries it. Switching mode changes what a person is ASKED for
+ * and never what gets predicted -- which is the only way this is safe
+ * to add to a form somebody may already have filled in.
+ *
+ * Simple is the default for a first visit, because the reader who
+ * benefits from it is by definition the one who has not been here
+ * before. The choice is remembered per browser.
+ */
+const MODE_STORE = 'sonoran.plannerMode';
+
+function plannerMode() {
+  try {
+    return localStorage.getItem(MODE_STORE) === 'advanced' ? 'advanced' : 'simple';
+  } catch {
+    return 'simple';
+  }
+}
+
+function applyPlannerMode(mode) {
+  const form = document.querySelector('[data-planner-form]');
+  if (!form) return;
+  form.classList.toggle('is-simple', mode === 'simple');
+  for (const button of document.querySelectorAll('[data-planner-mode]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.plannerMode === mode));
+  }
+  try {
+    localStorage.setItem(MODE_STORE, mode);
+  } catch {
+    /* The mode still applies for this page. */
+  }
+}
+
+function wirePlannerMode() {
+  const buttons = [...document.querySelectorAll('[data-planner-mode]')];
+  if (!buttons.length) return;
+  for (const button of buttons) {
+    button.addEventListener('click', () => applyPlannerMode(button.dataset.plannerMode));
+  }
+  applyPlannerMode(plannerMode());
+}
+
+/*
+ * Pick the board instead of typing its transmit power (#110, #113).
+ *
+ * "Power (dBm)" is a number most people have never looked up. The board
+ * is on the desk in front of them.
+ *
+ * **The note says how well we know the answer.** 54 of the 117 boards
+ * the flasher offers have a hand-written RF profile; the other 63 get a
+ * family rule that reads the chipset out of the board's name and
+ * assumes the rest. Both are offered, because hiding two thirds of the
+ * catalogue would be less useful and no more honest -- but a figure
+ * guessed from a name must never look like one somebody measured, and a
+ * coverage map is very good at making a guess look authoritative.
+ *
+ * The stock antenna gain comes along with it, since that is the other
+ * thing a board decides, and boards with the antenna inside the case
+ * say so: there is nothing to unscrew and upgrade.
+ */
+let boardCatalogue = null;
+
+async function loadBoards() {
+  if (boardCatalogue) return boardCatalogue;
+  try {
+    const body = await get('api/radio/boards');
+    boardCatalogue = body && Array.isArray(body.boards) ? body.boards : null;
+  } catch {
+    boardCatalogue = null;
+  }
+  return boardCatalogue;
+}
+
+async function wireBoardRun() {
+  const run = document.querySelector('[data-board-run]');
+  const picker = document.querySelector('[data-board-type]');
+  const note = document.querySelector('[data-board-note]');
+  if (!run || !picker || !note) return;
+
+  const boards = await loadBoards();
+  if (!boards || !boards.length) return;
+
+  // Known profiles first: the boards we can actually answer for should
+  // be the ones somebody finds without scrolling.
+  const ordered = [...boards].sort((a, b) => {
+    if (a.profile_is_exact !== b.profile_is_exact) return a.profile_is_exact ? -1 : 1;
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  picker.replaceChildren(
+    el('option', { value: '', text: "I'll type the power myself" }),
+    ...ordered.map((board) => el('option', {
+      value: board.slug,
+      text: board.profile_is_exact ? board.name : `${board.name} (assumed)`,
+    })),
+  );
+
+  picker.addEventListener('change', () => {
+    const board = boards.find((item) => item.slug === picker.value);
+    if (!board) {
+      note.hidden = true;
+      return;
+    }
+    const power = field('tx_power');
+    if (power && board.assumed_tx_power_dbm != null) {
+      power.value = String(board.assumed_tx_power_dbm);
+      power.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const gain = field('tx_gain');
+    if (gain && board.assumed_antenna_gain_dbi != null) {
+      gain.value = String(board.assumed_antenna_gain_dbi);
+      gain.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    note.hidden = false;
+    const fixed = board.fixed_antenna
+      ? ' Its antenna is inside the case, so there is nothing to upgrade.'
+      : '';
+    note.textContent = board.profile_is_exact
+      ? `${board.chipset} at ${board.assumed_tx_power_dbm} dBm, with the antenna it ships with `
+        + `(${board.assumed_antenna_gain_dbi} dBi). The operator can set the power lower.${fixed}`
+      : `No measured profile for this board. Assuming ${board.assumed_tx_power_dbm} dBm and `
+        + `${board.assumed_antenna_gain_dbi} dBi from its family — check your radio's settings `
+        + `and correct the fields if you know better.${fixed}`;
+  });
+
+  run.hidden = false;
+}
+
+/*
+ * Pick the antenna instead of typing its gain (#111, #113).
+ *
+ * "Antenna gain (dBi)" asks for a number printed on a box the buyer no
+ * longer has, and the catalogue's own caution applies here: every one
+ * of these figures is the SELLER'S CLAIM, not a measurement, and the
+ * note says so rather than presenting it as fact.
+ *
+ * Each end gets its own picker, because they are genuinely different
+ * antennas: a rooftop omni talking to a handheld is the normal case.
+ *
+ * The vertical beamwidth is shown where the listing gave one. It is the
+ * figure that decides whether high gain helps at all -- 12 degrees on
+ * the 10 dBi against 35 on the 5.8 -- and a planner that showed only
+ * the gain would be teaching the exact mistake the catalogue was
+ * written to prevent.
+ */
+let antennaCatalogue = null;
+
+async function loadAntennas() {
+  if (antennaCatalogue) return antennaCatalogue;
+  try {
+    const body = await get('api/radio/antennas');
+    antennaCatalogue = body && Array.isArray(body.antennas) ? body.antennas : null;
+  } catch {
+    antennaCatalogue = null;
+  }
+  return antennaCatalogue;
+}
+
+async function wireAntennaRun(end, gainField) {
+  const run = document.querySelector(`[data-antenna-run="${end}"]`);
+  const picker = document.querySelector(`[data-antenna-type="${end}"]`);
+  const note = document.querySelector(`[data-antenna-note="${end}"]`);
+  if (!run || !picker || !note) return;
+
+  const antennas = await loadAntennas();
+  if (!antennas || !antennas.length) return;
+
+  picker.replaceChildren(
+    el('option', { value: '', text: "I'll type the gain myself" }),
+    ...antennas.map((antenna) => el('option', {
+      value: antenna.key,
+      text: `${antenna.name} (${antenna.gain_dbi_claimed} dBi)`,
+    })),
+  );
+
+  picker.addEventListener('change', () => {
+    const antenna = antennas.find((item) => item.key === picker.value);
+    if (!antenna) {
+      note.hidden = true;
+      return;
+    }
+    const box = field(gainField);
+    if (box) {
+      box.value = String(antenna.gain_dbi_claimed);
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    note.hidden = false;
+    const beam = antenna.vertical_beamwidth_deg
+      ? ` Its pattern is about ${antenna.vertical_beamwidth_deg}° tall, so it reaches out rather than up or down.`
+      : '';
+    // "Claimed" is not hedging. It is the difference between a figure
+    // read off a retail listing and one somebody measured.
+    note.textContent =
+      `${antenna.gain_dbi_claimed} dBi claimed by ${antenna.maker}, not measured. `
+      + `${antenna.good_for}${beam}`;
+  });
+
+  run.hidden = false;
+}
+
+async function wireCableRun() {
+  const run = document.querySelector('[data-cable-run]');
+  const note = document.querySelector('[data-cable-note]');
+  const picker = document.querySelector('[data-cable-type]');
+  const length = document.querySelector('[data-cable-length]');
+  if (!run || !picker || !length) return;
+
+  const cables = await loadCables();
+  if (!cables || !cables.length) return;
+
+  picker.replaceChildren(
+    el('option', { value: '', text: "I'll type the loss myself" }),
+    ...cables.map((cable) => el('option', { value: cable.key, text: cable.name })),
+  );
+
+  const apply = () => {
+    const cable = cables.find((item) => item.key === picker.value);
+    const feet = Number(length.value);
+    if (!cable) {
+      note.hidden = true;
+      return;
+    }
+    const loss = cableLossDb(cable, feet);
+    const box = field('system_loss');
+    if (box) {
+      box.value = loss.toFixed(2);
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    note.hidden = false;
+    // Said in dB and again in plain words, because "2.3 dB" means
+    // nothing to somebody buying their first coax.
+    const share = 100 - 100 / 10 ** (loss / 10);
+    note.textContent =
+      `${feet} ft of ${cable.name} loses about ${loss.toFixed(2)} dB at each end — `
+      + `roughly ${Math.round(share)}% of the power, before the antenna. `
+      + `${cable.good_for}`;
+  };
+
+  picker.addEventListener('change', apply);
+  length.addEventListener('input', apply);
+  run.hidden = false;
+}
+
 function wirePlanner() {
   if (wired) return;
   wired = true;
@@ -1116,6 +1468,14 @@ function wirePlanner() {
   const defaults = SonoranPlannerParams.FORM_DEFAULTS;
   fillForm(defaults);
   if (preset) preset.value = defaults.preset;
+
+  // The cable helper reveals itself only once the catalogue has
+  // arrived, so a failed fetch leaves no dead controls on the form.
+  wirePlannerMode();
+  wireBoardRun();
+  wireCableRun();
+  wireAntennaRun('tx', 'tx_gain');
+  wireAntennaRun('rx', 'rx_gain');
 
   /*
    * The address follows a committed edit, not a keystroke.

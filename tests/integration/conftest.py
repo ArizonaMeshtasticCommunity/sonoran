@@ -62,7 +62,31 @@ def role_passwords() -> Iterator[None]:
 
 @pytest.fixture(scope="session")
 def timescale_url() -> Iterator[str]:
-    """Start a TimescaleDB container and return its sync database URL."""
+    """Return a TimescaleDB URL, starting a container unless given one.
+
+    `SONORAN_TEST_DATABASE_URL` lets a developer point the suite at a
+    database they already have. That is not a convenience: testcontainers
+    cannot start on every machine -- on a Mac running Colima it fails
+    with "error while creating mount source path ... operation not
+    supported", because its reaper sidecar cannot mount the docker
+    socket. On such a machine every database-backed test SKIPS, which
+    looks exactly like passing.
+
+    That is how a genuine failure in `/api/chat/overview` reached CI
+    unnoticed: 167 tests skipped locally and nobody saw it.
+
+        docker run --rm -d --name pg -e POSTGRES_PASSWORD=x \
+          -e POSTGRES_DB=azmsh_test -p 55432:5432 \
+          timescale/timescaledb-ha:pg17 -c timescaledb.max_background_workers=0
+        SONORAN_TEST_DATABASE_URL=postgresql+psycopg://postgres:x@127.0.0.1:55432/azmsh_test \
+          uv run pytest tests/integration
+    """
+    given = os.environ.get("SONORAN_TEST_DATABASE_URL")
+    if given:
+        _stop_background_workers(given)
+        yield given
+        return
+
     container = PostgresContainer(
         image=TIMESCALE_IMAGE,
         username="postgres",

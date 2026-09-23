@@ -3,10 +3,12 @@
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import Select, and_, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from sonoran.api.channels import classify, group_order
 from sonoran.api.dependencies import (
@@ -377,30 +379,62 @@ async def overview(
         )
     ).all()
 
+    # One query for every channel's newest messages, not one per
+    # channel.
+    #
+    # Channel names arrive from MQTT, so the number of times that loop
+    # ran was decided by the mesh rather than by us -- and each pass
+    # cost four queries, because `_as_messages` issues three of its own
+    # for names, reactions and reply parents. Ten channels was 41
+    # round trips and about two seconds.
+    #
+    # ROW_NUMBER partitioned by channel does the per-channel limit in
+    # the database. PARTITION BY groups NULLs together, which is the
+    # same thing the `IS NULL` branch above used to do for messages
+    # that arrived with no channel.
+    ranked = (
+        select(
+            TextMessage,
+            func.row_number()
+            .over(partition_by=TextMessage.channel, order_by=TextMessage.seen_at.desc())
+            .label("rank"),
+        )
+        .where(TextMessage.seen_at >= since, TextMessage.emoji.is_(False))
+        .subquery()
+    )
+    newest = aliased(TextMessage, ranked)
+    rows = list(
+        (
+            await session.scalars(
+                select(newest)
+                .where(ranked.c.rank <= per_channel)
+                # Both columns must come off the subquery. Ordering by
+                # `TextMessage.seen_at` here compiles to
+                # `ORDER BY text_message.seen_at`, and `text_message` is
+                # not in the outer FROM -- Postgres either refuses it or
+                # joins the base table in again.
+                .order_by(ranked.c.channel, ranked.c.seen_at.desc())
+            )
+        ).all()
+    )
+
+    # And one name/reaction/parent resolution for all of them together.
+    resolved = await _as_messages(session, rows)
+    by_channel: dict[str | None, list[dict[str, object]]] = {}
+    for message in resolved:
+        by_channel.setdefault(cast("str | None", message["channel"]), []).append(message)
+
     sections = []
     for row in counts:
-        rows = list(
-            (
-                await session.scalars(
-                    select(TextMessage)
-                    .where(
-                        TextMessage.channel.is_(None)
-                        if row.channel is None
-                        else TextMessage.channel == row.channel,
-                        TextMessage.seen_at >= since,
-                        TextMessage.emoji.is_(False),
-                    )
-                    .order_by(TextMessage.seen_at.desc())
-                    .limit(per_channel)
-                )
-            ).all()
-        )
         sections.append(
             classify(row.channel, core)
             | {
                 "count": row.count,
                 "last_seen": row.last_seen,
-                "messages": await _as_messages(session, rows),
+                # A channel whose every message in the window is a
+                # tapback has a count but no messages. It kept its
+                # section before and keeps it now.
+                "messages": by_channel.get(row.channel, []),
             }
         )
     sections.sort(key=lambda item: (group_order(str(item["group"])), -int(item["count"])))

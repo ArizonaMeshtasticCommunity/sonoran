@@ -345,6 +345,31 @@ function erpWatts(request) {
   return 10 ** ((request.tx_power + request.tx_gain - request.system_loss - 30) / 10);
 }
 
+/*
+ * `system_loss` IS APPLIED TWICE, ONCE AT EACH END.
+ *
+ * The form calls it "Cable loss (dB)" and takes one number. It is
+ * subtracted here, from the transmitted power, and again in
+ * `receivedDbm` below, from the level at the receiver. So a reader who
+ * types 2 loses 4 dB across the link.
+ *
+ * That is defensible as "assume both ends have a similar run", and it
+ * is what the model does today. It is NOT what the label says, and
+ * nobody typing into a box marked "Cable loss (dB)" expects it to count
+ * twice.
+ *
+ * #112 asks for this to be fixed or documented, and fixing it properly
+ * means a separate cable run per end -- a form change, not a sign
+ * change. Halving it here instead would quietly alter every prediction
+ * the planner has made so far. So it is documented, loudly, and
+ * `radio/cables.py` now holds the sourced per-cable figures that the
+ * two-ended version will need.
+ *
+ * For scale, from those datasheets at 915 MHz: 30 ft of LMR-400 is
+ * 1.18 dB and the same run of LMR-195 is 3.33 dB. Doubling either is
+ * the difference between a link closing and not.
+ */
+
 /** Turn a filled-in form into the values the engine takes. */
 function toEngineParams(request) {
   const climate = CLIMATE_CODES[request.radio_climate];
@@ -383,6 +408,8 @@ function toEngineParams(request) {
  * radio is the sum of the three.
  */
 function receivedDbm(fieldDbm, request) {
+  // The second of the two places `system_loss` is subtracted. See the
+  // note above `erpWatts`: one box, applied at both ends.
   return fieldDbm + request.rx_gain - request.system_loss;
 }
 

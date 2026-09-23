@@ -354,6 +354,17 @@
                       title="Drag to resize, or press E"></span>
                 <button type="button" class="watch-step" data-watch-step
                         title="Panel height (E)" aria-label="Panel height"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></button>
+                <!--
+                  The off switch for the single-key shortcuts (WCAG 2.1.4,
+                  #147). It lives here because this is where the shortcuts
+                  apply and where somebody who has just been surprised by
+                  one will look. F is exempt and stays bound either way --
+                  it is the way out of fullscreen.
+                -->
+                <label class="watch-shortcut-toggle">
+                  <input type="checkbox" data-watch-shortcuts checked />
+                  <span>Single-key shortcuts</span>
+                </label>
               </header>
               <div class="watch-panes" data-watch-panes>
                 <div class="watch-pane" data-watch-pane="traffic" role="tabpanel"></div>
@@ -703,21 +714,56 @@
           <p class="muted" data-planner-progress style="min-height: 1.2rem; font-size: .82rem"></p>
 
           <div class="planner-layout">
-            <div class="panel planner-form">
+            <div class="panel planner-form" data-planner-form>
+              <!--
+                Simple hides the boxes the pickers fill, not the pickers
+                (#113). Everything stays in the DOM and keeps its value,
+                so switching mode changes what is asked for and never
+                what is predicted.
+              -->
+              <div class="mode-switch" role="group" aria-label="How much detail">
+                <button type="button" class="toggle" data-planner-mode="simple"
+                        aria-pressed="true">Simple</button>
+                <button type="button" class="toggle" data-planner-mode="advanced"
+                        aria-pressed="false">Advanced</button>
+              </div>
               <h3>Transmitter</h3>
               <label>Site name <input data-planner="site_name" placeholder="Ridge above the pass" /></label>
               <div class="pair">
                 <label>Latitude <input data-planner="lat" inputmode="decimal" placeholder="click the map" /></label>
                 <label>Longitude <input data-planner="lon" inputmode="decimal" placeholder="click the map" /></label>
               </div>
+              <!--
+                Pick the board instead of typing its transmit power
+                (#110, #113). 54 of the 117 boards the flasher offers
+                have a hand-written RF profile; the rest get a family
+                rule, and the note says which one you got. A figure
+                guessed from a board name must not look like a figure
+                somebody measured.
+              -->
+              <div class="pair board-run" data-board-run hidden>
+                <label>Your radio <select data-board-type></select></label>
+              </div>
+              <p class="muted board-note" data-board-note hidden></p>
               <div class="pair">
                 <label>Antenna height (m) <input data-planner="tx_height" inputmode="decimal" /></label>
-                <label>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
+                <label data-advanced-only>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
               </div>
               <div class="pair">
-                <label>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
+                <label data-advanced-only>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
                 <label>Frequency (MHz) <input data-planner="frequency_mhz" inputmode="decimal" /></label>
               </div>
+              <!--
+                Pick the antenna instead of typing its gain (#111, #113).
+                "Antenna gain (dBi)" asks for a number printed on a box
+                the buyer no longer has. The picker fills the field, so
+                the engine, the share link and anybody who already knows
+                their figure are all untouched.
+              -->
+              <div class="pair antenna-run" data-antenna-run="tx" hidden>
+                <label>Antenna at your site <select data-antenna-type="tx"></select></label>
+              </div>
+              <p class="muted antenna-note" data-antenna-note="tx" hidden></p>
 
               <h3>Receiver</h3>
               <label>Modem preset <select data-planner="preset"></select></label>
@@ -726,9 +772,37 @@
                 <label>Height (m) <input data-planner="rx_height" inputmode="decimal" /></label>
               </div>
               <div class="pair">
-                <label>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
-                <label>Cable loss (dB) <input data-planner="system_loss" inputmode="decimal" /></label>
+                <label data-advanced-only>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
+                <label data-advanced-only>Cable loss (dB), each end
+                  <input data-planner="system_loss" inputmode="decimal" /></label>
               </div>
+              <!--
+                Pick the antenna instead of typing its gain (#111, #113).
+                "Antenna gain (dBi)" asks for a number printed on a box
+                the buyer no longer has. The picker fills the field, so
+                the engine, the share link and anybody who already knows
+                their figure are all untouched.
+              -->
+              <div class="pair antenna-run" data-antenna-run="rx" hidden>
+                <label>Antenna at the far end <select data-antenna-type="rx"></select></label>
+              </div>
+              <p class="muted antenna-note" data-antenna-note="rx" hidden></p>
+              <!--
+                Work the cable loss out instead of asking for it (#112).
+                Nobody knows what to type into a dB box. They do know
+                what cable they bought and roughly how long it is, and
+                the difference is large: 30 ft of LMR-195 is 3.33 dB
+                against LMR-400's 1.18 dB at 915 MHz.
+
+                It fills the box above rather than replacing it, so an
+                advanced user can still type a figure and anybody who
+                has already learned the box keeps it.
+              -->
+              <div class="pair cable-run" data-cable-run hidden>
+                <label>Cable <select data-cable-type></select></label>
+                <label>Length (ft) <input data-cable-length inputmode="decimal" value="10" /></label>
+              </div>
+              <p class="muted cable-note" data-cable-note hidden></p>
               <p class="muted" style="font-size: .78rem">
                 The sensitivity follows the preset. Lower it by a few dB in town,
                 where the band is shared and noisy.

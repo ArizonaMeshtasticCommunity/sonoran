@@ -851,8 +851,22 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .watch-bar[hidden], .watch-panel[hidden], .watch-legend[hidden],
 .watch-pane[hidden] { display: none; }
 
-.watch-control a { display: grid; place-items: center; width: 30px; height: 30px; }
-.watch-control a[aria-pressed="true"] { color: var(--accent); }
+/* The control is a real <button>, so it needs the look Leaflet gives
+   its own anchors -- background, colour and border come from
+   `.leaflet-bar a` and a button inherits none of them. */
+.watch-control button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.watch-control button[aria-pressed="true"] { color: var(--accent); }
 .watch-control .icon { width: 1.15rem; height: 1.15rem; }
 
 /*
@@ -2103,6 +2117,78 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * never the only one (WCAG 1.4.1), so the cards read in greyscale. An
  * unknown card is grey and never green: nothing measured is not healthy.
  */
+/* The planner's cable run (#112). Hidden until its catalogue arrives,
+   so a failed fetch leaves no dead controls behind. */
+.cable-run[hidden] { display: none; }
+.antenna-run[hidden] { display: none; }
+.board-run[hidden] { display: none; }
+/* Simple / Advanced (#113). The fields are hidden, never removed: every
+   value survives the switch, so the prediction cannot change with it. */
+.mode-switch { display: flex; gap: .4rem; margin: 0 0 .8rem; }
+.mode-switch .toggle[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+.planner-form.is-simple [data-advanced-only] { display: none; }
+.board-note { font-size: .78rem; margin: .3rem 0 .6rem; }
+.antenna-note { font-size: .78rem; margin: .3rem 0 .6rem; }
+/* The link budget under the planner's summary tiles (#113). */
+.link-budget { margin: .9rem 0 .3rem; }
+.link-budget h4 { margin: 0 0 .4rem; }
+.link-budget ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .2rem; font-size: .84rem; }
+.link-budget-note {
+  margin: .5rem 0 0;
+  padding: .5rem .65rem;
+  border-left: 3px solid var(--warn);
+  background: var(--panel-2);
+  border-radius: .3rem;
+  font-size: .82rem;
+}
+.cable-note { font-size: .78rem; margin: .3rem 0 .6rem; }
+
+/* The off switch for the single-key shortcuts (#147). Small and beside
+   the other watch-bar controls: it is a setting, not a feature. */
+.watch-shortcut-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.watch-shortcut-toggle input { margin: 0; }
+
+/* The node's own map (#103). Short on a phone so it does not take the
+   whole screen on a page people scroll; taller where there is room. */
+.node-map {
+  height: clamp(14rem, 38svh, 30rem);
+  border-radius: .5rem;
+  background: var(--panel-2);
+}
+.node-map-note { display: flex; flex-wrap: wrap; gap: .6rem; align-items: baseline; margin: .55rem 0 0; }
+
+/* The compact health summary (#95). The full checklist below it reuses
+   `.health-cards`, so only the summary half needs anything new. */
+.health-headline { font-weight: 650; margin: 0 0 .4rem; }
+.health-dots { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .6rem; }
+.health-dot {
+  width: .7rem;
+  height: .7rem;
+  border-radius: 50%;
+  /* A dot carries state by colour, so it needs a non-colour cue too
+     (WCAG 1.4.1). The ring differs in width per state, and each dot has
+     a `title`; the row as a whole is labelled with the sentence above
+     it, which is what a screen reader actually reads. */
+  background: var(--muted);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .35);
+}
+.health-dot.state-ok { background: var(--good); }
+.health-dot.state-warn { background: var(--warn); box-shadow: inset 0 0 0 2px rgb(0 0 0 / .45); }
+.health-dot.state-bad { background: var(--bad); box-shadow: inset 0 0 0 3px rgb(0 0 0 / .5); }
+.health-attention { list-style: none; margin: 0 0 .7rem; padding: 0; display: grid; gap: .35rem; }
+.health-attention li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .45rem; align-items: baseline; }
+.health-group { margin-top: .9rem; }
+.health-group h4 { margin: 0 0 .45rem; }
+.health-full { margin-top: .8rem; }
+
 .health-cards {
   display: grid; gap: .75rem; margin-bottom: 1rem;
   grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));

@@ -50,8 +50,33 @@ jobs:
         # first step points the URL below at whichever port this got.
         ports:
           - 5432
+        # The health check uses `-h 127.0.0.1` deliberately. A bare
+        # `pg_isready` checks the WRONG SERVER: this image initialises
+        # by starting a temporary postgres with `-c listen_addresses=''`
+        # -- its own entrypoint calls it the "socket-only postgresql
+        # server" -- and runs the initdb scripts against it over the
+        # unix socket. `pg_isready` with no host uses that same socket,
+        # so it answers "accepting connections" while there is no TCP
+        # listener at all. The service is marked healthy, the job
+        # starts, and the first connection to the mapped port is
+        # accepted by Docker's proxy and immediately closed:
+        #
+        #     psycopg.OperationalError: connection failed: server
+        #     closed the connection unexpectedly
+        #
+        # Measured against this exact image with listen_addresses='':
+        #
+        #     pg_isready                  accepting connections  (0)
+        #     pg_isready -h 127.0.0.1     no response            (2)
+        #
+        # It was intermittent because it is a race between how long
+        # `uv sync` takes and how long the toolkit extensions take. On
+        # run 35880147556: healthy at 15:15:20, connected at 15:15:46,
+        # and the init server had still not handed over at 15:15:51.
+        # Over TCP the check cannot pass before the real server is
+        # listening, which is the thing the job actually needs to know.
         options: >-
-          --health-cmd "pg_isready -U postgres -d sonoran"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d sonoran"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
@@ -103,8 +128,33 @@ jobs:
         # Docker picks the host port, as in `migrations`.
         ports:
           - 5432
+        # The health check uses `-h 127.0.0.1` deliberately. A bare
+        # `pg_isready` checks the WRONG SERVER: this image initialises
+        # by starting a temporary postgres with `-c listen_addresses=''`
+        # -- its own entrypoint calls it the "socket-only postgresql
+        # server" -- and runs the initdb scripts against it over the
+        # unix socket. `pg_isready` with no host uses that same socket,
+        # so it answers "accepting connections" while there is no TCP
+        # listener at all. The service is marked healthy, the job
+        # starts, and the first connection to the mapped port is
+        # accepted by Docker's proxy and immediately closed:
+        #
+        #     psycopg.OperationalError: connection failed: server
+        #     closed the connection unexpectedly
+        #
+        # Measured against this exact image with listen_addresses='':
+        #
+        #     pg_isready                  accepting connections  (0)
+        #     pg_isready -h 127.0.0.1     no response            (2)
+        #
+        # It was intermittent because it is a race between how long
+        # `uv sync` takes and how long the toolkit extensions take. On
+        # run 35880147556: healthy at 15:15:20, connected at 15:15:46,
+        # and the init server had still not handed over at 15:15:51.
+        # Over TCP the check cannot pass before the real server is
+        # listening, which is the thing the job actually needs to know.
         options: >-
-          --health-cmd "pg_isready -U postgres -d azmsh"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d azmsh"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20

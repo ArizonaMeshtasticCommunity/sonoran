@@ -56,22 +56,42 @@ def test_unknown_fields_are_ignored_so_agents_can_grow() -> None:
         {"sent": "2026-09-22T18:00:00"},  # no zone: a clock we cannot place
         {"obs": [{"id": "a1b2c3", "t": "2026-09-22T17:59:58Z", "lat": 91, "lon": 0}]},
         {"obs": [{"id": "a1b2c3", "t": "2026-09-22T17:59:58Z", "lat": 0, "lon": 0}] * 101},
-        {
-            "obs": [
-                {
-                    "id": "x",
-                    "t": "2026-09-22T17:59:58Z",
-                    "lat": 0,
-                    "lon": 0,
-                    "meta": {"k": "v" * 2000},
-                }
-            ]
-        },
     ],
 )
 def test_a_message_that_breaks_the_contract_is_refused(change: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         Batch.model_validate(_batch(**change))
+
+
+def test_an_oversized_meta_value_is_dropped_and_the_observation_kept() -> None:
+    """This case used to be in the list above, and the change is deliberate.
+
+    An oversized `meta` value used to reject the whole message. Since
+    observations arrive in batches of up to 100, that meant one station
+    sending one long field lost every observation in the batch --
+    silently, for as long as its firmware did it, with its operator
+    seeing only "my station stopped reporting".
+
+    `meta` is decoration; the position and signal are the measurement.
+    So the unusable field is dropped and the observation is kept. The
+    size bound it was defending is still enforced, just per field
+    instead of per message.
+    """
+    batch = Batch.model_validate(
+        _batch(
+            obs=[
+                {
+                    "id": "x",
+                    "t": "2026-09-22T17:59:58Z",
+                    "lat": 0,
+                    "lon": 0,
+                    "meta": {"k": "v" * 2000, "callsign": "SWA1"},
+                }
+            ]
+        )
+    )
+    assert len(batch.obs) == 1, "the observation was lost with its bad field"
+    assert batch.obs[0].meta == {"callsign": "SWA1"}, "a usable field was dropped too"
 
 
 def test_a_heartbeat_is_read_with_its_counts() -> None:

@@ -1,0 +1,167 @@
+# Walk the deployed instance, for the bugs only real data produces.
+#
+# #83 wired the e2e journeys into CI against SEEDED data, which is right
+# for a merge gate: a journey that blocks a pull request has to be
+# deterministic. But the bug that started that work could not have been
+# caught that way. The 320 px reflow failure (#82) needed a real
+# leaderboard row with a long detail line -- "-8.0 dB, 11 and 6 reports
+# each way" -- to overflow, and seeded data is tidy.
+#
+# The same shape turned up repeatedly: a node named `Z1PPY<<3` proving
+# the name field carries markup, 148 nodes spanning Alaska to Mexico
+# blowing out the map fit, 79 telemetry rows dated in the future, a node
+# with 379 neighbour reports told it had fewer than 2. None of those is
+# reproducible from a fixture.
+#
+# This CANNOT gate a pull request and must not try to. Real data changes
+# underneath it, so a red run means "go and look", never "this PR is
+# bad". Same reasoning as `vendor-pin.yml`, whose structure this copies,
+# including the distinction between "could not check" and "check
+# failed".
+name: Live e2e
+
+on:
+  # DELIBERATELY MANUAL FOR NOW.
+  #
+  # The repository's Actions budget was exhausted on 2026-09-23, so
+  # turning a nightly job on is the wrong thing to ship this week. The
+  # schedule below is the intended cadence and is commented out rather
+  # than dropped, so enabling it is one line and no thought.
+  #
+  #  schedule:
+  #    - cron: '43 9 * * *'   # daily, once, off the hour
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Instance to walk (defaults to the SONORAN_LIVE_URL variable)'
+        required: false
+        type: string
+
+# One run at a time. Two overlapping walks of the same instance would
+# report the same finding twice and race on the issue below.
+concurrency:
+  group: live-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  walk:
+    # Self-hosted, like every other job here since Logan moved them
+    # (#169-#171). The runner is HIS hardware at his cost, which is the
+    # other reason this job stays manual: a nightly walk of a live
+    # instance is a standing charge on somebody else's machine, and
+    # turning it on is their call rather than mine.
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Decide what to walk
+        id: target
+        env:
+          FROM_INPUT: ${{ inputs.url }}
+          FROM_VARIABLE: ${{ vars.SONORAN_LIVE_URL }}
+        run: |
+          url="${FROM_INPUT:-$FROM_VARIABLE}"
+          if [ -z "$url" ]; then
+            # Not knowing where the instance is is not evidence that the
+            # instance is broken. Say so and stop, rather than failing.
+            echo "::warning::no instance configured; set the SONORAN_LIVE_URL repository variable"
+            echo "known=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "known=yes" >> "$GITHUB_OUTPUT"
+            echo "url=$url" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install the browser
+        if: steps.target.outputs.known == 'yes'
+        run: npx --yes playwright@1 install --with-deps chromium
+
+      - name: Walk it
+        if: steps.target.outputs.known == 'yes'
+        id: walk
+        env:
+          SONORAN_URL: ${{ steps.target.outputs.url }}
+        run: |
+          set +e
+          out="$(node tools/dev/e2e.js 2>&1)"
+          status=$?
+          echo "$out"
+          {
+            echo "## Live e2e"
+            echo
+            echo "Walked \`$SONORAN_URL\`."
+            echo
+            echo '```'
+            echo "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Kept for the issue body below, truncated so a long failure
+          # cannot produce an unreadable comment.
+          {
+            echo 'report<<REPORT_EOF'
+            echo "$out" | tail -60
+            echo 'REPORT_EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # One signal a day at most, which the issue asks for.
+      #
+      # A scheduled run that nobody watches is the same as no run, and a
+      # new issue every night is the same as no issue. So there is ONE
+      # issue, reopened and commented on when the walk fails and closed
+      # when it passes again.
+      - name: Say so, once
+        if: steps.target.outputs.known == 'yes'
+        uses: actions/github-script@v7
+        env:
+          REPORT: ${{ steps.walk.outputs.report }}
+          STATUS: ${{ steps.walk.outputs.status }}
+          TARGET: ${{ steps.target.outputs.url }}
+        with:
+          script: |
+            const title = 'Live e2e: the deployed instance failed a journey';
+            const failed = process.env.STATUS !== '0';
+            const { owner, repo } = context.repo;
+            const found = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue in:title "${title}"`,
+            });
+            const existing = found.data.items[0];
+            const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Walked \`${process.env.TARGET}\` on ${new Date().toISOString().slice(0, 10)}.`,
+              '',
+              'This is **not** a pull request gate. Real data changes underneath',
+              'this run, so a failure means "go and look", not "revert something".',
+              '',
+              '```',
+              process.env.REPORT || '(no output captured)',
+              '```',
+              '',
+              `[Run log](${run})`,
+            ].join('\n');
+
+            if (failed) {
+              if (existing) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+                if (existing.state === 'closed') {
+                  await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: 'open' });
+                }
+              } else {
+                await github.rest.issues.create({ owner, repo, title, body });
+              }
+              core.setFailed('a journey failed against the deployed instance');
+            } else if (existing && existing.state === 'open') {
+              // Passing again is worth exactly one line, and then silence.
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `Passing again as of ${new Date().toISOString().slice(0, 10)}. [Run log](${run})`,
+              });
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, state: 'closed' });
+            }

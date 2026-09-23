@@ -43,6 +43,7 @@ const SonoranWatch = (() => {
   let tab = 'traffic';
   let legendOpen = false;
   let control = null;
+  let watchButton = null;
   let fallback = false;
   const unread = { traffic: 0, traces: 0 };
   /* Where each moved element came from, so exit puts it back exactly. */
@@ -240,6 +241,16 @@ const SonoranWatch = (() => {
     writeFragment();
     settle();
     setTimeout(settle, 260);
+    /*
+     * Put focus back on the control that started this.
+     *
+     * Exiting used to leave it on the map div, which is not
+     * interactive: a keyboard user pressed F, watch mode ended, and
+     * their focus was somewhere they could not act from (WCAG 2.4.3).
+     * `undress()` moves elements back to where they came from, so this
+     * runs after it, and after the settle that follows.
+     */
+    if (watchButton && watchButton.isConnected) watchButton.focus();
   }
 
   const toggle = () => (on ? leave() : enter());
@@ -390,9 +401,18 @@ const SonoranWatch = (() => {
       options: { position: 'bottomright' },
       onAdd() {
         const wrap = L.DomUtil.create('div', 'leaflet-bar watch-control');
-        const button = L.DomUtil.create('a', '', wrap);
-        button.href = '#';
-        button.role = 'button';
+        /*
+         * A real button, not an anchor wearing `role="button"`.
+         *
+         * An element with that role must respond to Space as well as
+         * Enter (WCAG 4.1.2), and a native `<a href>` never does.
+         * Measured before this change: Enter toggled watch mode, Space
+         * did nothing at all. A `<button>` gets both keys, the right
+         * role and the disabled semantics for free, and none of it can
+         * drift.
+         */
+        const button = L.DomUtil.create('button', '', wrap);
+        button.type = 'button';
         button.setAttribute('aria-pressed', 'false');
         button.title = 'Watch mode (F)';
         button.setAttribute('aria-label', 'Watch mode');
@@ -408,6 +428,10 @@ const SonoranWatch = (() => {
           L.DomEvent.preventDefault(event);
           toggle();
         });
+        // Where focus goes when watch mode ends. Leaving it on the map
+        // div strands a keyboard user somewhere they cannot act from
+        // (WCAG 2.4.3); `app.js` already does this for the nav toggle.
+        watchButton = button;
         return wrap;
       },
     });
@@ -417,7 +441,58 @@ const SonoranWatch = (() => {
     for (const name of TABS) {
       $(`[data-watch-tab="${name}"]`, shell).addEventListener('click', () => setTab(name));
     }
+    /*
+     * A way to turn the single-key shortcuts off (WCAG 2.1.4, #147).
+     *
+     * F, T, E, 1, 2 and Space are bound with no modifier. For a speech
+     * input user a stray recognised word is a keypress, so a page that
+     * acts on single characters is a page that acts on nothing they
+     * meant. The success criterion accepts any one of three remedies:
+     * require a modifier, allow remapping, or allow turning them off.
+     *
+     * Turning them off is the one taken. Requiring a modifier would
+     * quietly ruin what watch mode is for -- it is a wall-display mode
+     * and one-handed keys are most of why it is pleasant -- and
+     * remapping is a great deal of machinery for five keys nobody has
+     * asked to rebind. An off switch costs nothing to anyone who does
+     * not need it.
+     *
+     * F IS EXEMPT AND STAYS BOUND. It is the only way out of fullscreen
+     * by keyboard, and a user who cannot leave is worse off than one
+     * who never had the shortcut. Escape and the browser's own control
+     * remain as well.
+     */
+    const SHORTCUT_STORE = 'sonoran.watchShortcuts';
+
+    const shortcutsOn = () => {
+      try {
+        return localStorage.getItem(SHORTCUT_STORE) !== 'off';
+      } catch {
+        // A browser that refuses storage keeps the default rather than
+        // losing the feature.
+        return true;
+      }
+    };
+
+    const setShortcuts = (on) => {
+      try {
+        localStorage.setItem(SHORTCUT_STORE, on ? 'on' : 'off');
+      } catch {
+        /* Nothing to do: the toggle still applies for this page. */
+      }
+    };
+
+    ctx.shortcutsOn = shortcutsOn;
+    ctx.setShortcuts = setShortcuts;
+
     $('[data-watch-step]', shell).addEventListener('click', stepHeight);
+
+    // The off switch reflects what is stored, then writes it.
+    const shortcutBox = $('[data-watch-shortcuts]', shell);
+    if (shortcutBox) {
+      shortcutBox.checked = shortcutsOn();
+      shortcutBox.addEventListener('change', () => setShortcuts(shortcutBox.checked));
+    }
     wireGrip(shell);
     // The strip wraps with the window, so its height is watched rather
     // than measured once. A ResizeObserver costs no timer.
@@ -445,9 +520,26 @@ const SonoranWatch = (() => {
       const node = document.activeElement;
       const tagName = node && node.tagName;
       if (tagName === 'INPUT' || tagName === 'SELECT' || tagName === 'TEXTAREA') return;
+      /*
+       * And anywhere else somebody is typing.
+       *
+       * The three tag names above are not the whole set. A
+       * `contenteditable` region takes text exactly like a textarea and
+       * has none of those tags, so every one of these single keys --
+       * F, T, E, 1, 2, Space -- reached the map instead of the text.
+       * `isContentEditable` is inherited, so it is true inside a nested
+       * element of an editable region as well as on the region itself.
+       *
+       * This is the narrow half of WCAG 2.1.4. The rest of it, that
+       * these shortcuts have no modifier and no off switch, is a
+       * product decision and is tracked on #147.
+       */
+      if (node && node.isContentEditable) return;
       const key = event.key;
+      // F first, and outside the switch: it is the way out.
       if (key === 'f' || key === 'F') { event.preventDefault(); toggle(); return; }
       if (!on) return;
+      if (!shortcutsOn()) return;
       if (key === 'Escape' && fallback) { event.preventDefault(); leave(); return; }
       if (key === 't' || key === 'T') { event.preventDefault(); setTab(tab === 'traffic' ? 'traces' : 'traffic'); return; }
       if (key === '1') { event.preventDefault(); setTab('traffic'); return; }

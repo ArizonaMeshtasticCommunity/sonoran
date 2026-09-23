@@ -92,8 +92,22 @@
    * place a radio could go", which colour alone cannot: a reader who is
    * colour blind still has to be able to tell a prediction from a node.
    */
+  /*
+   * The only three states the engine produces, checked here rather than
+   * trusted.
+   *
+   * `state` is a server-side enum today, so what follows was never
+   * exploitable. But it is a `str` field that travels from the API into
+   * an `innerHTML` sink by string interpolation -- `el()`'s `html:`
+   * escape hatch, whose one caller this is -- and that is the exact
+   * shape of #81, where a node's name reached a sink the same way. A
+   * value that is checked against a fixed set cannot carry markup no
+   * matter what the API is changed to return later.
+   */
+  const PIN_STATES = new Set(['ok', 'bad', 'unknown']);
+
   function pin(candidate) {
-    const state_ = candidate.state || 'unknown';
+    const state_ = PIN_STATES.has(candidate.state) ? candidate.state : 'unknown';
     return L.divIcon({
       className: '',
       html: `<span class="gap-candidate-pin ${state_}"></span>`,

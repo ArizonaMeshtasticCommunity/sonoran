@@ -23,6 +23,7 @@ Nothing here decides what a value means. It holds one and hands it back.
 import asyncio
 import time
 import weakref
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 
 # Every cache that has been made, so they can all be emptied at once.
@@ -129,3 +130,71 @@ class TimedCache[T]:
         For tests, and for anything that knows the answer has changed.
         """
         self._held = None
+
+
+class KeyedCache[T]:
+    """Many answers, each held for a while, with a ceiling on how many.
+
+    `TimedCache` holds one value, which fits an endpoint that takes no
+    arguments. The expensive endpoints on this API all take arguments --
+    a node id, a window, a limit -- so one hold per endpoint would
+    answer every caller with the first caller's parameters.
+
+    **The ceiling is the whole reason this is a class and not a dict.**
+    The obvious version is `dict[key, TimedCache]`, and the keys come
+    from the query string, so a caller who varies `hours` gets a new
+    entry every time and the dict grows without limit. That is exactly
+    the bug fixed in #160, where the live map's paused queue had no cap,
+    and it would be worse here: a cache is supposed to protect the box.
+
+    So entries are held in insertion order and the oldest is dropped
+    once there are more than `capacity`. An attacker varying a parameter
+    gets misses and evictions -- they pay full price for every request,
+    as they do today, and the memory stays bounded. A reader loading the
+    same page twice gets the hit.
+
+    Eviction is by insertion order rather than by last use. Least-recently
+    -used would need a touch on every read; the values here expire on a
+    timer anyway, so the cheaper policy loses very little and the
+    ordering cost is paid once per miss instead of once per hit.
+    """
+
+    __slots__ = ("__weakref__", "_capacity", "_held", "_lock", "_lock_loop")
+
+    def __init__(self, capacity: int = 64) -> None:
+        if capacity < 1:
+            raise ValueError("capacity must be at least 1")
+        self._capacity = capacity
+        self._held: OrderedDict[str, TimedCache[T]] = OrderedDict()
+        self._lock: asyncio.Lock | None = None
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
+        _ALL.add(self)  # type: ignore[arg-type]
+
+    def _for(self, key: str) -> TimedCache[T]:
+        """The hold for one key, making and bounding it as needed."""
+        found = self._held.get(key)
+        if found is not None:
+            return found
+        made: TimedCache[T] = TimedCache()
+        self._held[key] = made
+        while len(self._held) > self._capacity:
+            # `last=False` is the oldest insertion, not the newest.
+            self._held.popitem(last=False)
+        return made
+
+    async def get(self, key: str, seconds: float, make: Callable[[], Awaitable[T]]) -> T:
+        """Return the held value for `key`, or make one.
+
+        Each key gets its own `TimedCache`, so the single-flight lock is
+        per key: a slow refresh of one node's routes does not hold up a
+        different node's.
+        """
+        return await self._for(key).get(seconds, make)
+
+    def clear(self) -> None:
+        """Forget every key. For tests, between cases."""
+        self._held.clear()
+
+    def __len__(self) -> int:
+        """How many keys are held. For tests and for a bound to assert."""
+        return len(self._held)
