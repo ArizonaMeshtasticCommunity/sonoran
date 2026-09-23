@@ -6012,21 +6012,53 @@ async function route() {
  * the same way.
  */
 function wireTheme() {
-  const select = $('[data-theme-choice]');
-  if (!select) return;
+  const button = $('[data-theme-choice]');
+  if (!button) return;
+
+  /*
+   * Three states, cycled, with the name saying which one it is in.
+   *
+   * `system` stays the default and stays reachable: a reader who has
+   * set their operating system to light should not have to re-say it
+   * here. `aria-pressed` would be wrong for a three-state control, so
+   * the accessible name carries the state instead -- an icon alone
+   * says nothing to a screen reader, and an icon whose meaning is
+   * "the opposite of what you see" says nothing to anyone.
+   */
+  const ORDER = ['system', 'light', 'dark'];
+  const LOOK = {
+    system: { icon: '#i-theme-system', word: 'System', label: 'Theme: following the system' },
+    light: { icon: '#i-theme-light', word: 'Light', label: 'Theme: light' },
+    dark: { icon: '#i-theme-dark', word: 'Dark', label: 'Theme: dark' },
+  };
+
+  const show = (mode) => {
+    const look = LOOK[mode] || LOOK.system;
+    $('use', button).setAttribute('href', look.icon);
+    const word = $('[data-theme-word]', button);
+    if (word) word.textContent = look.word;
+    button.setAttribute('aria-label', look.label);
+  };
+
   const mode = document.documentElement.getAttribute('data-theme-mode') || 'system';
-  select.value = mode;
-  select.addEventListener('change', () => {
+  show(mode);
+
+  button.addEventListener('click', () => {
+    const now = document.documentElement.getAttribute('data-theme-mode') || 'system';
+    const next = ORDER[(ORDER.indexOf(now) + 1) % ORDER.length];
     try {
-      localStorage.setItem('sonoran.theme', select.value);
+      localStorage.setItem('sonoran.theme', next);
     } catch {
-      // Refused storage: the choice lasts for this load only.
-      document.documentElement.setAttribute('data-theme',
-        select.value === 'light' ? 'light' : 'dark');
+      // Refused storage: the choice lasts for this load only, so apply
+      // it here rather than reloading into the old one.
+      document.documentElement.setAttribute('data-theme', next === 'light' ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme-mode', next);
+      show(next);
       return;
     }
     location.reload();
   });
+
   if (mode === 'system' && window.matchMedia) {
     matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => location.reload());
   }

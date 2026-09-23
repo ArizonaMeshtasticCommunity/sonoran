@@ -1500,6 +1500,50 @@ a.more { text-decoration: none; display: inline-block; }
  * same treatment and wants it for the same reason.
  * https://www.w3.org/TR/WCAG22/#orientation
  */
+/*
+ * One app bar at phone width (#91).
+ *
+ * The sidebar stacked four full-width blocks above the content --
+ * brand, menu button, status, theme -- and the page heading began at
+ * 249 px on a 390x844 phone. That is 30% of the viewport before
+ * anything the reader came for, on every first load.
+ *
+ * They now share two compact rows instead of four full-width blocks:
+ * the mark instead of the wordmark and the menu button on the first,
+ * the status and the theme on the second. Measured, that is 129 px to
+ * the heading rather than 249. Not one row -- four controls do not fit
+ * across 390 px without cramping the menu button, and the menu button
+ * is the one a thumb actually needs. The nav itself still opens full
+ * width underneath, which is the part that needs the room.
+ *
+ * This is the same shape the landscape rule below already used; it now
+ * applies at phone width generally rather than only when the screen is
+ * short.
+ */
+@media (max-width: 60rem) {
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .5rem;
+    padding-top: calc(.4rem + var(--safe-top));
+    padding-bottom: .4rem;
+  }
+  .brand { flex: 0 0 auto; }
+  /* The mark alone. The wordmark is the widest thing in the row and
+     the heading below already names the page. */
+  .brand-text { display: none; }
+  .brand-mark { max-width: 6.5rem; }
+  .nav-toggle { flex: 1 1 8rem; width: auto; margin: 0; }
+  .sidebar .status { flex: 0 0 auto; margin: 0; font-size: .78rem; }
+  .theme-switch { flex: 0 0 auto; margin: 0; padding: .4rem .5rem; }
+  /* Room is scarce, so the theme shows its icon and its state is in
+     the accessible name. */
+  .theme-switch .theme-word { display: none; }
+  /* Open, the list still needs the full width under the row. */
+  .sidebar nav { flex: 1 1 100%; }
+}
+
 @media (max-width: 60rem) and (max-height: 32rem) {
   .sidebar {
     flex-direction: row; align-items: center; gap: .75rem;
@@ -2142,8 +2186,14 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 :root[data-theme="light"] .leaflet-tile-pane .basemap-tiles img.leaflet-tile { filter: none; }
 
 /* The theme control in the nav (#50). */
-.theme-switch { display: flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--muted); padding: .4rem .75rem; }
-.theme-switch select { font-size: .82rem; }
+.theme-switch {
+  display: flex; align-items: center; gap: .4rem;
+  font-size: .82rem; color: var(--muted);
+  padding: .4rem .75rem; background: none; border: 1px solid var(--line);
+  border-radius: .4rem; cursor: pointer;
+}
+.theme-switch:hover { border-color: var(--accent-soft); color: var(--text); }
+.theme-switch .icon { width: 1.1rem; height: 1.1rem; }
 
 /*
  * The 900 MHz band on the RF page (design 7.4). The waterfall is a
