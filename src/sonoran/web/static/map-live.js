@@ -640,8 +640,34 @@ const SonoranLive = (() => {
     for (let index = 0; index < POOL_SIZE; index += 1) pool.push(makeSlot());
     let liveCount = 0;
 
-    /* Marks waiting for their release time. See `enqueue`. */
+    /*
+     * Marks waiting for their release time. See `enqueue`.
+     *
+     * BOUNDED, and the bound matters because of what pausing does.
+     * `setPaused(true)` cancels the animation frame, so nothing drains
+     * this -- but the 15-second poll keeps calling `enqueue`. Holding
+     * the buffer across a pause is deliberate and documented; holding
+     * it without limit was not. Pause the map and walk away and this
+     * grew for as long as you were gone, with an O(n log n) sort of
+     * the whole backlog every 15 seconds and an O(n) walk on resume.
+     *
+     * The cap keeps the NEWEST marks and drops the oldest. On resume
+     * somebody wants to see what the mesh is doing now, not a
+     * fast-forward of the hour they missed, and the oldest marks in a
+     * long backlog are the least interesting thing in it.
+     *
+     * Four times the pool because the pool is what can be on screen at
+     * once; a few pool-loads of pending marks is a full-looking replay
+     * and anything beyond it is never seen as motion.
+     */
+    const QUEUE_LIMIT = POOL_SIZE * 4;
     let queue = [];
+
+    /** Drop the oldest pending marks when the queue is over its cap. */
+    function trimQueue() {
+      const over = queue.length - QUEUE_LIMIT;
+      if (over > 0) queue.splice(0, over);
+    }
     /* When a node last flashed, so a fast talker does not strobe. */
     const lastEmit = new Map();
 
@@ -907,6 +933,7 @@ const SonoranLive = (() => {
         queue.push({ at: now + (packet.timeMs - lo) * factor, packet });
       }
       queue.sort((a, b) => a.at - b.at);
+      trimQueue();
       start();
     }
 
@@ -919,6 +946,7 @@ const SonoranLive = (() => {
         step += 1;
       }
       queue.sort((a, b) => a.at - b.at);
+      trimQueue();
       start();
     }
 
