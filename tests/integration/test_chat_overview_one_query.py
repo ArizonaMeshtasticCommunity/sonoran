@@ -37,6 +37,13 @@ def _seed_channels(migrated_engine, count: int) -> None:  # type: ignore[no-unty
     """Messages across `count` named channels, plus the two odd ones."""
     now = datetime.now(UTC)
     with migrated_engine.begin() as connection:
+        # Start from nothing. Without this the rows accumulate across
+        # calls and across runs against a reusable database, and an
+        # assertion about WHICH messages a section holds turns into an
+        # assertion about how many times the suite has been run. CI
+        # hides it behind a fresh container; a developer reusing a
+        # database does not have that luxury.
+        connection.execute(text("DELETE FROM text_message WHERE from_node_num = 9001"))
         connection.execute(
             text(
                 "INSERT INTO node (node_num, node_id, short_name, first_seen, "
@@ -59,6 +66,10 @@ def _seed_channels(migrated_engine, count: int) -> None:  # type: ignore[no-unty
         # No channel name at all -- PARTITION BY has to group these the
         # way the old `IS NULL` branch did.
         rows.append({"channel": None, "body": "no channel", "seen": now, "emoji": False})
+        # And the empty string, which is a DIFFERENT row out of GROUP BY
+        # and classifies to the same label. If a rewrite ever merges the
+        # two, this is what catches it.
+        rows.append({"channel": "", "body": "empty channel", "seen": now, "emoji": False})
         # Every message a tapback: a count with no messages.
         rows.append({"channel": "OnlyEmoji", "body": "\U0001f44d", "seen": now, "emoji": True})
         for row in rows:
@@ -89,22 +100,56 @@ def _overview(client: TestClient) -> dict:
 
 
 def test_the_awkward_channels_survive(migrated_engine, timescale_url) -> None:  # type: ignore[no-untyped-def]
-    """A nameless channel and an all-tapback channel both keep sections."""
+    """A nameless channel and an all-tapback channel both keep sections.
+
+    **This test was wrong before it was right, and the way it was wrong
+    matters.** It keyed sections on `str(section["channel"])` and looked
+    for `"None"`. There is no such key: `classify()` maps a NULL channel
+    to `{"channel": "", "label": "(no channel)"}` and always has. CI
+    failed with "the channel with no name lost its section" and the
+    section was there the whole time, under a name the test invented.
+
+    It also collapsed the two cases it most needed to tell apart. A NULL
+    channel and an EMPTY-STRING channel are separate rows out of
+    `GROUP BY`, and both classify to `channel: ""` — so keying sections
+    by that value merges two distinct sections and hides exactly the bug
+    a windowed rewrite could introduce.
+
+    So this asserts on the messages, which are what would actually go
+    missing, and seeds both cases to prove they stay apart.
+    """
     _seed_channels(migrated_engine, 4)
     with _client(timescale_url) as client:
         body = _overview(client)
 
-    sections = {str(section.get("channel")): section for section in body["sections"]}
+    named = {section["channel"]: section for section in body["sections"] if section["channel"]}
+    nameless = [section for section in body["sections"] if not section["channel"]]
 
-    assert "None" in sections, (
-        "the channel with no name lost its section; PARTITION BY must group "
-        "NULLs the way the old `IS NULL` branch did"
+    # NULL and "" both land here. They must be two sections, not one.
+    assert len(nameless) == 2, (
+        f"expected the NULL-channel and empty-string-channel sections to stay "
+        f"separate, got {len(nameless)}: {[s['count'] for s in nameless]}"
     )
-    assert sections["None"]["messages"], "the nameless channel's messages went missing"
+    # Each of the two must hold its OWN message. Asserting only that both
+    # bodies appear SOMEWHERE among them passes when the two are merged:
+    # one section ends up with both messages and the other with none, and
+    # the union looks identical. Verified -- collapsing NULL and "" in
+    # the grouping did not fail an earlier version of this assertion.
+    held = [{message["body"] for message in section["messages"]} for section in nameless]
+    mine = [bodies & {"no channel", "empty channel"} for bodies in held]
 
-    assert "OnlyEmoji" in sections, "a channel of pure tapbacks lost its section"
-    assert sections["OnlyEmoji"]["count"] >= 1
-    assert sections["OnlyEmoji"]["messages"] == [], (
+    # The property is that the two never MERGE, stated without assuming
+    # this test owns the table -- `test_api.py` seeds its own
+    # NULL-channel rows, so an exact-list assertion passes alone and
+    # fails in the full suite, which is a worse kind of wrong than
+    # either bug it was meant to catch.
+    assert sorted(mine, key=sorted) == [{"empty channel"}, {"no channel"}], (
+        f"the NULL and empty-string channels did not each keep exactly their own message: {mine}"
+    )
+
+    assert "OnlyEmoji" in named, "a channel of pure tapbacks lost its section"
+    assert named["OnlyEmoji"]["count"] >= 1
+    assert named["OnlyEmoji"]["messages"] == [], (
         "tapbacks are not messages of their own and must not appear as any"
     )
 
