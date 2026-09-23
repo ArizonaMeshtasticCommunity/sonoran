@@ -537,7 +537,44 @@ button:disabled:hover { border-color: var(--line); background: none; }
  * there is 24 rem to be had, and collapses to the container below that.
  * The desktop grid is unchanged.
  */
-.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr)); }
+/*
+ * Panels stop growing somewhere (#70).
+ *
+ * Tyler: "in general, UI is worse on larger screens". Measured on the
+ * dashboard before this, `main` at three viewports:
+ *
+ *     1440 x 900    main 1200   4 stat tiles at 272 px   fine
+ *     2560 x 1440   main 2320   4 tiles at 552 px
+ *     3840 x 2160   main 3600   4 tiles at 872 px        absurd
+ *
+ * The cause is `auto-fit` plus an unbounded `1fr`. `auto-fit`
+ * COLLAPSES the tracks it cannot fill -- at 3840 the grid declared
+ * twelve and zeroed eight -- so extra width never becomes extra
+ * columns. It is shared out among however many panels happen to exist,
+ * and a tile holding one number ends up 872 px wide.
+ *
+ * The cap is on the GRID, not on the track, and the difference is not
+ * cosmetic. Capping the track (`minmax(min(17rem, 100%), 26rem)`) also
+ * fixes 3840, and I measured it doing so -- 872 px down to 416. But it
+ * broke 1440, taking the dashboard from four columns to two, because
+ * `auto-fit` computes its repetition count from the track's MAX sizing
+ * function when that is definite: 1200 / 26rem = 2. A container cap
+ * leaves the track `1fr`, so the count still comes off the 17rem floor
+ * and every width below the cap is byte-for-byte unchanged.
+ *
+ * `auto-fill` was the third candidate -- it is what `.channel-group`
+ * uses, for this same collapsing behaviour. Right there, where cards
+ * should line up in a fixed grid; wrong here, because it would hold
+ * four tiles at 272 px in a 3600 px row and leave 2,500 px empty.
+ *
+ * Maps are deliberately NOT capped. The same issue opened with "map
+ * should probably fill the whole div", so the fix for the panels must
+ * not undo the fix for the map.
+ */
+.grid {
+  display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr));
+  max-width: 100rem; margin-inline: auto;
+}
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr)); }
 /*
  * The node page's four short summary panels (#102).
