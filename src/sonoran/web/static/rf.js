@@ -194,7 +194,10 @@
         // apart without colour.
         fillOpacity: aircraft ? 0.9 : 0.15,
         weight: aircraft ? 1 : 2,
-      }).bindTooltip(aircraft ? aircraftTooltip(row) : otherTooltip(row), { direction: 'top' });
+        /* Built on hover, not on draw. Leaflet calls this when the
+           tooltip opens, so a busy sky no longer builds six elements
+           per aircraft on every poll for tooltips nobody hovered. */
+      }).bindTooltip(() => (aircraft ? aircraftTooltip(row) : otherTooltip(row)), { direction: 'top' });
       marker.on('click', () => selectThing(row));
       state.aircraft.addLayer(marker);
       if (aircraft && row.track_deg != null) {
@@ -221,7 +224,7 @@
         }));
       }
       const marker = L.circleMarker([row.lat, row.lon], { radius: 7, weight: 2, ...style })
-        .bindTooltip(stationTooltip(row), { direction: 'top' });
+        .bindTooltip(() => stationTooltip(row), { direction: 'top' });
       marker.on('click', () => selectStation(row.station));
       state.stations.addLayer(marker);
     }
