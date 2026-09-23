@@ -686,3 +686,53 @@ would trade a wrong number for no number.
 non-regression half — uncapped callers must keep "View all", or the fix
 is a rename of every button on the site. Proven by mutation: forcing
 `cut = false` restores the bug and turns the comparison case red.
+
+### The live map opens on a region, and out-of-state nodes do not vote (#195)
+
+**Decided:** option **(a)** of the two the issue put to maintainers —
+open on the home region, and let the reader zoom out freely.
+
+(b) was "stop the reader zooming out past Arizona", via `minZoom` or
+`maxBounds`. That would hide the 148 out-of-state nodes completely, and
+#114 says in as many words that nodes outside the view must still show
+if you pan or zoom out. (b) contradicts a decision already made, so it
+is not a free choice between two readings.
+
+**Two causes, both measured** at 1879×622, preset MediumFast:
+
+| fit set | zoom | result |
+|---|---|---|
+| all 401 positioned | 6 | 6 < 7, no fit ran — map stayed at the configured view |
+| the 400 inside Arizona | 7 | the fit runs and centres on the mesh |
+
+One node near Oakland decided the opening view for the whole mesh.
+#114 stopped a far node zooming the map *out*; it did not stop one
+**cancelling the zoom in**.
+
+The second cause is that a centre plus an **integer** zoom shows a
+different area on every screen shape. At that box, zoom 7 shows about
+20° of longitude and Arizona — about 6° wide — filled under a third of
+it. `zoomSnap: 0.25` lets `fitBounds` land where it means.
+
+**The home region is four settings, not a constant.** Arizona by
+default because this deployment is Arizona's; another mesh sets four
+numbers and `app.js` does not change. A test asserts those four numbers
+appear **nowhere** in the JavaScript, because a hardcoded box would
+pass every other check here and be wrong for everyone else.
+
+**The filter applies to the vote, not to the map.** Nodes outside the
+region are still drawn and still reached by panning. A test reads the
+drawing step and asserts it does not use the filtered set — because the
+failure mode of getting that wrong is exactly reading (b), which was
+rejected.
+
+**A #114 guard went red and was repaired, not relaxed.** It required
+the literal `CONFIG.mapZoom` within 1,200 characters of the fit. #195
+makes the floor the home *region*, which is stricter — a box rather
+than an integer — and the explanation pushed the fallback past the
+window. The test now sizes its window to the block and asserts the
+property (a floor exists; a widening fit is refused) rather than one
+spelling. Proven still sharp by mutation: removing the refusal turns it
+red. This is the second test in this session broken by a comment
+growing past a fixed character window; a window measured against a
+literal length is a fragile instrument.

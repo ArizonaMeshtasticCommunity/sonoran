@@ -455,6 +455,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "tileAttribution": settings.map_tile_attribution,
             "mapCenter": [settings.map_default_lat, settings.map_default_lon],
             "mapZoom": settings.map_default_zoom,
+            # The region the live map opens on, as Leaflet wants it:
+            # [[south, west], [north, east]] (#195). The centre and zoom
+            # above stay for the pages that use a plain `setView`.
+            "mapHome": [
+                [settings.map_home_south, settings.map_home_west],
+                [settings.map_home_north, settings.map_home_east],
+            ],
             # The preset every picker opens on when it has a choice
             # (#177). Pages fall back to their old behaviour when this
             # one is not in the data they were given.
