@@ -206,6 +206,32 @@ services:
     logging: *logging
     command: ["sonoran-jobs"]
     env_file: .env
+    # Contain the coverage job's memory to the container that uses it.
+    #
+    # The coverage prediction is the largest thing this deployment runs,
+    # and on a small box it does not fit: on the dev box it is killed by
+    # the OOM killer part-way through every run, exit 137.
+    #
+    # Without a limit that kill is the KERNEL's choice, made by score
+    # across the whole machine, and the scores do not favour us.
+    # Measured on that box with the jobs container already stopped:
+    #
+    #     816  sonoran-api
+    #     815  postgres
+    #     815  postgres
+    #     810  mesh-graph
+    #
+    # The API is the likeliest victim -- the one process a reader
+    # actually depends on. A limit here moves the kill into this
+    # container's own cgroup, so the job that cannot fit is the thing
+    # that dies, and `docker inspect` reports OOMKilled=true instead of
+    # leaving a bare 137 to diagnose.
+    #
+    # Zero means unlimited, which is docker's default and is what every
+    # deployment gets unless it asks. A number that is right for a
+    # 3.4 GB box would be wrong for a large one, so this is a setting
+    # and not a constant. See docs/OPERATIONS.md.
+    mem_limit: ${JOBS_MEMORY_LIMIT:-0}
     # The jobs role, and nothing else. See `x-no-credentials`.
     environment:
       <<: *no-credentials

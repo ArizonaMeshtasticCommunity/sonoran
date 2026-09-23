@@ -530,9 +530,8 @@ kills it again:
 Eleven restarts in one stretch. **Coverage has not completed once** —
 the last finished run on disk was 2.5 hours old when this was found.
 
-**The cost was not the wasted work.** The box has one core, so the
-storm starved the thing people look at. Measured on that box minutes
-apart:
+**The cost was not the wasted work.** The storm starved the thing
+people look at. Measured on that box minutes apart:
 
 | endpoint | jobs stopped | jobs running |
 |---|---|---|
@@ -547,11 +546,27 @@ behind a passing test. Proven by mutation: moving the call after
 `task.run()` turns the ordering case red.
 
 **What this does not fix.** Coverage still cannot complete on this box
-— 1 core, 3.4 GB RAM, swap pinned at 2047/2047 MB for an entire run.
-This makes it fail once an interval instead of continuously, which
-gives the core back to the API; it does not produce a coverage map.
-That needs either less memory in the prediction or more memory in the
-box, and the box is the owner's call.
+— 3.4 GB RAM with swap pinned at 2047/2047 MB for an entire run. This
+makes it fail once an interval instead of continuously, which gives the
+CPU back to the API; it does not produce a coverage map. That needs
+either less memory in the prediction or more memory in the box, and the
+box is the owner's call.
+
+**A correction I had to make to this entry.** It first said the box has
+**one core**, and everything above was written around that. It has
+**three**. The claim came from `nproc`, read once and reused: `nproc`
+returns 1 on that host while `nproc --all` returns 3, the containers
+see 3, and CPU affinity is `0-2`. I have not explained the discrepancy
+and am not asserting a cause.
+
+Nothing else in this entry changes, and the reason is worth keeping:
+the slowdown was **measured** (0.32 s against 2.06 s, load average
+20.9) rather than derived from a core count. A conclusion resting on a
+measurement survived a wrong fact underneath it; one resting on the
+core count would not have. It is the fifth instrument failure in this
+session — after `.State.ExitCode` on a running container, `$?` after a
+pipe, a `sed` that matched nothing, and a literal that ruff had
+reflowed.
 
 **Two instrument failures worth keeping.**
 

@@ -737,6 +737,38 @@ Setting one is a judgement about which failure is preferable, on a host
 shared with another account, and it belongs to whoever operates the box.
 The measurements above are here so that decision starts from numbers.
 
+**Update, 2026-09-23. The trade has changed, because the run this was
+protecting no longer finishes.** The coverage job is now killed by the
+OOM killer part-way through *every* run on the dev box — a foreground
+`docker run` returns exit **137**, and memory sampled every 15 s across
+a whole attempt never rose above ~170 MB available with swap at
+2047/2047 MB. There is no longer a run that "would have finished" to
+risk.
+
+What is at risk instead is everything else, because without a ceiling
+the kill is the kernel's choice across the whole machine. Measured with
+the jobs container already stopped:
+
+| oom_score | process |
+|---|---|
+| 816 | **sonoran-api** |
+| 815 | postgres |
+| 815 | postgres |
+| 810 | mesh-graph |
+
+The API is the likeliest victim — the one process a reader depends on.
+
+`jobs` therefore takes `mem_limit: ${JOBS_MEMORY_LIMIT:-0}`. **Zero,
+docker's default, is still what every deployment gets unless it asks**,
+so this decides nothing on anyone's behalf; it makes the operator's
+decision expressible without a patch. A number right for a 3.4 GB box
+would be wrong for a large one.
+
+This section previously recorded the box as having 3 cores. That is
+correct — an investigation on 2026-09-23 briefly recorded 1, from
+`nproc`, which returns 1 on that host while `nproc --all` returns 3 and
+affinity is `0-2`. Trust `nproc --all` here.
+
 ### 3.7 CI's `test` job fails intermittently on a migration
 
 **State:** Both causes found and removed. Watching.
