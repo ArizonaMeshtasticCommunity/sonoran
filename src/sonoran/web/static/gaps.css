@@ -131,7 +131,23 @@
 
 .gap-map-shell { position: relative; }
 #gaps-map {
-  height: 26rem;
+  /*
+   * Scales with the viewport, like every other map on the site (#70).
+   *
+   * A flat 26rem was the last fixed map height left. Measured at
+   * 3320x1797, the resolution the issue was reported from:
+   *
+   *     #map           1258 px   70% of viewport
+   *     #planner-map   1438 px   80%
+   *     #coverage-map  1258 px   70%
+   *     #rf-map        1258 px   70%
+   *     #gaps-map       416 px   23%   <- this
+   *
+   * The scaling term matches coverage and RF. The floor is the old
+   * fixed value rather than their 20rem, so no screen small enough for
+   * the floor to apply gets a shorter map than it has today.
+   */
+  height: max(26rem, 70svh);
   border: 1px solid var(--line);
   border-radius: .4rem;
   background: var(--panel);
