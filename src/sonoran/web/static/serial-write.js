@@ -20,6 +20,44 @@
  */
 
 /*
+ * The port an AdminMessage travels on. `PortNum.ADMIN_APP`.
+ */
+export const ADMIN_PORT = 6;
+
+/**
+ * Wrap an AdminMessage for the wire.
+ *
+ * **An AdminMessage is not sent on its own.** It goes inside a
+ * `MeshPacket` addressed to the local node on the admin port, inside a
+ * `ToRadio`. #117 says so in one line -- "each is sent as a MeshPacket
+ * to the local node on the admin port" -- and sending the bare
+ * AdminMessage instead is silently accepted by the firmware and
+ * silently does NOTHING.
+ *
+ * Measured against meshtasticd 2.7.26: sending bare AdminMessages
+ * reported success, and a re-read showed `lora.hopLimit` still at its
+ * old value. Nothing errored. That is the worst shape a bug can have
+ * on a path that writes to somebody's radio, and no simulator of mine
+ * would have caught it -- the simulator checks what we send, not what
+ * a node does with it.
+ *
+ * `nodeNum` is the local node's own number, from `my_info` on the
+ * read. Addressing the packet to the node itself is what makes it an
+ * admin request rather than traffic.
+ */
+export function adminEnvelope(admin, nodeNum, { AdminMessage, ToRadio }) {
+  const payload = AdminMessage.encode(AdminMessage.fromObject(admin)).finish();
+  return ToRadio.encode(ToRadio.fromObject({
+    packet: {
+      to: nodeNum,
+      from: nodeNum,
+      wantAck: true,
+      decoded: { portnum: ADMIN_PORT, payload },
+    },
+  })).finish();
+}
+
+/*
  * Settings this never writes unless the caller explicitly asks.
  *
  * #117: "A mistake there can lock someone out of their own node." A
