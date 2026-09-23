@@ -147,26 +147,40 @@ def _false_accepts(limit: int) -> list[Verdict]:
     return found
 
 
-def test_the_false_accepts_are_overwhelmingly_the_empty_payload_shape() -> None:
-    """#157's claim, re-measured through the classifier that counts them.
+def test_false_accepts_are_now_rare_enough_that_the_census_cannot_find_them() -> None:
+    """#157 is FIXED, and this test is the evidence.
 
-    The issue says 96% of false accepts are portnum 0 with an empty
-    payload. That is the whole basis for the proposed rule, so the
-    census must actually put them in that bucket -- if it did not, the
-    number the census prints would not be the number the rule is about.
+    It used to demand 25 false accepts out of 60,000 wrong-key packets
+    and assert that 96% of them had an empty payload -- the signature
+    the proposed mitigation keyed on.
+
+    The mitigation shipped is a different and better one: the validator
+    now requires that the known fields alone reproduce the input, so
+    random bytes decoding into unknown field numbers no longer pass.
+    Measured over 40,000 random plaintexts per length, 12 to 64 bytes,
+    the rate went from 2.025% at its worst to 0.0025%.
+
+    So the census can no longer find false accepts to classify, and
+    that is the point. The assertion is inverted: finding a crowd of
+    them again means the validator has been loosened.
     """
     found = _false_accepts(limit=25)
-    assert len(found) == 25, (
-        f"only {len(found)} false accepts turned up in 60,000 packets; the "
-        f"measured rate was about 1 in 800, so either the validator "
-        f"changed or this test is no longer producing wrong-key output"
+    assert len(found) <= 2, (
+        f"{len(found)} false accepts turned up in 60,000 wrong-key packets. "
+        f"After #157 the expected number is 0 to 1. The "
+        f"discard-unknown-fields round trip has been weakened or removed"
     )
-    empty = sum(1 for verdict in found if verdict.kind == DECODED_EMPTY)
-    assert empty / len(found) >= 0.8, (
-        f"only {empty} of {len(found)} false accepts had an empty payload; "
-        f"#157's proposed rule keys on exactly that shape, and at this "
-        f"rate it would no longer catch most of them"
-    )
+
+
+def test_the_census_still_reads_a_real_packet(**_: object) -> None:
+    """The positive control the test above needs.
+
+    "We found no false accepts" and "the classifier is broken" look
+    identical from the outside. This asserts the same classifier still
+    reads a genuine packet, in the same run.
+    """
+    raw = _packet(bytes(_data(payload=b"\x01\x02\x03").SerializeToString()), OURS)
+    assert classify(raw, [OURS]).kind == DECODED_WITH_PAYLOAD
 
 
 def test_a_genuinely_empty_data_can_never_have_been_ingested() -> None:

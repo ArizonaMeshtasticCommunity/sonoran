@@ -49,10 +49,19 @@ def _a_real_data_packet() -> bytes:
 
 SAMPLES = 40_000
 PLAINTEXT_BYTES = 48
-# Measured at 0.107%-0.130% today. A ceiling of 1% is far enough above
-# that to never flake, and far enough below a broken validator to catch
-# one: accepting "anything non-empty" would be ~100%.
-CEILING = 0.01
+# FIXED in #157. The validator now also requires that the known fields
+# alone reproduce the input, so random bytes decoding into unknown
+# field numbers no longer pass. Re-measured over the same 40,000 draws:
+#
+#     12 bytes  2.025% -> 0.0025%     810x fewer
+#     24 bytes  0.427% -> 0.0000%
+#     48 bytes  0.130% -> 0.0025%
+#     64 bytes  0.102% -> 0.0025%
+#
+# The ceiling moves from 1% to 0.1% with it. Leaving it at 1% would
+# have kept passing while the rate went back up twenty-fold, which is
+# the whole failure mode a ceiling exists to catch.
+CEILING = 0.001
 
 
 def _false_accepts(seed: int) -> int:
@@ -71,8 +80,8 @@ def test_the_validator_rejects_almost_all_random_bytes() -> None:
     rate = accepted / SAMPLES
     assert rate < CEILING, (
         f"the wrong-key validator accepted {accepted}/{SAMPLES} random "
-        f"plaintexts ({rate:.3%}); it was 0.107%-0.130% when #157 was "
-        f"filed, so something has made it much less discriminating"
+        f"plaintexts ({rate:.4%}); after #157 it was 0.0025%, so the "
+        f"discard-unknown-fields round trip has been weakened or removed"
     )
 
 
@@ -144,23 +153,30 @@ def _false_accepts_at(length: int, seed: int) -> int:
     )
 
 
-def test_short_packets_are_accepted_far_more_often_than_long_ones() -> None:
-    """The rate is a function of length, not a property of the mesh.
+def test_no_plaintext_length_is_a_soft_spot_any_more() -> None:
+    """The length dependence was the finding; its absence is the fix.
 
-    A fix judged against the 48-byte figure alone would be judged
-    against the wrong number for most of the traffic it has to handle.
+    Before #157 this asserted that short plaintexts were accepted
+    EIGHTEEN TIMES more often than long ones -- 2.025% at 12 bytes
+    against 0.102% at 64 -- because a short string has less room for a
+    byte that fails to parse. That mattered: acks, routing and
+    telemetry are the small packets, so the common case was the weak
+    one.
+
+    The discard-unknown-fields round trip removed the gap rather than
+    narrowing it. Both ends now sit at or below 1 acceptance in 40,000,
+    and asserting an ORDERING between two numbers that small would be
+    asserting noise -- on the measured seed they come out 1 and 2.
+
+    So what is checked is the property that has to hold however the
+    counts land: no length is a soft spot.
     """
-    short = _false_accepts_at(SHORT_BYTES, seed=20260923)
-    long = _false_accepts_at(LONG_BYTES, seed=20260923)
-    assert long, (
-        "no 64-byte plaintext was accepted at all, so the comparison "
-        "below has no denominator and the validator has changed"
-    )
-    assert short > 5 * long, (
-        f"{SHORT_BYTES}-byte plaintexts were accepted {short} times and "
-        f"{LONG_BYTES}-byte ones {long} times in {SAMPLES} draws each. The "
-        f"gap was 18x when this was measured; a validator that has flattened "
-        f"it has changed in a way #157's numbers no longer describe"
+    worst = max(_false_accepts_at(length, seed=20260923) for length in (12, 16, 24, 48, 64))
+    assert worst <= SAMPLES // 4000, (
+        f"the worst length now accepts {worst}/{SAMPLES} random plaintexts. "
+        f"After #157 no length exceeded 1. A length-dependent soft spot has "
+        f"come back, which is what made the old rate 18x worse on exactly "
+        f"the packets a foreign mesh sends most"
     )
 
 
