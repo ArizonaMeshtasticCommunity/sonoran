@@ -29,6 +29,47 @@ def _time(telemetry: Any, context: HandlerContext) -> datetime:
     )
 
 
+def _reported(value: Any, **columns: str) -> dict[str, Any]:
+    """Return only the fields the node actually sent (#190).
+
+    Meshtastic marks its telemetry fields `optional`, so the protobuf
+    tracks presence per field. Reading an absent one gives the type's
+    default, and this handler used to copy that default straight into
+    the database:
+
+        barometric_pressure=value.barometric_pressure
+
+    A node with a temperature-and-humidity sensor and nothing else was
+    therefore stored as reporting a barometric pressure of 0 hPa, which
+    is not a low reading -- it is not a pressure at all. The Weather
+    panel drew it, the device panel read a missing battery as 0 %, and
+    `node_page` averaged the false zeros into everyone else's numbers.
+
+    Measured on the live database over seven days before this fix:
+    2,642 of 5,811 environment rows (45%) held a pressure of exactly
+    zero, and **not one row in either table held NULL**. That second
+    number is the proof: with per-field presence working, some node
+    somewhere would have to be missing something.
+
+    `columns` maps a database column to its protobuf field, because two
+    of them differ (`rainfall` is `rainfall_1h`).
+
+    `HasField` raises for a field with no presence to ask about -- a
+    repeated one, such as `one_wire_temperature` in the vendored
+    schema, where empty already *is* the absent state. Those keep their
+    value. None of them are stored today; the branch is here so that
+    adding one cannot take the ingest down with a ValueError.
+    """
+    stored: dict[str, Any] = {}
+    for column, field in columns.items():
+        try:
+            present = value.HasField(field)
+        except ValueError:
+            present = True
+        stored[column] = getattr(value, field) if present else None
+    return stored
+
+
 async def store_telemetry(session: AsyncSession, message: Message, context: HandlerContext) -> None:
     """Store each telemetry variant in its matching metric table."""
     telemetry: Any = message
@@ -44,11 +85,14 @@ async def store_telemetry(session: AsyncSession, message: Message, context: Hand
         session.add(
             DeviceMetrics(
                 **shared,
-                battery_level=value.battery_level,
-                voltage=value.voltage,
-                channel_utilization=value.channel_utilization,
-                air_util_tx=value.air_util_tx,
-                uptime_seconds=value.uptime_seconds,
+                **_reported(
+                    value,
+                    battery_level="battery_level",
+                    voltage="voltage",
+                    channel_utilization="channel_utilization",
+                    air_util_tx="air_util_tx",
+                    uptime_seconds="uptime_seconds",
+                ),
             )
         )
     if telemetry.HasField("environment_metrics"):
@@ -56,16 +100,20 @@ async def store_telemetry(session: AsyncSession, message: Message, context: Hand
         session.add(
             EnvironmentMetrics(
                 **shared,
-                temperature=value.temperature,
-                relative_humidity=value.relative_humidity,
-                barometric_pressure=value.barometric_pressure,
-                gas_resistance=value.gas_resistance,
-                iaq=value.iaq,
-                lux=value.lux,
-                uv_lux=value.uv_lux,
-                wind_direction=value.wind_direction,
-                wind_speed=value.wind_speed,
-                rainfall=value.rainfall_1h,
+                **_reported(
+                    value,
+                    temperature="temperature",
+                    relative_humidity="relative_humidity",
+                    barometric_pressure="barometric_pressure",
+                    gas_resistance="gas_resistance",
+                    iaq="iaq",
+                    lux="lux",
+                    uv_lux="uv_lux",
+                    wind_direction="wind_direction",
+                    wind_speed="wind_speed",
+                    # The column is `rainfall`; the field is `rainfall_1h`.
+                    rainfall="rainfall_1h",
+                ),
             )
         )
     if telemetry.HasField("air_quality_metrics"):
@@ -73,12 +121,15 @@ async def store_telemetry(session: AsyncSession, message: Message, context: Hand
         session.add(
             AirQualityMetrics(
                 **shared,
-                pm10_standard=value.pm10_standard,
-                pm25_standard=value.pm25_standard,
-                pm100_standard=value.pm100_standard,
-                pm10_environmental=value.pm10_environmental,
-                pm25_environmental=value.pm25_environmental,
-                pm100_environmental=value.pm100_environmental,
+                **_reported(
+                    value,
+                    pm10_standard="pm10_standard",
+                    pm25_standard="pm25_standard",
+                    pm100_standard="pm100_standard",
+                    pm10_environmental="pm10_environmental",
+                    pm25_environmental="pm25_environmental",
+                    pm100_environmental="pm100_environmental",
+                ),
             )
         )
     if telemetry.HasField("power_metrics"):
@@ -86,11 +137,14 @@ async def store_telemetry(session: AsyncSession, message: Message, context: Hand
         session.add(
             PowerMetrics(
                 **shared,
-                ch1_voltage=value.ch1_voltage,
-                ch1_current=value.ch1_current,
-                ch2_voltage=value.ch2_voltage,
-                ch2_current=value.ch2_current,
-                ch3_voltage=value.ch3_voltage,
-                ch3_current=value.ch3_current,
+                **_reported(
+                    value,
+                    ch1_voltage="ch1_voltage",
+                    ch1_current="ch1_current",
+                    ch2_voltage="ch2_voltage",
+                    ch2_current="ch2_current",
+                    ch3_voltage="ch3_voltage",
+                    ch3_current="ch3_current",
+                ),
             )
         )

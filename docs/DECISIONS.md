@@ -570,3 +570,55 @@ including that a fresh box still runs at once, that a genuinely due job
 still runs, that a corrupt or unwritable record costs the backoff and
 never the process, and the ordering, checked against comment-stripped
 source.
+
+### A telemetry field the node did not send is not a reading of zero (#190)
+
+**Decided:** store `None` for any telemetry field the protobuf says was
+not present.
+
+`store_telemetry` checked `HasField` for the *message* and then copied
+every *field* without a check, so an absent field's default landed in
+the database as a measurement. A node with a temperature-and-humidity
+sensor and nothing else was recorded as reporting a barometric pressure
+of 0 hPa — not a low reading, not a pressure at all.
+
+**Measured on the live database, seven days, before the fix:**
+
+| | rows | field = 0 | field IS NULL |
+|---|---|---|---|
+| `environment_metrics.barometric_pressure` | 5,811 | **2,642 (45%)** | **0** |
+| `device_metrics.voltage` | 17,713 | 1,255 | **0** |
+
+The zero NULLs are the proof. With per-field presence working, some
+node somewhere would have to be missing something.
+
+**A real zero is kept.** Turning every zero into None would be a
+different lie in place of the old one: a node at freezing reports 0 °C,
+a flat battery reports 0%, a dry hour reports 0 rainfall. That is the
+obvious wrong implementation, so it has first-class tests rather than a
+remark.
+
+**`HasField` raises on a repeated field** — `one_wire_temperature` is
+one — so those keep their value. None are stored today; the branch
+exists so adding one cannot take the ingest down with a `ValueError`.
+My first test for it asserted `== 0.0`, assuming a field `HasField`
+refuses must be a scalar without presence. It is a list. The code was
+right and my expectation was wrong.
+
+**This is the fourth instance of one pattern**, after #157, #149 and
+#197: *a value meaning "absent" sharing storage with a value that means
+something.* Four is no longer a coincidence. Worth a standing check on
+any new column: what does the absent case store, and can it be told
+from a real one?
+
+**Held by:** `tests/unit/test_a_field_not_sent_is_not_a_zero.py`,
+including an invariant that every field this handler stores still
+supports presence — so a schema change that silently removed it turns
+the suite red rather than quietly restoring false zeros. Proven by
+mutation: forcing `present = True` reproduces the bug and turns two
+cases red.
+
+**Not backfilled.** The false zeros already stored cannot be told from
+real ones without the original packets, and `raw_bytes` holds the
+MeshPacket rather than a decoded telemetry row. Readers should expect
+old rows to carry them.
