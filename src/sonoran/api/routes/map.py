@@ -21,6 +21,7 @@ from sonoran.db.models import (
 )
 from sonoran.meshtastic import portnums_pb2
 from sonoran.positions import clean, is_usable
+from sonoran.roles import resolve_role
 
 router = APIRouter(prefix="/api/map", tags=["map"])
 
@@ -107,7 +108,11 @@ async def map_nodes(
             "altitude": node.last_altitude,
             "last_heard": node.last_heard,
             "hw_model": node.hw_model,
-            "role": node.role,
+            # Resolved, not raw: every client stored before #197 is
+            # NULL here, and the map drew 167 of them as "no role
+            # reported". The rule lives in `roles.resolve_role` so this
+            # page and any other agree on it.
+            "role": resolve_role(node.role, node.long_name, node.short_name),
             "is_mqtt_gateway": node.is_mqtt_gateway,
         }
         for node in nodes

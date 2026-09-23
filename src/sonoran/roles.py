@@ -29,6 +29,12 @@ from sonoran.logging import get_logger
 
 logger = get_logger(__name__)
 
+# The role a node has when it names none.
+#
+# `config.proto` calls CLIENT the "Default Role", so a User message
+# that sets no role is reporting a client rather than saying nothing.
+DEFAULT_ROLE = "CLIENT"
+
 # The roles that may transmit on a coverage map.
 #
 # These are deliberately sited community assets. Somebody chose the
@@ -258,3 +264,44 @@ def is_diagnostic_role_set(allowed: frozenset[str] | None) -> bool:
     `None` means every role and is always diagnostic.
     """
     return allowed is None or not allowed.issubset(INFRASTRUCTURE_ROLES)
+
+
+def resolve_role(role: str | None, long_name: str | None, short_name: str | None) -> str | None:
+    """Return the role of a node, reading an old NULL for what it meant.
+
+    Since #197 the ingest writes `CLIENT` as `CLIENT`, so new rows do
+    not need this. Rows written before it are still NULL for every
+    client on the mesh -- 167 of them on MediumFast when the issue was
+    filed -- and they cannot be backfilled by a migration, because
+    nothing in the database says which NULLs were clients.
+
+    Something does say it indirectly. `long_name` and `short_name` are
+    written in one statement with `role`, in `store_nodeinfo`, and
+    **nowhere else in the ingest**. So a row that carries a name is a
+    row where a User message was processed, which is exactly the case
+    the old code turned into NULL. A row with no name at all is a node
+    that has only ever been seen relaying or being mentioned, and its
+    role is genuinely unknown.
+
+    This is an inference and it is the weaker half of the fix. It is
+    kept here, beside the trap it answers, rather than in the one page
+    that needs it, so a second page cannot grow a second version of the
+    rule that disagrees.
+
+    **It expires.** Every node that sends NodeInfo again gets a real
+    role written, so the set this touches only shrinks. When
+    `SELECT count(*) FROM node WHERE role IS NULL AND long_name IS NOT
+    NULL` reaches zero, this function can go.
+
+    One case it gets wrong, stated rather than hidden: a node running a
+    role number the vendored proto did not know *also* stored NULL
+    before #197, and this calls it a client. That is bounded -- the
+    firmware ships few roles and this repository vendors them -- and it
+    is strictly better than the grey it replaces, which called every
+    client an unknown.
+    """
+    if role:
+        return role
+    if long_name or short_name:
+        return DEFAULT_ROLE
+    return None
