@@ -2117,6 +2117,15 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * never the only one (WCAG 1.4.1), so the cards read in greyscale. An
  * unknown card is grey and never green: nothing measured is not healthy.
  */
+/* The node's own map (#103). Short on a phone so it does not take the
+   whole screen on a page people scroll; taller where there is room. */
+.node-map {
+  height: clamp(14rem, 38svh, 30rem);
+  border-radius: .5rem;
+  background: var(--panel-2);
+}
+.node-map-note { display: flex; flex-wrap: wrap; gap: .6rem; align-items: baseline; margin: .55rem 0 0; }
+
 /* The compact health summary (#95). The full checklist below it reuses
    `.health-cards`, so only the summary half needs anything new. */
 .health-headline { font-weight: 650; margin: 0 0 .4rem; }

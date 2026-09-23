@@ -4333,6 +4333,128 @@ function healthChecks(gaps, detail) {
 }
 
 /*
+ * Where the node is (#103).
+ *
+ * The node page showed the position as two numbers in the Identity
+ * panel, which is the one fact on that page that a map answers better
+ * than text.
+ *
+ * Deliberately NOT drawn: lines to neighbours and to the nodes that
+ * hear it. The issue offers that as "optional, and useful", from "data
+ * the page already loads" -- but it does not. Measured against
+ * `/api/nodes/{id}/detail`, neither `neighbors` nor `heard_by` carries
+ * a latitude or a longitude:
+ *
+ *     neighbors  keys: node_id, display_name, snr, last_rx_time,
+ *                      broadcast_interval_secs, time
+ *     heard_by   keys: node_id, display_name, count, direct_count,
+ *                      relayed_count, last_heard, avg_snr, best_snr,
+ *                      avg_rssi
+ *
+ * Drawing them needs the endpoint to carry positions, which is a change
+ * to the API rather than to this function.
+ */
+const nodeMaps = new Map();
+
+function nodeMapPanel(detail) {
+  const node = detail.node || {};
+  const position = node.position;
+  const confidence = node.position_confidence || 'none';
+
+  /*
+   * No position is a normal state, not an error.
+   *
+   * Sharing one is optional on this mesh, and #96 established that
+   * treating a withheld or rounded position as a fault tells a careful
+   * owner they got something wrong. So this says what is true and
+   * stops.
+   */
+  if (!position || position.lat == null || position.lon == null) {
+    return el('section', { class: 'panel' },
+      el('h3', { text: 'Where it is' }),
+      el('p', { class: 'muted', text: 'This node does not share a position. That is optional.' }));
+  }
+
+  const box = el('div', { class: 'node-map', 'data-node-map': '' });
+  const panel = el('section', { class: 'panel' },
+    el('h3', { text: 'Where it is' }),
+    box,
+    el('p', { class: 'muted node-map-note' },
+      confidence === 'coarse'
+        // Named, not drawn as a radius. The detail payload carries the
+        // confidence but not the rounding distance, and a circle drawn
+        // to a guessed radius would claim a precision we do not have.
+        ? 'Rounded to a coarser position by its owner, which is a normal privacy choice.'
+        : `${round(position.lat, 5)}, ${round(position.lon, 5)}`,
+      el('a', { class: 'linky', href: '#map', text: 'Open the live map' })));
+
+  // Leaflet needs the element in the document before it measures it.
+  setTimeout(() => drawNodeMap(box, position, confidence), 0);
+  return panel;
+}
+
+function drawNodeMap(target, position, confidence) {
+  if (!target.isConnected || typeof L === 'undefined') return;
+
+  /*
+   * Let go of the maps whose panels are gone.
+   *
+   * `replace()` builds a new container on every node page load, so
+   * keying on the element alone would never match the old entry: each
+   * visit would leave a live Leaflet instance, its tile layer and its
+   * listeners attached to a detached node, and `nodeMaps` would grow
+   * for as long as somebody kept clicking through nodes.
+   */
+  for (const [element, old] of nodeMaps) {
+    if (element === target || !element.isConnected) {
+      old.remove();
+      nodeMaps.delete(element);
+    }
+  }
+
+  const point = [position.lat, position.lon];
+  /*
+   * The page's scroll gesture belongs to the page.
+   *
+   * A map that grabs the wheel traps a reader scrolling past it on a
+   * laptop, and one that grabs the drag traps a thumb on a phone. Both
+   * are handed back on a click or a tap, which is what Leaflet's
+   * `tap`/`scrollWheelZoom` pair is for.
+   */
+  const map = L.map(target, {
+    attributionControl: true,
+    scrollWheelZoom: false,
+    dragging: !L.Browser.mobile,
+  }).setView(point, confidence === 'coarse' ? 11 : 14);
+  nodeMaps.set(target, map);
+  map.on('click', () => {
+    map.scrollWheelZoom.enable();
+    if (!map.dragging.enabled()) map.dragging.enable();
+  });
+
+  if (CONFIG.tileUrl) {
+    L.tileLayer(CONFIG.tileUrl, {
+      className: 'basemap-tiles',
+      attribution: CONFIG.tileAttribution || '',
+      maxZoom: 19,
+    }).addTo(map);
+  }
+
+  L.circleMarker(point, {
+    radius: 8,
+    color: PALETTE.accent,
+    fillColor: PALETTE.accent,
+    // A rounded position is drawn hollow, so the shape says "about
+    // here" without a radius that would claim a distance we were not
+    // told.
+    fillOpacity: confidence === 'coarse' ? 0.15 : 0.7,
+    weight: 2,
+  }).addTo(map);
+
+  setTimeout(() => map.invalidateSize(), 0);
+}
+
+/*
  * The node's health in one panel, with everything behind one button.
  *
  * The health cards and "Potential issues" were the first two things on
@@ -4857,7 +4979,7 @@ async function loadNodeDetail(nodeId) {
    * grid below, one panel wide, with everything it used to show behind
    * "View all checks".
    */
-  replace(body, summary, el('div', { class: 'grid two' },
+  replace(body, summary, nodeMapPanel(detail), el('div', { class: 'grid two' },
     health,
     routes,
     history,
