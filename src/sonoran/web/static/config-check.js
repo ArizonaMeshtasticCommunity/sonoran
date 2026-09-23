@@ -23,6 +23,17 @@
 import { ConfigParser } from './vendor/config-checker/js/parser.js';
 import { ConfigChecker } from './vendor/config-checker/js/checker.js';
 import { ConfigFixer } from './vendor/config-checker/js/fixer.js';
+/*
+ * Upstream's diagnostics module, imported rather than reimplemented
+ * (#119). Its privacy model is a WHITELIST: the report is built
+ * field-by-field from a fixed list of non-sensitive scalars, and there
+ * is no code path that copies a caller-supplied object wholesale. So a
+ * future caller handing it a config by mistake still cannot leak one.
+ *
+ * Reimplementing that would mean reimplementing the guarantee, and a
+ * blacklist written from memory is how PSKs end up in bug reports.
+ */
+import { Diagnostics, STEPS } from './vendor/config-checker/js/diagnostics.js';
 
 /*
  * Give the vendored code decoders that need no `new Function`.
@@ -232,6 +243,7 @@ async function run(page) {
 async function loadFile(page, file) {
   if (!file) return;
   setNotice(page, '', '');
+  hideDiagnostics(page);
   try {
     const buffer = await file.arrayBuffer();
     await ready();
@@ -244,7 +256,78 @@ async function loadFile(page, file) {
     replace($('[data-config-result]', page));
     $('[data-config-exports]', page).hidden = true;
     setNotice(page, explain(error), 'bad');
+    /*
+     * "Today, when the checker breaks on a real config, we never find
+     * out" (#119, and #61 before it). The reader is the only person
+     * who can tell us, and they will not paste a stack trace they
+     * cannot read or a config they should not share.
+     *
+     * The step is named from upstream's fixed enum rather than free
+     * text, so the report says WHICH stage broke without saying
+     * anything about the file.
+     */
+    recordFailure(page, STEPS.PARSE, error, file);
   }
+}
+
+/* ------------------------------------------------- diagnostics (#119) */
+
+const diagnostics = new Diagnostics();
+
+/** Note a failure and offer the reader a report they can read first. */
+function recordFailure(page, step, error, file) {
+  try {
+    diagnostics.record({
+      step,
+      error,
+      format: state.config && state.config.format,
+      fileExt: file && file.name ? `.${String(file.name).split('.').pop()}` : null,
+      fileSize: file && typeof file.size === 'number' ? file.size : null,
+    });
+    drawDiagnostics(page);
+  } catch (failed) {
+    // A broken bug-reporter must not replace the bug. The reader still
+    // has the plain-English notice above.
+    console.warn('diagnostics failed', failed);
+  }
+}
+
+function hideDiagnostics(page) {
+  const panel = $('[data-config-diagnostics]', page);
+  if (panel) panel.hidden = true;
+}
+
+/**
+ * Show the report, in full, before anything is copied.
+ *
+ * #119 asks for "a preview of exactly what will be copied, so the
+ * reader can see there is nothing private in it". A claim that a
+ * report is privacy-safe is worth less than the report itself sitting
+ * on the page where they can read it.
+ */
+function drawDiagnostics(page) {
+  const panel = $('[data-config-diagnostics]', page);
+  if (!panel) return;
+  const report = diagnostics.generateReport();
+  const preview = $('[data-config-diagnostics-text]', page);
+  if (preview) preview.textContent = report;
+  panel.hidden = false;
+  const button = $('[data-config-diagnostics-copy]', page);
+  if (!button || button.dataset.wired === 'true') return;
+  button.dataset.wired = 'true';
+  button.addEventListener('click', async () => {
+    const text = $('[data-config-diagnostics-text]', page).textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = 'Copied';
+    } catch {
+      // Same shape as the planner's copy control: say what the
+      // browser did rather than pretending it worked. The text is on
+      // the page already, so selecting it by hand still works.
+      button.textContent = 'The browser refused — select the text above';
+    }
+    setTimeout(() => { button.textContent = 'Copy diagnostic report'; }, 4000);
+  });
 }
 
 /** Turn a parse failure into something worth reading. */

@@ -878,6 +878,36 @@
           </div>
 
           <p class="notice" data-config-notice hidden></p>
+          <!--
+            Shown only when the checker has broken on somebody's file
+            (#119). Until then the reader has no reason to see it.
+
+            The report is printed IN FULL above the copy button, not
+            summarised and not behind a disclosure, because the only
+            thing that makes "this contains nothing private" credible
+            is being able to read it. Upstream builds it from a fixed
+            whitelist of scalars -- tool version, coarse browser, which
+            step failed, the error class, a scrubbed message, the
+            detected format, file size and extension, a timestamp --
+            and never from config contents, channel names, PSKs, MQTT
+            credentials or the file name.
+
+            Nothing is sent. The reader copies it if they choose to.
+          -->
+          <div class="panel" data-config-diagnostics hidden>
+            <h3>Something went wrong reading that file</h3>
+            <p class="sub">
+              This did not work, and we would not otherwise hear about it.
+              Below is everything the report contains &mdash; no settings, no
+              channel names, no keys, not even the file name. Nothing is sent
+              anywhere; copying it is up to you.
+            </p>
+            <pre data-config-diagnostics-text></pre>
+            <div class="controls">
+              <button type="button" class="toggle" data-config-diagnostics-copy>Copy diagnostic report</button>
+              <a class="linky" href="https://github.com/ArizonaMeshtasticCommunity/sonoran/issues/new" target="_blank" rel="noopener">Open an issue</a>
+            </div>
+          </div>
 
           <div class="panel">
             <h3>1. Where is the node</h3>
