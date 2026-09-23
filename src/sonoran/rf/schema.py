@@ -34,6 +34,11 @@ STORED_KINDS = AIRCRAFT_KINDS
 
 MAX_OBS = 100
 MAX_META_BYTES = 1024
+# A flat map of short scalars is all any station needs to describe a
+# contact, and all the RF page can display.
+MAX_META_KEYS = 16
+MAX_META_VALUE_CHARS = 120
+META_KEY = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,31}$")
 # A Meshtastic node ID, as the firmware prints it.
 MESH_NODE = re.compile(r"^![0-9a-f]{8}$")
 # 902 to 928 MHz in 50 kHz bins is 520. This leaves room for finer bins
@@ -67,8 +72,56 @@ class Observation(_Model):
     @field_validator("meta")
     @classmethod
     def _small_meta(cls, value: dict[str, object] | None) -> dict[str, object] | None:
-        if value is not None and len(repr(value).encode()) > MAX_META_BYTES:
+        """Bound the shape of station-supplied `meta`, not just its size.
+
+        `meta` arrives from an MQTT station and was previously checked
+        for one thing: that `repr()` of it fits in a kilobyte. Inside
+        that kilobyte it could hold any keys, nested objects and arrays,
+        and values of any type -- and the RF page renders every key it
+        finds, because the non-aircraft tooltip is a generic viewer for
+        sources whose fields we do not know in advance.
+
+        It is rendered safely today: `rf.js` builds DOM with
+        `el({ text })`. This is not a live vulnerability. It is
+        attacker-shaped JSON sitting on a public API, and it becomes one
+        the moment anybody renders it as a string -- which is exactly
+        how #81 happened, where a node's name reached an innerHTML sink.
+
+        A key allowlist would close it hardest, and it is what #148
+        suggested. It would also delete the generic viewer, which is a
+        real feature for `aprs`, `sonde` and `ism`. So instead the
+        SHAPE is bounded, which removes the category without removing
+        the function:
+
+        * scalars only -- no nested dict or list, so nothing recursive
+          reaches a renderer
+        * a bounded number of keys, each a plain identifier-ish name
+        * bounded string lengths on both keys and values
+
+        What survives is a small flat map of short scalars. There is
+        nothing left to smuggle through it.
+        """
+        if value is None:
+            return None
+        if len(repr(value).encode()) > MAX_META_BYTES:
             raise ValueError(f"meta is larger than {MAX_META_BYTES} bytes")
+        if len(value) > MAX_META_KEYS:
+            raise ValueError(f"meta has more than {MAX_META_KEYS} keys")
+        for key, item in value.items():
+            if not META_KEY.match(key):
+                raise ValueError(f"meta key {key!r} is not a plain name")
+            if isinstance(item, bool) or item is None or isinstance(item, int | float):
+                continue
+            if isinstance(item, str):
+                if len(item) > MAX_META_VALUE_CHARS:
+                    raise ValueError(
+                        f"meta value for {key!r} is longer than {MAX_META_VALUE_CHARS}"
+                    )
+                continue
+            raise ValueError(
+                f"meta value for {key!r} is a {type(item).__name__}; "
+                f"only strings, numbers, booleans and null are allowed"
+            )
         return value
 
 
