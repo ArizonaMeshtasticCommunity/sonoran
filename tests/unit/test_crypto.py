@@ -13,6 +13,8 @@ from sonoran.crypto.decrypt import (
     decrypt_packet,
     decrypt_with_key,
 )
+from sonoran.decode.payloads import mesh_pb2
+from sonoran.ingest.pipeline import _valid_data
 
 KEY = base64.b64decode("1PG7OiApB1nwvP+rz05pAQ==")
 PACKET_ID = 123456789
@@ -73,9 +75,29 @@ def test_decrypt_packet_returns_first_key_result() -> None:
 
 
 def test_decrypt_packet_uses_validator_to_select_later_key() -> None:
-    """A validator lets AES-CTR select the key that produces valid data."""
+    """A validator lets AES-CTR select the key that produces valid data.
+
+    This drives the REAL validator, not an oracle (#157).
+
+    It used to pass `validator=lambda value: value == plaintext`, which
+    has a 0% false-accept rate by construction — so the multi-key path
+    was never exercised against the thing that actually runs, and a
+    change that made `_valid_data` less discriminating would pass here.
+
+    The old "plaintext" was `b"\x0a\x05hello meshtastic"`, which is not
+    a valid `Data` protobuf at all. The oracle was hiding that too.
+
+    The wrong key produces `e3af8a...` from this ciphertext, which
+    `_valid_data` rejects — deterministically, since the key, the nonce
+    and the ciphertext are all fixed. This test cannot flake on the
+    ~1-in-800 false-accept rate measured in
+    `test_wrong_key_discrimination.py`.
+    """
     second_key = b"x" * 16
-    plaintext = b"\x0a\x05hello meshtastic"
+    data = mesh_pb2.Data()
+    data.portnum = 1  # TEXT_MESSAGE_APP
+    data.payload = b"hello mesh"
+    plaintext = bytes(data.SerializeToString())
     cipher = Cipher(
         algorithms.AES(second_key),
         modes.CTR(build_nonce(PACKET_ID, FROM_NODE)),
@@ -88,7 +110,7 @@ def test_decrypt_packet_uses_validator_to_select_later_key() -> None:
         PACKET_ID,
         FROM_NODE,
         [KEY, second_key],
-        validator=lambda value: value == plaintext,
+        validator=_valid_data,
     )
 
     assert result == plaintext
