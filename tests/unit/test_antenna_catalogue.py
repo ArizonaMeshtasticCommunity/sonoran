@@ -114,9 +114,8 @@ def test_more_gain_means_a_narrower_pattern() -> None:
         key=lambda a: a.gain_dbi_claimed,
     )
     widths = [a.vertical_beamwidth_deg for a in stated]
-    assert widths == sorted(widths, reverse=True), (
-        f"gain and beamwidth disagree: {[(a.key, a.gain_dbi_claimed, a.vertical_beamwidth_deg) for a in stated]}"
-    )
+    seen = [(a.key, a.gain_dbi_claimed, a.vertical_beamwidth_deg) for a in stated]
+    assert widths == sorted(widths, reverse=True), f"gain and beamwidth disagree: {seen}"
 
 
 def test_every_antenna_is_explained_in_words() -> None:
