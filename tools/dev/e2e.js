@@ -495,8 +495,46 @@ async function main() {
   });
 
   await journey(context, 'statistics draws its charts', async (page) => {
-    await open(page, 'stats', 6000);
-    const canvases = await page.locator('[data-page="stats"] canvas').count();
+    /*
+     * Waits for the charts, not for a number of seconds (#154).
+     *
+     * This journey used `open(page, 'stats', 6000)` -- a fixed pause
+     * after `load` -- and failed on a cold load while passing on later
+     * runs in the same session. Measured against the dev instance, four
+     * fresh browser contexts:
+     *
+     *     run 1   load 10661 ms   first sized canvas 12718 ms  (+2057)
+     *     run 2   load  9012 ms   first sized canvas  9042 ms  (+30)
+     *     run 3   load  9008 ms   first sized canvas  9011 ms  (+3)
+     *     run 4   load  9284 ms   first sized canvas  9291 ms  (+7)
+     *
+     * The gap the fixed pause has to cover varies by seventy times
+     * between a cold run and a warm one, because the leaderboards on
+     * this page are behind a 900-second cache and the first request
+     * after a cold start does the whole read.
+     *
+     * Raising the 6000 would trade a fast flake for a slow one and
+     * would still be a guess. Waiting for the condition -- canvases
+     * present AND sized -- cannot flake on a slow cache, and still
+     * fails if the charts never draw, which is the property this
+     * journey is for.
+     *
+     * `width > 0` matters: ECharts inserts its canvas before it has
+     * measured the container, so a canvas can exist at zero size for a
+     * frame or two and a count alone would pass on a chart nobody can
+     * see.
+     */
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    const sized = '[data-page="stats"] canvas';
+    await page.waitForFunction(
+      (selector) => [...document.querySelectorAll(selector)]
+        .filter((canvas) => canvas.width > 0 && canvas.height > 0).length > 0,
+      sized,
+      { timeout: 30000 },
+    );
+    const canvases = await page.evaluate((selector) =>
+      [...document.querySelectorAll(selector)]
+        .filter((canvas) => canvas.width > 0 && canvas.height > 0).length, sized);
     must(canvases > 0, 'no chart was drawn');
     return `${canvases} charts`;
   });
