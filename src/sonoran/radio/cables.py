@@ -36,9 +36,33 @@ RG-58 loses **21.1 dB/100ft** against LMR-400's 3.9 -- more than five
 times as much. A 30 ft run throws away 76% of the power in RG-58 and
 24% in LMR-400.
 
-**Still not included:** RG-174, RG-316 and the U.FL pigtails. Same
-problem, not yet solved the same way: pick a manufacturer's part and
-cite its datasheet.
+**U.FL pigtails are deliberately absent, and this is why.** Hirose's
+published attenuation for the 1.13 mm cable starts at **3 GHz**
+(6.5 dB/m, then 9.5 at 6 GHz and 11.7 at 8 GHz). There is no published
+figure anywhere near 915 MHz. Scaling the 3 GHz value down by the usual
+square-root-of-frequency rule gives about 3.6 dB/m, and that number
+would be a model rather than a measurement -- the square-root rule
+under-reads on thin lossy cable, where the dielectric term is linear in
+frequency. So it is not in the table.
+
+What is worth knowing about them is a length argument rather than a
+figure: a U.FL pigtail is a few centimetres, so even at several dB per
+metre it costs a fraction of a dB. The cable on the mast is the one
+that decides a link, not the one inside the box.
+
+**Connector and adapter loss is absent for the same reason.** #112 asks
+whether 0.1-0.5 dB per adapter is realistic. The answer appears to be
+that 0.1 dB is the PESSIMISTIC end below 1 GHz for a decent connector,
+not the optimistic one -- but every figure found for it was a
+generalisation rather than a manufacturer's specification, and the
+datasheets reachable here either refuse automated fetches or quote VSWR
+without an insertion-loss number. A link budget is not the place to put
+a number nobody will stand behind.
+
+Worth noting for whoever finishes it: on cheap adapters the MISMATCH
+loss from a poor VSWR is likely to dominate the insertion loss, so an
+"insertion loss per adapter" figure may be answering the smaller half of
+the question.
 
 Connector and adapter loss is also absent. #112 suggests 0.1-0.5 dB per
 adapter and asks whether that is realistic; it is a plausible range and
