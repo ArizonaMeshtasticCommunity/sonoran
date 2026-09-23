@@ -255,3 +255,36 @@ checked, to people who would then have nowhere to go when it failed.
 **What would change it:** `docs/USB-HARDWARE-TEST.md` coming back clean
 on one ESP32 and one nRF52. Then the sentence loses its second half and
 #115 closes with it.
+
+### "Needs hardware" was partly a failure to look (#116, #117)
+
+**Decided:** verify the protocol against `meshtasticd` — the real
+Meshtastic firmware — and reserve the hand-test for what only a board
+can show.
+
+I asserted for a long stretch that these issues were blocked on
+hardware I do not have, and built a simulator instead. `meshtasticd`
+runs the actual firmware and speaks the same client API over TCP. It
+was one `docker pull` away the whole time.
+
+**What that cost.** The simulator passed a write path that **silently
+does nothing**. An `AdminMessage` must be wrapped in a `MeshPacket`
+addressed to the local node on the admin port; sending it bare is
+accepted by the firmware and ignored. The write reported `wrote 1`, the
+UI would have said "Wrote 1 setting", and a re-read showed the old
+value. No error anywhere.
+
+**All 22 write tests passed against the broken version**, because a
+simulator checks what we *send*, not what a node *does* with it. The
+tests were not wrong; they were measuring the wrong side of the wire.
+And I built the instrument.
+
+The generalisation, which is the same one this file already records in
+another costume: **a test you wrote against a model you wrote can only
+find the bugs you thought of.** Before accepting "this can only be
+verified with X", ask what the nearest real implementation is. Often it
+ships in a container.
+
+**What remains genuinely hardware-only:** the USB transport — CDC-ACM
+chunking, the reboot a commit triggers, port release, nRF52 against
+ESP32. That gap is real, and much narrower than "needs a board".
