@@ -637,3 +637,52 @@ cases red.
 real ones without the original packets, and `raw_bytes` holds the
 MeshPacket rather than a decoded telemetry row. Readers should expect
 old rows to carry them.
+
+### "View all" is only said when it is all (#200, with #193.5)
+
+**Decided:** fix #200 and #193 item 5 in one change, because doing
+either alone makes the page worse.
+
+#193.5 asked for the "N more" span beside the button to go, since "the
+button already gives the total". #200 then showed that the button's
+total is **a lie whenever the API caps the list**: "View all 25
+messages" on a node that had sent 1,184. Removing the span on that
+justification, alone, would have left the page asserting a wrong number
+with nothing beside it to hint otherwise.
+
+That is the #95/#103 shape again — two issues each individually
+satisfied, jointly producing something neither described. It is the
+second time in this repository, so the rule is now explicit: **before
+closing an issue that removes a signal, find what else was relying on
+it.**
+
+**The audit #200 asked for**, every `expandingList`/`expandingTable`
+caller:
+
+| caller | data | capped by the API? | now says |
+|---|---|---|---|
+| `messagesPanel` | `messages.recent` | **yes**, 25 of a measured `count` | "Show the 25 newest messages" |
+| `neighborPanel` | `neighbors` | limit 100, **never reached** | "View all N nodes" |
+| `heardByPanel` | gateways | no | unchanged |
+| routes `heard_by` / `hears` | no limit | no | unchanged |
+| chat sections | — | already compared `count` with the list | unchanged |
+
+**The neighbours cap was measured rather than fixed.** Over 7 days, 176
+nodes report neighbours and the most any node has is **37**, against a
+limit of 100. Building a truncation signal for a case that does not
+occur would be work with no reader. If a node ever passes 100 this is
+wrong, and that is written here rather than guarded, deliberately.
+
+**The decision reads a measured count, not a heuristic.** "The list is
+exactly 25, so it must be cut" would be wrong for a node that really
+sent 25. `detail.messages.count` is measured by the endpoint and is the
+only thing on the page that can tell a short list from a cut one.
+
+**The true total stays in the heading.** The button now says "the 25
+newest", so the heading is the only place that says 1,184; removing it
+would trade a wrong number for no number.
+
+**Held by:** `tests/unit/test_node_page_desktop.py`, including the
+non-regression half — uncapped callers must keep "View all", or the fix
+is a rename of every button on the site. Proven by mutation: forcing
+`cut = false` restores the bug and turns the comparison case red.

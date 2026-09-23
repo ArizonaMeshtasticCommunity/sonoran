@@ -301,7 +301,26 @@ function expandingList(items, render, options = {}) {
     items.slice(0, limit).map(render));
   if (items.length <= limit) return [list];
 
-  const closed = `View all ${items.length} ${noun}`;
+  /*
+   * "View all", only when it IS all (#200).
+   *
+   * `items` is whatever the API sent, and several endpoints cap what
+   * they send. "Messages sent" offered "View all 25 messages" on a node
+   * that had sent 1,184, because 25 was the API's limit and this helper
+   * had no way to know. AGENTS.md 9.19: a row limit must not decide
+   * what the page says exists.
+   *
+   * `cut` says the caller knows the list is not everything. The true
+   * total stays in the panel heading, which is read from a count the
+   * API measures rather than from the length of a truncated list.
+   *
+   * This also carries #193.5: there is no "N more" span beside the
+   * button. The button names the number it is about, and the two
+   * together read as two different facts when they were one.
+   */
+  const closed = options.cut
+    ? `Show the ${items.length} newest ${noun}`
+    : `View all ${items.length} ${noun}`;
   const button = el('button', {
     class: 'more', type: 'button', 'aria-expanded': 'false', text: closed,
   });
@@ -311,8 +330,7 @@ function expandingList(items, render, options = {}) {
     button.setAttribute('aria-expanded', open ? 'false' : 'true');
     button.textContent = open ? closed : `Show fewer ${noun}`;
   });
-  return [list, el('p', { class: 'more-wrap' }, button,
-    el('span', { class: 'muted', text: `${items.length - limit} more` }))];
+  return [list, el('p', { class: 'more-wrap' }, button)];
 }
 
 /** Render one node as a clickable identity chip. */
@@ -452,7 +470,10 @@ function expandingTable(columns, rows, emptyMessage, options = {}) {
     table(columns, rows.slice(0, limit), emptyMessage));
   if (rows.length <= limit) return [wrap];
 
-  const closed = `View all ${rows.length} ${noun}`;
+  // "View all", only when it is all. See `expandingList` (#200).
+  const closed = options.cut
+    ? `Show the ${rows.length} newest ${noun}`
+    : `View all ${rows.length} ${noun}`;
   const button = el('button', {
     class: 'more', type: 'button', 'aria-expanded': 'false', text: closed,
   });
@@ -467,8 +488,8 @@ function expandingTable(columns, rows, emptyMessage, options = {}) {
     button.setAttribute('aria-expanded', open ? 'false' : 'true');
     button.textContent = open ? closed : `Show fewer ${noun}`;
   });
-  return [wrap, el('p', { class: 'more-wrap' }, button,
-    el('span', { class: 'muted', text: `${rows.length - limit} more` }))];
+  // As in `expandingList`: the total is on the button already (#193.5).
+  return [wrap, el('p', { class: 'more-wrap' }, button)];
 }
 
 /* A summary tile. Its `hint` travels the same way a column's does: in
@@ -4157,11 +4178,16 @@ function devicePanel(detail) {
 
 function messagesPanel(detail) {
   const messages = detail.messages.recent || [];
+  // `recent` is capped by the API; `count` is measured (#200). When
+  // they disagree the list is not everything, and the button must not
+  // say "all" -- this node had 1,184 messages behind a "View all 25".
+  const cut = (detail.messages.count || 0) > messages.length;
   return el('div', { class: 'panel' },
     el('h3', {}, 'Messages sent',
       el('span', { class: 'muted', text: `${count(detail.messages.count)} in ${detail.window_hours} h` })),
     messages.length
-      ? expandingList(messages, (message) => messageItem(message, { showChannel: true }), { limit: 5 })
+      ? expandingList(messages, (message) => messageItem(message, { showChannel: true }),
+          { limit: 5, cut })
       : empty('This node sent no stored messages in the window.'));
 }
 
@@ -4172,8 +4198,10 @@ function identityPanel(node) {
     ['Short name', node.short_name || 'not reported'],
     ['Hardware', node.hw_model || 'unknown'],
     ['Role', node.role ? `${roleLabel(node.role)} (${node.role})` : 'unknown'],
-    ['Licensed', node.is_licensed ? 'yes' : 'no'],
-    ['MQTT gateway', node.is_mqtt_gateway ? 'yes' : 'no'],
+    // Through `yesNo`, not inlined. These two were the reason #193.4
+    // could be "fixed" in the helper and still show lower case here.
+    ['Licensed', yesNo(node.is_licensed)],
+    ['MQTT gateway', yesNo(node.is_mqtt_gateway)],
     ['Channel', node.last_channel || 'unknown'],
     ['First seen', stamp(node.first_seen)],
     ['Last heard', node.last_heard ? `${stamp(node.last_heard)} (${ago(node.last_heard)} ago)` : 'never'],
@@ -4888,6 +4916,22 @@ function routesPanel(routes) {
   const longest = routes.longest_segment;
   const heardBy = routes.furthest_heard_by;
   const heard = routes.furthest_heard;
+  /*
+   * Why there is no distance, said in the tile (#193.7).
+   *
+   * "None with an exact position" is true and reads as "nobody heard
+   * it". On the node this was reported against, 26 nodes hear it and it
+   * hears 48; the reason no distance exists is that **its own** position
+   * is rounded, so every pair is excluded by the #55 rule.
+   *
+   * That is a different sentence from "the other ends are rounded", and
+   * it is the one the reader can act on: it is their own privacy
+   * setting, not somebody else's. The rule itself does not change --
+   * a distance is still never measured from a rounded position.
+   */
+  const noDistance = routes.position === false
+    ? 'Its own position is rounded, so no distance can be measured.'
+    : 'None with an exact position.';
   const depth = routes.hop_depth || { packets: 0, counts: [] };
   const columns = [
     { label: 'Node', cell: (row) => nodeChip(row) },
@@ -4905,9 +4949,9 @@ function routesPanel(routes) {
         longest ? `${longest.from.display_name} to ${longest.to.display_name}` : 'No traceroute segment with two exact positions.',
         'The longest single hop of any traceroute this node took part in.'),
       tile('Furthest node that heard it', heardBy ? km(heardBy.distance_km) : '-',
-        heardBy ? `${heardBy.display_name}${heardBy.best_snr != null ? `, ${round(heardBy.best_snr, 1)} dB` : ''}` : 'None with an exact position.'),
+        heardBy ? `${heardBy.display_name}${heardBy.best_snr != null ? `, ${round(heardBy.best_snr, 1)} dB` : ''}` : noDistance),
       tile('Furthest node it heard', heard ? km(heard.distance_km) : '-',
-        heard ? `${heard.display_name}${heard.best_snr != null ? `, ${round(heard.best_snr, 1)} dB` : ''}` : 'None with an exact position.'),
+        heard ? `${heard.display_name}${heard.best_snr != null ? `, ${round(heard.best_snr, 1)} dB` : ''}` : noDistance),
       tile('Hops to the nearest gateway', depth.median == null ? '-' : String(depth.median),
         depth.packets
           ? `typical, over ${count(depth.packets)} packets: ${depth.counts.map((item) => `${item.hops} hop${item.hops === 1 ? '' : 's'} ${count(item.packets)}`).join(', ')}`
@@ -6182,7 +6226,10 @@ function kvList(entries) {
     [el('dt', { text: label }), el('dd', { text: String(value) })]));
 }
 
-const yesNo = (value) => (value == null ? null : value ? 'yes' : 'no');
+/* "Yes" and "No", capitalised, because they are values in a list and
+ * not words in a sentence (#193.4). Changed here rather than at the
+ * call sites so every page agrees. */
+const yesNo = (value) => (value == null ? null : value ? 'Yes' : 'No');
 const coordinate = (value) => (value == null ? null : round(value / 1e7, 5));
 
 /**

@@ -576,6 +576,38 @@ button:disabled:hover { border-color: var(--line); background: none; }
   max-width: 100rem; margin-inline: auto;
 }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr)); }
+
+/*
+ * The node page's own column (#193.1, #193.2).
+ *
+ * `loadNodeDetail` puts four blocks into `[data-node-body]`: the
+ * summary row, Health, the map, and the lower grid. Two of them are
+ * `.grid`, which caps itself at 100rem and centres. The other two --
+ * Health and the map -- are bare panels, so past 1600 px they kept
+ * going to full width while the grids stopped, and the page had two
+ * different left edges.
+ *
+ * They also touched: measured at 1440x813 the gap between the summary
+ * row and Health was 16 px, and between Health and the map, and the map
+ * and the lower grid, it was 0 px. A column with one `gap` gives every
+ * block the same separation instead of relying on each one's margin.
+ *
+ * Scoped to `[data-node-body]`, which is the whole point. `app.css`
+ * says above that maps are deliberately NOT capped, because #70 asked
+ * for the map to fill its container -- that was the Map and Planner
+ * pages. Here the map is one panel among others and shares their
+ * width. Those pages do not match this selector and do not change.
+ */
+[data-node-body] {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+[data-node-body] > .panel {
+  max-width: 100rem;
+  margin-inline: auto;
+  width: 100%;
+}
 /*
  * The node page's four short summary panels (#102).
  *
