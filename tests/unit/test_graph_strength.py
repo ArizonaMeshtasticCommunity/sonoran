@@ -192,3 +192,73 @@ def test_the_threshold_is_not_scaled_by_the_window() -> None:
         "strength now takes a window; scaling the threshold by it was "
         "measured and made the window dependence worse, not better"
     )
+
+
+# ------------------------------------------------- what a link's SNR is
+
+
+def test_a_links_snr_is_the_median_and_not_the_newest_reading(**_: object) -> None:
+    """#71. It was the newest, and every other sample was discarded.
+
+    Measured on one real link: the graph reported **-6.75 dB** while
+    the fifty samples behind it ran -16.0 to -0.25, with the next four
+    at -12.75, -13.0, -8.75 and -5.0. The figure a reader saw was
+    whichever hop happened to be measured last, which moves for
+    reasons that have nothing to do with the link.
+    """
+    edges: dict[tuple[int, int], Edge] = {}
+    for snr, minute in ((-16.0, 0), (-5.0, 1), (-12.0, 2), (-0.25, 3), (-13.0, 4)):
+        _add(
+            edges,
+            Edge(
+                source=A,
+                target=B,
+                kind="traceroute",
+                snr=snr,
+                time=NOW.replace(minute=minute),
+            ),
+        )
+    edge = only(edges)
+    assert edge.samples == [-16.0, -5.0, -12.0, -0.25, -13.0], "samples were not all kept"
+    # Newest is -13.0 and the maximum is -0.25. Neither is the answer.
+    assert edge.snr_summary == -12.0
+    assert edge.as_json()["snr"] == -12.0
+
+
+def test_an_even_number_of_samples_averages_the_middle_two() -> None:
+    edges: dict[tuple[int, int], Edge] = {}
+    for snr in (-10.0, -2.0, -8.0, -4.0):
+        _add(edges, Edge(source=A, target=B, kind="traceroute", snr=snr, time=NOW))
+    assert only(edges).snr_summary == -6.0
+
+
+def test_a_link_nothing_measured_still_has_no_snr() -> None:
+    """None is not zero, and it must survive to the page.
+
+    The graph draws a link with no SNR in a stale colour rather than
+    as a bad one, so a 0.0 here would repaint every unmeasured link as
+    a poor one.
+    """
+    edges: dict[tuple[int, int], Edge] = {}
+    _add(edges, Edge(source=A, target=B, kind="neighbor", snr=None, time=NOW))
+    edge = only(edges)
+    assert edge.samples == []
+    assert edge.snr_summary is None
+    assert edge.as_json()["snr"] is None
+
+
+def test_merging_two_maps_keeps_both_sides_samples() -> None:
+    """`_merge` folds a whole counted link in, not one report.
+
+    Dropping the incoming samples here would make the median depend on
+    which source was read first -- traceroutes or neighbour reports.
+    """
+    left: dict[tuple[int, int], Edge] = {}
+    right: dict[tuple[int, int], Edge] = {}
+    for snr in (-2.0, -4.0):
+        _add(left, Edge(source=A, target=B, kind="traceroute", snr=snr, time=NOW))
+    for snr in (-20.0, -22.0):
+        _add(right, Edge(source=A, target=B, kind="neighbor", snr=snr, time=NOW))
+    _merge(left, only(right))
+    assert sorted(only(left).samples) == [-22.0, -20.0, -4.0, -2.0]
+    assert only(left).snr_summary == -12.0
