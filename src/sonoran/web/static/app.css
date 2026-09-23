@@ -851,8 +851,22 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .watch-bar[hidden], .watch-panel[hidden], .watch-legend[hidden],
 .watch-pane[hidden] { display: none; }
 
-.watch-control a { display: grid; place-items: center; width: 30px; height: 30px; }
-.watch-control a[aria-pressed="true"] { color: var(--accent); }
+/* The control is a real <button>, so it needs the look Leaflet gives
+   its own anchors -- background, colour and border come from
+   `.leaflet-bar a` and a button inherits none of them. */
+.watch-control button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.watch-control button[aria-pressed="true"] { color: var(--accent); }
 .watch-control .icon { width: 1.15rem; height: 1.15rem; }
 
 /*

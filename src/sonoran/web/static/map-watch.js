@@ -43,6 +43,7 @@ const SonoranWatch = (() => {
   let tab = 'traffic';
   let legendOpen = false;
   let control = null;
+  let watchButton = null;
   let fallback = false;
   const unread = { traffic: 0, traces: 0 };
   /* Where each moved element came from, so exit puts it back exactly. */
@@ -240,6 +241,16 @@ const SonoranWatch = (() => {
     writeFragment();
     settle();
     setTimeout(settle, 260);
+    /*
+     * Put focus back on the control that started this.
+     *
+     * Exiting used to leave it on the map div, which is not
+     * interactive: a keyboard user pressed F, watch mode ended, and
+     * their focus was somewhere they could not act from (WCAG 2.4.3).
+     * `undress()` moves elements back to where they came from, so this
+     * runs after it, and after the settle that follows.
+     */
+    if (watchButton && watchButton.isConnected) watchButton.focus();
   }
 
   const toggle = () => (on ? leave() : enter());
@@ -390,9 +401,18 @@ const SonoranWatch = (() => {
       options: { position: 'bottomright' },
       onAdd() {
         const wrap = L.DomUtil.create('div', 'leaflet-bar watch-control');
-        const button = L.DomUtil.create('a', '', wrap);
-        button.href = '#';
-        button.role = 'button';
+        /*
+         * A real button, not an anchor wearing `role="button"`.
+         *
+         * An element with that role must respond to Space as well as
+         * Enter (WCAG 4.1.2), and a native `<a href>` never does.
+         * Measured before this change: Enter toggled watch mode, Space
+         * did nothing at all. A `<button>` gets both keys, the right
+         * role and the disabled semantics for free, and none of it can
+         * drift.
+         */
+        const button = L.DomUtil.create('button', '', wrap);
+        button.type = 'button';
         button.setAttribute('aria-pressed', 'false');
         button.title = 'Watch mode (F)';
         button.setAttribute('aria-label', 'Watch mode');
@@ -408,6 +428,10 @@ const SonoranWatch = (() => {
           L.DomEvent.preventDefault(event);
           toggle();
         });
+        // Where focus goes when watch mode ends. Leaving it on the map
+        // div strands a keyboard user somewhere they cannot act from
+        // (WCAG 2.4.3); `app.js` already does this for the nav toggle.
+        watchButton = button;
         return wrap;
       },
     });

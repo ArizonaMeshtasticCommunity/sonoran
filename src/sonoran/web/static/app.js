@@ -392,6 +392,9 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
      */
     if (!column.sort) {
       return el('th', {
+        // Implicit column scope usually resolves, but "usually" is
+        // decided by the assistive technology rather than by us.
+        scope: 'col',
         class: classes.join(' ').trim() || null,
         'data-hint': column.hint || null,
         'data-label': column.label,
@@ -403,6 +406,7 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
     classes.push('sortable');
     if (active) classes.push('sorted');
     return el('th', {
+      scope: 'col',
       class: classes.join(' ').trim() || null,
       'data-hint': column.hint || null,
       'data-label': column.label,
@@ -988,13 +992,19 @@ document.addEventListener('fullscreenchange', () => {
  * Give a chart panel its full-screen control, once.
  *
  * A real `<button>`, and that is the point of this comment.
- * `map-watch.js` builds its control as an `<a role="button">`, which is
- * the shape Leaflet's own controls take. An anchor runs its click
- * handler on Enter and not on Space, and `role="button"` does not add
- * the missing key: ARIA names a thing, it does not implement it.
- * Measured on this deployment — focus the watch control and press
- * Space, and `SonoranWatch.isOn()` is still false; press Enter and it
- * is true. A `<button type="button">` answers to both with no code.
+ * `map-watch.js` used to build its control as an `<a role="button">`,
+ * which is the shape Leaflet's own controls take. An anchor runs its
+ * click handler on Enter and not on Space, and `role="button"` does not
+ * add the missing key: ARIA names a thing, it does not implement it.
+ * Measured on this deployment at the time — focus the watch control and
+ * press Space, and `SonoranWatch.isOn()` was still false; press Enter
+ * and it was true. A `<button type="button">` answers to both with no
+ * code.
+ *
+ * The watch control is a real button too now (#147), so the two agree.
+ * The reasoning is kept because it is the reason for the choice here,
+ * and it is the trap anybody reaching for a Leaflet-shaped control
+ * falls into next.
  *
  * The control goes beside the box rather than in the `h3`, because a
  * button inside a heading joins the heading's own text when a screen

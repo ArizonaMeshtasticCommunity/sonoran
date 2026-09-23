@@ -41,21 +41,26 @@ def test_every_chart_gets_the_control_from_one_place() -> None:
 def test_the_control_is_a_button_and_not_an_anchor() -> None:
     """Space must work, and on an anchor it does not.
 
-    `map-watch.js` builds its control as `<a role="button">`, and
-    measured on the deployed instance: focus it, press Space, and
-    `SonoranWatch.isOn()` is still false. Enter works. That bug must
+    `map-watch.js` used to build its control as `<a role="button">`,
+    and measured on the deployed instance: focus it, press Space, and
+    `SonoranWatch.isOn()` was still false. Enter worked. That bug must
     not be copied here.
+
+    It has since been fixed (#147), so the second assertion below is now
+    a consistency check rather than a note about a known difference:
+    both controls are real buttons and both should stay that way.
     """
     start = APP.index("function fitChartExpand")
     body = APP[start:]
     assert "el('button', {\n    type: 'button', class: 'chart-expand'" in body, (
         "the full-screen control is not a real button"
     )
-    # The bug this is guarding against, so the comparison stays honest
-    # if map-watch is ever fixed.
-    assert "button.role = 'button'" in WATCH, (
-        "map-watch no longer uses an anchor; check whether this note "
-        "and the comment in fitChartExpand are still true"
+    # The other control that had this bug. It was an anchor when this
+    # test was written; the assertion was inverted when #147 fixed it,
+    # which is exactly what the note here asked whoever fixed it to do.
+    assert "L.DomUtil.create('button'" in WATCH, (
+        "map-watch's control went back to an anchor; Space stops working "
+        "there and the comment in fitChartExpand stops being true"
     )
 
 
