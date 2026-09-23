@@ -1,0 +1,54 @@
+# Say when the vendored config checker falls behind upstream.
+#
+# `web/static/vendor/config-checker` is pinned to one commit and
+# nothing else tells us when upstream moves. `tools/check_config_
+# checker_pin.sh` has existed for this since #61 and nothing ran it,
+# which is the same silent-staleness the script was written to stop.
+#
+# NOT part of CI, deliberately. Upstream moving is not a fault in a
+# pull request, and a job that fails somebody's unrelated PR for it
+# gets ignored or switched off within a week. This runs on its own
+# schedule, so a red run means exactly one thing: go and look at the
+# vendored copy.
+name: Vendor pin
+
+on:
+  schedule:
+    # Mondays, early. Weekly is enough for a dependency that moves in
+    # releases rather than commits.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  config-checker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the pin with upstream
+        env:
+          # The upstream repository is private, so the checkout token
+          # is what lets `git ls-remote` read it.
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
+        run: |
+          set +e
+          out="$(bash tools/check_config_checker_pin.sh 2>&1)"
+          status=$?
+          echo "$out"
+          {
+            echo "## Vendored config checker"
+            echo
+            echo '```'
+            echo "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 0 = current, 1 = upstream moved (report it), 2 = could not
+          # run. A check that cannot reach upstream is not evidence that
+          # anything is wrong, so it does not fail the run -- it says so
+          # in the summary and stays quiet.
+          if [ "$status" -eq 2 ]; then
+            echo "::warning::the pin check could not run; treating as unknown, not as stale"
+            exit 0
+          fi
+          exit "$status"
