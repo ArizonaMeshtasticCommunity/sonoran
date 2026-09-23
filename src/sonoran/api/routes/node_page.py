@@ -188,7 +188,33 @@ def _bucket(column: Any, width: int, origin: datetime) -> Any:
 async def _device_series(
     session: AsyncSession, node_num: int, since: datetime, now: datetime, width: int
 ) -> list[dict[str, object]]:
-    bucket = _bucket(DeviceMetrics.time, width, since).label("bucket")
+    """Battery and air time over the window, placed by OUR clock.
+
+    `DeviceMetrics.time` is the node's own clock, and AGENTS.md 9.4
+    says node clocks are wrong, sometimes badly. This used to bucket on
+    that column and clamp to `[since, now]`, so a node running ahead
+    had its telemetry fall outside the window and disappear -- and the
+    docstring then told the page to read an empty series as "the node
+    sends no device telemetry", which is a different thing entirely.
+
+    Measured on production: 79 rows across 13 nodes are dated in the
+    future, the furthest at 2036-02-07. For `!700379d3`, 31 of its 55
+    rows in a 24 h window were ahead of now, and the endpoint returned
+    24 points. More than half of that node's battery chart was missing.
+
+    So the placement comes from the packet that carried the reading.
+    `packet.first_seen_at` is stamped when we received it, which is the
+    same clock `heard_at` uses and the one the other two series on this
+    page already use.
+
+    The join is LEFT with a fallback to the node's own time, because a
+    reading we cannot tie to a packet should still be drawn rather than
+    silently dropped -- that is the very failure being fixed. Measured,
+    that is 1 row in 17,786.
+    """
+    # Our clock where we have it, the node's where we do not.
+    stamped = func.coalesce(Packet.first_seen_at, DeviceMetrics.time)
+    bucket = _bucket(stamped, width, since).label("bucket")
     rows = (
         await session.execute(
             select(
@@ -198,10 +224,18 @@ async def _device_series(
                 func.avg(DeviceMetrics.channel_utilization),
                 func.avg(DeviceMetrics.air_util_tx),
             )
+            .select_from(DeviceMetrics)
+            .outerjoin(
+                Packet,
+                and_(
+                    Packet.from_node_num == DeviceMetrics.node_num,
+                    Packet.packet_id == DeviceMetrics.packet_id,
+                ),
+            )
             .where(
                 DeviceMetrics.node_num == node_num,
-                DeviceMetrics.time >= since,
-                DeviceMetrics.time <= now,
+                stamped >= since,
+                stamped <= now,
             )
             .group_by(bucket)
             .order_by(bucket)

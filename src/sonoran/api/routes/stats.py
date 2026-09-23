@@ -209,7 +209,8 @@ async def top_talkers(
     channel a busy sender is a cost to everybody else, and the page says
     so beside the count (#60). None when the node reports no telemetry.
     """
-    start = datetime.now(UTC) - timedelta(hours=hours)
+    now = datetime.now(UTC)
+    start = now - timedelta(hours=hours)
     rows = (
         await session.execute(
             select(Packet.from_node_num, func.count().label("total"))
@@ -224,10 +225,26 @@ async def top_talkers(
         node: value
         for node, value in (
             await session.execute(
+                # Bounded at BOTH ends.
+                #
+                # `DeviceMetrics.time` is the node's own clock, and
+                # this had a lower bound only. A node running ahead had
+                # every future-dated reading it has ever sent averaged
+                # into the answer for "the last hour": measured on
+                # production, one node's one-hour figure came from five
+                # rows of which four were dated in the future, so its
+                # number was effectively a lifetime average at any
+                # window size. 79 rows across 13 nodes are ahead of now
+                # today, the furthest by nearly ten years.
+                #
+                # AGENTS.md 9.4. The upper bound does not repair a bad
+                # clock, but it stops one node's clock from deciding
+                # what a window means.
                 select(DeviceMetrics.node_num, func.avg(DeviceMetrics.air_util_tx))
                 .where(
                     DeviceMetrics.node_num.in_(senders),
                     DeviceMetrics.time >= start,
+                    DeviceMetrics.time <= now,
                     DeviceMetrics.air_util_tx.is_not(None),
                 )
                 .group_by(DeviceMetrics.node_num)
@@ -312,6 +329,14 @@ async def _node_health(
     if not node_nums:
         return {}
 
+    # Bounded at both ends, and this one matters more than a window.
+    #
+    # `DISTINCT ON ... ORDER BY time DESC` picks the reading the node
+    # says is newest, so without an upper bound a node claiming 2036
+    # always wins its own "latest battery" -- and keeps winning it
+    # after the radio has been off for a month. 79 rows across 13 nodes
+    # are dated in the future today. See AGENTS.md 9.4.
+    now = datetime.now(UTC)
     latest = (
         await session.execute(
             select(
@@ -320,7 +345,11 @@ async def _node_health(
                 DeviceMetrics.voltage,
                 DeviceMetrics.uptime_seconds,
             )
-            .where(DeviceMetrics.node_num.in_(node_nums), DeviceMetrics.time >= start)
+            .where(
+                DeviceMetrics.node_num.in_(node_nums),
+                DeviceMetrics.time >= start,
+                DeviceMetrics.time <= now,
+            )
             .distinct(DeviceMetrics.node_num)
             .order_by(DeviceMetrics.node_num, DeviceMetrics.time.desc())
         )
@@ -329,7 +358,11 @@ async def _node_health(
     uptime_rows = (
         await session.execute(
             select(DeviceMetrics.node_num, func.max(DeviceMetrics.uptime_seconds))
-            .where(DeviceMetrics.node_num.in_(node_nums), DeviceMetrics.time >= start)
+            .where(
+                DeviceMetrics.node_num.in_(node_nums),
+                DeviceMetrics.time >= start,
+                DeviceMetrics.time <= now,
+            )
             .group_by(DeviceMetrics.node_num)
         )
     ).all()
