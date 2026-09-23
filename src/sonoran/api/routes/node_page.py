@@ -26,10 +26,10 @@ from sonoran.api.routes.gaps import read_assessment
 from sonoran.api.routes.graph import _mentions, _trace_links
 from sonoran.config import Settings
 from sonoran.db.models import DeviceMetrics, NeighborMetrics, Node, Packet, PacketSeen, Traceroute
+from sonoran.decode.portnums import traffic_label
 from sonoran.gaps import store as gaps_store
 from sonoran.gaps.signals import position_confidence
 from sonoran.gaps.siting import distance_km
-from sonoran.meshtastic import portnums_pb2
 from sonoran.positions import MIN_SITE_PRECISION_BITS
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
@@ -42,14 +42,6 @@ SIGNAL_GATEWAYS = 6
 # decide what evidence exists (AGENTS.md 9.19), so the answer says when
 # it was reached rather than pretend the list was whole.
 ROUTE_TRACE_LIMIT = 2000
-
-
-def _portnum_name(value: int) -> str:
-    """Return the protobuf name of a port number, or the number itself."""
-    try:
-        return portnums_pb2.PortNum.Name(value)  # type: ignore[attr-defined]
-    except ValueError:
-        return str(value)
 
 
 def bucket_seconds(hours: int) -> int:
@@ -263,13 +255,16 @@ async def _packet_series(
     bucket = _bucket(Packet.first_seen_at, width, since).label("bucket")
     rows = (
         await session.execute(
-            select(bucket, Packet.portnum, func.count())
+            # By state as well as port. This is the traffic chart #157
+            # names: it drew PKI direct messages, no-key packets and
+            # genuine UNKNOWN_APP as one band called UNKNOWN_APP.
+            select(bucket, Packet.portnum, Packet.payload_state, func.count())
             .where(
                 Packet.from_node_num == node_num,
                 Packet.first_seen_at >= since,
                 Packet.first_seen_at <= now,
             )
-            .group_by(bucket, Packet.portnum)
+            .group_by(bucket, Packet.portnum, Packet.payload_state)
         )
     ).all()
     # Every bucket of the window, so a silent stretch reads as zero
@@ -280,8 +275,12 @@ async def _packet_series(
         buckets.append(start)
         start += timedelta(seconds=width)
     series: dict[str, dict[datetime, int]] = {}
-    for moment, portnum, total in rows:
-        series.setdefault(_portnum_name(portnum), {})[moment] = total
+    for moment, portnum, payload_state, total in rows:
+        # `+=`, not `=`: grouping by state as well as port means two
+        # rows in one bucket can map to the same band, and assignment
+        # would silently keep only the last of them.
+        band = series.setdefault(traffic_label(portnum, payload_state), {})
+        band[moment] = band.get(moment, 0) + total
     totals = {name: sum(values.values()) for name, values in series.items()}
     return {
         "buckets": buckets,

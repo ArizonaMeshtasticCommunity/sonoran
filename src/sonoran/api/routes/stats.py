@@ -13,16 +13,8 @@ from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
+from sonoran.decode.portnums import traffic_label
 from sonoran.meshtastic import portnums_pb2
-
-
-def _portnum_name(value: int) -> str:
-    """Return the protobuf name of a port number, or the number itself."""
-    try:
-        return portnums_pb2.PortNum.Name(value)  # type: ignore[attr-defined]
-    except ValueError:
-        return str(value)
-
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -166,11 +158,19 @@ async def portnums(
 async def _read_portnums(session: AsyncSession) -> list[dict[str, object]]:
     """Group every packet ever kept by its port number."""
     rows = await session.execute(
-        select(Packet.portnum, func.count().label("total")).group_by(Packet.portnum)
+        # By state as well as port: a portnum of 0 is four different
+        # things and this listing called all of them UNKNOWN_APP (#157).
+        select(Packet.portnum, Packet.payload_state, func.count().label("total")).group_by(
+            Packet.portnum, Packet.payload_state
+        )
     )
     return [
-        {"portnum": portnum, "name": _portnum_name(portnum), "count": total}
-        for portnum, total in rows.all()
+        {
+            "portnum": portnum,
+            "name": traffic_label(portnum, payload_state),
+            "count": total,
+        }
+        for portnum, payload_state, total in rows.all()
     ]
 
 
@@ -405,14 +405,14 @@ async def activity(
     bucket = func.date_trunc("hour", Packet.first_seen_at).label("hour")
     rows = (
         await session.execute(
-            select(bucket, Packet.portnum, func.count().label("total"))
+            select(bucket, Packet.portnum, Packet.payload_state, func.count().label("total"))
             # The upper bound is not redundant. `packet.first_seen_at`
             # holds the gateway's own clock when it sent one, and those
             # clocks run wrong: rows dated more than a day ahead exist.
             # Without this the chart grows hours that have not happened.
             # See docs/ISSUES.md 1.5.
             .where(Packet.first_seen_at >= start, Packet.first_seen_at <= now)
-            .group_by(bucket, Packet.portnum)
+            .group_by(bucket, Packet.portnum, Packet.payload_state)
             .order_by(bucket)
         )
     ).all()
@@ -421,13 +421,19 @@ async def activity(
     seen: set[datetime] = set()
     totals: dict[str, int] = {}
     series: dict[str, dict[datetime, int]] = {}
-    for moment, portnum, total in rows:
+    for moment, portnum, payload_state, total in rows:
         if moment not in seen:
             seen.add(moment)
             hours_seen.append(moment)
-        name = _portnum_name(portnum)
+        name = traffic_label(portnum, payload_state)
         totals[name] = totals.get(name, 0) + total
-        series.setdefault(name, {})[moment] = total
+        # `+=`, not `=`. Grouping by state as well as port means one
+        # band can now be reached by more than one row in the same
+        # bucket -- a readable portnum 0 and a PKI one both land on
+        # different names, but two states that map to the same name
+        # would otherwise have the later row overwrite the earlier.
+        band = series.setdefault(name, {})
+        band[moment] = band.get(moment, 0) + total
 
     # Busiest family first, so a stacked chart reads from the bottom.
     order = sorted(totals, key=lambda name: -totals[name])

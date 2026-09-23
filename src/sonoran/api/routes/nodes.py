@@ -42,6 +42,7 @@ from sonoran.db.models import (
     PowerMetrics,
     TextMessage,
 )
+from sonoran.decode.portnums import traffic_label
 from sonoran.gaps import store as gaps_store
 from sonoran.gaps.signals import position_confidence
 from sonoran.meshtastic import portnums_pb2
@@ -95,14 +96,6 @@ def _summary(node: Node) -> NodeSummary:
             node.last_lat, node.last_lon, node.last_position_precision_bits, MIN_SITE_PRECISION_BITS
         )[0],
     )
-
-
-def _portnum_name(value: int) -> str:
-    """Return the protobuf name of a port number, or the number itself."""
-    try:
-        return portnums_pb2.PortNum.Name(value)  # type: ignore[attr-defined]
-    except ValueError:
-        return str(value)
 
 
 def _row_values(model: Any, row: object, skip: tuple[str, ...] = ("id",)) -> dict[str, object]:
@@ -225,15 +218,21 @@ async def _activity(session: AsyncSession, node_num: int, since: datetime) -> di
     """Return packet counts for one node in the selected window."""
     rows = (
         await session.execute(
-            select(Packet.portnum, func.count().label("total"))
+            # Grouped by the state as well as the port, because a
+            # portnum of 0 is four different things and this chart used
+            # to draw all of them as UNKNOWN_APP (#157).
+            select(Packet.portnum, Packet.payload_state, func.count().label("total"))
             .where(Packet.from_node_num == node_num, Packet.first_seen_at >= since)
-            .group_by(Packet.portnum)
+            .group_by(Packet.portnum, Packet.payload_state)
             .order_by(func.count().desc())
         )
     ).all()
     return {
         "packet_count": sum(row.total for row in rows),
-        "by_portnum": [{"portnum": _portnum_name(row.portnum), "count": row.total} for row in rows],
+        "by_portnum": [
+            {"portnum": traffic_label(row.portnum, row.payload_state), "count": row.total}
+            for row in rows
+        ],
     }
 
 
@@ -1061,7 +1060,8 @@ async def node_packets(
         rows.append(
             {
                 "packet_id": item.packet_id,
-                "portnum": _portnum_name(item.portnum),
+                # `select(Packet)` above, so the state is on the row.
+                "portnum": traffic_label(item.portnum, item.payload_state),
                 "channel": item.channel,
                 "seen_at": item.first_seen_at,
                 "from_node": format_node_id(item.from_node_num),
