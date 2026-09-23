@@ -210,6 +210,10 @@ function drawResult(page) {
   ]);
 
   $('[data-config-exports]', page).hidden = false;
+  // The optional panel is only useful once there is a config to apply
+  // it to, and it appears with the export controls for that reason.
+  const extras = $('[data-config-extras]', page);
+  if (extras) extras.hidden = false;
 }
 
 /** Say which config is loaded, and from where. */
@@ -255,6 +259,8 @@ async function loadFile(page, file) {
     state.result = null;
     replace($('[data-config-result]', page));
     $('[data-config-exports]', page).hidden = true;
+    const extras = $('[data-config-extras]', page);
+    if (extras) extras.hidden = true;
     setNotice(page, explain(error), 'bad');
     /*
      * "Today, when the checker breaks on a real config, we never find
@@ -363,7 +369,11 @@ function download(data, filename, mimeType) {
 function exportFixed(page) {
   if (!state.config) return;
   try {
-    const fixed = ConfigFixer.fix(state.config, state.region, state.nodeType);
+    const extras = readExtras(page);
+    if (extras === null) return;
+    const fixed = ConfigFixer.fix(
+      state.config, state.region, state.nodeType, extras.overrides, extras.mqtt,
+    );
     const out = ConfigFixer.exportFixed(fixed, state.fileName, !state.fileName);
     download(out.data, out.filename, out.mimeType);
     setNotice(page, `Corrected config saved as ${out.filename}.`, '');
@@ -443,6 +453,8 @@ function wire(page) {
     });
   }
 
+  wireExtras(page);
+
   const input = $('[data-config-file]', page);
   input.addEventListener('change', () => loadFile(page, input.files[0]));
 
@@ -499,3 +511,98 @@ async function show(page) {
 
 window.SonoranConfigCheck = { show };
 if (window.sonoranConfigLoaded) window.sonoranConfigLoaded();
+
+
+/* ------------------------------------- MQTT and editable values (#118) */
+
+/*
+ * Read the optional panel, or refuse the export and say why.
+ *
+ * Returns null when a value cannot be read, having shown the reason.
+ * #118: "a bad value blocks export with a clear message" -- exporting
+ * a config with a silently-dropped interval is worse than not
+ * exporting, because the reader flashes it and finds out on the mesh.
+ *
+ * PRIVACY. The MQTT password is read straight out of the field and
+ * handed to the fixer, which puts it in the downloaded file. It is
+ * never written to `localStorage`, never sent anywhere, and there is
+ * deliberately no "remember me": this page's whole promise is that
+ * nothing leaves the device, and a stored broker password would be the
+ * one thing on it worth stealing.
+ */
+function readExtras(page) {
+  const panel = $('[data-config-extras]', page);
+  const error = $('[data-config-extras-error]', page);
+  if (error) { error.hidden = true; error.textContent = ''; }
+  if (!panel) return { overrides: undefined, mqtt: undefined };
+
+  const overrides = {};
+  for (const field of $$('[data-override]', page)) {
+    const raw = field.value.trim();
+    if (!raw) continue;
+    if (!Number.isFinite(secondsFrom(raw))) {
+      if (error) {
+        error.textContent =
+          `"${raw}" is not a time this understands. Use 30m, 1.5h, 2d, or a ` +
+          'number of seconds. Nothing was exported.';
+        error.hidden = false;
+      }
+      field.focus();
+      return null;
+    }
+    overrides[field.dataset.override] = raw;
+  }
+
+  const enabled = $('[data-mqtt="enabled"]', page);
+  const mqtt = enabled && enabled.checked
+    ? {
+      enabled: true,
+      address: $('[data-mqtt="address"]', page).value.trim(),
+      username: $('[data-mqtt="username"]', page).value.trim(),
+      password: $('[data-mqtt="password"]', page).value,
+    }
+    : undefined;
+
+  return { overrides: Object.keys(overrides).length ? overrides : undefined, mqtt };
+}
+
+/*
+ * The same forms upstream's `parseTimeInput` accepts, checked here so
+ * the reader is told before the export rather than after.
+ *
+ * Not imported, because upstream keeps it inside a closure in
+ * `fixer.js` and does not export it. So this is a second copy of one
+ * regular expression, and the risk is that they drift. The test for
+ * this holds BOTH against the same table of inputs, which is the
+ * cheapest way to find out if they ever do.
+ */
+function secondsFrom(text) {
+  const value = String(text).trim().toLowerCase();
+  if (!value) return NaN;
+  const match = value.match(
+    /^([0-9]*\.?[0-9]+)\s*(d|days?|h|hr|hrs|hours?|m|min|mins|minutes?|s|sec|secs|seconds?)?$/,
+  );
+  if (!match) {
+    const plain = Number(value);
+    return Number.isNaN(plain) ? NaN : plain;
+  }
+  const amount = parseFloat(match[1]);
+  const unit = match[2] || '';
+  if (!unit || unit.startsWith('s')) return Math.round(amount);
+  if (unit.startsWith('m')) return Math.round(amount * 60);
+  if (unit.startsWith('h')) return Math.round(amount * 3600);
+  if (unit.startsWith('d')) return Math.round(amount * 86400);
+  return Math.round(amount);
+}
+
+/** Put every editable field back to the recommendation. */
+function wireExtras(page) {
+  const reset = $('[data-config-extras-reset]', page);
+  if (reset) {
+    reset.addEventListener('click', () => {
+      for (const field of $$('[data-override]', page)) field.value = '';
+      const error = $('[data-config-extras-error]', page);
+      if (error) error.hidden = true;
+    });
+  }
+}
