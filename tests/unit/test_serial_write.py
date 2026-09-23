@@ -116,3 +116,66 @@ def test_it_does_not_port_the_cli_string_approach() -> None:
         "the comment warning the next person off the CLI approach is gone, "
         "so this test is now the only record of it"
     )
+
+
+# ------------------------------------------------------------ the UI
+
+
+def _config_check() -> str:
+    return (ROOT / "src" / "sonoran" / "web" / "static" / "config-check.js").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_a_protected_row_is_never_offered_as_a_tick_box() -> None:
+    """A tick box implies a choice the reader should not make casually.
+
+    Protected rows are reported in a sentence underneath instead, so
+    the reader knows they exist and that they were left alone. Verified
+    in a browser against a node reporting an admin key: the note reads
+    "1 security setting (security.adminKey) will not be written.
+    Changing these can lock you out of your own node." and the row is
+    absent from the list.
+    """
+    body = _config_check()
+    start = body.index("function drawSerialPlan(")
+    plan = body[start : body.index("\n}", start)]
+    assert "rows.filter((row) => !row.protected)" in plan, (
+        "the preview no longer separates protected rows, so a channel PSK "
+        "or an admin key can be ticked like any other setting"
+    )
+    assert "lock you out of your own node" in body, (
+        "the sentence explaining why those settings were skipped is gone"
+    )
+
+
+def test_the_backup_is_written_before_the_change_not_after() -> None:
+    """A backup taken after a failed write is a backup of the wreckage."""
+    body = _config_check()
+    start = body.index("async function applySerial(")
+    apply_body = body[start : body.index("\n}\n", start)]
+    backup = apply_body.index("data-serial-backup")
+    confirm = apply_body.index("window.confirm")
+    assert backup < confirm, (
+        "the backup is offered after the confirmation, so a reader who "
+        "confirms quickly can write before anything is saved"
+    )
+
+
+def test_the_reader_is_told_when_the_mesh_changes() -> None:
+    """Region and preset move the node to a different mesh (#117).
+
+    Verified in a browser: "This changes which mesh the node is on:
+    modemPreset unset -> 4, channelNum unset -> 18 ...".
+    """
+    assert "changes which mesh the node is on" in _config_check()
+
+
+def test_the_port_is_released_when_the_page_goes_away() -> None:
+    """A port left open blocks the Meshtastic app and the CLI.
+
+    `readConfig` closes its own port; this covers the reader
+    navigating away mid-read, which that cannot.
+    """
+    body = _config_check()
+    assert "'pagehide'" in body, "nothing releases the serial port when the reader leaves the page"

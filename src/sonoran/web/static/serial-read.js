@@ -35,6 +35,21 @@ export const BAUD_RATE = 115200;
  */
 export const CONFIG_TIMEOUT_MS = 10_000;
 
+/*
+ * The sections a `Config` and a `ModuleConfig` can carry.
+ *
+ * Seeded empty on every read so a node that does not report a section
+ * does not make the checker throw on a field of it.
+ */
+const CONFIG_SECTIONS = Object.freeze([
+  'device', 'position', 'power', 'network', 'display', 'lora', 'bluetooth', 'security',
+]);
+const MODULE_SECTIONS = Object.freeze([
+  'mqtt', 'serial', 'externalNotification', 'storeForward', 'rangeTest', 'telemetry',
+  'cannedMessage', 'audio', 'remoteHardware', 'neighborInfo', 'ambientLighting',
+  'detectionSensor', 'paxcounter',
+]);
+
 /** The sentinel the read race resolves to when the clock wins. */
 const TIMED_OUT = Symbol('timed out');
 
@@ -87,7 +102,20 @@ export async function readConfig(port, {
 } = {}) {
   await port.open({ baudRate: BAUD_RATE });
   const decoder = new FrameDecoder();
-  const collected = { channels: [], config: {}, moduleConfig: {} };
+  const collected = {
+    channels: [],
+    // Every section seeded empty, because a node only sends the ones
+    // it has and `ConfigChecker` reads fields off them unguarded --
+    // `moduleConfig.mqtt.enabled` on a node that reported no MQTT
+    // section threw `Cannot read properties of undefined`, which
+    // reaches the reader as a stack trace rather than an answer.
+    //
+    // An absent section and an empty one mean the same thing here: no
+    // settings reported. That is not the same as "the defaults", and
+    // the checker already treats a missing field as unset.
+    config: Object.fromEntries(CONFIG_SECTIONS.map((name) => [name, {}])),
+    moduleConfig: Object.fromEntries(MODULE_SECTIONS.map((name) => [name, {}])),
+  };
   let reader = null;
   let writer = null;
   try {

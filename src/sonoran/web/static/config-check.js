@@ -34,6 +34,9 @@ import { ConfigFixer } from './vendor/config-checker/js/fixer.js';
  * blacklist written from memory is how PSKs end up in bug reports.
  */
 import { Diagnostics, STEPS } from './vendor/config-checker/js/diagnostics.js';
+import { readConfig, serialUnavailableReason } from './serial-read.js';
+import { planChanges, applyChanges } from './serial-write.js';
+import { frame as serialFrame } from './serial-frames.js';
 
 /*
  * Give the vendored code decoders that need no `new Function`.
@@ -454,6 +457,7 @@ function wire(page) {
   }
 
   wireExtras(page);
+  wireSerial(page);
 
   const input = $('[data-config-file]', page);
   input.addEventListener('change', () => loadFile(page, input.files[0]));
@@ -604,5 +608,194 @@ function wireExtras(page) {
       const error = $('[data-config-extras-error]', page);
       if (error) error.hidden = true;
     });
+  }
+}
+
+
+/* ------------------------------------------ connect by USB (#116, #117) */
+
+/*
+ * The button is shown only when the browser can actually do it, and
+ * replaced by one line when it cannot. A control that fails when
+ * pressed is worse than one that explains itself first -- #116 asks
+ * for exactly that wording: "USB needs Chrome or Edge on a computer.
+ * You can still upload an exported config."
+ */
+function wireSerial(page) {
+  const panel = $('[data-serial-panel]', page);
+  if (!panel) return;
+  panel.hidden = false;
+
+  const status = $('[data-serial-status]', page);
+  const connect = $('[data-serial-connect]', page);
+  const reason = serialUnavailableReason();
+  if (reason) {
+    connect.hidden = true;
+    status.textContent = reason;
+    status.hidden = false;
+    return;
+  }
+
+  let port = null;
+  const say = (message, tone = '') => {
+    status.textContent = message;
+    status.className = `notice${tone ? ` ${tone}` : ''}`;
+    status.hidden = !message;
+  };
+
+  const release = async () => {
+    // Belt and braces: `readConfig` closes the port itself, and this
+    // runs if the reader navigates away mid-read. A port left open
+    // blocks the Meshtastic app and the CLI.
+    if (!port) return;
+    try { await port.close(); } catch { /* already closed */ }
+    port = null;
+    $('[data-serial-disconnect]', page).hidden = true;
+  };
+  window.addEventListener('pagehide', release);
+
+  connect.addEventListener('click', async () => {
+    try {
+      // Must be inside the click handler: the browser only grants a
+      // port chooser in response to a gesture.
+      port = await navigator.serial.requestPort();
+      $('[data-serial-disconnect]', page).hidden = false;
+      say('Connecting…');
+      const { root, FromRadio, ToRadio } = await serialSchema();
+      const config = await readConfig(port, {
+        decode: (bytes) => FromRadio.toObject(FromRadio.decode(bytes), { longs: Number }),
+        encodeWantConfig: (id) =>
+          ToRadio.encode(ToRadio.fromObject({ wantConfigId: id })).finish(),
+        onProgress: (line) => say(line),
+      });
+      port = null;
+      $('[data-serial-disconnect]', page).hidden = true;
+      state.config = config;
+      state.fileName = 'node-over-usb';
+      say('Read the configuration. Checking it…');
+      await run(page);
+      drawSerialPlan(page);
+      say('');
+    } catch (error) {
+      await release();
+      say(String((error && error.message) || error), 'bad');
+      recordFailure(page, STEPS.SERIAL_READ, error, null);
+    }
+  });
+
+  $('[data-serial-disconnect]', page).addEventListener('click', release);
+  $('[data-serial-apply]', page).addEventListener('click', () => applySerial(page));
+}
+
+/** protobuf.js over the generated descriptor, built once. */
+let serialRoot = null;
+async function serialSchema() {
+  if (serialRoot) return serialRoot;
+  const pb = window.protobuf;
+  if (!pb) throw new Error('The protobuf library did not load, so USB is unavailable.');
+  const root = pb.Root.fromJSON(window.MeshtasticSerialProto);
+  serialRoot = {
+    root,
+    FromRadio: root.lookupType('meshtastic.FromRadio'),
+    ToRadio: root.lookupType('meshtastic.ToRadio'),
+  };
+  return serialRoot;
+}
+
+/**
+ * Show every change before anything is written (#117).
+ *
+ * One tick box per row, so nothing can be written that was not shown
+ * and chosen. Protected rows are not offered at all -- they are
+ * counted in a line underneath instead, because a tick box implies a
+ * choice the reader should not be casually making with a PSK.
+ */
+function drawSerialPlan(page) {
+  const wrap = $('[data-serial-plan]', page);
+  if (!wrap || !state.config || !state.result) return;
+  const fixed = ConfigFixer.fix(state.config, state.region, state.nodeType);
+  const rows = planChanges(state.config, fixed);
+  const offered = rows.filter((row) => !row.protected);
+  const guarded = rows.filter((row) => row.protected);
+
+  replace($('[data-serial-rows]', page), offered.map((row) => el('li', {},
+    el('label', { class: 'stack' },
+      el('input', { type: 'checkbox', checked: true, 'data-serial-row':
+        `${row.group}.${row.section}.${row.field}` }),
+      ` ${row.section}.${row.field}: ${format(row.from)} → ${format(row.to)}`))));
+
+  const protectedNote = $('[data-serial-protected]', page);
+  protectedNote.textContent = guarded.length
+    ? `${guarded.length} security setting${guarded.length === 1 ? '' : 's'} `
+      + `(${guarded.map((r) => `${r.section}.${r.field}`).join(', ')}) `
+      + 'will not be written. Changing these can lock you out of your own node.'
+    : '';
+  protectedNote.hidden = !guarded.length;
+
+  const mesh = offered.filter((row) => row.changesMesh);
+  const warning = $('[data-serial-mesh-warning]', page);
+  warning.textContent = mesh.length
+    ? 'This changes which mesh the node is on: '
+      + `${mesh.map((r) => `${r.field} ${format(r.from)} → ${format(r.to)}`).join(', ')}. `
+      + 'It will stop hearing its current mesh.'
+    : '';
+  warning.hidden = !mesh.length;
+
+  wrap.hidden = !offered.length;
+}
+
+function format(value) {
+  if (value === undefined || value === null) return 'unset';
+  return String(value);
+}
+
+/** Write what was ticked, after a backup and a confirmation. */
+async function applySerial(page) {
+  const fixed = ConfigFixer.fix(state.config, state.region, state.nodeType);
+  const ticked = new Set(
+    $$('[data-serial-row]', page).filter((box) => box.checked)
+      .map((box) => box.dataset.serialRow),
+  );
+  const rows = planChanges(state.config, fixed)
+    .filter((row) => ticked.has(`${row.group}.${row.section}.${row.field}`));
+  if (!rows.length) return;
+
+  if ($('[data-serial-backup]', page).checked) {
+    // Before, not after. A backup written after a failed write is a
+    // backup of whatever the node ended up as.
+    const out = ConfigFixer.exportFixed(state.config, 'node-backup', true);
+    download(out.data, out.filename, out.mimeType);
+  }
+
+  const name = (state.config.myInfo && state.config.myInfo.myNodeNum) || 'this node';
+  // eslint-disable-next-line no-alert
+  if (!window.confirm(`Write ${rows.length} setting${rows.length === 1 ? '' : 's'} to ${name} and reboot it?`)) {
+    return;
+  }
+
+  const status = $('[data-serial-status]', page);
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    const { root } = await serialSchema();
+    const AdminMessage = root.lookupType('meshtastic.AdminMessage');
+    const writer = port.writable.getWriter();
+    const result = await applyChanges(rows, {
+      send: async (message) => {
+        const bytes = AdminMessage.encode(AdminMessage.fromObject(message)).finish();
+        await writer.write(serialFrame(bytes));
+      },
+      onProgress: (line) => { status.textContent = line; status.hidden = false; },
+    });
+    writer.releaseLock();
+    await port.close();
+    status.textContent = `Wrote ${result.written} setting${result.written === 1 ? '' : 's'}. `
+      + 'The node is rebooting; reconnect to check it took.';
+    status.hidden = false;
+  } catch (error) {
+    status.textContent = String((error && error.message) || error);
+    status.className = 'notice bad';
+    status.hidden = false;
+    recordFailure(page, STEPS.SERIAL_APPLY, error, null);
   }
 }
