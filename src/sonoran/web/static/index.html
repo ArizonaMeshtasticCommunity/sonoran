@@ -888,7 +888,21 @@
                 (#61). Web Serial needs Chrome or Edge on a computer. This
                 page keeps to the parts it draws itself.
               -->
-              <p class="sub">Node plugged in by USB? <a class="linky" href="https://cfgtest.azmsh.dev" target="_blank" rel="noopener">cfgtest.azmsh.dev</a> reads the config straight off it, with no export step (Chrome or Edge on a computer).</p>
+              <!--
+                This used to point at cfgtest for the USB path, on the
+                grounds that this page had no such thing. It does now
+                (#116, #117), so the sentence was simply false.
+
+                cfgtest is still named, as a fallback rather than as
+                the answer, and #115 asks for the link to be removed
+                entirely. It is NOT removed yet, and the reason is
+                specific: cfgtest's USB path has been used against real
+                boards and this one has not. Removing the fallback on
+                the strength of a simulator would be promising parity
+                that nothing has checked. See docs/USB-HARDWARE-TEST.md
+                -- when that comes back clean, this line goes.
+              -->
+              <p class="sub">Node plugged in by USB? Use <strong>Connect a node by USB</strong> below &mdash; it reads the config straight off the node, with no export step (Chrome or Edge on a computer). If that does not work for your board, <a class="linky" href="https://cfgtest.azmsh.dev" target="_blank" rel="noopener">cfgtest.azmsh.dev</a> does the same thing and has been used against more hardware.</p>
             </div>
             <!--
             Optional MQTT, and settings a reader can change before
