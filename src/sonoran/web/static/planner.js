@@ -1008,6 +1008,28 @@ function writeSummary(threshold) {
 
   const budget = linkBudget(request, threshold);
 
+  /*
+   * How far short of the nearest node you missed (#113).
+   *
+   * "What would help most" needs no re-run to answer usefully. Every
+   * missed node already carries the level it would have received, and
+   * the difference from the threshold is the number a reader can act
+   * on: 2 dB is a better cable, 12 dB is a different site.
+   *
+   * The issue's other tip -- "raising the antenna 3 m reaches N more
+   * nodes" -- does need a re-run per suggestion, and is not here.
+   *
+   * Nodes with a null level were outside the predicted area entirely.
+   * They are not "nearly reached" and must not be offered as though a
+   * decibel or two would fix them.
+   */
+  const shortfalls = missed
+    .filter((item) => item.level != null)
+    .map((item) => ({ node: item.node, short: threshold - item.level }))
+    .filter((item) => item.short > 0)
+    .sort((a, b) => a.short - b.short);
+  const nearest = shortfalls[0] || null;
+
   replace(body, [
     el('div', { class: 'grid' },
       statTile('Nodes reached', `${reached.length} of ${withPosition.length}`),
@@ -1017,7 +1039,16 @@ function writeSummary(threshold) {
     el('section', { class: 'link-budget' },
       el('h4', { text: 'Where the power goes' }),
       el('ul', {}, ...budget.lines.map((line) => el('li', { text: line }))),
-      budget.note ? el('p', { class: 'link-budget-note', text: budget.note }) : null),
+      budget.note ? el('p', { class: 'link-budget-note', text: budget.note }) : null,
+      nearest
+        ? el('p', { class: 'link-budget-near' },
+          `Nearest node you did not reach: ${nearest.node.display_name || nearest.node.node_id}, `
+          + `short by ${nearest.short.toFixed(1)} dB.`
+          + (shortfalls.length > 1
+            ? ` ${count(shortfalls.filter((item) => item.short <= nearest.short + 3).length)} `
+              + 'within 3 dB of that.'
+            : ''))
+        : null),
     el('p', { class: 'muted', style: 'margin:.75rem 0 .25rem;font-size:.82rem' },
       'A prediction, not a promise. It assumes clear ground and the ' +
       'receiver figures in the form. Real radios do worse.'),

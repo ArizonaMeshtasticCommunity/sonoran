@@ -94,3 +94,37 @@ def test_the_local_server_serves_module_and_wasm_types() -> None:
     """
     assert "'.mjs': 'application/javascript'" in SERVE
     assert "'.wasm': 'application/wasm'" in SERVE
+
+
+def test_it_says_how_far_short_the_nearest_miss_was() -> None:
+    """ "What would help most", answered without an engine re-run (#113).
+
+    The tiles say how many nodes were reached. They do not say whether
+    the next one was 0.5 dB away or 30, and that is the difference
+    between "buy a better cable" and "pick a different hill".
+
+    Every missed node already carries the level it would have received,
+    so the shortfall is arithmetic on data the summary has in hand.
+
+    Measured after a real prediction:
+
+        "Nearest node you did not reach: Hoodrat, short by 0.5 dB.
+         23 within 3 dB of that."
+
+    The issue's other tip -- "raising the antenna 3 m reaches N more
+    nodes" -- genuinely needs a re-run per suggestion and is not built.
+    """
+    start = PLANNER.index("const shortfalls = missed")
+    body = PLANNER[start : start + 700]
+    assert "item.level != null" in body, (
+        "nodes outside the predicted area have no level, and offering "
+        "them as 'nearly reached' would be a lie a decibel cannot fix"
+    )
+    assert "item.short > 0" in body, "nodes that were reached are counted as misses"
+    assert "link-budget-near" in PLANNER, "the shortfall is computed and never shown"
+
+
+def test_the_shortfall_is_sorted_so_the_nearest_is_first() -> None:
+    """ "Nearest" has to mean nearest, not first in the node list."""
+    start = PLANNER.index("const shortfalls = missed")
+    assert ".sort((a, b) => a.short - b.short)" in PLANNER[start : start + 700]

@@ -2133,6 +2133,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .link-budget { margin: .9rem 0 .3rem; }
 .link-budget h4 { margin: 0 0 .4rem; }
 .link-budget ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .2rem; font-size: .84rem; }
+.link-budget-near { margin: .5rem 0 0; font-size: .82rem; }
 .link-budget-note {
   margin: .5rem 0 0;
   padding: .5rem .65rem;
