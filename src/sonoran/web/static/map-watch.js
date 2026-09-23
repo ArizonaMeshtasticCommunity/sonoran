@@ -469,6 +469,21 @@ const SonoranWatch = (() => {
       const node = document.activeElement;
       const tagName = node && node.tagName;
       if (tagName === 'INPUT' || tagName === 'SELECT' || tagName === 'TEXTAREA') return;
+      /*
+       * And anywhere else somebody is typing.
+       *
+       * The three tag names above are not the whole set. A
+       * `contenteditable` region takes text exactly like a textarea and
+       * has none of those tags, so every one of these single keys --
+       * F, T, E, 1, 2, Space -- reached the map instead of the text.
+       * `isContentEditable` is inherited, so it is true inside a nested
+       * element of an editable region as well as on the region itself.
+       *
+       * This is the narrow half of WCAG 2.1.4. The rest of it, that
+       * these shortcuts have no modifier and no off switch, is a
+       * product decision and is tracked on #147.
+       */
+      if (node && node.isContentEditable) return;
       const key = event.key;
       if (key === 'f' || key === 'F') { event.preventDefault(); toggle(); return; }
       if (!on) return;
