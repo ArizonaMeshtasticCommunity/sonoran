@@ -1195,6 +1195,57 @@ function cableLossDb(cable, feet) {
 }
 
 /*
+ * Simple or Advanced (#113).
+ *
+ * Simple hides the boxes the pickers fill -- transmit power, both
+ * antenna gains, cable loss -- and leaves the pickers, the site and the
+ * height. Advanced is today's form, unchanged.
+ *
+ * NOTHING IS REMOVED FROM THE DOM and no value is cleared. Hiding is
+ * `display: none` on the label, so every field keeps whatever the
+ * pickers put in it, `readForm` still reads it, and the share link
+ * still carries it. Switching mode changes what a person is ASKED for
+ * and never what gets predicted -- which is the only way this is safe
+ * to add to a form somebody may already have filled in.
+ *
+ * Simple is the default for a first visit, because the reader who
+ * benefits from it is by definition the one who has not been here
+ * before. The choice is remembered per browser.
+ */
+const MODE_STORE = 'sonoran.plannerMode';
+
+function plannerMode() {
+  try {
+    return localStorage.getItem(MODE_STORE) === 'advanced' ? 'advanced' : 'simple';
+  } catch {
+    return 'simple';
+  }
+}
+
+function applyPlannerMode(mode) {
+  const form = document.querySelector('[data-planner-form]');
+  if (!form) return;
+  form.classList.toggle('is-simple', mode === 'simple');
+  for (const button of document.querySelectorAll('[data-planner-mode]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.plannerMode === mode));
+  }
+  try {
+    localStorage.setItem(MODE_STORE, mode);
+  } catch {
+    /* The mode still applies for this page. */
+  }
+}
+
+function wirePlannerMode() {
+  const buttons = [...document.querySelectorAll('[data-planner-mode]')];
+  if (!buttons.length) return;
+  for (const button of buttons) {
+    button.addEventListener('click', () => applyPlannerMode(button.dataset.plannerMode));
+  }
+  applyPlannerMode(plannerMode());
+}
+
+/*
  * Pick the board instead of typing its transmit power (#110, #113).
  *
  * "Power (dBm)" is a number most people have never looked up. The board
@@ -1420,6 +1471,7 @@ function wirePlanner() {
 
   // The cable helper reveals itself only once the catalogue has
   // arrived, so a failed fetch leaves no dead controls on the form.
+  wirePlannerMode();
   wireBoardRun();
   wireCableRun();
   wireAntennaRun('tx', 'tx_gain');

@@ -714,7 +714,19 @@
           <p class="muted" data-planner-progress style="min-height: 1.2rem; font-size: .82rem"></p>
 
           <div class="planner-layout">
-            <div class="panel planner-form">
+            <div class="panel planner-form" data-planner-form>
+              <!--
+                Simple hides the boxes the pickers fill, not the pickers
+                (#113). Everything stays in the DOM and keeps its value,
+                so switching mode changes what is asked for and never
+                what is predicted.
+              -->
+              <div class="mode-switch" role="group" aria-label="How much detail">
+                <button type="button" class="toggle" data-planner-mode="simple"
+                        aria-pressed="true">Simple</button>
+                <button type="button" class="toggle" data-planner-mode="advanced"
+                        aria-pressed="false">Advanced</button>
+              </div>
               <h3>Transmitter</h3>
               <label>Site name <input data-planner="site_name" placeholder="Ridge above the pass" /></label>
               <div class="pair">
@@ -735,10 +747,10 @@
               <p class="muted board-note" data-board-note hidden></p>
               <div class="pair">
                 <label>Antenna height (m) <input data-planner="tx_height" inputmode="decimal" /></label>
-                <label>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
+                <label data-advanced-only>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
               </div>
               <div class="pair">
-                <label>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
+                <label data-advanced-only>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
                 <label>Frequency (MHz) <input data-planner="frequency_mhz" inputmode="decimal" /></label>
               </div>
               <!--
@@ -760,8 +772,8 @@
                 <label>Height (m) <input data-planner="rx_height" inputmode="decimal" /></label>
               </div>
               <div class="pair">
-                <label>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
-                <label>Cable loss (dB), each end
+                <label data-advanced-only>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
+                <label data-advanced-only>Cable loss (dB), each end
                   <input data-planner="system_loss" inputmode="decimal" /></label>
               </div>
               <!--
