@@ -288,3 +288,49 @@ ships in a container.
 **What remains genuinely hardware-only:** the USB transport — CDC-ACM
 chunking, the reboot a commit triggers, port release, nRF52 against
 ESP32. That gap is real, and much narrower than "needs a board".
+
+### The integration suite is made to run locally, not routed around
+
+**Decided:** turn testcontainers' reaper off in
+`tests/integration/conftest.py`, and set `SONORAN_REQUIRE_INTEGRATION`
+in the `test` job so a container that will not start is red.
+
+All 166 database-backed tests skipped on any Mac running Colima. The
+cause was already written into the conftest docstring — testcontainers'
+Ryuk sidecar bind-mounts the Docker socket, and Colima's socket sits on
+a virtiofs mount where that is "operation not supported" — and the
+response at the time was a documented workaround: start a Postgres
+container by hand and point `SONORAN_TEST_DATABASE_URL` at it. The
+one-line fix, turning the reaper off, was never tried.
+
+That is the same mistake as the USB work above, in a second place: the
+boundary was diagnosed accurately and then **defended rather than
+tested**. A correct diagnosis is not a reason to stop.
+
+**Measured, three arms on one machine:**
+
+| reaper | guard | result |
+|---|---|---|
+| on | off | 14 skipped — the false green, and how it looked for months |
+| on | armed | 14 failed, message naming the variable |
+| off (the fix) | armed | 166 passed |
+
+**What the guard is for.** pytest prints a skip and a pass on the same
+summary line, so losing 166 tests looks identical to running them. CI
+does run them today — run 35914127599 reports `1516 passed, 1 skipped`
+— so this was local blindness and not a CI hole, which is worth stating
+plainly because the first version of this note claimed otherwise before
+the log was read. The variable makes CI's green mean "they ran" rather
+than "nothing objected".
+
+**The cost, stated:** without Ryuk, a test run killed outright can
+leave one container behind. `timescale_url` already stops the container
+on every ordinary exit, so the reaper was only ever insurance against
+the abnormal one — and it was charging every local run for it.
+
+**What would change this:** a Colima release that can bind-mount its
+own socket, or a testcontainers reaper that does not need one.
+
+**Held by:** `tests/unit/test_integration_suite_runs.py`, which calls
+both helpers rather than grepping for them, and covers the spellings of
+the variable a workflow might use.
