@@ -702,40 +702,48 @@ function drawNodes() {
       fillOpacity: reached === false ? 0.2 : faded ? 0.15 : 0.6,
       opacity: faded ? 0.35 : 1,
     });
-    const lines = [
-      el('div', { style: 'font-weight:650' }, node.display_name || node.node_id),
-      el('div', { class: 'muted', style: 'font-size:.8rem' }, node.node_id),
-      // The colour on the map means nothing without the word for it,
-      // and it is the same word the other pages use.
-      el('div', { class: 'muted', style: 'font-size:.8rem' },
-        roleLabel(node.role) + (node.is_mqtt_gateway ? ', gateway' : '')),
-    ];
-    if (reached != null) {
+    /* Built on open, not on draw.
+     *
+     * Every node on the map used to get its popup DOM and its two
+     * button listeners whether or not anybody clicked it. Leaflet
+     * takes a function here and calls it when the popup opens, so
+     * the cost is proportional to clicks instead of to nodes. */
+    marker.bindPopup(() => {
+      const lines = [
+        el('div', { style: 'font-weight:650' }, node.display_name || node.node_id),
+        el('div', { class: 'muted', style: 'font-size:.8rem' }, node.node_id),
+        // The colour on the map means nothing without the word for it,
+        // and it is the same word the other pages use.
+        el('div', { class: 'muted', style: 'font-size:.8rem' },
+          roleLabel(node.role) + (node.is_mqtt_gateway ? ', gateway' : '')),
+      ];
+      if (reached != null) {
+        lines.push(
+          el('div', { style: `font-size:.85rem;color:${reached ? PALETTE.good : PALETTE.muted}` },
+            reached ? `Reached, about ${level.toFixed(1)} dBm` : 'Not reached'),
+        );
+      }
+      // The buttons sit in their own row. Two `.linky` buttons side by
+      // side have no space between them and read as one run-on phrase.
       lines.push(
-        el('div', { style: `font-size:.85rem;color:${reached ? PALETTE.good : PALETTE.muted}` },
-          reached ? `Reached, about ${level.toFixed(1)} dBm` : 'Not reached'),
+        el('div', { class: 'popup-actions' },
+          el('button', {
+            class: 'linky',
+            type: 'button',
+            text: 'Use as the site',
+            onclick: () => setSite(node.lat, node.lon, node.display_name || node.node_id, node.altitude),
+          }),
+          state.result
+            ? el('button', {
+                class: 'linky',
+                type: 'button',
+                text: 'Check this link',
+                onclick: () => runLink(node),
+              })
+            : null),
       );
-    }
-    // The buttons sit in their own row. Two `.linky` buttons side by
-    // side have no space between them and read as one run-on phrase.
-    lines.push(
-      el('div', { class: 'popup-actions' },
-        el('button', {
-          class: 'linky',
-          type: 'button',
-          text: 'Use as the site',
-          onclick: () => setSite(node.lat, node.lon, node.display_name || node.node_id, node.altitude),
-        }),
-        state.result
-          ? el('button', {
-              class: 'linky',
-              type: 'button',
-              text: 'Check this link',
-              onclick: () => runLink(node),
-            })
-          : null),
-    );
-    marker.bindPopup(el('div', {}, ...lines));
+      return el('div', {}, ...lines);
+    });
     marker.addTo(state.nodeLayer);
   }
 }
