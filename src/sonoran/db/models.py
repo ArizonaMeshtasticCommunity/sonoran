@@ -114,6 +114,11 @@ class Packet(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     raw_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
     payload_json: Mapped[dict | None] = mapped_column(JSONB)
+    # Why the payload could or could not be read: one of
+    # `sonoran.decode.payload_state.PayloadState`, or NULL for a row
+    # written before this was recorded. NULL is not a fourth state --
+    # see that module, and do not fold it into the commonest value.
+    payload_state: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "first_seen_at"),
