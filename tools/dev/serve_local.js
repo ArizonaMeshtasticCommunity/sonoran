@@ -24,8 +24,15 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..', '..', 'src', 'sonoran', 'web', 'static');
 const UPSTREAM = process.env.SONORAN_UPSTREAM || 'http://203.0.113.10:8200';
 const PORT = Number(process.env.PORT || 8811);
-const TYPES = { '.js': 'application/javascript', '.css': 'text/css', '.html': 'text/html',
-                '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml' };
+// `.mjs` and `.wasm` are not optional here. The planner's engine is an
+// ES module worker that imports `splat_driver.mjs` and instantiates a
+// `.wasm` beside it; served as text/plain the import fails silently and
+// a prediction hangs forever on "Asking the engine which terrain it
+// needs", with nothing in the console to say why.
+const TYPES = { '.js': 'application/javascript', '.mjs': 'application/javascript',
+                '.wasm': 'application/wasm', '.css': 'text/css', '.html': 'text/html',
+                '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml',
+                '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
 
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');

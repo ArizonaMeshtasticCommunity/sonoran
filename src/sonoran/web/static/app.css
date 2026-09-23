@@ -2122,6 +2122,18 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .cable-run[hidden] { display: none; }
 .antenna-run[hidden] { display: none; }
 .antenna-note { font-size: .78rem; margin: .3rem 0 .6rem; }
+/* The link budget under the planner's summary tiles (#113). */
+.link-budget { margin: .9rem 0 .3rem; }
+.link-budget h4 { margin: 0 0 .4rem; }
+.link-budget ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .2rem; font-size: .84rem; }
+.link-budget-note {
+  margin: .5rem 0 0;
+  padding: .5rem .65rem;
+  border-left: 3px solid var(--warn);
+  background: var(--panel-2);
+  border-radius: .3rem;
+  font-size: .82rem;
+}
 .cable-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 
 /* The off switch for the single-key shortcuts (#147). Small and beside

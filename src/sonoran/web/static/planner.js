@@ -924,6 +924,61 @@ function showResult() {
   writeSummary(threshold);
 }
 
+/*
+ * The link budget, in sentences (#113).
+ *
+ * The summary tiles say how many nodes were reached. They do not say
+ * WHY, and "why" is the question somebody is actually asking when the
+ * answer disappoints: is it the radio, the antenna, the cable, or the
+ * hill?
+ *
+ * Every figure here is one the engine already used, restated in the
+ * order a person would say it aloud. Nothing is recomputed, so this
+ * cannot disagree with the prediction it sits beside.
+ *
+ * The cable line says "each end" because `system_loss` is applied at
+ * both -- see the note over `erpWatts` in planner-params.js. Saying it
+ * once here and twice in the arithmetic is how a reader ends up
+ * believing the planner is wrong.
+ */
+function linkBudget(request, threshold) {
+  const txPower = Number(request.tx_power);
+  const txGain = Number(request.tx_gain);
+  const rxGain = Number(request.rx_gain);
+  const loss = Number(request.system_loss);
+  const effective = txPower + txGain - loss;
+
+  const lines = [
+    `The radio sends ${txPower.toFixed(1)} dBm.`,
+    `Its antenna adds ${txGain.toFixed(1)} dB.`,
+  ];
+  if (loss > 0) {
+    lines.push(`The cable loses ${loss.toFixed(2)} dB at each end.`);
+  }
+  lines.push(`Effective power leaving the site: ${effective.toFixed(1)} dBm.`);
+  lines.push(
+    `At the far end, ${rxGain.toFixed(1)} dB of antenna gain is added and `
+    + `${loss.toFixed(2)} dB of cable is taken away, and the radio needs `
+    + `${threshold} dBm to hear it.`,
+  );
+
+  /*
+   * One observation, only when it is true and worth making.
+   *
+   * A cable that costs more than the antenna earns is the single most
+   * common way a well-meant upgrade makes a node worse, and it is
+   * invisible in a coverage map: the map just looks smaller than
+   * expected.
+   */
+  const note = loss > txGain
+    ? `Your cable loses more (${loss.toFixed(2)} dB) than your antenna gains `
+      + `(${txGain.toFixed(1)} dB). A shorter run, or a thicker cable, buys more `
+      + `than a bigger antenna would.`
+    : null;
+
+  return { lines, note };
+}
+
 function writeSummary(threshold) {
   const body = document.querySelector('[data-planner-summary]');
   if (!body) return;
@@ -951,12 +1006,18 @@ function writeSummary(threshold) {
     0,
   );
 
+  const budget = linkBudget(request, threshold);
+
   replace(body, [
     el('div', { class: 'grid' },
       statTile('Nodes reached', `${reached.length} of ${withPosition.length}`),
       statTile('Ground covered', `${area.toFixed(0)} km2`),
       statTile('Furthest node', furthest ? `${furthest.toFixed(1)} km` : 'none'),
       statTile('Receiver threshold', `${threshold} dBm`)),
+    el('section', { class: 'link-budget' },
+      el('h4', { text: 'Where the power goes' }),
+      el('ul', {}, ...budget.lines.map((line) => el('li', { text: line }))),
+      budget.note ? el('p', { class: 'link-budget-note', text: budget.note }) : null),
     el('p', { class: 'muted', style: 'margin:.75rem 0 .25rem;font-size:.82rem' },
       'A prediction, not a promise. It assumes clear ground and the ' +
       'receiver figures in the form. Real radios do worse.'),
