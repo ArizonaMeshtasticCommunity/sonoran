@@ -4148,15 +4148,17 @@ function showIssues() {
  * One health card: a name, a state in words and a shape, the measurement
  * behind it, and what would make it green.
  */
-function healthCard({ name, state, measure, green, evidence }) {
+function healthCard({ name, state, measure, green, evidence, glyph, link }) {
   const look = HEALTH_STATES[state] || HEALTH_STATES.unknown;
   return el('div', { class: `health-card state-${state}` },
     el('div', { class: 'health-head' },
-      el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: look.glyph }),
+      el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: glyph || look.glyph }),
       el('h3', { text: name })),
-    el('p', { class: 'health-state', text: look.word }),
+    // The Settings entry is not a check and has no state to report.
+    state === 'none' ? null : el('p', { class: 'health-state', text: look.word }),
     el('p', { class: 'health-measure', text: measure }),
-    el('p', { class: 'health-green muted', text: green }),
+    green ? el('p', { class: 'health-green muted', text: green }) : null,
+    link ? el('a', { class: 'linky', href: link.href, text: link.text }) : null,
     evidence
       ? el('button', { class: 'linky', type: 'button', text: 'See the evidence', onclick: showIssues })
       : null);
@@ -4173,7 +4175,7 @@ const signalState = (signal) => (signal ? signal.state : 'unknown');
  * what a signal means; it only picks which signals each card shows.
  * Power and position come from the node record, as #52 proposes.
  */
-function healthCards(gaps, detail) {
+function healthChecks(gaps, detail) {
   const primary = gaps && gaps.available && gaps.assessments.length ? gaps.assessments[0] : null;
   const row = primary ? primary.node : null;
   const signal = (name) => (row && row.signals ? row.signals[name] : null);
@@ -4257,8 +4259,16 @@ function healthCards(gaps, detail) {
   }[confidence] || ['unknown', 'Shares no position. That is optional on this mesh.'];
 
   const measured = (value, fallback) => (row ? value : fallback);
-  return el('div', { class: 'health-cards' },
-    healthCard({
+  /*
+   * The checks as DATA, not as cards.
+   *
+   * Two views read this now -- the compact summary at the top of the
+   * page and the full checklist behind "View all" (#95) -- and a
+   * summary that counted rendered DOM would have to parse the words
+   * back out of it.
+   */
+  return [
+    ({
       name: 'Heard over the air',
       state: heardState,
       measure: measured(
@@ -4268,7 +4278,7 @@ function healthCards(gaps, detail) {
       green: 'Green when a gateway other than itself hears it over the air, and more than one gateway hears it directly. Grey when nothing heard it directly, which this check cannot tell apart from a node several hops deep.',
       evidence: Boolean(row),
     }),
-    healthCard({
+    ({
       name: 'Signal margin',
       state: signalState(margin),
       measure: measured(
@@ -4279,7 +4289,7 @@ function healthCards(gaps, detail) {
       green: `Green when its best measured link is at least ${marginEvidence.margin_bad_db ?? 5} dB above what the preset needs.`,
       evidence: Boolean(row),
     }),
-    healthCard({
+    ({
       name: 'Gets out consistently',
       state: signalState(intermittent),
       measure: measured(
@@ -4290,31 +4300,141 @@ function healthCards(gaps, detail) {
       green: 'Green when something on the air hears it in most of the hours it is awake.',
       evidence: Boolean(row),
     }),
-    healthCard({
+    ({
       name: 'Heard back',
       state: signalState(heardBack),
       measure: measured((heardBack && heardBack.sentence) || 'Not measured.', notAssessed),
       green: 'Green when the nodes it hears also hear it.',
       evidence: Boolean(row),
     }),
-    healthCard({
+    ({
       name: 'Power',
       state: powerState,
       measure: powerMeasure,
       green: `Green on external power, or with the battery above ${BATTERY_WEAK} %.`,
     }),
-    healthCard({
+    ({
       name: 'Position',
       state: position[0],
       measure: position[1],
       green: 'Green whenever it shares a position, rounded or exact. Sharing one is optional.',
     }),
-    el('div', { class: 'health-card state-none' },
-      el('div', { class: 'health-head' },
-        el('span', { class: 'health-glyph', 'aria-hidden': 'true', text: '⚙' }),
-        el('h3', { text: 'Settings' })),
-      el('p', { class: 'health-measure', text: 'Check a config file against the community recommendations. Nothing leaves the browser.' }),
-      el('a', { class: 'linky', href: '#config', text: 'Open Config check' })));
+    ({
+      name: 'Settings',
+      // Not a check: there is nothing to pass or fail, so it is `none`
+      // and the summary leaves it out of every count.
+      state: 'none',
+      glyph: '⚙',
+      measure: 'Check a config file against the community recommendations. Nothing leaves the browser.',
+      green: null,
+      link: { href: '#config', text: 'Open Config check' },
+    }),
+  ];
+}
+
+/*
+ * The node's health in one panel, with everything behind one button.
+ *
+ * The health cards and "Potential issues" were the first two things on
+ * the node page and between them filled the first screen, so somebody
+ * opening the page to check the battery scrolled past two assessments
+ * of the same gaps data to reach it (#95).
+ *
+ * Two product calls, made here rather than asked about:
+ *
+ * 1. A COUNT AND A ROW OF DOTS, not a score or a ring. Several checks
+ *    can legitimately be `unknown`, so any single number would either
+ *    hide them or invent a denominator. "5 of 6 checks good" states the
+ *    denominator it used, and a screen reader gets it for nothing.
+ * 2. EXPANDS IN PLACE, not a modal or its own route. The full list is
+ *    long-form reading with evidence under each item, which a drawer
+ *    fights; and a route would need the node page's own routing
+ *    changed. If people turn out to want to link to it, the route is
+ *    the cheap upgrade from here.
+ *
+ * `unknown` never counts against the node. That is required by the
+ * issue and it is the same mistake as #87, where a node nothing had
+ * heard read "Good".
+ */
+const HEALTH_GROUPS = [
+  { key: 'bad', heading: 'Needs fixing', states: ['bad', 'warn'] },
+  { key: 'ok', heading: 'Good', states: ['ok'] },
+  { key: 'unknown', heading: "Can't tell yet", states: ['unknown'] },
+];
+
+function healthPanel(gaps, detail, evidencePanel) {
+  const checks = healthChecks(gaps, detail);
+  // `none` is the Settings entry, which is guidance rather than a
+  // check. It appears in the full list and in no count.
+  const judged = checks.filter((check) => check.state !== 'none');
+  const attention = judged.filter((check) => check.state === 'bad' || check.state === 'warn');
+  const good = judged.filter((check) => check.state === 'ok');
+  const cannotTell = judged.filter((check) => check.state === 'unknown');
+
+  const sentence = [
+    `${count(good.length)} of ${count(judged.length - cannotTell.length)} checks good`,
+    attention.length ? `${count(attention.length)} needs attention` : null,
+    cannotTell.length ? `${count(cannotTell.length)} can't tell yet` : null,
+  ].filter(Boolean).join(' · ');
+
+  const dots = el('p', { class: 'health-dots', role: 'img', 'aria-label': sentence },
+    ...judged.map((check) => el('span', {
+      class: `health-dot state-${check.state}`,
+      'aria-hidden': 'true',
+      title: `${check.name}: ${(HEALTH_STATES[check.state] || HEALTH_STATES.unknown).word}`,
+    })));
+
+  const full = el('div', { class: 'health-full', hidden: true },
+    ...HEALTH_GROUPS.map((group) => {
+      const members = checks.filter((check) => group.states.includes(check.state));
+      if (!members.length) return null;
+      return el('section', { class: 'health-group' },
+        el('h4', { text: group.heading }),
+        el('div', { class: 'health-cards' }, ...members.map(healthCard)));
+    }),
+    // Guidance, not a check, so it sits below the three groups rather
+    // than inside one of them.
+    el('div', { class: 'health-cards' },
+      ...checks.filter((check) => check.state === 'none').map(healthCard)),
+    /*
+     * "Potential issues" lives in here too.
+     *
+     * It was a second panel built from the same gaps assessment as the
+     * cards, which is the duplication #95 is about. Inside the
+     * disclosure it becomes the evidence layer of one feature rather
+     * than a second opinion beside it -- and `showIssues`, which the
+     * per-check "See the evidence" buttons call, still has something to
+     * scroll to.
+     */
+    evidencePanel || null);
+
+  const toggle = el('button', {
+    class: 'linky',
+    type: 'button',
+    'aria-expanded': 'false',
+    text: 'View all checks',
+    onclick: () => {
+      const open = full.hidden;
+      full.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.textContent = open ? 'Hide checks' : 'View all checks';
+    },
+  });
+
+  return el('section', { class: 'panel health-panel' },
+    el('h3', { text: 'Health' }),
+    el('p', { class: 'health-headline', text: sentence }),
+    dots,
+    // Only what needs attention is named up here. Listing the good ones
+    // is what made this two screens tall in the first place.
+    attention.length
+      ? el('ul', { class: 'health-attention' },
+        ...attention.map((check) => el('li', {},
+          el('span', { class: `health-dot state-${check.state}`, 'aria-hidden': 'true' }),
+          el('span', { text: `${check.name}. ${check.measure}` }))))
+      : null,
+    toggle,
+    full);
 }
 
 /** Say an evidence key in words: `rf_packets` is "rf packets". */
@@ -4706,9 +4826,7 @@ async function loadNodeDetail(nodeId) {
    * came for — below the fold on a busy node. Both are capped at five
    * rows now and say how many more there are.
    */
-  const cards = el('div', { class: 'health-slot' }, el('p', { class: 'loading', text: 'Loading health checks' }));
-  const issues = el('div', { class: 'panel span-2', id: 'node-issues' },
-    el('h3', { text: 'Potential issues' }), el('p', { class: 'loading', text: 'Loading' }));
+  const health = el('div', { class: 'panel' }, el('p', { class: 'loading', text: 'Loading health checks' }));
   const routes = el('div', { class: 'panel span-2' },
     el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' }));
   const history = el('div', { class: 'grid two span-2 history-grid' });
@@ -4730,8 +4848,17 @@ async function loadNodeDetail(nodeId) {
     activityPanel(detail),
     weatherPanel(detail));
 
-  replace(body, cards, summary, el('div', { class: 'grid two' },
-    issues,
+  /*
+   * Identity and device first, health after (#95).
+   *
+   * The seven health cards used to open the page and fill the screen
+   * above them, so somebody checking the battery scrolled past a full
+   * assessment to reach it. The health panel now sits at the top of the
+   * grid below, one panel wide, with everything it used to show behind
+   * "View all checks".
+   */
+  replace(body, summary, el('div', { class: 'grid two' },
+    health,
     routes,
     history,
     messagesPanel(detail),
@@ -4748,8 +4875,7 @@ async function loadNodeDetail(nodeId) {
   ]);
   // The page may have moved on to another node while these loaded.
   if (currentNodeId !== nodeId) return;
-  cards.replaceWith(healthCards(gaps, detail));
-  issues.replaceWith(issuesPanel(gaps));
+  health.replaceWith(healthPanel(gaps, detail, issuesPanel(gaps)));
   routes.replaceWith(routesPanel(routesData));
   drawNodeHistory(history, historyData);
   const types = (detail.activity.by_portnum || []).map((row) => row.portnum);

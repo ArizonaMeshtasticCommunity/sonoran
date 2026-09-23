@@ -180,11 +180,16 @@ def test_leaderboards_default_to_the_busiest_preset(tmp_path: Path) -> None:
 
 
 def _health_cards_source() -> str:
-    """The body of `healthCards`, which decides what colour a card is."""
+    """The body of `healthChecks`, which decides what state a check is.
+
+    It was `healthCards` until #95 split the checks from their
+    rendering; the state logic these tests guard moved with the data,
+    unchanged. The name is the only thing that changed here.
+    """
     source = (
         Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static" / "app.js"
     ).read_text(encoding="utf-8")
-    start = source.index("function healthCards(")
+    start = source.index("function healthChecks(")
     return source[start : start + 9000]
 
 

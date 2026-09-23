@@ -2117,6 +2117,30 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * never the only one (WCAG 1.4.1), so the cards read in greyscale. An
  * unknown card is grey and never green: nothing measured is not healthy.
  */
+/* The compact health summary (#95). The full checklist below it reuses
+   `.health-cards`, so only the summary half needs anything new. */
+.health-headline { font-weight: 650; margin: 0 0 .4rem; }
+.health-dots { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .6rem; }
+.health-dot {
+  width: .7rem;
+  height: .7rem;
+  border-radius: 50%;
+  /* A dot carries state by colour, so it needs a non-colour cue too
+     (WCAG 1.4.1). The ring differs in width per state, and each dot has
+     a `title`; the row as a whole is labelled with the sentence above
+     it, which is what a screen reader actually reads. */
+  background: var(--muted);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .35);
+}
+.health-dot.state-ok { background: var(--good); }
+.health-dot.state-warn { background: var(--warn); box-shadow: inset 0 0 0 2px rgb(0 0 0 / .45); }
+.health-dot.state-bad { background: var(--bad); box-shadow: inset 0 0 0 3px rgb(0 0 0 / .5); }
+.health-attention { list-style: none; margin: 0 0 .7rem; padding: 0; display: grid; gap: .35rem; }
+.health-attention li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .45rem; align-items: baseline; }
+.health-group { margin-top: .9rem; }
+.health-group h4 { margin: 0 0 .45rem; }
+.health-full { margin-top: .8rem; }
+
 .health-cards {
   display: grid; gap: .75rem; margin-bottom: 1rem;
   grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
