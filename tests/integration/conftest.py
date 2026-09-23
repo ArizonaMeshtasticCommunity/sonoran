@@ -65,15 +65,21 @@ def timescale_url() -> Iterator[str]:
     """Return a TimescaleDB URL, starting a container unless given one.
 
     `SONORAN_TEST_DATABASE_URL` lets a developer point the suite at a
-    database they already have. That is not a convenience: testcontainers
-    cannot start on every machine -- on a Mac running Colima it fails
-    with "error while creating mount source path ... operation not
-    supported", because its reaper sidecar cannot mount the docker
-    socket. On such a machine every database-backed test SKIPS, which
-    looks exactly like passing.
+    database they already have. It is an escape hatch, not the ordinary
+    path: the container starts here on its own.
 
-    That is how a genuine failure in `/api/chat/overview` reached CI
-    unnoticed: 167 tests skipped locally and nobody saw it.
+    It did not always. On a Mac running Colima every database-backed
+    test SKIPPED, with "error while creating mount source path ...
+    operation not supported", and a skip looks exactly like a pass in
+    pytest's summary line. That is how a genuine failure in
+    `/api/chat/overview` reached CI unnoticed: 167 tests skipped locally
+    and nobody saw it.
+
+    The cause was diagnosed correctly at the time -- testcontainers'
+    reaper sidecar bind-mounts the Docker socket, and Colima's socket
+    lives on a virtiofs mount that cannot be bind-mounted -- and then
+    worked around with the manual container below rather than fixed.
+    Turning the reaper off is the fix, and `_disable_ryuk` does it.
 
         docker run --rm -d --name pg -e POSTGRES_PASSWORD=x \
           -e POSTGRES_DB=azmsh_test -p 55432:5432 \
@@ -102,16 +108,66 @@ def timescale_url() -> Iterator[str]:
     # `ALTER TABLE packet ALTER COLUMN want_ack DROP DEFAULT`. A setting
     # read at server start cannot be undone by the schema under test.
     container.with_command("postgres -c timescaledb.max_background_workers=0")
+    _disable_ryuk()
     try:
         container.start()
     except Exception as exc:  # Docker not available or image pull failed.
-        pytest.skip(f"cannot start TimescaleDB container: {exc}")
+        _no_container(exc)
     url = container.get_connection_url()
     # testcontainers returns a psycopg2 URL. We use psycopg (v3).
     url = url.replace("postgresql+psycopg2://", "postgresql+psycopg://")
     _stop_background_workers(url)
     yield url
     container.stop()
+
+
+# Environment variable testcontainers reads to skip its reaper sidecar.
+RYUK_DISABLED = "TESTCONTAINERS_RYUK_DISABLED"
+
+
+def _disable_ryuk() -> None:
+    """Turn off testcontainers' reaper, which this suite does not need.
+
+    Ryuk is a sidecar that removes leftover containers after the test
+    process exits. It gets the Docker socket by bind-mounting it, and on
+    Colima that socket sits on a virtiofs mount where a bind mount is
+    "operation not supported" -- so the *database* container never
+    starts and every test that needs it skips.
+
+    The trade is small and worth naming. Without Ryuk, a test run that
+    is killed outright (SIGKILL, a closed laptop) can leave one
+    `timescale/timescaledb-ha:pg17` container behind, to be removed by
+    hand. Every ordinary exit still stops it, because `timescale_url`
+    stops the container itself rather than relying on the reaper -- so
+    on this suite Ryuk was only ever insurance against the abnormal
+    exit, and it was costing every local run instead.
+
+    An explicit setting always wins: someone who has set this variable,
+    either way, has said what they want.
+    """
+    os.environ.setdefault(RYUK_DISABLED, "true")
+
+
+# Set this where a skipped integration suite would be a false green --
+# CI, or a local run you intend to trust. It turns "no container" from a
+# skip into a failure.
+REQUIRE_INTEGRATION = "SONORAN_REQUIRE_INTEGRATION"
+
+
+def _no_container(exc: Exception) -> None:
+    """Skip, or fail, when the database container will not start.
+
+    A skip is the right default: somebody without Docker should still be
+    able to run the unit tests. But a skip is reported in the same line
+    as a pass, and this suite has already shipped a real bug behind one
+    -- so anywhere the result is going to be trusted, say so with
+    `SONORAN_REQUIRE_INTEGRATION=1` and a missing container becomes red
+    instead of quiet.
+    """
+    message = f"cannot start TimescaleDB container: {exc}"
+    if os.environ.get(REQUIRE_INTEGRATION, "").strip().lower() in {"1", "true", "yes"}:
+        pytest.fail(f"{REQUIRE_INTEGRATION} is set, so this is a failure. {message}")
+    pytest.skip(message)
 
 
 def _stop_background_workers(url: str) -> None:

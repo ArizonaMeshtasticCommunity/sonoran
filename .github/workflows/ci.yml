@@ -25,6 +25,20 @@ jobs:
 
   test:
     runs-on: self-hosted
+    env:
+      # This job runs the 166 database-backed tests in tests/integration
+      # as well as the unit suite, and it starts their container itself
+      # through testcontainers. If that ever stops working -- Docker
+      # missing from a runner, an image that will not pull -- the suite
+      # skips them and still reports green, because pytest counts a skip
+      # and a pass on the same line.
+      #
+      # That is not hypothetical. The same tests skipped on every
+      # developer Mac running Colima for months, and a real failure in
+      # /api/chat/overview reached this workflow behind the silence.
+      # Here, where the result gates a merge, a container that will not
+      # start is a failure and not a quiet subtraction of 166 tests.
+      SONORAN_REQUIRE_INTEGRATION: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
