@@ -3057,41 +3057,89 @@ function seedPositions(nodes, links) {
  * Passes past this point buy very little: the pairs are already the
  * full gap apart and only the tightest knots are still opening.
  *
- * The sweep is every pair against every other, which is why this runs
- * once for the whole mesh and is kept. It stops above a few thousand
- * nodes rather than locking the page up.
+ * The sweep used to be every pair against every other, 28 passes,
+ * and it was bounded at 1,500 nodes to stop the page locking up.
+ * Timed with the function lifted out verbatim:
+ *
+ *     859 nodes (the mesh today)    121 ms
+ *     1500 nodes (the old ceiling)  366 ms
+ *
+ * Two points further apart than `gap` can never push each other, so
+ * the comparison only has to happen between near neighbours. Each pass
+ * buckets the points into cells of `gap` a side and compares each
+ * point against its own cell and the eight around it. The grid is
+ * rebuilt per pass because the points move.
+ *
+ *     859 nodes    121 ms -> 27 ms    4.5x
+ *     1500 nodes   366 ms -> 49 ms    7.5x
+ *     3000 nodes   (used to bail out) -> 135 ms
+ *
+ * The layout it produces is the same. Median nearest-neighbour
+ * distance, which is what the separation is FOR:
+ *
+ *              original   gridded
+ *      500       41.4      41.3
+ *      859       33.4      33.5
+ *     1500       21.0      20.9
+ *
+ * and the 10th percentile -- the worst crowding left over -- comes out
+ * slightly better gridded, 17.7 against 16.5 at 859 and 8.4 against
+ * 6.4 at 1500. It is not bit-identical and cannot be: the points move
+ * as they are compared, so a different visiting order gives different
+ * floats. What matters is the distribution, and that is unchanged.
+ *
+ * The 1,500 ceiling is raised to 6,000 rather than removed. The cost
+ * is linear now, but it is still work on the main thread, and a mesh
+ * that large wants a different picture rather than a slower one.
  */
 function separatePositions(seeds, nodes) {
   const ids = nodes.map((node) => node.node_id).filter((id) => seeds.has(id));
-  if (ids.length > 1500) return seeds;
+  if (ids.length > 6000) return seeds;
 
   // The seed arrays are held by reference, so moving one here moves the
-  // same array in `seeds`. Reading them into a plain list once keeps
-  // every Map lookup out of the pair sweep, which runs tens of millions
-  // of times on a large mesh.
+  // same array in `seeds`.
   const points = ids.map((id) => seeds.get(id));
   const gap = GRAPH_SPAN / 24;
+  const cells = new Map();
   for (let pass = 0; pass < 28; pass += 1) {
+    cells.clear();
+    for (let i = 0; i < points.length; i += 1) {
+      const key = `${Math.floor(points[i][0] / gap)},${Math.floor(points[i][1] / gap)}`;
+      const bucket = cells.get(key);
+      if (bucket) bucket.push(i);
+      else cells.set(key, [i]);
+    }
     for (let a = 0; a < points.length; a += 1) {
       const first = points[a];
-      for (let b = a + 1; b < points.length; b += 1) {
-        const second = points[b];
-        let dx = second[0] - first[0];
-        let dy = second[1] - first[1];
-        let distance = Math.hypot(dx, dy);
-        if (distance >= gap) continue;
-        // Exactly on top of each other has no direction to push along,
-        // so the pair is nudged apart on a fixed diagonal first.
-        if (distance === 0) {
-          dx = gap * 0.5;
-          dy = gap * 0.5;
-          distance = Math.hypot(dx, dy);
+      const cx = Math.floor(first[0] / gap);
+      const cy = Math.floor(first[1] / gap);
+      for (let ox = -1; ox <= 1; ox += 1) {
+        for (let oy = -1; oy <= 1; oy += 1) {
+          const bucket = cells.get(`${cx + ox},${cy + oy}`);
+          if (!bucket) continue;
+          for (const b of bucket) {
+            // `b <= a` keeps each pair to one comparison, exactly as
+            // the `b = a + 1` of the old inner loop did.
+            if (b <= a) continue;
+            const second = points[b];
+            let dx = second[0] - first[0];
+            let dy = second[1] - first[1];
+            let distance = Math.hypot(dx, dy);
+            if (distance >= gap) continue;
+            // Exactly on top of each other has no direction to push
+            // along, so the pair is nudged apart on a fixed diagonal.
+            if (distance === 0) {
+              dx = gap * 0.5;
+              dy = gap * 0.5;
+              distance = Math.hypot(dx, dy);
+            }
+            const push = ((gap - distance) / distance) * 0.5;
+            first[0] -= dx * push;
+            first[1] -= dy * push;
+            second[0] += dx * push;
+            second[1] += dy * push;
+          }
         }
-        const push = ((gap - distance) / distance) * 0.5;
-        first[0] -= dx * push;
-        first[1] -= dy * push;
-        second[0] += dx * push;
-        second[1] += dy * push;
       }
     }
   }
