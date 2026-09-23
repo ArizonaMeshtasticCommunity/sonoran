@@ -17,6 +17,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Response
 
+from sonoran.radio.adapters import ADAPTERS, UNSPECIFIED, total_loss_db
 from sonoran.radio.antennas import ANTENNAS, BAND_HIGH_MHZ, BAND_LOW_MHZ
 from sonoran.radio.cables import CABLES, db_per_100ft
 
@@ -58,6 +59,28 @@ async def cables(response: Response, frequency_mhz: float = 915.0) -> dict[str, 
         "cables": [
             asdict(cable) | {"db_per_100ft": round(db_per_100ft(cable, frequency_mhz), 3)}
             for cable in CABLES
+        ],
+    }
+
+
+@router.get("/adapters")
+async def adapters(response: Response) -> dict[str, object]:
+    """Return the adapter catalogue, with the mismatch term included.
+
+    `total_loss_db` is insertion plus mismatch, because a datasheet's
+    insertion loss is only half of what an adapter costs and the half
+    it leaves out is the one that grows on cheap parts.
+
+    **`total_loss_db` is null for the unspecified adapter, and that
+    null has to survive to the page.** An adapter nobody has published
+    figures for costs an unknown amount; rendering it as 0, or as the
+    catalogue average, would make a guess look like a measurement.
+    """
+    response.headers["Cache-Control"] = f"public, max-age={CACHE_SECONDS}"
+    return {
+        "adapters": [
+            asdict(adapter) | {"total_loss_db": total_loss_db(adapter)}
+            for adapter in (*ADAPTERS, UNSPECIFIED)
         ],
     }
 

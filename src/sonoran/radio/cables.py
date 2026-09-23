@@ -50,23 +50,20 @@ figure: a U.FL pigtail is a few centimetres, so even at several dB per
 metre it costs a fraction of a dB. The cable on the mast is the one
 that decides a link, not the one inside the box.
 
-**Connector and adapter loss is absent for the same reason.** #112 asks
-whether 0.1-0.5 dB per adapter is realistic. The answer appears to be
-that 0.1 dB is the PESSIMISTIC end below 1 GHz for a decent connector,
-not the optimistic one -- but every figure found for it was a
-generalisation rather than a manufacturer's specification, and the
-datasheets reachable here either refuse automated fetches or quote VSWR
-without an insertion-loss number. A link budget is not the place to put
-a number nobody will stand behind.
+**Connector and adapter loss lives in `adapters.py`**, with its own
+datasheets. This file said for a while that the figures were not
+sourceable -- that every number found was a generalisation and the
+reachable datasheets refused automated fetches or quoted VSWR with no
+insertion loss. That was true of the pages I had tried and false as a
+statement about the world: Mini-Circuits publishes both, per part.
 
-Worth noting for whoever finishes it: on cheap adapters the MISMATCH
-loss from a poor VSWR is likely to dominate the insertion loss, so an
-"insertion loss per adapter" figure may be answering the smaller half of
-the question.
-
-Connector and adapter loss is also absent. #112 suggests 0.1-0.5 dB per
-adapter and asks whether that is realistic; it is a plausible range and
-not a sourced figure, so it is not a number in this file yet.
+The answer to #112's "is 0.1-0.5 dB per adapter realistic": **0.1 dB is
+the published typical across DC-18 GHz**, so at 915 MHz it is a ceiling
+rather than an estimate, and 0.5 dB is five times a good adapter's
+whole-band typical. The mismatch note that used to be here -- that on
+cheap adapters the reflection loss dominates the insertion loss -- is
+right for a poor part and wrong for a good one, and `adapters.py`
+carries the arithmetic that says where the line falls.
 """
 
 from __future__ import annotations

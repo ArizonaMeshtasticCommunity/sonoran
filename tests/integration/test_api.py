@@ -715,7 +715,9 @@ def test_a_reply_counts_its_way_back(migrated_engine, timescale_url: str) -> Non
 
     assert sorted(by_pair[frozenset(("!00001901", "!00001902"))]["each_way"]) == [0, 1]
     assert back["snr"] == 2.0
-    assert back["strength"] == "weak"
+    # "unknown", not "weak": one report says nothing about the link
+    # itself, only about how much of it we have seen (#149).
+    assert back["strength"] == "unknown"
     assert evidence["report_count"] == 1, "a hop only the way back names still has evidence"
 
 

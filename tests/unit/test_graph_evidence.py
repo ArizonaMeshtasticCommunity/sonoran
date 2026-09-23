@@ -1,6 +1,6 @@
 """A row limit must never decide what evidence exists (AGENTS.md 9.19).
 
-The graph's `strength` -- weak, one-way, two-way -- and its `each_way`
+The graph's `strength` -- unknown, one-way, two-way -- and its `each_way`
 counts were computed from whatever survived a row cap. The page asks
 for no limit, so the default of 2000 applied while a 24 h MediumFast
 window held 3367 neighbour and 2867 traceroute rows.

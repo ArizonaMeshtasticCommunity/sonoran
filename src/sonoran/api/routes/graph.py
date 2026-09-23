@@ -45,10 +45,23 @@ TRACEROUTE_KIND = "traceroute"
 # is of the whole window; this only bounds the list.
 LINK_REPORTS_SHOWN = 50
 
-# Below WEAK_LINK_SAMPLES reports in total a link is weak: it happened,
-# but too rarely to say it is usable. Past that a link is two-way when
-# packets crossed it at least TWO_WAY_MIN_SAMPLES times in each
-# direction, and one-way when one direction falls short of that.
+# Below MIN_SAMPLES_TO_JUDGE reports in total, the graph says nothing
+# about a link: it happened, and there is too little evidence to call it
+# anything. Past that a link is two-way when packets crossed it at least
+# TWO_WAY_MIN_SAMPLES times in each direction, and one-way when one
+# direction falls short of that.
+#
+# That first state used to be called WEAK, and calling it that was the
+# defect in #149 -- #87 mirrored. There, `unknown` was rendered as a
+# shade of `ok` and a node nothing had heard read Good. Here the same
+# confusion ran the other way: a link seen twice was reported as a
+# property of the LINK ("Weak link: few packets crossed it") when it is
+# a property of our EVIDENCE. The legend said so outright -- "Weak:
+# under 10 packets seen" -- while the label called the link weak.
+#
+# It is not a rare corner. Measured against the deployed instance:
+# 90.0% of links at 24 h, 97.0% at 6 h. Two thousand links told every
+# reader the mesh was worse than anybody knows it to be.
 # The graph pages ask for at most 7 days, and so does this API.
 #
 # The ceiling was 720 h while the only selector that drives these three
@@ -91,10 +104,41 @@ def clamp_hours(hours: int) -> tuple[int, int | None]:
     return GRAPH_MAX_HOURS, hours
 
 
-WEAK_LINK_SAMPLES = 10
+# NOT scaled by the window, and #149 asked whether it should be.
+#
+# The complaint is real: a fixed count means the label partly reports
+# the window the reader chose. Measured on the deployed instance, with
+# the threshold fixed at 10, the share of links with too little
+# evidence falls as the window widens --
+#
+#     6 h    97.0%        24 h    90.0%        168 h    69.5%
+#
+# -- so the same link changes category by changing the selector.
+#
+# The obvious fix is to make the threshold a RATE: ten reports per
+# 24 hours, scaled. **Measured, that is worse.** Same instance, same
+# links, threshold scaled to 3 / 10 / 70:
+#
+#     6 h    79.4%        24 h    90.0%        168 h    96.4%
+#
+# It does not remove the window dependence, it inverts it and widens
+# the spread from 27 points to 17 in the other direction. The reason is
+# that the link POPULATION grows with the window too -- 1,219 links at
+# 6 h against 4,964 at 168 h, and most of what the longer window adds
+# is links seen once in a week. Demanding proportionally more evidence
+# from a population that got proportionally sparser moves the number
+# without fixing the meaning.
+#
+# So the threshold stays fixed and honest about being fixed. Making it
+# window-invariant needs a different definition of a link's strength --
+# something per unit time, or a confidence rather than a count -- which
+# is a product decision recorded on #149, not a constant to retune.
+MIN_SAMPLES_TO_JUDGE = 10
 TWO_WAY_MIN_SAMPLES = 3
 
-WEAK = "weak"
+# Too little evidence to say anything. Named for what it is rather than
+# for what a reader might assume -- see #149 and the note above.
+UNKNOWN = "unknown"
 ONE_WAY = "one_way"
 TWO_WAY = "two_way"
 
@@ -142,8 +186,8 @@ class Edge:
     @property
     def strength(self) -> str:
         """Return how well the evidence supports this link."""
-        if self.forward + self.backward < WEAK_LINK_SAMPLES:
-            return WEAK
+        if self.forward + self.backward < MIN_SAMPLES_TO_JUDGE:
+            return UNKNOWN
         if min(self.forward, self.backward) < TWO_WAY_MIN_SAMPLES:
             return ONE_WAY
         return TWO_WAY
