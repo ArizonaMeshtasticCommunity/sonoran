@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import get_settings
-from sonoran.crypto.decrypt import decode_key, decrypt_packet
+from sonoran.crypto.decrypt import DecryptionError, decode_key, decrypt_packet
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.decode.envelope import ParsedEnvelope, parse_envelope
 from sonoran.decode.payloads import decode_payload, parse_data
@@ -138,13 +138,37 @@ async def process_message(
         return await _store_opaque(session, message, envelope, from_node_num)
 
     if packet.encrypted:
-        plaintext, _ = decrypt_packet(
-            packet.encrypted,
-            packet.id,
-            from_node_num,
-            keys,
-            validator=_valid_data,
-        )
+        try:
+            plaintext, _ = decrypt_packet(
+                packet.encrypted,
+                packet.id,
+                from_node_num,
+                keys,
+                validator=_valid_data,
+            )
+        except DecryptionError:
+            # Keep the packet we cannot read.
+            #
+            # This used to raise, unwind to the caller, roll the
+            # transaction back and log a traceback -- keeping nothing,
+            # not even the fact that two nodes were on the air. Add a
+            # channel, rotate a key, or have somebody use a channel we
+            # do not hold, and those nodes silently vanish from the map
+            # while the log fills at packet rate. Indistinguishable
+            # from a quiet mesh, which is the worst way to lose data.
+            #
+            # The PKI branch above already does the right thing for a
+            # payload nobody here can open. This is the same case: the
+            # port number sits inside the encrypted part, the packet is
+            # still traffic, and both nodes were still heard.
+            logger.info(
+                "no configured key opened packet %s from %s on %s; "
+                "storing it as traffic with an unknown port",
+                packet.id,
+                from_node_num,
+                message.topic.channel or "an unnamed channel",
+            )
+            return await _store_opaque(session, message, envelope, from_node_num)
         data = parse_data(plaintext)
         decoded = decode_payload(data.portnum, data.payload)
     else:
