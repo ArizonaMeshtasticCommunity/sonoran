@@ -564,6 +564,21 @@ picker and one feed renderer. The preset name, the node scope, the
 honesty counter, the replay lag and the OpenStreetMap attribution never
 hide.
 
+Every chart can go full screen, and the control comes from `chart()` in
+`app.js` rather than from the eleven call sites, so no chart can be
+left without one. It borrows watch mode's two decisions: the box is
+**moved** into the overlay so one ECharts instance keeps drawing, and
+the overlay is fixed to the viewport in CSS with the Fullscreen API
+layered on top, because iOS Safari refuses `requestFullscreen` on an
+arbitrary element. ECharts measures its container once, so both
+entering and leaving call `resize()`. Full screen also turns on
+`dataZoom`, but only where the x axis is `time` or `category` — a zoom
+on the count axis of a horizontal bar chart hides bars rather than
+showing a range. The control is a real `<button>`, so Space and Enter
+both work. The two charts drawn outside `chart()` — the RF band
+occupancy chart in `rf.js` and the planner's profile in `planner.js` —
+do not have it.
+
 #### 3.10.1 The packet page, by kind
 
 A packet page (`#packet/<from>/<packet id>`) is read in this order:

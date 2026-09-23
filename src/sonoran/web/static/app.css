@@ -1310,6 +1310,68 @@ body.watch-mode { overflow: hidden; }
    than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
 .chart.tall { height: min(82svh, 52rem); }
 
+/*
+ * The full-screen control, above its chart (#100).
+ *
+ * It is a sibling of the box and not a child, because ECharts owns
+ * everything inside the box and clears it on every draw. Right-aligned
+ * in its own row rather than floated into the `h3`: the heading is a
+ * wrapping flex row that already carries a live count on two panels,
+ * and a third item in it wraps to a line of its own at panel width
+ * anyway.
+ */
+.chart-tools { display: flex; justify-content: flex-end; margin: -.4rem 0 .4rem; }
+.chart-expand {
+  display: inline-flex; align-items: center; gap: .35rem;
+  /* WCAG 2.2 SC 2.5.8 Target Size (Minimum) asks for 24x24 CSS px, and
+     the text alone is 17 px tall. */
+  padding: .3rem .55rem; min-height: 1.75rem;
+  font-size: .75rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); background: none;
+  border: 1px solid var(--line); border-radius: .4rem; cursor: pointer;
+}
+.chart-expand:hover { color: var(--text); border-color: var(--accent-soft); }
+.chart-expand .icon { width: .9rem; height: .9rem; fill: currentColor; flex: 0 0 auto; }
+
+/*
+ * The overlay a chart is moved into.
+ *
+ * `position: fixed; inset: 0` on both paths, so the Fullscreen API only
+ * ever adds the browser chrome going away. iOS Safari refuses
+ * `requestFullscreen` on an arbitrary element, and without this rule
+ * that refusal would mean nothing happened at all.
+ */
+.chart-stage {
+  position: fixed; inset: 0; z-index: 2000;
+  display: flex; flex-direction: column; gap: .5rem;
+  padding: .75rem;
+  background: var(--bg); color: var(--text);
+}
+.chart-stage[hidden] { display: none; }
+body.chart-staged { overflow: hidden; }
+.chart-stage-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: .75rem; flex: 0 0 auto;
+}
+.chart-stage-head h2 {
+  margin: 0; font-size: .95rem; font-weight: 650;
+  /* A node chart's heading can be long, and it must not push the way
+     out off the side of the screen at 320 px. */
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chart-stage-close {
+  display: inline-flex; align-items: center; gap: .4rem; flex: 0 0 auto;
+  padding: .45rem .7rem; min-height: 2rem;
+  font-size: .8rem; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: .4rem; cursor: pointer;
+}
+.chart-stage-close:hover { border-color: var(--accent-soft); }
+.chart-stage-close .icon { width: 1rem; height: 1rem; fill: currentColor; }
+/* The box is told its height here rather than keeping the 15rem it had
+   in the panel, which is the whole point of opening it. */
+.chart-stage-body { flex: 1 1 auto; min-height: 0; }
+.chart-stage-body > .chart { height: 100%; }
+
 /* Chat */
 
 .channel-group { margin-bottom: 1.75rem; }

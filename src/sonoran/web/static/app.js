@@ -649,6 +649,15 @@ function messageItem(message, options = {}) {
 
 /* ECharts instances are kept so a redraw does not leak canvases. */
 const charts = new Map();
+/*
+ * The option each chart was last drawn with.
+ *
+ * Full screen adds a zoom control to a chart and has to take it away
+ * again on the way out. ECharts merges by default, so `dataZoom` put on
+ * an instance stays on it; the only way back is to set the whole option
+ * again with `notMerge`, and that needs the option the caller gave.
+ */
+const chartOptions = new Map();
 
 function chart(target, option) {
   if (!target) return null;
@@ -662,6 +671,7 @@ function chart(target, option) {
     charts.set(target, instance);
   }
   instance.setOption(option, true);
+  chartOptions.set(target, option);
   /*
    * Name the region, and let ECharts describe the data inside it.
    *
@@ -676,11 +686,10 @@ function chart(target, option) {
    */
   if (!target.getAttribute('role')) target.setAttribute('role', 'img');
   if (!target.getAttribute('aria-label')) {
-    const panel = target.closest('.panel');
-    const heading = panel ? panel.querySelector('h3, h4') : null;
-    const title = heading ? heading.textContent.trim() : '';
+    const title = chartTitle(target);
     if (title) target.setAttribute('aria-label', `Chart: ${title}`);
   }
+  fitChartExpand(target);
   return instance;
 }
 
@@ -703,6 +712,12 @@ function chartEmpty(target, message) {
   const instance = charts.get(target);
   if (instance && !instance.isDisposed()) instance.dispose();
   charts.delete(target);
+  chartOptions.delete(target);
+  // The control sits beside the box rather than inside it, because
+  // ECharts owns everything inside. So it outlives a chart that turns
+  // into a sentence, unless it is taken away here.
+  const tools = target.previousElementSibling;
+  if (tools && tools.classList.contains('chart-tools')) tools.remove();
   target.classList.add('chart-empty');
   target.removeAttribute('_echarts_instance_');
   replace(target, empty(message));
@@ -746,6 +761,272 @@ addEventListener('resize', () => {
     if (!instance.isDisposed()) instance.resize();
   }
 });
+
+/* --- A chart, full screen (#100) --------------------------------- */
+
+/*
+ * The box is moved into the overlay, never copied.
+ *
+ * `map-watch.js` made the same choice for the map and the reason is the
+ * same: a second ECharts instance over the same series is a second
+ * thing that can disagree with the first, and the day they disagree is
+ * the day a reader is shown the wrong mesh. Moving the box keeps one
+ * instance, one option and one `aria-label`, so nothing about what the
+ * chart claims changes when it grows.
+ *
+ * The Fullscreen API first, because it hides the browser's own chrome,
+ * which is most of what "look at this closely" is asking for. iOS
+ * Safari does not grant `requestFullscreen` on an arbitrary element, so
+ * the overlay is `position: fixed; inset: 0` in CSS on both paths and
+ * the API only ever adds to it. That way there is one set of rules to
+ * get right instead of two.
+ */
+
+/* What is full screen now, or null. One chart at a time. */
+let chartStage = null;
+
+/**
+ * What a chart panel is called.
+ *
+ * Read from the children rather than from `textContent`, because a
+ * panel heading is a heading and a muted note beside it with no space
+ * between the two nodes. `textContent` runs them together: the node
+ * page read "Battery and voltagefrom device telemetry", measured on
+ * this deployment. The note is worth keeping — it says where the
+ * numbers came from — so it is joined with a comma instead.
+ *
+ * Empty when there is no heading to read, so the caller decides what
+ * to do about it. `chart` leaves the label off rather than writing a
+ * name that says nothing.
+ */
+function chartTitle(box) {
+  const panel = box.closest('.panel');
+  const heading = panel ? panel.querySelector('h3, h4') : null;
+  if (!heading) return '';
+  return [...heading.childNodes]
+    .map((child) => child.textContent.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** An SVG icon from the sprite in `index.html`. */
+function icon(id) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', id);
+  svg.append(use);
+  return svg;
+}
+
+/** Build the overlay once. It holds no chart until one is put into it. */
+function chartStageShell() {
+  const found = $('[data-chart-stage]');
+  if (found) return found;
+  const shell = el('div', {
+    class: 'chart-stage', 'data-chart-stage': true, hidden: true,
+    role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'chart-stage-title',
+  },
+  el('div', { class: 'chart-stage-head' },
+    el('h2', { id: 'chart-stage-title', 'data-chart-stage-title': true }),
+    el('button', {
+      type: 'button', class: 'chart-stage-close', 'data-chart-stage-close': true,
+      onclick: () => leaveChartStage(),
+    }, icon('#i-fullscreen-exit'), el('span', { text: 'Close' }))),
+  el('div', { class: 'chart-stage-body', 'data-chart-stage-body': true }));
+  /*
+   * Escape, and the Tab that would otherwise walk out of the back of
+   * the overlay. Under the Fullscreen API the browser takes Escape
+   * before the page sees it and `fullscreenchange` does the work
+   * instead; this listener is what the CSS fallback has.
+   *
+   * The overlay holds exactly one focusable control, so the trap is
+   * "Tab keeps the focus on Close". The chart itself is a canvas and
+   * was never in the tab order.
+   */
+  shell.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); leaveChartStage(); return; }
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      $('[data-chart-stage-close]', shell).focus();
+    }
+  });
+  document.body.append(shell);
+  return shell;
+}
+
+/*
+ * A zoom control, but only where there is a time range to zoom into.
+ *
+ * `dataZoom` acts on an axis index, and on this dashboard the axis that
+ * carries time is the x axis on the node history charts, the signal
+ * chart, the daily history and the hourly activity chart. The other
+ * three go through the same helper and must not get it: the graph page
+ * draws a force layout with no axis at all, the packet-types chart and
+ * the hardware chart are horizontal bars whose x axis is the count, and
+ * zooming a count axis hides bars rather than showing a range.
+ *
+ * So the test is the x axis type, which is `time` or `category` for
+ * exactly the charts that want it and `value` or absent for the rest.
+ */
+function chartZoomOption(option) {
+  const axis = option.xAxis;
+  const type = axis && !Array.isArray(axis) ? axis.type : null;
+  if (type !== 'time' && type !== 'category') return option;
+  return {
+    ...option,
+    // The slider needs the room, or it draws over the axis labels.
+    grid: { ...(option.grid || CHART_BASE.grid), bottom: 76 },
+    dataZoom: [
+      { type: 'inside', xAxisIndex: 0 },
+      {
+        type: 'slider', xAxisIndex: 0, bottom: 16, height: 28,
+        borderColor: PALETTE.line,
+        fillerColor: PALETTE.panel2,
+        handleStyle: { color: PALETTE.accent },
+        moveHandleStyle: { color: PALETTE.accent },
+        textStyle: { color: PALETTE.muted },
+        dataBackground: {
+          lineStyle: { color: PALETTE.line },
+          areaStyle: { color: PALETTE.panel2 },
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Draw the staged chart again at its new size.
+ *
+ * ECharts measures its container when it is made and never again on its
+ * own, so a box that changed size draws at the old one until `resize`
+ * is called. Both entering and leaving change the size.
+ */
+function redrawChart(box, zoomed) {
+  const instance = charts.get(box);
+  if (!instance || instance.isDisposed()) return;
+  const option = chartOptions.get(box);
+  if (option) instance.setOption(zoomed ? chartZoomOption(option) : option, true);
+  instance.resize();
+}
+
+async function enterChartStage(box, opener) {
+  if (chartStage || !box) return;
+  const shell = chartStageShell();
+  const anchor = document.createComment('full-screen placeholder');
+  box.parentNode.insertBefore(anchor, box);
+  // The hardware chart sets its own height in a style attribute, which
+  // would win over any rule here. It is put back on the way out.
+  chartStage = { box, anchor, opener, height: box.style.height, api: false };
+  box.style.height = '100%';
+  $('[data-chart-stage-title]', shell).textContent = chartTitle(box) || 'Chart';
+  $('[data-chart-stage-body]', shell).append(box);
+  shell.hidden = false;
+  document.body.classList.add('chart-staged');
+  try {
+    if (shell.requestFullscreen) {
+      await shell.requestFullscreen({ navigationUI: 'hide' });
+      chartStage.api = true;
+    } else if (shell.webkitRequestFullscreen) {
+      shell.webkitRequestFullscreen();
+      chartStage.api = true;
+    }
+  } catch {
+    /* iOS Safari, and anything that refuses. The CSS already did it. */
+  }
+  $('[data-chart-stage-close]', shell).focus();
+  redrawChart(box, true);
+  // The overlay grows over a transition on the fallback path, so one
+  // more measurement after it has landed.
+  setTimeout(() => { if (chartStage) redrawChart(chartStage.box, true); }, 260);
+}
+
+async function leaveChartStage() {
+  if (!chartStage) return;
+  const { box, anchor, opener, height, api } = chartStage;
+  chartStage = null;
+  if (api && document.fullscreenElement) {
+    try {
+      await document.exitFullscreen();
+    } catch {
+      /* Already out, by Escape or by the browser. Nothing to undo. */
+    }
+  }
+  const shell = $('[data-chart-stage]');
+  if (shell) shell.hidden = true;
+  document.body.classList.remove('chart-staged');
+  box.style.height = height;
+  /*
+   * The page may have been drawn again while the chart was full screen:
+   * a live page replaces its panels every 15 s, and that takes the
+   * anchor with them. Putting the box back into a tree nobody can see
+   * would leave a canvas alive with no way to reach it, so it is
+   * disposed instead. The page has already drawn its replacement.
+   */
+  if (anchor.parentNode) {
+    anchor.parentNode.insertBefore(box, anchor);
+    anchor.remove();
+    redrawChart(box, false);
+  } else {
+    const instance = charts.get(box);
+    if (instance && !instance.isDisposed()) instance.dispose();
+    charts.delete(box);
+    chartOptions.delete(box);
+    box.remove();
+  }
+  // Back to the control that opened it, the way `wireNav` does for the
+  // menu. A re-render takes that button away with the rest of the
+  // panel, and focusing a detached node moves the focus to the body,
+  // so it is checked first.
+  if (opener && opener.isConnected) opener.focus();
+}
+
+/*
+ * One place to learn that fullscreen ended, including Escape and every
+ * route the page did not initiate.
+ */
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && chartStage && chartStage.api) leaveChartStage();
+});
+
+/**
+ * Give a chart panel its full-screen control, once.
+ *
+ * A real `<button>`, and that is the point of this comment.
+ * `map-watch.js` builds its control as an `<a role="button">`, which is
+ * the shape Leaflet's own controls take. An anchor runs its click
+ * handler on Enter and not on Space, and `role="button"` does not add
+ * the missing key: ARIA names a thing, it does not implement it.
+ * Measured on this deployment — focus the watch control and press
+ * Space, and `SonoranWatch.isOn()` is still false; press Enter and it
+ * is true. A `<button type="button">` answers to both with no code.
+ *
+ * The control goes beside the box rather than in the `h3`, because a
+ * button inside a heading joins the heading's own text when a screen
+ * reader reads the outline, and two of these headings already carry a
+ * live count.
+ */
+function fitChartExpand(target) {
+  if (!target || !target.parentNode) return;
+  // The staged box lives in the overlay, which is not a panel and has
+  // no room for a second control. A live re-render still draws every
+  // other chart on the page, and each of those gets its own.
+  if (chartStage && chartStage.box === target) return;
+  const label = `Full screen: ${chartTitle(target) || 'chart'}`;
+  const found = target.previousElementSibling;
+  if (found && found.classList.contains('chart-tools')) {
+    // The heading carries a live count on two panels, so the name is
+    // written again rather than assumed to be the one from last time.
+    $('button', found).setAttribute('aria-label', label);
+    return;
+  }
+  const button = el('button', {
+    type: 'button', class: 'chart-expand', 'aria-label': label,
+  }, icon('#i-fullscreen'), el('span', { text: 'Full screen' }));
+  button.addEventListener('click', () => enterChartStage(target, button));
+  target.parentNode.insertBefore(el('div', { class: 'chart-tools' }, button), target);
+}
 
 /* ---------------------------------------------------------------- 4 */
 
