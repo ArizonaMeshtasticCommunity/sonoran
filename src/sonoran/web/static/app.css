@@ -2117,6 +2117,19 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * never the only one (WCAG 1.4.1), so the cards read in greyscale. An
  * unknown card is grey and never green: nothing measured is not healthy.
  */
+/* The off switch for the single-key shortcuts (#147). Small and beside
+   the other watch-bar controls: it is a setting, not a feature. */
+.watch-shortcut-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.watch-shortcut-toggle input { margin: 0; }
+
 /* The node's own map (#103). Short on a phone so it does not take the
    whole screen on a page people scroll; taller where there is room. */
 .node-map {

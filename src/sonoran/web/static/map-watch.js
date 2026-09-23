@@ -441,7 +441,58 @@ const SonoranWatch = (() => {
     for (const name of TABS) {
       $(`[data-watch-tab="${name}"]`, shell).addEventListener('click', () => setTab(name));
     }
+    /*
+     * A way to turn the single-key shortcuts off (WCAG 2.1.4, #147).
+     *
+     * F, T, E, 1, 2 and Space are bound with no modifier. For a speech
+     * input user a stray recognised word is a keypress, so a page that
+     * acts on single characters is a page that acts on nothing they
+     * meant. The success criterion accepts any one of three remedies:
+     * require a modifier, allow remapping, or allow turning them off.
+     *
+     * Turning them off is the one taken. Requiring a modifier would
+     * quietly ruin what watch mode is for -- it is a wall-display mode
+     * and one-handed keys are most of why it is pleasant -- and
+     * remapping is a great deal of machinery for five keys nobody has
+     * asked to rebind. An off switch costs nothing to anyone who does
+     * not need it.
+     *
+     * F IS EXEMPT AND STAYS BOUND. It is the only way out of fullscreen
+     * by keyboard, and a user who cannot leave is worse off than one
+     * who never had the shortcut. Escape and the browser's own control
+     * remain as well.
+     */
+    const SHORTCUT_STORE = 'sonoran.watchShortcuts';
+
+    const shortcutsOn = () => {
+      try {
+        return localStorage.getItem(SHORTCUT_STORE) !== 'off';
+      } catch {
+        // A browser that refuses storage keeps the default rather than
+        // losing the feature.
+        return true;
+      }
+    };
+
+    const setShortcuts = (on) => {
+      try {
+        localStorage.setItem(SHORTCUT_STORE, on ? 'on' : 'off');
+      } catch {
+        /* Nothing to do: the toggle still applies for this page. */
+      }
+    };
+
+    ctx.shortcutsOn = shortcutsOn;
+    ctx.setShortcuts = setShortcuts;
+
     $('[data-watch-step]', shell).addEventListener('click', stepHeight);
+
+    // The off switch reflects what is stored, then writes it.
+    const shortcutBox = $('[data-watch-shortcuts]', shell);
+    if (shortcutBox) {
+      shortcutBox.checked = shortcutsOn();
+      shortcutBox.addEventListener('change', () => setShortcuts(shortcutBox.checked));
+    }
     wireGrip(shell);
     // The strip wraps with the window, so its height is watched rather
     // than measured once. A ResizeObserver costs no timer.
@@ -485,8 +536,10 @@ const SonoranWatch = (() => {
        */
       if (node && node.isContentEditable) return;
       const key = event.key;
+      // F first, and outside the switch: it is the way out.
       if (key === 'f' || key === 'F') { event.preventDefault(); toggle(); return; }
       if (!on) return;
+      if (!shortcutsOn()) return;
       if (key === 'Escape' && fallback) { event.preventDefault(); leave(); return; }
       if (key === 't' || key === 'T') { event.preventDefault(); setTab(tab === 'traffic' ? 'traces' : 'traffic'); return; }
       if (key === '1') { event.preventDefault(); setTab('traffic'); return; }

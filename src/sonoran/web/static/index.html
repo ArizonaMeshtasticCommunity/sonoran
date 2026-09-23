@@ -354,6 +354,17 @@
                       title="Drag to resize, or press E"></span>
                 <button type="button" class="watch-step" data-watch-step
                         title="Panel height (E)" aria-label="Panel height"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></button>
+                <!--
+                  The off switch for the single-key shortcuts (WCAG 2.1.4,
+                  #147). It lives here because this is where the shortcuts
+                  apply and where somebody who has just been surprised by
+                  one will look. F is exempt and stays bound either way --
+                  it is the way out of fullscreen.
+                -->
+                <label class="watch-shortcut-toggle">
+                  <input type="checkbox" data-watch-shortcuts checked />
+                  <span>Single-key shortcuts</span>
+                </label>
               </header>
               <div class="watch-panes" data-watch-panes>
                 <div class="watch-pane" data-watch-pane="traffic" role="tabpanel"></div>
