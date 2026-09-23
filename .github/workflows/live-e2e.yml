@@ -49,7 +49,12 @@ permissions:
 
 jobs:
   walk:
-    runs-on: ubuntu-latest
+    # Self-hosted, like every other job here since Logan moved them
+    # (#169-#171). The runner is HIS hardware at his cost, which is the
+    # other reason this job stays manual: a nightly walk of a live
+    # instance is a standing charge on somebody else's machine, and
+    # turning it on is their call rather than mine.
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

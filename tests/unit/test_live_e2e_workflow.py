@@ -80,6 +80,17 @@ def test_it_reports_through_one_issue_rather_than_many() -> None:
     )
 
 
+def test_it_runs_where_the_other_jobs_run() -> None:
+    """Self-hosted, on Logan's hardware, since #169-#171 moved them all.
+
+    A job on `ubuntu-latest` in this repo would be both inconsistent and
+    queued behind a runner label nothing else uses.
+    """
+    assert FLOW["jobs"]["walk"]["runs-on"] == "self-hosted", (
+        "the live walk runs on a different runner from every other job in this repository"
+    )
+
+
 def test_it_asks_for_no_more_permission_than_it_needs() -> None:
     assert FLOW["permissions"] == {"contents": "read", "issues": "write"}, (
         f"the live walk's permissions grew: {FLOW['permissions']}"
