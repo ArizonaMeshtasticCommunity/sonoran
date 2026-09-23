@@ -48,10 +48,16 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 # How many rows each board shows.
 BOARD_SIZE = 10
 
-# The window the link board reads, and how many reports of each kind it
-# reads at most. The answer says when the cap was reached.
+# The window the link board reads.
+#
+# There is no row cap any more. There was one, of 10,000 of each kind,
+# and 72 h of MediumFast already held 9,577 neighbour and 9,332
+# traceroute rows -- 96% of it. Crossing that would have started
+# demoting links off the board for having too little evidence, when
+# the evidence was there and simply had not been read. See the note in
+# `graph.mesh_graph` and AGENTS.md 9.19; reading the whole window is
+# 24 ms at 168 h on production, so the cap bought nothing.
 LINK_WINDOW_HOURS = 72
-LINK_ROW_LIMIT = 10_000
 
 # How long a link board is held. The graph evidence behind it changes
 # slowly, and reading three days of it is the heaviest thing here.
@@ -209,8 +215,8 @@ async def _link_board(session: AsyncSession, preset: str, margin_db: float) -> d
     modem = preset_for_channel(preset)
     required = required_snr_db(modem) if modem else 0.0
     since = datetime.now(UTC) - timedelta(hours=LINK_WINDOW_HOURS)
-    edges = await _traceroute_edges(session, since, LINK_ROW_LIMIT, preset)
-    neighbours = await _neighbor_edges(session, since, LINK_ROW_LIMIT, preset)
+    edges = await _traceroute_edges(session, since, preset)
+    neighbours = await _neighbor_edges(session, since, preset)
     for edge in neighbours.values():
         _merge(edges, edge)
 
@@ -242,8 +248,7 @@ async def _link_board(session: AsyncSession, preset: str, margin_db: float) -> d
         "window_hours": LINK_WINDOW_HOURS,
         "cannot_know": (
             "Both ends need an exact position, and a link needs reports in both directions, "
-            "so a real long link that only one side reports is missing. "
-            f"At most the newest {LINK_ROW_LIMIT} reports of each kind are read."
+            "so a real long link that only one side reports is missing."
         ),
         "rows": [
             {

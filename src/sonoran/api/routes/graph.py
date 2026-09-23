@@ -186,19 +186,15 @@ def _merge(edges: EdgeMap, edge: Edge) -> None:
     known.time = max(known.time, edge.time)
 
 
-async def _neighbor_edges(
-    session: AsyncSession, since: datetime, limit: int, channel: str | None
-) -> EdgeMap:
+async def _neighbor_edges(session: AsyncSession, since: datetime, channel: str | None) -> EdgeMap:
     """Return the links that recent neighbor reports show on one channel.
 
     A node names the neighbours it hears, so the packet each report
     measures travelled from the neighbour to the node that reports it.
     """
-    statement = (
-        select(NeighborMetrics)
-        .where(NeighborMetrics.time >= since, channel_filter(NeighborMetrics.channel, channel))
-        .order_by(NeighborMetrics.time.desc())
-        .limit(limit)
+    # The whole window, not a page of it. See `mesh_graph` for why.
+    statement = select(NeighborMetrics).where(
+        NeighborMetrics.time >= since, channel_filter(NeighborMetrics.channel, channel)
     )
     rows = (await session.scalars(statement)).all()
     edges: EdgeMap = {}
@@ -250,19 +246,15 @@ def _trace_links(row: Traceroute) -> list[tuple[int, int, float | None, int, int
     return links
 
 
-async def _traceroute_edges(
-    session: AsyncSession, since: datetime, limit: int, channel: str | None
-) -> EdgeMap:
+async def _traceroute_edges(session: AsyncSession, since: datetime, channel: str | None) -> EdgeMap:
     """Return the links that recent traceroutes show.
 
     There is one link between each pair of hops that follow each other,
     for as far along the path as the report reached.
     """
-    statement = (
-        select(Traceroute)
-        .where(Traceroute.seen_at >= since, channel_filter(Traceroute.channel, channel))
-        .order_by(Traceroute.seen_at.desc())
-        .limit(limit)
+    # The whole window, not a page of it. See `mesh_graph` for why.
+    statement = select(Traceroute).where(
+        Traceroute.seen_at >= since, channel_filter(Traceroute.channel, channel)
     )
     rows = (await session.scalars(statement)).all()
     edges: EdgeMap = {}
@@ -560,12 +552,36 @@ async def mesh_graph(
     each other, so a page must ask for one channel at a time.
     """
     since = datetime.now(UTC) - timedelta(hours=hours)
-    edges = await _traceroute_edges(session, since, limit, channel)
-    for edge in (await _neighbor_edges(session, since, limit, channel)).values():
+    edges = await _traceroute_edges(session, since, channel)
+    for edge in (await _neighbor_edges(session, since, channel)).values():
         _merge(edges, edge)
 
+    # The limit picks which links are DRAWN. It does not decide what
+    # the evidence was.
+    #
+    # It used to cut the rows before they were counted, so `strength`
+    # and `each_way` described whatever survived truncation. Measured
+    # on a 24 h MediumFast window, the default of 2000 discarded 38% of
+    # the neighbour rows and 32% of the traceroute rows, and 103 of
+    # 1776 shared links changed strength when it was raised -- 53 of
+    # them from `weak`, which the page draws dotted and calls "too
+    # rarely to say it is usable", to `two_way`. AGENTS.md 9.19:
+    # a row limit must never decide what evidence exists.
+    #
+    # Reading the whole window is affordable. Measured on production:
+    # 4 ms at the 24 h default, 24 ms at 168 h, 201 ms at the 720 h
+    # maximum. The cap was not buying speed, it was buying wrong
+    # answers.
+    #
+    # Ranked by evidence so a truncated picture keeps the best attested
+    # links, and `links_truncated` says when that happened, because a
+    # partial graph that does not admit it is worse than a small one.
+    ranked = sorted(edges.values(), key=lambda edge: edge.forward + edge.backward, reverse=True)
+    truncated = len(ranked) > limit
+    shown = ranked[:limit]
+
     node_nums: set[int] = set()
-    for edge in edges.values():
+    for edge in shown:
         node_nums.update((edge.source, edge.target))
 
     rows = (await session.scalars(select(Node).where(Node.node_num.in_(node_nums)))).all()
@@ -577,12 +593,15 @@ async def mesh_graph(
         _node_json(num, known.get(num), name_of(names, num), counts.get(num, 0))
         for num in sorted(node_nums)
     ]
-    links = [edge.as_json() for edge in edges.values()]
+    links = [edge.as_json() for edge in shown]
     return {
         "window_hours": hours,
         "channel": channel,
         "node_count": len(nodes),
         "link_count": len(links),
+        # What was measured, against what is drawn.
+        "links_found": len(ranked),
+        "links_truncated": truncated,
         "nodes": nodes,
         "links": links,
     }
