@@ -4375,7 +4375,7 @@ async function drawTimeline(target, nodeId, hours, types) {
     el('p', { class: 'muted' },
       'A packet is one transmission: a position, a reading, a message, or a routine announcement. '
       + 'Open a row to see what it carried and which gateways heard it.'
-      + (seenSortable ? '' : ' Sorting by hops, gateways or signal needs a window of 7 days or less.')),
+      + (seenSortable ? '' : ' Sorting by hops, gateways or signal needs a window of 7 days or less: choose one above.')),
     el('div', { class: 'controls' }, directionSelect, typeSelect, channelInput),
     body, pager);
   markScrollableTables(target);
@@ -4384,7 +4384,7 @@ async function drawTimeline(target, nodeId, hours, types) {
 
 async function loadNodeDetail(nodeId) {
   const page = $('[data-page="node"]');
-  const hours = $('[data-node-hours]', page).value || '24';
+  const hours = $('[data-node-hours]', page).value || '720';
   const body = $('[data-node-body]', page);
   replace(body, el('p', { class: 'loading', text: 'Loading' }));
 
@@ -4430,12 +4430,23 @@ async function loadNodeDetail(nodeId) {
   const packets = el('div', { class: 'panel span-2 timeline' },
     el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' }));
 
-  replace(body, cards, el('div', { class: 'grid two' },
-    issues,
+  /*
+   * The four short panels get a row of their own (#102).
+   *
+   * They were in the same `grid two` as everything else, whose track
+   * minimum is 24 rem -- so on most laptops only two fitted and they
+   * took two rows plus a screen of scrolling to see four short lists.
+   * A narrower minimum lets all four sit side by side when there is
+   * room and still fall back to two, then one, when there is not.
+   */
+  const summary = el('div', { class: 'grid summary-row' },
     identityPanel(node),
     devicePanel(detail),
     activityPanel(detail),
-    weatherPanel(detail),
+    weatherPanel(detail));
+
+  replace(body, cards, summary, el('div', { class: 'grid two' },
+    issues,
     routes,
     history,
     messagesPanel(detail),

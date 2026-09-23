@@ -539,6 +539,20 @@ button:disabled:hover { border-color: var(--line); background: none; }
  */
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr)); }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr)); }
+/*
+ * The node page's four short summary panels (#102).
+ *
+ * Identity, Device, Activity and Weather are all short, so they belong
+ * on one row rather than two. 24 rem fits two on a laptop; 15 rem fits
+ * four, and the `min(..., 100%)` guard is what stops the track floor
+ * exceeding the container on a phone -- the same idiom every other
+ * grid here uses, and the one `.board li` was missing when Statistics
+ * scrolled sideways.
+ */
+.grid.summary-row {
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  margin-bottom: 1rem;
+}
 
 /*
  * Two rows of two, not three and a stray.

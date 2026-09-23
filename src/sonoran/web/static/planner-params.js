@@ -85,8 +85,13 @@ const DEFAULTS = {
   frequency_mhz: 906.875,
   rx_height: 1,
   rx_gain: 2.15,
-  sensitivity: -139,
-  preset: 'LONG_FAST',
+  // Medium fast, because that is what this mesh actually runs (#105).
+  // The sensitivity has to move with it -- the two are one choice, and
+  // a form that opens on Medium fast with Long fast's -139 dBm would
+  // predict a reach nobody has. The change handler already keeps them
+  // together after the first load; this keeps them together before it.
+  sensitivity: -134,
+  preset: 'MEDIUM_FAST',
   clutter_height: 0,
   ground_dielectric: 15,
   ground_conductivity: 0.005,
