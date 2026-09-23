@@ -1094,6 +1094,88 @@ function showLink(node, result, request) {
 
 let wired = false;
 
+/*
+ * Work the cable loss out from a cable and a length (#112).
+ *
+ * "Cable loss (dB)" asks a newcomer for a number they have no way to
+ * arrive at. They do know which cable they bought and roughly how long
+ * the run is, and the answer matters: at 915 MHz, 30 ft of LMR-195 is
+ * 3.33 dB and the same run of LMR-400 is 1.18 dB.
+ *
+ * This FILLS the existing box rather than replacing it. Somebody who
+ * already knows their figure can still type it, and the box remains
+ * what the share link and the engine read, so nothing downstream had to
+ * change.
+ *
+ * The figures come from `/api/radio/cables`, which computes them from
+ * the maker's own formula. They are deliberately not copied into this
+ * file: two tables of sourced numbers drifting apart is worse than one
+ * fetch, because neither copy would look wrong.
+ */
+const FEET_PER_100 = 100;
+let cableCatalogue = null;
+
+async function loadCables() {
+  if (cableCatalogue) return cableCatalogue;
+  try {
+    const body = await get('api/radio/cables');
+    cableCatalogue = body && Array.isArray(body.cables) ? body.cables : null;
+  } catch {
+    // The planner works without this. A newcomer loses the help; an
+    // advanced user types the dB as they always did.
+    cableCatalogue = null;
+  }
+  return cableCatalogue;
+}
+
+function cableLossDb(cable, feet) {
+  if (!cable || !(feet > 0)) return 0;
+  return (cable.db_per_100ft * feet) / FEET_PER_100;
+}
+
+async function wireCableRun() {
+  const run = document.querySelector('[data-cable-run]');
+  const note = document.querySelector('[data-cable-note]');
+  const picker = document.querySelector('[data-cable-type]');
+  const length = document.querySelector('[data-cable-length]');
+  if (!run || !picker || !length) return;
+
+  const cables = await loadCables();
+  if (!cables || !cables.length) return;
+
+  picker.replaceChildren(
+    el('option', { value: '', text: "I'll type the loss myself" }),
+    ...cables.map((cable) => el('option', { value: cable.key, text: cable.name })),
+  );
+
+  const apply = () => {
+    const cable = cables.find((item) => item.key === picker.value);
+    const feet = Number(length.value);
+    if (!cable) {
+      note.hidden = true;
+      return;
+    }
+    const loss = cableLossDb(cable, feet);
+    const box = field('system_loss');
+    if (box) {
+      box.value = loss.toFixed(2);
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    note.hidden = false;
+    // Said in dB and again in plain words, because "2.3 dB" means
+    // nothing to somebody buying their first coax.
+    const share = 100 - 100 / 10 ** (loss / 10);
+    note.textContent =
+      `${feet} ft of ${cable.name} loses about ${loss.toFixed(2)} dB at each end — `
+      + `roughly ${Math.round(share)}% of the power, before the antenna. `
+      + `${cable.good_for}`;
+  };
+
+  picker.addEventListener('change', apply);
+  length.addEventListener('input', apply);
+  run.hidden = false;
+}
+
 function wirePlanner() {
   if (wired) return;
   wired = true;
@@ -1116,6 +1198,10 @@ function wirePlanner() {
   const defaults = SonoranPlannerParams.FORM_DEFAULTS;
   fillForm(defaults);
   if (preset) preset.value = defaults.preset;
+
+  // The cable helper reveals itself only once the catalogue has
+  // arrived, so a failed fetch leaves no dead controls on the form.
+  wireCableRun();
 
   /*
    * The address follows a committed edit, not a keystroke.

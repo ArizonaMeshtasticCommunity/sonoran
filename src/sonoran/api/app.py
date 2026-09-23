@@ -32,6 +32,7 @@ from sonoran.api.routes.map import router as map_router
 from sonoran.api.routes.node_page import router as node_page_router
 from sonoran.api.routes.nodes import router as nodes_router
 from sonoran.api.routes.packets import router as packets_router
+from sonoran.api.routes.radio import router as radio_router
 from sonoran.api.routes.rf import router as rf_router
 from sonoran.api.routes.stats import router as stats_router
 from sonoran.api.routes.terrain import router as terrain_router
@@ -423,6 +424,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(coverage_router)
     app.include_router(embed_router)
+    app.include_router(radio_router)
     app.include_router(gaps_router)
     app.include_router(graph_router)
     app.include_router(map_router)

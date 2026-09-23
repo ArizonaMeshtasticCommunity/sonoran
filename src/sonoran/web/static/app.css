@@ -2117,6 +2117,11 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * never the only one (WCAG 1.4.1), so the cards read in greyscale. An
  * unknown card is grey and never green: nothing measured is not healthy.
  */
+/* The planner's cable run (#112). Hidden until its catalogue arrives,
+   so a failed fetch leaves no dead controls behind. */
+.cable-run[hidden] { display: none; }
+.cable-note { font-size: .78rem; margin: .3rem 0 .6rem; }
+
 /* The off switch for the single-key shortcuts (#147). Small and beside
    the other watch-bar controls: it is a setting, not a feature. */
 .watch-shortcut-toggle {

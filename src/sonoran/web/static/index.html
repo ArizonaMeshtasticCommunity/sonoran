@@ -741,6 +741,22 @@
                 <label>Cable loss (dB), each end
                   <input data-planner="system_loss" inputmode="decimal" /></label>
               </div>
+              <!--
+                Work the cable loss out instead of asking for it (#112).
+                Nobody knows what to type into a dB box. They do know
+                what cable they bought and roughly how long it is, and
+                the difference is large: 30 ft of LMR-195 is 3.33 dB
+                against LMR-400's 1.18 dB at 915 MHz.
+
+                It fills the box above rather than replacing it, so an
+                advanced user can still type a figure and anybody who
+                has already learned the box keeps it.
+              -->
+              <div class="pair cable-run" data-cable-run hidden>
+                <label>Cable <select data-cable-type></select></label>
+                <label>Length (ft) <input data-cable-length inputmode="decimal" value="10" /></label>
+              </div>
+              <p class="muted cable-note" data-cable-note hidden></p>
               <p class="muted" style="font-size: .78rem">
                 The sensitivity follows the preset. Lower it by a few dB in town,
                 where the band is shared and noisy.
