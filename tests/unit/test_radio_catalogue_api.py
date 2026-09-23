@@ -17,10 +17,12 @@ Verified by calling the handlers directly (they touch no database):
 """
 
 import asyncio
+import json
 
+from fastapi.encoders import jsonable_encoder
 from starlette.responses import Response
 
-from sonoran.api.routes.radio import CACHE_SECONDS, antennas, cables
+from sonoran.api.routes.radio import CACHE_SECONDS, antennas, boards, cables
 from sonoran.radio.cables import BY_KEY, db_per_100ft
 
 
@@ -67,3 +69,30 @@ def test_both_responses_say_they_may_be_cached() -> None:
         response = Response()
         asyncio.run(call(response))
         assert response.headers["Cache-Control"] == f"public, max-age={CACHE_SECONDS}"
+
+
+def test_every_payload_survives_the_serialiser() -> None:
+    """These return dataclasses via `asdict`, not plain dicts.
+
+    `Cable.table` is a tuple of tuples, which is the kind of thing that
+    works when you call the handler and fails when FastAPI encodes it.
+    Calling the function proves the data; this proves it can leave the
+    process.
+
+    Checked: the table arrives as a list of lists — `[[1, 1.9], ...]` —
+    which is what a JSON client can actually read.
+    """
+    for name, call in (
+        ("cables", lambda: cables(Response(), 915.0)),
+        ("antennas", lambda: antennas(Response())),
+        ("boards", lambda: boards(Response())),
+    ):
+        body = asyncio.run(call())
+        encoded = jsonable_encoder(body)
+        text = json.dumps(encoded)
+        assert len(text) > 100, f"{name} encoded to almost nothing"
+
+    table = jsonable_encoder(asyncio.run(cables(Response(), 915.0)))["cables"][0]["table"]
+    assert isinstance(table, list) and isinstance(table[0], list), (
+        f"the printed attenuation table does not survive encoding: {type(table)}"
+    )
