@@ -29,6 +29,7 @@ diagnostic run is refused before a handler body runs. See `AGENTS.md`
 """
 
 from pathlib import Path
+from secrets import token_urlsafe
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import Path as PathParam
@@ -105,8 +106,17 @@ STATIC_DIR = Path(__file__).parent.parent.parent / "web" / "static"
 
 
 @router.get("/embed/coverage", include_in_schema=False)
-async def embed_page(settings: Settings = Depends(_require_enabled)) -> HTMLResponse:
-    """Serve the embed document."""
+async def embed_page(
+    request: Request, settings: Settings = Depends(_require_enabled)
+) -> HTMLResponse:
+    """Serve the embed document.
+
+    The one inline script here gets a nonce, the same as the
+    dashboard's two. This page matters more than the dashboard for
+    that, not less: it is the one document this project deliberately
+    lets a third party frame, so its policy is the one running inside
+    somebody else's site.
+    """
     html = (STATIC_DIR / "embed-coverage.html").read_text(encoding="utf-8")
     config = {
         "apiBase": settings.web_api_base_url,
@@ -115,7 +125,10 @@ async def embed_page(settings: Settings = Depends(_require_enabled)) -> HTMLResp
         "mapCenter": [settings.map_default_lat, settings.map_default_lon],
         "mapZoom": settings.map_default_zoom,
     }
-    return HTMLResponse(html.replace("__SONORAN_EMBED_CONFIG__", as_script_json(config)))
+    nonce = token_urlsafe(16)
+    request.state.csp_nonce = nonce
+    html = html.replace("__SONORAN_EMBED_CONFIG__", as_script_json(config))
+    return HTMLResponse(html.replace("__SONORAN_NONCE__", nonce))
 
 
 @router.get("/api/embed/coverage")

@@ -9,7 +9,7 @@
       The attribute is always set to light or dark, so app.css needs one
       block of light values and not a second copy inside a media query.
     -->
-    <script>
+    <script nonce="__SONORAN_NONCE__">
       (function () {
         var mode = 'system';
         try { mode = localStorage.getItem('sonoran.theme') || 'system'; } catch (error) {}
@@ -1170,7 +1170,7 @@
     </div>
 
 
-    <script>window.SONORAN = __SONORAN_CONFIG__;</script>
+    <script nonce="__SONORAN_NONCE__">window.SONORAN = __SONORAN_CONFIG__;</script>
     <script src="static/vendor/leaflet.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/vendor/echarts.min.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--

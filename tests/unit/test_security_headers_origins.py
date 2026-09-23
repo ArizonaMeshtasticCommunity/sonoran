@@ -15,6 +15,8 @@ into a response header without being tested for shape.
    when `WEB_BASE_PATH` is set and the proxy does not strip it.
 """
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -108,9 +110,17 @@ def test_a_crafted_tile_url_cannot_add_a_directive() -> None:
 
     names = _names(policy)
     assert names.count("script-src") == 1, f"a directive was injected: {policy}"
-    # And the one that is there is ours.
+    # And the one that is there is ours. Matched by shape rather than
+    # by a literal, because the nonce changes per response -- but every
+    # part that is NOT the nonce is still pinned, which is what stops a
+    # hostile setting widening it.
     script = next(item for item in _directives(policy) if item.startswith("script-src"))
-    assert script == "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'"
+    assert re.fullmatch(r"script-src 'self' 'nonce-[A-Za-z0-9_-]+' 'wasm-unsafe-eval'", script), (
+        script
+    )
+    assert "'unsafe-inline'" not in script, (
+        "script-src allows every inline script again; that is what let the #81 payload run"
+    )
     # The hostile value contributed nothing at all.
     assert "unsafe-inline' *" not in policy
     assert "tiles.example.com" not in policy

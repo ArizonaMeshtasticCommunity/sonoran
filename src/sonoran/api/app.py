@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hashlib import sha256
 from pathlib import Path
+from secrets import token_urlsafe
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI
@@ -193,6 +194,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # the routed path means what the note says.
         path = get_route_path(request.scope)
         response = await call_next(request)
+        # Set by the document handler, which is the only response with
+        # inline script in it. Anything else gets a policy that permits
+        # no inline script at all, which is what we want.
+        nonce = getattr(request.state, "csp_nonce", "")
         response.headers["X-Content-Type-Options"] = "nosniff"
         # Send the origin, not the full URL, on a cross-origin request.
         # `no-referrer` sent nothing, and the OpenStreetMap tile server
@@ -223,7 +228,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 f"default-src 'self'; img-src {image_sources}; "
                 "connect-src 'self'; "
                 "style-src 'self' 'unsafe-inline'; "
-                "script-src 'self' 'unsafe-inline'; "
+                # The embed's one inline script carries the same nonce
+                # the dashboard's two do. This page is the one we let a
+                # third party frame, so its policy is the one running
+                # inside somebody else's site -- it is the LAST place to
+                # keep a blanket allowance for inline script.
+                f"script-src 'self' 'nonce-{nonce}'; "
                 "worker-src 'none'; "
                 "frame-src 'none'; "
                 f"frame-ancestors {frame_ancestors(settings.embed_frame_ancestors)}"
@@ -240,7 +250,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 # browser refuses to do that without wasm-unsafe-eval and
                 # reports nothing the user can see. Terrain comes from
                 # this origin, so no extra connect source is needed.
-                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
+                #
+                # NO `unsafe-inline`. It used to be here, and it is the
+                # reason the stored XSS in #81 executed: a node named
+                # `<img src=x onerror=...>` reached an innerHTML sink,
+                # and the policy permitted the handler to run. The sink
+                # is fixed, but a policy that would allow the next one
+                # is a policy doing nothing.
+                #
+                # Two inline scripts need to run: the theme, which must
+                # go before first paint or a light reader sees a dark
+                # frame, and the one line that carries the server's
+                # config. Both carry this nonce. A browser that
+                # understands nonces ignores `unsafe-inline` entirely,
+                # so there is no point keeping it as a fallback -- it
+                # would only weaken the policy for browsers that honour
+                # both.
+                f"script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval'; "
                 "worker-src 'self' blob:; "
                 # Nothing may frame the dashboard, not even this origin.
                 "frame-ancestors 'none'; "
@@ -388,7 +414,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"version": __version__, "schema": "none"}
 
     @app.get("/", include_in_schema=False)
-    async def dashboard() -> HTMLResponse:
+    async def dashboard(request: Request) -> HTMLResponse:
         """Serve the no-build dashboard at the configured base path."""
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         config = {
@@ -414,6 +440,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         html = html.replace("__SONORAN_CONFIG__", as_script_json(config))
         html = html.replace("__SONORAN_ASSET_VERSION__", app.state.asset_version)
+        # A fresh nonce per response, put on the request so the security
+        # middleware can name it in the policy. The document is
+        # `no-cache`, so a nonce can never be served twice -- which is
+        # the one thing that would make it worthless.
+        nonce = token_urlsafe(16)
+        request.state.csp_nonce = nonce
+        html = html.replace("__SONORAN_NONCE__", nonce)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     if STATIC_DIR.is_dir():
