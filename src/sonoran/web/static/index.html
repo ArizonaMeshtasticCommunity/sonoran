@@ -987,7 +987,7 @@
                 </select>
               </label>
               <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
-              <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show weak links</button>
+              <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show unjudged links</button>
               <button type="button" data-graph-reset>Reset layout</button>
               <a class="linky" data-graph-external target="_blank" rel="noopener">Open mesh-graph</a>
             </div>
@@ -1000,7 +1000,7 @@
             <p class="legend" style="margin: .5rem 0 0">
               <span><span class="line solid"></span>Two-way: packets crossed it both ways</span>
               <span><span class="line dashed"></span>One-way: packets crossed it mostly one way</span>
-              <span data-legend-weak hidden><span class="line weak"></span>Weak: under 10 packets seen</span>
+              <span data-legend-weak hidden><span class="line weak"></span>Too little evidence: under 10 packets seen</span>
               <span data-legend-unconfirmed hidden><span class="line grey"></span>No signal reading</span>
             </p>
           </div>

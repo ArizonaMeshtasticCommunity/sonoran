@@ -2922,12 +2922,21 @@ const LINK_OPACITY = 0.95;
 const LINK_LINE = {
   two_way: { width: 2.0, type: 'solid', opacity: LINK_OPACITY },
   one_way: { width: 1.4, type: 'dashed', opacity: LINK_OPACITY },
-  weak: { width: 1.0, type: 'dotted', opacity: LINK_OPACITY },
+  unknown: { width: 1.0, type: 'dotted', opacity: LINK_OPACITY },
 };
+/*
+ * The third one is about OUR EVIDENCE, not about the link (#149).
+ *
+ * It read "Weak link: few packets crossed it", which states a property
+ * of the link and then gives a reason that is a property of what we
+ * have seen. 90% of links at 24 h were in it. That is #87 mirrored:
+ * there an unknown node was coloured as a healthy one, here an unknown
+ * link is described as a bad one.
+ */
 const LINK_STRENGTH = {
   two_way: 'Two-way link',
   one_way: 'One-way link: packets crossed it mostly one way',
-  weak: 'Weak link: few packets crossed it',
+  unknown: 'Too few packets crossed it to say whether it carries',
 };
 
 /* Layout units. The graph fits whatever bounds it is given, so this
@@ -3242,7 +3251,8 @@ PAGES.graph = async (page) => {
    * it. A traceroute hop with no reading is not proof of a working
    * radio link, so it is hidden by default.
    *
-   * A link is weak when too few packets crossed it to call it usable,
+   * A link is unjudged when too few packets crossed it to call it
+   * anything -- that is a statement about our evidence, not the link,
    * whichever way they went (see `strength` in the graph endpoint).
    * Those are shown by default, because they are true, and the toggle
    * takes them away for anyone who wants only the links that carry.
@@ -3251,8 +3261,8 @@ PAGES.graph = async (page) => {
    * not show a crowd of unconnected dots.
    */
   let visible = showUnconfirmed ? allLinks : confirmed;
-  const weak = visible.filter((link) => link.strength === 'weak').length;
-  if (!showWeak) visible = visible.filter((link) => link.strength !== 'weak');
+  const unjudged = visible.filter((link) => link.strength === 'unknown').length;
+  if (!showWeak) visible = visible.filter((link) => link.strength !== 'unknown');
   data.links = visible;
 
   /*
@@ -3292,17 +3302,17 @@ PAGES.graph = async (page) => {
     + (view === 'focus' ? ' - one hop' : view === 'backbone' ? ` - strongest ${BACKBONE_LINKS_PER_NODE} per node` : '')
     + (hiddenByView ? `, ${count(hiddenByView)} more not drawn` : '')
     + (showUnconfirmed ? '' : unconfirmed ? `, ${count(unconfirmed)} unconfirmed hidden` : '')
-    + (weak
+    + (unjudged
       ? showWeak
-        ? `, ${count(weak)} weak`
-        : `, ${count(weak)} weak hidden`
+        ? `, ${count(unjudged)} unjudged`
+        : `, ${count(unjudged)} unjudged hidden`
       : '');
   // Links stored before channel tracking mix every preset together, so
   // this one graph does show links that cannot exist. Say so plainly.
   const dotted = $('[data-legend-unconfirmed]', page);
   if (dotted) dotted.hidden = !showUnconfirmed;
   const faint = $('[data-legend-weak]', page);
-  if (faint) faint.hidden = !(showWeak && weak);
+  if (faint) faint.hidden = !(showWeak && unjudged);
 
   const warning = $('[data-graph-warning]', page);
   if (warning) {
@@ -3551,7 +3561,7 @@ PAGES.graph = async (page) => {
         eachWay: link.each_way,
         strength: link.strength,
         lineStyle: {
-          ...(LINK_LINE[link.strength] || LINK_LINE.weak),
+          ...(LINK_LINE[link.strength] || LINK_LINE.unknown),
           // Unconfirmed: the stale colour, not a fainter one. At .2 it
           // measured 1.22:1, the worst value on the page. `--role-stale`
           // at full strength is 3.31 dark and 4.59 light, so the colour
