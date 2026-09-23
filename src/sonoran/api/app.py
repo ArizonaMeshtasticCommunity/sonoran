@@ -307,6 +307,34 @@ def _static_cache_control(scope: Scope) -> str:
     return _A_YEAR if version else _A_FEW_MINUTES
 
 
+# Named one by one, deliberately.
+#
+# `startswith("/embed/")` was correct for the one document that exists
+# and wrong for every one that does not yet. Any page added under
+# `/embed/` later would have inherited third-party `frame-ancestors`
+# and lost `X-Frame-Options` without anybody choosing that -- the
+# failure being silent is the whole problem, because the page would
+# work.
+#
+# Adding an embed route therefore means adding it here. That is the
+# point, and `test_embed_policy_is_explicit.py` fails if a registered
+# embed route is missing from this set, so the omission cannot be quiet
+# either.
+_EMBED_PATHS = frozenset(
+    {
+        "/embed/coverage",
+        "/api/embed/coverage",
+        "/api/embed/nodes",
+    }
+)
+
+# The one prefix that survives, because its path carries six parameters
+# and cannot be written out. It is a leaf namespace serving PNG tiles,
+# not a place documents get added, which is what made the old
+# `/embed/` prefix dangerous.
+_EMBED_TILE_PREFIX = "/api/embed/tiles/"
+
+
 def _is_embed(path: str) -> bool:
     """Return true for a path that a third party may frame.
 
@@ -330,7 +358,7 @@ def _is_embed(path: str) -> bool:
     test over a production difference. It now drives a client shaped
     like the proxy that does not strip.
     """
-    return path == "/embed/coverage" or path.startswith("/embed/") or path.startswith("/api/embed/")
+    return path in _EMBED_PATHS or path.startswith(_EMBED_TILE_PREFIX)
 
 
 @asynccontextmanager
