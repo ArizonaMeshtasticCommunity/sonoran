@@ -40,6 +40,10 @@ TRACEROUTE_KIND = "traceroute"
 
 # How much evidence a link needs before the graph trusts it. See #73.
 #
+# How many of a link's reports the link page lists. The COUNT it shows
+# is of the whole window; this only bounds the list.
+LINK_REPORTS_SHOWN = 50
+
 # Below WEAK_LINK_SAMPLES reports in total a link is weak: it happened,
 # but too rarely to say it is usable. Past that a link is two-way when
 # packets crossed it at least TWO_WAY_MIN_SAMPLES times in each
@@ -498,7 +502,7 @@ async def _link_reports(
                 }
             )
     reports.sort(key=lambda item: cast(datetime, item["time"]), reverse=True)
-    return reports[:50]
+    return reports
 
 
 @router.get("/link")
@@ -517,6 +521,8 @@ async def graph_link(
     first, second = require_node_num(a), require_node_num(b)
     since = datetime.now(UTC) - timedelta(hours=hours)
     reports = await _link_reports(session, first, second, since, channel)
+    # The whole window is counted and measured; only the list is cut.
+    shown = reports[:LINK_REPORTS_SHOWN]
     names = await resolve_names(session, (first, second))
     measured = [
         value
@@ -527,9 +533,17 @@ async def graph_link(
         "a": {"node_id": format_node_id(first), "display_name": name_of(names, first)},
         "b": {"node_id": format_node_id(second), "display_name": name_of(names, second)},
         "window_hours": hours,
+        # The count is of the window; the list is the newest slice of it.
+        #
+        # This used to report `len(reports)` AFTER the list had been cut
+        # to 50, so a link with 71 reports told the reader it had 50 --
+        # and the graph edge for the same window and channel said 71.
+        # Somebody clicking a link to check a number got a different
+        # number. `best_snr` was a maximum over the truncated 50 too.
         "report_count": len(reports),
+        "reports_shown": len(shown),
         "best_snr": max(measured) if measured else None,
-        "reports": reports,
+        "reports": shown,
     }
 
 

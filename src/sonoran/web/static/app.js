@@ -806,7 +806,20 @@ async function loadLeaderboards(page) {
             row.other_id ? [' to ', nodeChip({ node_id: row.other_id, display_name: row.other_name })] : null),
           el('span', { class: 'value', text: `${count(row.value)} ${row.unit}` }),
           el('span', { class: 'muted detail', text: row.detail }))))
-      : empty('Nothing qualifies in the window.'),
+      /*
+       * "Nothing qualifies" is a measurement. "Not assessed" is an
+       * admission, and the two must not read the same.
+       *
+       * The two gaps-backed boards are built from an empty list when
+       * `read_assessment` returns nothing, so a preset the job has not
+       * yet looked at used to report that nobody qualified -- a claim
+       * about a mesh that had not been measured. The payload has said
+       * `assessed: false` all along and this ignored it. Same rule the
+       * gaps page holds: silence is not a finding.
+       */
+      : empty(data.assessed === false
+          ? 'No assessment has been written for this preset yet, so these boards have nothing to rank.'
+          : 'Nothing qualifies in the window.'),
     el('details', {}, el('summary', { text: 'What this cannot know' }),
       el('p', { class: 'muted', text: board.cannot_know })))));
 }

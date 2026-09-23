@@ -976,10 +976,20 @@ async def node_packets(
                 select(uploads.c.from_node_num, uploads.c.packet_id)
             )
         )
-        # A packet row is dated by its first upload, which may be a
-        # little before this gateway's. The lower bound keeps the scan
-        # to the chunks that can hold it.
-        filters.append(Packet.first_seen_at >= since - timedelta(hours=1))  # type: ignore[operator]
+        # No lower bound on the packet's own date here, deliberately.
+        #
+        # There used to be one, `since - 1 hour`, to keep the scan to
+        # the chunks that could hold the row. The assumption behind it
+        # -- that a gateway uploads within an hour of the packet first
+        # being seen -- does not hold: measured over 24 h, 4,764 of
+        # 258,487 observations lagged by more than an hour and the
+        # worst by 19.5 days. Every one of those was dropped from the
+        # listing AND from X-Total-Count, so the total agreed with the
+        # rows and both were wrong.
+        #
+        # The `uploads` subquery is already bounded by `seen_at`, which
+        # is the column this listing is actually about. 9.19: a bound
+        # for the planner's benefit must not decide what exists.
     if portnum is not None:
         filters.append(Packet.portnum == _parse_packet_type(portnum))
     if channel:

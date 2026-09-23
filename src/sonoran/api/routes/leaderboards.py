@@ -85,14 +85,25 @@ async def leaderboards(
     """
     settings: Settings = request.app.state.settings
     presets = _assessed_presets(settings)
-    preset = channel if channel is not None else (presets[0] if presets else None)
-    if preset is None or preset_for_channel(preset) is None:
+    asked = channel if channel is not None else (presets[0] if presets else None)
+    modem = preset_for_channel(asked)
+    if asked is None or modem is None:
         return {
             "available": False,
-            "reason": "not_a_preset" if preset else "no_assessment",
+            "reason": "not_a_preset" if asked else "no_assessment",
             "presets": presets,
             "boards": [],
         }
+    # The resolved preset, never the caller's spelling of it.
+    #
+    # `preset_for_channel` normalises by stripping every non-alphanumeric
+    # character, so `l.o.n.g.f.a.s.t` and `--LoNg----FaSt--` both resolve
+    # to LongFast -- and both used to be echoed back verbatim as
+    # `preset` and used as the key of a module-global cache that is
+    # never evicted. So a caller could mint unbounded cache entries, and
+    # miss the 900-second hold on every one of them, which is exactly
+    # the expensive read that hold exists for.
+    preset = modem.name
     document = read_assessment(settings, preset)
     rows = _rows(document)
     window = document.get("window_hours") if document else None
