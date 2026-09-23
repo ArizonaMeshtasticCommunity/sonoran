@@ -136,5 +136,14 @@ const fixed = {
   eq('mesh-changing list is non-empty', CHANGES_WHICH_MESH.length > 0, true);
 }
 
+// 10. A nested message that did not change is not a change. The fixer
+//     deep-clones, so it is never the same object; the preview used to
+//     offer "mqtt.mapReportSettings: [object Object] → [object Object]".
+{
+  const node = { config: {}, moduleConfig: { mqtt: { mapReportSettings: { publishIntervalSecs: 3600 } } } };
+  const rows = planChanges(node, JSON.parse(JSON.stringify(node)));
+  eq('an equal nested object is not a change', rows.length, 0);
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

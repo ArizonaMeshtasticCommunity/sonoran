@@ -746,6 +746,7 @@ function drawSerialPlan(page) {
 
 function format(value) {
   if (value === undefined || value === null) return 'unset';
+  if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
 

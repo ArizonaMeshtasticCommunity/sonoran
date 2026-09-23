@@ -58,6 +58,7 @@ def test_the_write_path_behaves(tmp_path: Path) -> None:
         "never writes bluetooth.enabled",
         "commits exactly once",
         "one setConfig for the section",
+        "an equal nested object is not a change",
         "no changes means no admin traffic",
         "writes bluetooth when asked for by name",
     ):

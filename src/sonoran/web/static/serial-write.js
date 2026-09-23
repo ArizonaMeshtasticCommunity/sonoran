@@ -132,6 +132,12 @@ export function planChanges(current, fixed) {
 
 function same(a, b) {
   if (a === b) return true;
+  // A nested message (`mqtt.mapReportSettings`) arrives as a fresh
+  // object on each side -- `ConfigFixer` deep-clones -- so it never
+  // equals by reference. Compare what it holds.
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
   // An absent setting and its zero value are the same node behaviour,
   // and writing one over the other is a change the reader would not
   // recognise as one.
