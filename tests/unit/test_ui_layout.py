@@ -266,10 +266,10 @@ def test_no_hint_lives_only_in_a_tooltip() -> None:
     keyboard-only users and touch-only users, such as anyone with a
     modern phone or tablet".
 
-    Every place the dashboard put an explanation in `title` now also
-    puts it in `data-hint`, and `revealHints` writes those out under the
-    table as text anybody can reach. The `title` stays as a pointer
-    convenience; it is no longer the only copy.
+    Every place the dashboard put an explanation in `title` carries it
+    in `data-hint` instead, and `revealHints` turns each one into a
+    button on the heading or the tile label it explains. See
+    `test_column_hints.py` for the control itself.
     https://html.spec.whatwg.org/multipage/dom.html#the-title-attribute
     """
     script = _read("app.js")

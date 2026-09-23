@@ -603,8 +603,6 @@ button:disabled:hover { border-color: var(--line); background: none; }
 .stat { display: flex; flex-direction: column; gap: .3rem; padding: 1.15rem 1.2rem; }
 .stat .value { font-size: 1.9rem; font-weight: 650; line-height: 1.1; }
 .stat .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
-/* A tile label with a sentence behind it, like `th.hinted`. */
-.stat .label.hinted { text-decoration: underline dotted; text-underline-offset: .3em; cursor: help; }
 .stat .delta { font-size: .78rem; color: var(--muted); }
 
 /* Node identity */
@@ -662,66 +660,64 @@ th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--
    dashboard's role column read "Cli". */
 td.wrap { max-width: 28rem; }
 th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
-/* A heading with a `hint` has a sentence behind it. See `table()`. The
-   sentence itself is written out under the table by `revealHints`; the
-   dotted underline says there is more to read, for a pointer that will
-   also get the tooltip. */
-th.hinted { text-decoration: underline dotted; text-underline-offset: .3em; cursor: help; }
-
 /*
- * What the columns and figures mean, in the page rather than in a
- * tooltip.
+ * What one column or one figure means (#99).
  *
- * Closed by default, so a desktop reader who already knows the words
- * sees one line. It sits outside `.table-wrap` on purpose: the table is
- * excepted from WCAG 2.2 SC 1.4.10 Reflow and may scroll in two
- * dimensions, and this must not, so it reflows to 320 CSS px with the
- * rest of the page. See `revealHints` in app.js.
+ * The sentence used to sit in a disclosure under the table, which
+ * repeated every heading a second time. It is now on the heading,
+ * behind a button, and the panel is a popover so `.table-wrap`'s
+ * sideways scroll cannot clip it. See `revealHints` in app.js.
  */
-.hint-notes { margin: .6rem 0 0; font-size: .82rem; }
-.hint-notes > summary {
-  color: var(--muted); cursor: pointer;
-  /* A `summary` is the tap target that opens this, so it gets a hit
-     region rather than the 17 px a line of 0.82 rem text would give it.
-     WCAG 2.2 SC 2.5.8 Target Size (Minimum) asks 24x24 CSS px. */
-  padding: .35rem 0; min-height: 1.75rem;
-  display: flex; align-items: center; gap: .4rem;
+.hint-open {
+  /* A tap target, not a 12 px letter. WCAG 2.2 SC 2.5.8 Target Size
+     (Minimum) asks for 24x24 CSS px, and a `th` is 0.75 rem text. */
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.5rem; margin-left: .15rem; padding: 0;
+  vertical-align: middle;
+  color: var(--muted); background: none; border: 0; cursor: pointer;
+}
+.hint-open:hover { color: var(--accent); }
+.hint-mark {
+  display: flex; align-items: center; justify-content: center;
+  width: 1rem; height: 1rem;
+  border: 1px solid currentColor; border-radius: 50%;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: .7rem; font-style: italic; font-weight: 700;
+  line-height: 1; text-transform: none; letter-spacing: 0;
+}
+
+.hint-pop {
   /*
-   * `display: flex` on a `summary` takes the user-agent disclosure
-   * marker away in Chrome and Safari, and a line of grey text that
-   * happens to be clickable is not an affordance anybody finds. This
-   * whole block exists so a phone can reach the sentences, so the thing
-   * that says it opens has to be drawn rather than inherited.
+   * `inset: auto` and `margin: 0` undo the user-agent rules for
+   * `[popover]`, which centre a popover in the viewport. `left` and
+   * `top` are written by `placeHint` in app.js, under the button that
+   * opened it; the values here are only what the first frame uses.
    */
-  list-style: none;
+  position: fixed; inset: auto; left: 0; top: 0; margin: 0;
+  /* Above the page, for the browsers that have no top layer to put it
+     in and draw it as an ordinary fixed element instead. */
+  z-index: 1900;
+  /* Never wider than the screen it has to fit on, which is 320 CSS px
+     under WCAG 2.2 SC 1.4.10 Reflow. */
+  width: min(22rem, calc(100vw - 1rem));
+  padding: .7rem .8rem;
+  font-size: .82rem; font-weight: 400; line-height: 1.5;
+  text-transform: none; letter-spacing: 0; text-align: left;
+  color: var(--muted); background: var(--panel);
+  border: 1px solid var(--line); border-radius: .5rem;
+  box-shadow: 0 .5rem 1.5rem var(--scroll-shadow);
 }
-.hint-notes > summary::-webkit-details-marker { display: none; }
-.hint-notes > summary::before {
-  content: ""; flex: 0 0 auto;
-  width: .4rem; height: .4rem;
-  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
-  transform: rotate(-45deg); transition: transform .15s ease;
+.hint-pop[hidden] { display: none; }
+.hint-pop p { margin: 0 0 .4rem; }
+.hint-pop p:last-child { margin-bottom: 0; }
+.hint-pop .hint-name {
+  color: var(--text); font-weight: 650;
+  font-size: .75rem; text-transform: uppercase; letter-spacing: .05em;
 }
-.hint-notes[open] > summary::before { transform: rotate(45deg); }
-.hint-notes > summary:hover { color: var(--text); }
-.hint-notes .kv {
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: .35rem .9rem; margin: .35rem 0 .2rem;
-}
-.hint-notes dt { color: var(--text); font-weight: 600; }
-.hint-notes dd { color: var(--muted); line-height: 1.5; }
-/* The exact protocol values a column holds, on their own line under the
-   sentence that explains the column. */
-.hint-notes .hint-exact { display: block; margin-top: .2rem; font: var(--mono); }
-/*
- * One column at phone width. `max-content` for the term beside a
- * sentence gives a two-character-wide description column on a 320 px
- * screen, which is a Reflow failure in everything but name.
- */
-@media (max-width: 34rem) {
-  .hint-notes .kv { grid-template-columns: minmax(0, 1fr); gap: .1rem; }
-  .hint-notes dd { margin-bottom: .5rem; }
-}
+/* The exact protocol values this column holds. `overflow-wrap` because
+   a long enum has no space in it to break at, and one of those must
+   not push the panel past the edge of a 320 px screen. */
+.hint-pop .hint-exact { font: var(--mono); overflow-wrap: anywhere; }
 tbody tr:hover { background: var(--panel-2); }
 td.wrap { white-space: normal; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }

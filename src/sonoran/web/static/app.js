@@ -366,21 +366,19 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
    * as anyone with a modern phone or tablet."
    * https://html.spec.whatwg.org/multipage/dom.html#the-title-attribute
    *
-   * So the sentence is now carried in `data-hint` as well, and
-   * `revealHints` renders every hint under the table as visible text in
-   * a `details` that anybody can open with one tap. The `title` stays
-   * as a convenience for a pointer, but it is no longer the only copy.
+   * So the sentence is carried in `data-hint`, and `revealHints` turns
+   * it into a button on the heading that opens the sentence in a
+   * panel. `title` is gone rather than kept beside it: two copies of
+   * one sentence drift, and a native tooltip opening on hover over a
+   * heading that now has its own control is one affordance too many.
    *
-   * Not a tooltip component: a tooltip on hover or focus would land the
-   * page in WCAG 2.2 SC 1.4.13 Content on Hover or Focus (Level AA) and
-   * its dismissible/hoverable/persistent obligations, for information
-   * that is better simply written down. Not an inline note in the cell
-   * either — that widens the column, and the table is the one part of
-   * the page WCAG 2.2 SC 1.4.10 Reflow excepts, so it is the one place
-   * extra width costs a reader the most.
+   * Not an inline note in the cell either — that widens the column,
+   * and the table is the one part of the page WCAG 2.2 SC 1.4.10
+   * Reflow excepts, so it is the one place extra width costs a reader
+   * the most.
    */
   const head = el('tr', {}, columns.map((column) => {
-    const classes = [column.num ? 'num' : '', column.hint ? 'hinted' : ''];
+    const classes = [column.num ? 'num' : ''];
     /*
      * A column may also carry `sort`: the name the server knows the
      * column by. The heading then becomes a button that asks the
@@ -395,7 +393,6 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
     if (!column.sort) {
       return el('th', {
         class: classes.join(' ').trim() || null,
-        title: column.hint || null,
         'data-hint': column.hint || null,
         'data-label': column.label,
         text: column.label,
@@ -413,7 +410,6 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
     }, el('button', {
       type: 'button',
       class: 'sort-button',
-      title: column.hint || null,
       onclick: () => column.onSort(column.sort, active && direction === 'asc' ? 'desc' : 'asc'),
     },
     el('span', { text: column.label }),
@@ -472,16 +468,14 @@ function expandingTable(columns, rows, emptyMessage, options = {}) {
 }
 
 /* A summary tile. Its `hint` travels the same way a column's does: in
- * `data-hint` for `revealHints` to write out under the grid, and in
- * `title` as a pointer convenience rather than as the only copy.
+ * `data-hint`, for `revealHints` to turn into a button on the label.
  * See the note in `table()`. */
 function statTile(label, value, delta, hint) {
   return el('div', { class: 'panel' },
     el('div', { class: 'stat' },
       el('span', { class: 'value', text: value }),
       el('span', {
-        class: hint ? 'label hinted' : 'label',
-        title: hint || null,
+        class: 'label',
         'data-hint': hint || null,
         'data-label': label,
         text: label,
@@ -5060,7 +5054,10 @@ PAGES.firehose = async (page) => {
     {
       label: 'Hops',
       num: true,
-      hint: 'Hop start minus hop limit: how many relays the packet had used by the time it was uploaded.',
+      // Named in #99 as the example of a hint written in the
+      // protocol's words. "Hop start minus hop limit" is how the
+      // number is worked out, not what it means to a reader.
+      hint: 'How many times this packet was relayed before a gateway uploaded it.',
       cell: (row) => (row.hop_start == null ? '-' : `${row.hop_start - (row.hop_limit ?? row.hop_start)}`),
     },
     {
@@ -6070,42 +6067,53 @@ function markScrollableTables(root = document) {
  * with a modern phone or tablet".
  * https://html.spec.whatwg.org/multipage/dom.html#the-title-attribute
  *
- * The answer is a disclosure, not a tooltip polyfill:
+ * The first answer was a disclosure under the table, "What these
+ * columns mean". It worked, and it repeated every heading a second
+ * time on a page that is already long (#99). The sentence now sits on
+ * the heading it explains, behind a button.
  *
- *  - It is ordinary text in the document, so it works with a finger, a
- *    keyboard, a screen reader and a printer, and it needs no hover and
- *    no focus. A hover tooltip would instead have to satisfy WCAG 2.2
- *    SC 1.4.13 Content on Hover or Focus (Level AA) — dismissible,
- *    hoverable, persistent — for a sentence that can simply be shown.
- *  - It sits OUTSIDE `.table-wrap`, so it reflows to 320 CSS px like
- *    the rest of the page. Inside the table it would inherit the
- *    table's two-dimensional scroll, and WCAG 2.2 SC 1.4.10 Reflow only
- *    excepts the table itself — the Understanding document is explicit
- *    that a heading or control beside an excepted table is not excepted
- *    with it. https://www.w3.org/TR/WCAG22/#reflow
- *  - It is closed by default, so nothing about the desktop page moves.
+ * A button, and not a hover tooltip, for the same reason as before. A
+ * hover tooltip must satisfy WCAG 2.2 SC 1.4.13 Content on Hover or
+ * Focus (Level AA) — dismissible, hoverable, persistent — and a `title`
+ * cannot be reached by a finger or a keyboard at all. A button that
+ * opens on click, tap and Enter or Space has none of those problems:
+ * nothing opens by accident, so nothing has to be kept open while the
+ * pointer travels to it.
  *
- * The exact wire values come with it. A role column shows "Client mute"
- * because `CLIENT_MUTE` truncates into a lie, and the exact value then
- * had nowhere to live on a phone; here each distinct value the column
- * actually holds is listed once, which costs a line rather than a
- * column's width.
+ * The panel is a popover, which is what keeps it out of
+ * `.table-wrap`'s sideways scroll. A popover draws in the browser's
+ * top layer, so no ancestor's `overflow` can clip it, while staying
+ * where it is in the document for a screen reader. It also brings
+ * Escape and tap-outside-to-close with it, both of which SC 1.4.13
+ * asks for. Where `popover` is not supported the same element is shown
+ * with `hidden` and `position: fixed` — fixed positioning escapes a
+ * plain `overflow` ancestor as well — and this file closes it on
+ * Escape and on a tap outside.
  *
- * Nothing here changes a value, a label or a unit. It only moves a
- * sentence that already existed from a tooltip into the page.
+ * The exact wire values come with it, on the column that holds them. A
+ * role column shows "Client mute" because `CLIENT_MUTE` truncates into
+ * a lie, and the exact value had nowhere else to live on a phone.
+ *
+ * Nothing here changes a value, a label or a unit.
  */
+
+/* Whether the browser has the popover API. Chrome 114, Safari 17 and
+ * Firefox 125 have it; older ones take the `hidden` path below. */
+const POPOVER = 'popover' in HTMLElement.prototype;
+
+/* The panel that is open now, so a second one closes the first. */
+let openHint = null;
+let hintSeq = 0;
+
 function revealHints(root = document) {
   for (const wrap of $$('.table-wrap', root)) {
     const table = $('table', wrap);
-    const notes = [];
     for (const th of table ? $$('th', table) : []) {
       const hint = th.dataset.hint;
-      const label = th.dataset.label || th.textContent.trim();
       const exact = exactValues(table, th);
       if (!hint && !exact.length) continue;
-      notes.push({ label, hint, exact });
+      fitHint(th, 'column', th.dataset.label || th.textContent.trim(), hint, exact);
     }
-    fitNotes(wrap, notes, 'columns');
   }
   /*
    * The same for the summary tiles. Four numbers on the dashboard, each
@@ -6113,13 +6121,9 @@ function revealHints(root = document) {
    * reason those sentences matter: "Uploads" is not a count of gateways
    * and the tile that says so was readable only on hover.
    */
-  for (const grid of $$('.grid', root)) {
-    const notes = [];
-    for (const label of $$('.stat .label[data-hint]', grid)) {
-      notes.push({ label: label.dataset.label || label.textContent.trim(),
-        hint: label.dataset.hint, exact: [] });
-    }
-    fitNotes(grid, notes, 'figures');
+  for (const label of $$('.stat .label[data-hint]', root)) {
+    fitHint(label, 'figure', label.dataset.label || label.textContent.trim(),
+      label.dataset.hint, []);
   }
 }
 
@@ -6143,52 +6147,134 @@ function exactValues(table, th) {
   return out;
 }
 
-/**
- * Put the notes after `target`, or take an old block away.
- *
- * The block is rebuilt on each render because the rows behind it are,
- * but an open disclosure stays open: a reader who opened it to work
- * through a table must not have it shut under them every live refresh.
- */
-function fitNotes(target, notes, noun) {
-  const existing = target.nextElementSibling?.classList.contains('hint-notes')
-    ? target.nextElementSibling : null;
-  if (!notes.length) {
-    if (existing) existing.remove();
-    return;
-  }
-  const open = existing ? existing.open : false;
-  const list = el('dl', { class: 'kv' });
-  for (const note of notes) {
-    list.append(el('dt', { text: note.label }));
-    const body = el('dd', {});
-    if (note.hint) body.append(el('span', { text: note.hint }));
-    if (note.exact.length) {
-      body.append(el('span', { class: 'hint-exact' },
+/** The sentence and the exact values, as the panel's contents. */
+function hintBody(label, hint, exact) {
+  return [
+    el('p', { class: 'hint-name', text: label }),
+    hint ? el('p', { text: hint }) : null,
+    exact.length
+      ? el('p', { class: 'hint-exact' },
         el('span', { class: 'muted', text: 'Exact values here: ' }),
-        ...note.exact.map((value, index) =>
-          el('span', { text: `${index ? ', ' : ''}${value.text} = ${value.exact}` }))));
+        exact.map((value, index) =>
+          el('span', { text: `${index ? ', ' : ''}${value.text} = ${value.exact}` })))
+      : null,
+  ];
+}
+
+/**
+ * Give one heading or tile label its hint button, once.
+ *
+ * A live page renders every 15 s and most renders say the same thing.
+ * Rebuilding the button anyway would take the focus out of it each
+ * time, and shut a panel somebody was reading, so the contents are
+ * compared first and only a real change is written.
+ */
+function fitHint(host, noun, label, hint, exact) {
+  /*
+   * The name carries the heading, because a page holds a dozen of
+   * these and "What this column means" a dozen times names nothing to
+   * somebody tabbing through. The heading goes last rather than first
+   * — "What Uploads means" reads well until the column is called "What
+   * it said", and then it reads "What What it said means".
+   */
+  const name = `What this ${noun} means: ${label}`;
+  const key = [label, hint, ...exact.map((value) => `${value.text}=${value.exact}`)].join(' ');
+  const found = $('.hint-open', host);
+  if (found) {
+    const panel = document.getElementById(found.getAttribute('aria-controls'));
+    if (panel && panel.dataset.key !== key) {
+      replace(panel, hintBody(label, hint, exact));
+      panel.dataset.key = key;
+      found.setAttribute('aria-label', name);
     }
-    list.append(body);
-  }
-  const block = el('details', { class: 'hint-notes' },
-    el('summary', { text: `What these ${noun} mean` }), list);
-  block.open = open;
-  if (!existing) {
-    target.after(block);
     return;
   }
+  const id = `hint-${++hintSeq}`;
+  const panel = el('div', { class: 'hint-pop', id, 'data-key': key, hidden: !POPOVER },
+    hintBody(label, hint, exact));
+  if (POPOVER) panel.setAttribute('popover', 'auto');
+  const button = el('button', {
+    type: 'button', class: 'hint-open',
+    'aria-label': name,
+    'aria-expanded': 'false',
+    'aria-controls': id,
+  }, el('span', { class: 'hint-mark', 'aria-hidden': 'true', text: 'i' }));
   /*
-   * Only when it actually changed.
-   *
-   * A live page re-renders every few seconds, and the columns almost
-   * never differ between two of them. Replacing the node anyway would
-   * take the focus out of it each time — a reader who had tabbed to the
-   * summary, or opened it and started reading, would be put back on the
-   * body on the next tick.
+   * The browser drives it where it can. `popovertarget` toggles the
+   * panel, closes it on Escape and on a tap outside, and — the part a
+   * click handler of ours would get wrong — closes it when the button
+   * that opened it is pressed again, rather than closing and reopening
+   * it in the same gesture.
    */
-  if (existing.textContent === block.textContent) return;
-  existing.replaceWith(block);
+  if (POPOVER) {
+    button.setAttribute('popovertarget', id);
+    /*
+     * An auto popover closes any other one as it opens, so nothing here
+     * has to track which panel is up. `toggle` is the first moment the
+     * panel has a size to measure, so that is where it is placed.
+     */
+    panel.addEventListener('toggle', (event) => {
+      const open = event.newState === 'open';
+      button.setAttribute('aria-expanded', String(open));
+      if (open) placeHint(button, panel);
+    });
+  } else {
+    button.addEventListener('click', () => {
+      const wasOpen = openHint && openHint.panel === panel;
+      closeHint();
+      if (wasOpen) return;
+      panel.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
+      openHint = { button, panel };
+      placeHint(button, panel);
+    });
+  }
+  host.append(button, panel);
+}
+
+/**
+ * Put the panel under its button, and never off the side of the screen.
+ *
+ * A heading near the right edge of a wide table would otherwise open a
+ * panel that runs past the viewport, and the panel is in the top layer
+ * so nothing scrolls to reach it. Below the button unless there is no
+ * room below, and then above it.
+ */
+function placeHint(button, panel) {
+  const gutter = 8;
+  const rect = button.getBoundingClientRect();
+  const wide = document.documentElement.clientWidth;
+  const tall = document.documentElement.clientHeight;
+  const left = Math.max(gutter,
+    Math.min(rect.left + rect.width / 2 - panel.offsetWidth / 2, wide - panel.offsetWidth - gutter));
+  const below = rect.bottom + 6;
+  const top = below + panel.offsetHeight > tall - gutter
+    ? Math.max(gutter, rect.top - panel.offsetHeight - 6) : below;
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+}
+
+/* Only the fallback path has a panel to close by hand. */
+function closeHint() {
+  if (!openHint) return;
+  const { button, panel } = openHint;
+  openHint = null;
+  button.setAttribute('aria-expanded', 'false');
+  panel.hidden = true;
+}
+
+/*
+ * Escape and a tap outside, for the browsers with no popover API.
+ * Where there is one the browser does both, and these listeners are
+ * not installed at all rather than racing it.
+ */
+if (!POPOVER) {
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeHint();
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (openHint && !event.target.closest('.hint-pop, .hint-open')) closeHint();
+  });
 }
 
 async function render(name) {

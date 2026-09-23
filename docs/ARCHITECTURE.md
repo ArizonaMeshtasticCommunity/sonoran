@@ -458,6 +458,19 @@ general proxy for the tile source.
   nodes, node detail, chat, weekly check-in, firehose, traceroutes,
   statistics.
 
+A column or a summary tile that needs explaining carries its sentence
+in `data-hint`, and `revealHints` in `app.js` turns each one into a
+button on the heading it explains. The button is a `<button>` with
+`aria-expanded`, so a finger and a keyboard both reach it; a `title`
+attribute reaches neither, which is why none is written. The panel is
+a popover, which draws in the browser's top layer, so `.table-wrap`'s
+sideways scroll cannot clip it while the panel stays where it is in
+the document for a screen reader. Where the popover API is missing the
+same element is shown with `hidden` and `position: fixed`, which
+escapes a plain `overflow` ancestor as well, and `app.js` closes it on
+Escape and on a tap outside. Each column's own exact protocol values
+are listed in its panel.
+
 The config check page uses the community config checker's logic,
 vendored in `web/static/vendor/config-checker/`, and draws the result in
 `web/static/config-check.js`. The vendored interface is not loaded. This

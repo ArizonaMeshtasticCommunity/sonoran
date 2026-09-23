@@ -14,8 +14,14 @@
  *     ./tools/dev/preview.sh          # in one terminal
  *     node tools/dev/e2e.js           # in another
  *
- * Set SONORAN_URL to walk a different instance.
+ * Set SONORAN_URL to walk a different instance. Set
+ * SONORAN_LOCAL_STATIC=1 to walk one with this checkout's `app.js` and
+ * `app.css` in place of its own, which is how a dashboard change is
+ * tested against real data before it is deployed.
  */
+
+const fs = require('fs');
+const path = require('path');
 
 function loadChromium() {
   const places = [
@@ -87,8 +93,39 @@ function must(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+/*
+ * Serve the working tree's static files over somebody else's instance.
+ *
+ * A dashboard change has no data of its own. The instance worth
+ * walking is the one with a real mesh in it, and that one runs the
+ * deployed code, so a journey run against it cannot say whether an
+ * unmerged change works. `SONORAN_LOCAL_STATIC=1` fulfils the four
+ * asset requests from this checkout instead, which tests the change
+ * against real rows before it is deployed. The default is off: a run
+ * with no environment set still walks exactly what is deployed.
+ */
+const LOCAL_STATIC = process.env.SONORAN_LOCAL_STATIC === '1';
+const STATIC_DIR = path.join(__dirname, '..', '..', 'src', 'sonoran', 'web', 'static');
+const TYPES = { js: 'application/javascript', css: 'text/css' };
+
+async function serveLocalStatic(page) {
+  if (!LOCAL_STATIC) return;
+  // A regular expression, not a glob: every asset is requested with a
+  // `?v=` cache buster on it, and a glob `*` does not cross the `?`.
+  await page.route(/\/static\/[^/?]+\.(js|css)(\?|$)/, (route, request) => {
+    const name = path.basename(new URL(request.url()).pathname);
+    const file = path.join(STATIC_DIR, name);
+    if (!fs.existsSync(file)) return route.continue();
+    return route.fulfill({
+      contentType: TYPES[name.split('.').pop()],
+      body: fs.readFileSync(file, 'utf8'),
+    });
+  });
+}
+
 async function journey(context, name, body) {
   const page = await context.newPage();
+  await serveLocalStatic(page);
   page.on('pageerror', (error) => errors.push(`${name}: ${error.message}`));
   page.on('console', (message) => {
     if (message.type() !== 'error' || IGNORE.test(message.text())) return;
@@ -449,21 +486,52 @@ async function main() {
   });
 
   await journey(phone, 'a phone can read what a column means', async (page) => {
+    /*
+     * The same journey as before #99, walked over the control that
+     * replaced the "What these columns mean" block: the sentence is now
+     * on the heading it explains. The assertions that matter are
+     * unchanged -- a finger can reach the Uploads sentence and the
+     * exact wire value, and neither is on the screen until it is asked
+     * for. A `title` tooltip could pass neither check on a touch
+     * screen.
+     */
     await open(page, 'firehose', 4500);
-    const notes = page.locator('[data-page="firehose"] .hint-notes').first();
-    must((await notes.count()) > 0, 'no column notes were written under the table');
-    // Closed, the sentences are not on the screen; open, they are. A
-    // `title` tooltip could pass neither check on a touch screen.
-    must(!(await notes.evaluate((node) => node.open)), 'the notes start open');
-    await notes.locator('summary').click();
-    await page.waitForTimeout(200);
-    const text = await notes.innerText();
-    must(/uploaded this packet to MQTT/.test(text),
-      'the Uploads sentence is not in the page');
+    const table = page.locator('[data-page="firehose"] .table-wrap').first();
+    const buttons = table.locator('.hint-open');
+    must((await buttons.count()) > 0, 'no column carries a hint control');
+    const uploads = table.locator('th[data-label="Uploads"] .hint-open');
+    must((await uploads.count()) > 0, 'the Uploads column has no hint control');
+    must((await uploads.getAttribute('aria-expanded')) === 'false', 'the hint starts open');
+    const panel = page.locator(`#${await uploads.getAttribute('aria-controls')}`);
+    must(!(await panel.isVisible()), 'the sentence is on the screen before it is asked for');
+
+    await uploads.tap();
+    await page.waitForTimeout(250);
+    must((await uploads.getAttribute('aria-expanded')) === 'true', 'tapping did not open it');
+    must(await panel.isVisible(), 'the panel did not appear');
+    must(/uploaded this packet to MQTT/.test(await panel.innerText()),
+      'the Uploads sentence is not in the panel');
+    // It must fit the screen, which is what `.table-wrap` would have
+    // taken away from a panel drawn inside the table.
+    const box = await panel.boundingBox();
+    const width = page.viewportSize().width;
+    must(box.x >= -1 && box.x + box.width <= width + 1,
+      `the panel runs off the screen: ${Math.round(box.x)}..${Math.round(box.x + box.width)} of ${width}`);
+
     // And the exact wire value, which used to live only in `title`.
-    must(/TELEMETRY_APP|POSITION_APP|NODEINFO_APP/.test(text),
+    const type = table.locator('th[data-label="Type"] .hint-open');
+    await type.tap();
+    await page.waitForTimeout(250);
+    const exact = page.locator(`#${await type.getAttribute('aria-controls')}`);
+    must(/TELEMETRY_APP|POSITION_APP|NODEINFO_APP/.test(await exact.innerText()),
       'no exact protocol value is reachable');
-    return 'hints and exact values both visible';
+    // Opening one closes the other, and Escape closes what is open.
+    must((await uploads.getAttribute('aria-expanded')) === 'false',
+      'two hint panels are open at once');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    must((await type.getAttribute('aria-expanded')) === 'false', 'Escape did not close it');
+    return `${await buttons.count()} columns explained, hints and exact values both reachable`;
   });
 
   await journey(phone, 'no form control invites the iOS zoom', async (page) => {
