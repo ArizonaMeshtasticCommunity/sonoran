@@ -6,10 +6,15 @@ through every run -- `docker run` reports exit **137**. Docker's
 coverage immediately, and the kernel kills it again. Eleven restarts
 were recorded in one stretch and coverage never completed once.
 
-The cost was not the wasted work. The box has **one core**, so the
-restart storm starved the thing people actually look at: measured on
-that box minutes apart, `/api/graph` served in 0.32 s with the jobs
-container stopped and 2.06 s with it running.
+The cost was not the wasted work. The restart storm starved the thing
+people actually look at: measured on that box minutes apart,
+`/api/graph` served in 0.32 s with the jobs container stopped and
+2.06 s with it running, and load average reached 20.9 on a 3-core box.
+
+(An earlier version of this file said "one core". That was wrong, and
+it came from reading `nproc`, which returned 1 while `nproc --all`
+returned 3 and CPU affinity was `0-2`. The measured slowdown above is
+unaffected -- it was measured, not derived from the core count.)
 
 The fix is to remember that a task was *tried*, across restarts, and
 let `at_start` mean "if it is actually due".
