@@ -128,11 +128,29 @@
           fight against the `details` user-agent rules.
         -->
         <button type="button" class="nav-toggle" data-nav-toggle hidden
-                aria-expanded="false" aria-controls="site-nav">
+                aria-expanded="false" aria-controls="site-menu"
+                aria-label="Menu">
           <svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg>
           <span class="nav-toggle-label">Menu</span>
           <span class="nav-toggle-here" data-nav-here></span>
         </button>
+        <!--
+          The one live region on the site, and it stays OUT here (#175).
+
+          #175 asks for the updated time to live inside the menu, and
+          the VISIBLE copy does. This one is `.sr-only` and never seen.
+          The menu is `hidden` when closed, which takes everything
+          inside it out of the accessibility tree, so a status that
+          lived only in there would stop announcing the moment a phone
+          user closed the menu -- and "are we still following the mesh"
+          is the one thing this site announces at all.
+
+          So: one live region, always in the tree, never visible. The
+          copy in the menu is plain text with no `role`, which is why
+          nothing is announced twice.
+        -->
+        <p class="sr-only" data-status-live role="status" aria-live="polite"></p>
+        <div class="site-menu" id="site-menu">
         <nav id="site-nav" aria-label="Dashboard pages">
           <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a>
           <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
@@ -163,7 +181,7 @@
           words, and it changes at the same moment the tables do.
           `polite` waits for a pause, so it never interrupts.
         -->
-        <p class="status" data-status role="status" aria-live="polite">
+        <p class="status" data-status>
           <span class="dot"></span><span data-status-text>Connecting</span>
         </p>
         <!--
@@ -186,6 +204,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-theme-system"/></svg>
           <span class="theme-word" data-theme-word>System</span>
         </button>
+        </div>
       </aside>
 
       <main class="content" id="main" tabindex="-1">

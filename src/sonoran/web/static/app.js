@@ -6397,6 +6397,11 @@ async function setStatus(state, message) {
   const dot = $('[data-status] .dot');
   dot.className = `dot ${state}`;
   $('[data-status-text]').textContent = message;
+  // The visible copy is inside the menu, which is `hidden` when a phone
+  // closes it; this one is `.sr-only`, always in the tree, and is the
+  // only thing that announces (#175).
+  const live = $('[data-status-live]');
+  if (live) live.textContent = message;
 }
 
 /*
@@ -6984,12 +6989,15 @@ function wire() {
 function wireNav() {
   const toggle = $('[data-nav-toggle]');
   const nav = $('#site-nav');
+  // The menu holds the nav, the status and the theme switch (#175), so
+  // the button opens all three rather than the links alone.
+  const menu = $('#site-menu') || nav;
   if (!toggle || !nav) return;
   const narrow = matchMedia('(max-width: 60rem)');
 
   const setOpen = (open) => {
     toggle.setAttribute('aria-expanded', String(open));
-    nav.hidden = !open;
+    menu.hidden = !open;
     $('use', toggle).setAttribute('href', open ? '#i-menu-close' : '#i-menu');
   };
 
