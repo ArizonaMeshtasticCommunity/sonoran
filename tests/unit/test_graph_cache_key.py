@@ -24,7 +24,13 @@ because the graph selector offers at most 7 days while 720 h cost
 
 import inspect
 
-from sonoran.api.routes.graph import GRAPH_MAX_HOURS, graph_cache_key, mesh_graph
+from sonoran.api.routes.graph import (
+    GRAPH_CEILING_HOURS,
+    GRAPH_MAX_HOURS,
+    clamp_hours,
+    graph_cache_key,
+    mesh_graph,
+)
 
 # Not part of the question the cache answers.
 IGNORED = {"request", "session"}
@@ -71,9 +77,34 @@ def test_a_channel_cannot_forge_another_key() -> None:
     )
 
 
-def test_the_window_ceiling_matches_what_the_pages_offer() -> None:
-    """720 h bought nothing any page could ask for and cost ten seconds."""
-    assert GRAPH_MAX_HOURS == 168, (
-        "the graph window ceiling moved; the selector offers 6 h, 24 h, "
-        "3 days and 7 days, and 720 h measured 9.2-10.1 s"
+def test_the_window_is_clamped_and_not_refused() -> None:
+    """An existing caller with hours=720 must not start getting 422s.
+
+    This is a public endpoint on a community deployment. Somebody's
+    script with 720 in it was inside the documented range yesterday, and
+    breaking it to protect our box is the wrong trade when clamping
+    exists. 720 h measured 9.2-10.1 s against 3.3 s at 168 h.
+    """
+    assert GRAPH_MAX_HOURS == 168, "the working window moved"
+    assert GRAPH_CEILING_HOURS >= 720, (
+        "the parameter no longer ACCEPTS the old ceiling, so a caller "
+        "that used to work now gets a 422 instead of a narrower answer"
+    )
+    assert clamp_hours(24) == (24, None), "a normal request was altered"
+    assert clamp_hours(168) == (168, None), "the boundary was clamped"
+    assert clamp_hours(720) == (168, 720), (
+        "a 720 h request is not clamped to 168 while reporting what it asked for"
+    )
+
+
+def test_a_clamped_request_says_so_in_the_body() -> None:
+    """Silently returning a different window would be worse than a 422.
+
+    `window_hours` already carries what was used; `window_clamped`
+    names what was asked for, so a caller can tell.
+    """
+    source = inspect.getsource(mesh_graph)
+    assert "window_clamped" in source, (
+        "a clamped window is not reported, so a caller asking for 720 h "
+        "gets 168 h of data and no way to know"
     )

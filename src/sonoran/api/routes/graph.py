@@ -68,7 +68,28 @@ LINK_REPORTS_SHOWN = 50
 # rather than a slow answer. A 30-day graph is a feature with a
 # different shape -- prepared, not computed while somebody waits -- not
 # a query parameter.
+#
+# BUT NOT BY RETURNING 422. This is a public endpoint on a community
+# deployment, and somebody's script with `hours=720` in it is not doing
+# anything wrong -- it was inside the documented range yesterday.
+# Breaking it to protect our own box is the wrong trade when a softer
+# one exists.
+#
+# So the parameter still ACCEPTS up to 720 and the window is clamped to
+# 168 inside, and the response says so: `window_hours` already carries
+# the window actually used, and `window_clamped` names the one that was
+# asked for. An existing caller keeps getting data -- a narrower slice
+# than it asked for -- and can see that it did.
 GRAPH_MAX_HOURS = 168
+GRAPH_CEILING_HOURS = 720
+
+
+def clamp_hours(hours: int) -> tuple[int, int | None]:
+    """Return the window to use, and the one asked for if it was cut."""
+    if hours <= GRAPH_MAX_HOURS:
+        return hours, None
+    return GRAPH_MAX_HOURS, hours
+
 
 WEAK_LINK_SAMPLES = 10
 TWO_WAY_MIN_SAMPLES = 3
@@ -385,7 +406,7 @@ async def _channel_packet_counts(session: AsyncSession, since: datetime) -> dict
 @router.get("/channels")
 async def graph_channels(
     request: Request,
-    hours: int = Query(default=24, ge=1, le=GRAPH_MAX_HOURS),
+    hours: int = Query(default=24, ge=1, le=GRAPH_CEILING_HOURS),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return every channel that has mesh links in the window.
@@ -406,6 +427,7 @@ async def graph_channels(
     the column, so one graph of them mixes every preset together. A
     large backlog of them must never become the default tab.
     """
+    hours, clamped = clamp_hours(hours)
     since = datetime.now(UTC) - timedelta(hours=hours)
     links = await _channel_link_counts(session, since)
     packets = await _channel_packet_counts(session, since)
@@ -434,7 +456,8 @@ async def graph_channels(
                 "packet_count": packets.get(name, 0),
             }
         )
-    return {"window_hours": hours, "channels": channels}
+    body: dict[str, object] = {"window_hours": hours, "channels": channels}
+    return body | {"window_clamped": clamped} if clamped else body
 
 
 def _mentions(node: int) -> ColumnElement[bool]:
@@ -531,7 +554,7 @@ async def _link_reports(
 async def graph_link(
     a: str,
     b: str,
-    hours: int = Query(default=24, ge=1, le=GRAPH_MAX_HOURS),
+    hours: int = Query(default=24, ge=1, le=GRAPH_CEILING_HOURS),
     channel: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
@@ -541,6 +564,7 @@ async def graph_link(
     can be opened from here.
     """
     first, second = require_node_num(a), require_node_num(b)
+    hours, clamped = clamp_hours(hours)
     since = datetime.now(UTC) - timedelta(hours=hours)
     reports = await _link_reports(session, first, second, since, channel)
     # The whole window is counted and measured; only the list is cut.
@@ -555,6 +579,7 @@ async def graph_link(
         "a": {"node_id": format_node_id(first), "display_name": name_of(names, first)},
         "b": {"node_id": format_node_id(second), "display_name": name_of(names, second)},
         "window_hours": hours,
+        **({"window_clamped": clamped} if clamped else {}),
         # The count is of the window; the list is the newest slice of it.
         #
         # This used to report `len(reports)` AFTER the list had been cut
@@ -588,7 +613,7 @@ _graph_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=64)
 @router.get("")
 async def mesh_graph(
     request: Request,
-    hours: int = Query(default=24, ge=1, le=GRAPH_MAX_HOURS),
+    hours: int = Query(default=24, ge=1, le=GRAPH_CEILING_HOURS),
     limit: int = Query(default=2000, ge=1, le=10000),
     channel: str | None = None,
     session: AsyncSession = Depends(get_session),
@@ -611,12 +636,18 @@ async def mesh_graph(
     # `test_graph_cache_key.py` builds this key by reading the
     # signature, so a parameter added later fails a test instead of
     # being silently ignored.
+    hours, clamped = clamp_hours(hours)
     key = graph_cache_key(hours=hours, limit=limit, channel=channel)
-    return await _graph_cache.get(
+    body = await _graph_cache.get(
         key,
         request.app.state.settings.stats_cache_seconds,
         lambda: _mesh_graph(session, hours, limit, channel),
     )
+    # Said in the body rather than only in a comment, so a caller that
+    # asked for more can tell it did not get it. Not cached with the
+    # answer: the same 168 h result serves both a request for 168 and a
+    # clamped request for 720, and only the latter should say so.
+    return body | {"window_clamped": clamped} if clamped else body
 
 
 def graph_cache_key(*, hours: int, limit: int, channel: str | None) -> str:
