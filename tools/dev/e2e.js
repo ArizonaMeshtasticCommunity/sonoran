@@ -170,8 +170,8 @@ const open = async (page, hash, settle = 3500) => {
  * Poll a condition in the page until it holds, or give up.
  *
  * NOT `page.waitForFunction`. That installs its poller with CDP
- * `Runtime.evaluate`, which is a string of JavaScript and which this
- * dashboard's Content-Security-Policy refuses: `script-src` carries
+ * `Runtime.evaluate`, which is a string of JavaScript, and this
+ * dashboard's Content-Security-Policy refuses it: `script-src` carries
  * 'self', a nonce and 'wasm-unsafe-eval', and deliberately not
  * 'unsafe-eval'. On a CI instance it fails with
  *
@@ -202,7 +202,7 @@ const PLANNER_SETTLED = () => {
 };
 
 /**
- * Ask the planner for a prediction, and report whether it could give one.
+ * Wait for the planner, and report whether it could predict at all.
  *
  * An instance with an empty terrain cache cannot predict anything: every
  * page comes back 404 and the planner refuses, which is the deployment
@@ -210,11 +210,14 @@ const PLANNER_SETTLED = () => {
  * deployment. This waits for whichever comes first, a filled summary or
  * a refusal, so a journey can carry on either way and say which it got.
  *
- * The first draft waited only for the summary, which turned a missing
- * terrain cache into a five-minute timeout and a red suite.
+ * The first draft of this waited only for the summary and turned a
+ * missing terrain cache into a five-minute timeout and a red suite.
+ *
+ * `start` runs the prediction. A shared link starts one by itself, and
+ * then there is nothing to click.
  */
-async function predict(page, timeout = 240000) {
-  await page.click('[data-planner-run]');
+async function predict(page, start, timeout = 240000) {
+  if (start) await start();
   if (!(await waitFor(page, PLANNER_SETTLED, timeout))) {
     return { ran: false, why: 'the run neither finished nor refused inside the time allowed' };
   }
@@ -579,6 +582,155 @@ async function main() {
     return run.ran
       ? `${before.docHeight} -> ${after.docHeight} px, flush at three positions, run took ${took} s`
       : `no prediction on this instance (${run.why}); flush at three positions on ${after.docHeight} px`;
+  });
+
+  await journey(context, 'a planner link carries the plan to a clean browser', async (page) => {
+    /*
+     * #107. The prediction is raster data made in the browser, so a link
+     * carries the settings and the page that opens it runs them again.
+     * The thing worth asserting is the round trip: the form that comes
+     * back, and a coverage image on the map rather than an empty one.
+     *
+     * The second half runs in a context of its own so that nothing is
+     * carried over in memory. A link that only works in the tab that
+     * made it is not a link.
+     *
+     * An instance with no terrain cannot predict, and there the map and
+     * the node count cannot be compared. The settings still travel, and
+     * the round trip of the form is still asserted, so this walks that
+     * far and says it went no further.
+     */
+    await open(page, 'planner', 5000);
+    await page.fill('[data-planner="site_name"]', 'Shaw Butte');
+    await page.fill('[data-planner="lat"]', '33.5905');
+    await page.fill('[data-planner="lon"]', '-112.0865');
+    await page.fill('[data-planner="tx_height"]', '6');
+    await page.selectOption('[data-planner="preset"]', 'LONG_FAST');
+    await page.fill('[data-planner="radius"]', '10');
+    await page.locator('[data-planner="radius"]').blur();
+    await page.waitForTimeout(500);
+
+    const query = new URLSearchParams(page.url().split('?')[1] || '');
+    must(query.get('tx_height') === '6', `the address did not follow the form: ${page.url()}`);
+    // Only what moved. A link that writes all 21 fields is four times
+    // as long and nobody reads it. Measured: 478 characters against 142.
+    must(!query.has('tx_power'), `an untouched field was written: ${[...query.keys()].join(',')}`);
+
+    const run = await predict(page, () => page.click('[data-planner-run]'));
+    const link = page.url();
+    let reached = null;
+    if (run.ran) {
+      // The date is stamped by a finished run, so it is only owed when
+      // there was one.
+      must(/ran=\d{4}-\d{2}-\d{2}/.test(link), `the link carries no date for the run: ${link}`);
+      reached = (await page.locator('[data-planner-summary]').innerText()).match(/(\d+) of (\d+)/);
+      must(reached, 'the summary printed no node count');
+    }
+
+    const clean = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
+    const opened = await clean.newPage();
+    await opened.goto(link, { waitUntil: 'load' });
+    const again = await predict(opened, null);
+    const back = await opened.evaluate(() => {
+      const read = (name) => document.querySelector(`[data-planner="${name}"]`).value;
+      return {
+        site_name: read('site_name'),
+        lat: read('lat'),
+        tx_height: read('tx_height'),
+        preset: read('preset'),
+        // Left out of the link, because it follows the preset. It has to
+        // come back as Long fast's own figure and not as the form
+        // default, or the link predicts a reach that preset has not got.
+        sensitivity: read('sensitivity'),
+        tx_power: read('tx_power'),
+        overlays: document.querySelectorAll('.leaflet-image-layer').length,
+        said: document.querySelector('[data-planner-shared]').textContent.trim(),
+      };
+    });
+    const sameCount = again.ran
+      ? (await opened.locator('[data-planner-summary]').innerText()).match(/(\d+) of (\d+)/)
+      : null;
+    await opened.close();
+    await clean.close();
+
+    // The settings travel whether or not there is terrain to predict over.
+    must(back.site_name === 'Shaw Butte' && back.lat === '33.5905', `the site came back as ${back.lat}`);
+    must(back.tx_height === '6' && back.preset === 'LONG_FAST', 'the settings did not come back');
+    must(back.sensitivity === '-139', `the sensitivity came back as ${back.sensitivity}`);
+    must(back.tx_power === '30', `an unshared field did not take its default: ${back.tx_power}`);
+    if (!run.ran) return `${link.length} characters, settings restored; no prediction here (${run.why})`;
+
+    must(back.overlays > 0, 'the link drew no coverage on the map');
+    must(/shared on \d{4}-\d{2}-\d{2}/.test(back.said), `the page did not date the plan: ${back.said}`);
+    must(sameCount && sameCount[0] === reached[0],
+      `the same link reached ${sameCount && sameCount[0]} where the original reached ${reached[0]}`);
+    return `${link.length} characters, reached ${reached[0]} in both`;
+  });
+
+  await journey(context, 'a hand-typed planner link cannot break the page', async (page) => {
+    /*
+     * A link is a string somebody can edit, and the numbers in it go
+     * into a WebAssembly engine. Every one is clamped, an unknown choice
+     * falls back to the default, and the page says what it did rather
+     * than quietly predicting something else.
+     *
+     * This waits for the line that reports what the link needed, not for
+     * a prediction. The holding happens as the form is filled, before
+     * any run, so this works on an instance with no terrain as well.
+     */
+    await page.goto(
+      `${BASE}/#planner?v=9&lat=33.45&lon=-112.07&radius=99999&tx_height=abc`
+        + '&preset=NOT_A_PRESET&nonsense=1&situation_fraction=0',
+      { waitUntil: 'load' },
+    );
+    const reported = await waitFor(page, () => {
+      const line = document.querySelector('[data-planner-shared]');
+      return Boolean(line && !line.hidden && line.textContent.trim().length > 0);
+    }, 30000);
+    must(reported, 'the page said nothing at all about the link it was opened with');
+    const held = await page.evaluate(() => ({
+      radius: document.querySelector('[data-planner="radius"]').value,
+      tx_height: document.querySelector('[data-planner="tx_height"]').value,
+      preset: document.querySelector('[data-planner="preset"]').value,
+      situation: document.querySelector('[data-planner="situation_fraction"]').value,
+      said: document.querySelector('[data-planner-shared]').textContent.trim(),
+    }));
+    must(held.radius === '150', `the range is ${held.radius} km, past the engine's 150`);
+    must(held.tx_height === '3', `"abc" became ${held.tx_height} rather than the default`);
+    must(held.preset === 'MEDIUM_FAST', `an unknown preset became ${held.preset}`);
+    must(held.situation === '1', `the situation fraction is ${held.situation}`);
+    must(/version 9/.test(held.said), `nothing said the version was unknown: ${held.said}`);
+    must(/nonsense/.test(held.said), `the unknown key was not reported: ${held.said}`);
+    return 'range, height, preset, fraction and version all reported';
+  });
+
+  await journey(context, 'the copy link control says what the clipboard did', async (page) => {
+    /*
+     * `navigator.clipboard` exists only in a secure context. Measured
+     * `undefined` on a plain-http instance, which is how this dashboard
+     * is usually reached, so the refused path is the common one and it
+     * has to be visible rather than silent.
+     */
+    await open(page, 'planner', 5000);
+    await page.fill('[data-planner="lat"]', '33.45');
+    await page.fill('[data-planner="lon"]', '-112.07');
+    await page.locator('[data-planner="lon"]').blur();
+    await page.click('[data-planner-share]');
+    await page.waitForTimeout(400);
+    const box = await page.evaluate(() => ({
+      secure: window.isSecureContext,
+      hidden: document.querySelector('[data-planner-share-box]').hidden,
+      value: document.querySelector('[data-planner-share-url]').value,
+      focused: document.activeElement.dataset.plannerShareUrl !== undefined,
+      status: document.querySelector('[data-planner-share-status]').textContent.trim(),
+    }));
+    // Whatever the clipboard did, the link is on the page and selected,
+    // and something says which of the two happened.
+    must(!box.hidden, 'the link box stayed hidden');
+    must(box.value.includes('#planner?v='), `the box holds ${box.value}`);
+    must(box.focused, 'the link box does not have focus, so Ctrl-C would copy nothing');
+    must(box.status.length > 10, `the status said ${JSON.stringify(box.status)}`);
+    return `secure context ${box.secure}: ${JSON.stringify(box.status.slice(0, 48))}`;
   });
 
   /*

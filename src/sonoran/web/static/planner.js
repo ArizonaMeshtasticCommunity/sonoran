@@ -328,6 +328,13 @@ const state = {
   request: null,
   running: false,
   cancelRunId: null,
+  /*
+   * The day the prediction on screen was made, or null when there is
+   * none or when a setting has moved since. A share link carries it so
+   * the page that opens the link can say what the numbers were made
+   * from, and it must not outlive the prediction it describes.
+   */
+  ranOn: null,
 };
 
 /* ---------------------------------------------------------------- */
@@ -413,6 +420,194 @@ function setProgress(text) {
 }
 
 /* ---------------------------------------------------------------- */
+/* The share link                                                    */
+
+/*
+ * A plan is its settings. The prediction itself is raster data made
+ * here in the browser, far too large for a URL, and the API is GET
+ * only against a read-only role (AGENTS.md 4), so there is nowhere on
+ * the server to put it either. The same settings over the same terrain
+ * give the same map, so the settings are what a link carries and the
+ * page that opens one runs the prediction again.
+ */
+
+/** Every share field as the form currently holds it. */
+function readShareValues() {
+  const values = {};
+  for (const name of SonoranPlannerParams.SHARE_FIELDS) {
+    const input = field(name);
+    if (input) values[name] = input.value;
+  }
+  return values;
+}
+
+/*
+ * Today, in this browser's own timezone.
+ *
+ * `toISOString().slice(0, 10)` is UTC, which in Arizona is tomorrow's
+ * date from five in the afternoon. A link made this evening would say
+ * it was made tomorrow.
+ */
+function today() {
+  const now = new Date();
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/** The query part of a link to what is on screen. */
+function shareQuery() {
+  return SonoranPlannerParams.toShareQuery(readShareValues(), state.ranOn);
+}
+
+/** The whole link, including whatever path this dashboard is served at. */
+function shareUrl() {
+  // Everything before the fragment, so a deployment under a sub-path or
+  // with a query string of its own keeps both.
+  return `${location.href.split('#')[0]}#planner?${shareQuery()}`;
+}
+
+/**
+ * Keep the address bar holding a link that works.
+ *
+ * `history.replaceState` rather than writing `location.hash`: it fires
+ * no `hashchange`, so the router does not re-enter the page and re-draw
+ * it every time a field is committed.
+ */
+function writeAddress() {
+  if (!location.hash.startsWith('#planner')) return;
+  const query = shareQuery();
+  // Only the version key means the form is on its defaults with no site
+  // chosen. There is nothing to share yet, so leave the address plain
+  // rather than make an ordinary visit look like somebody's link.
+  const next = query === `v=${SonoranPlannerParams.SHARE_VERSION}` ? '#planner' : `#planner?${query}`;
+  if (location.hash === next) return;
+  history.replaceState(null, '', next);
+  appliedShare = next.includes('?') ? next.slice(next.indexOf('?') + 1) : '';
+}
+
+function setShareStatus(text, kind) {
+  const line = document.querySelector('[data-planner-share-status]');
+  if (!line) return;
+  line.textContent = text || '';
+  line.hidden = !text;
+  line.className = `notice${kind ? ` ${kind}` : ''}`;
+}
+
+/** Put the link on the page, selected, whatever the clipboard did. */
+function showShareBox(url) {
+  const box = document.querySelector('[data-planner-share-box]');
+  const input = document.querySelector('[data-planner-share-url]');
+  if (!box || !input) return;
+  box.hidden = false;
+  input.value = url;
+  input.focus();
+  input.select();
+}
+
+/**
+ * Copy the link, and say what happened either way.
+ *
+ * `navigator.clipboard` exists only in a secure context. This dashboard
+ * is commonly reached over plain HTTP on a LAN or a private network address,
+ * and there the property is undefined -- measured as `undefined` on
+ * this instance over http. Even in a secure context the write can be
+ * refused. So the link always goes on the page, already selected, and
+ * the message says whether the copy worked.
+ */
+async function copyShareLink() {
+  const url = shareUrl();
+  showShareBox(url);
+  const clipboard = window.isSecureContext ? navigator.clipboard : null;
+  if (!clipboard) {
+    setShareStatus(
+      'This page is not on a secure origin, so the browser does not offer the ' +
+        'clipboard. The link is below and selected: press Ctrl-C or Cmd-C.',
+      'warn',
+    );
+    return;
+  }
+  try {
+    await clipboard.writeText(url);
+    setShareStatus('Link copied.', 'good');
+  } catch (error) {
+    setShareStatus(
+      `The browser refused the clipboard (${(error && error.name) || 'no reason given'}). ` +
+        'The link is below and selected: press Ctrl-C or Cmd-C.',
+      'warn',
+    );
+  }
+}
+
+/** The phone share sheet, where there is one. */
+async function sendShareLink() {
+  const url = shareUrl();
+  try {
+    await navigator.share({ title: 'Sonoran coverage plan', url });
+  } catch (error) {
+    // Dismissing the sheet is an AbortError and is not a fault.
+    if (error && error.name === 'AbortError') return;
+    showShareBox(url);
+    setShareStatus('The share sheet did not open. The link is below and selected.', 'warn');
+  }
+}
+
+function setSharedNote(text, kind) {
+  const line = document.querySelector('[data-planner-shared]');
+  if (!line) return;
+  line.textContent = text || '';
+  line.hidden = !text;
+  line.className = `notice${kind ? ` ${kind}` : ''}`;
+}
+
+/*
+ * The settings this page has already taken off the address.
+ *
+ * Leaving the planner and coming back calls `show` again. Without this
+ * the same link would start the same prediction a second time.
+ */
+let appliedShare = null;
+
+/**
+ * Fill the form from the address, and run what it describes.
+ *
+ * A link that carries a site is run straight away: the reader followed
+ * it to see a prediction, and the settings are all the run needs. A
+ * link with no site fills the form and waits, because there is nothing
+ * to predict from.
+ */
+async function applyShareLink() {
+  const hash = location.hash;
+  const search = hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '';
+  if (search === appliedShare) return;
+  appliedShare = search;
+  if (!search) return;
+
+  const read = SonoranPlannerParams.fromShareQuery(search);
+  const filled = { ...SonoranPlannerParams.FORM_DEFAULTS, ...read.values };
+  // `fillForm` leaves a field alone when the value is null, and the
+  // default for both coordinates is null. A link with no site must
+  // empty them rather than keep whatever was typed before.
+  for (const name of ['lat', 'lon']) if (filled[name] == null) filled[name] = '';
+  fillForm(filled);
+  const preset = document.querySelector('[data-planner="preset"]');
+  if (preset) preset.value = filled.preset;
+
+  const said = [];
+  if (read.ran) {
+    said.push(
+      `These settings were shared on ${read.ran}. The prediction is made again here ` +
+        'from the terrain and the node list as they are now, so it can differ a little.',
+    );
+  } else if (read.used) {
+    said.push('These settings came from a shared link.');
+  }
+  if (read.notes.length) said.push(`The link needed fixing: ${read.notes.join('; ')}.`);
+  setSharedNote(said.join(' '), read.notes.length ? 'warn' : '');
+
+  if (filled.lat !== '' && filled.lon !== '' && !state.running) await runCoverage();
+}
+
+/* ---------------------------------------------------------------- */
 /* The map                                                           */
 
 function ensurePlannerMap() {
@@ -446,6 +641,10 @@ function setSite(latitude, longitude, name, altitude) {
     setNotice('', '');
   }
   markSite(latitude, longitude, name);
+  // The site is a setting like any other, and it is the one people
+  // change most, so the address has to follow it.
+  state.ranOn = null;
+  writeAddress();
 }
 
 /** Put the one transmitter pin on the map, replacing any earlier one. */
@@ -654,7 +853,11 @@ async function runCoverage() {
       },
     };
     state.request = request;
+    state.ranOn = today();
     showResult();
+    // The link is only worth stamping with a date once there is a
+    // prediction behind it.
+    writeAddress();
     setProgress('');
   } catch (error) {
     console.error(error);
@@ -902,9 +1105,38 @@ function wirePlanner() {
     });
   }
 
-  const defaults = SonoranPlannerParams.DEFAULTS;
-  fillForm({ ...defaults, radius: defaults.radius / 1000 });
+  const defaults = SonoranPlannerParams.FORM_DEFAULTS;
+  fillForm(defaults);
   if (preset) preset.value = defaults.preset;
+
+  /*
+   * The address follows a committed edit, not a keystroke.
+   *
+   * `change` rather than `input`: WebKit limits a document to about a
+   * hundred `replaceState` calls in thirty seconds and then starts
+   * throwing, and twenty-one fields typed into would reach that. The
+   * Copy link button reads the form itself, so a link copied while a
+   * field is still being typed into is right either way.
+   */
+  for (const name of [...FIELDS, 'preset']) {
+    const input = field(name);
+    if (!input) continue;
+    input.addEventListener('change', () => {
+      state.ranOn = null;
+      writeAddress();
+    });
+  }
+
+  const share = document.querySelector('[data-planner-share]');
+  if (share) share.addEventListener('click', copyShareLink);
+  const send = document.querySelector('[data-planner-send]');
+  // The share sheet is a phone thing and most desktop browsers have no
+  // `navigator.share` at all. A button that cannot work is worse than
+  // no button, so it stays hidden until the browser offers one.
+  if (send && typeof navigator.share === 'function') {
+    send.hidden = false;
+    send.addEventListener('click', sendShareLink);
+  }
 
   const run = document.querySelector('[data-planner-run]');
   if (run) run.addEventListener('click', runCoverage);
@@ -915,12 +1147,21 @@ function wirePlanner() {
     clear.addEventListener('click', () => {
       state.result = null;
       state.request = null;
+      state.ranOn = null;
       state.coverageLayer.clearLayers();
       state.linkLayer.clearLayers();
       replace(document.querySelector('[data-planner-summary]'), []);
       hideLinkPanel();
       drawNodes();
       setNotice('', '');
+      // Clear takes the prediction away, so the link that described it
+      // goes too, and with it anything this page was told about where
+      // the settings came from.
+      setSharedNote('', '');
+      setShareStatus('', '');
+      const box = document.querySelector('[data-planner-share-box]');
+      if (box) box.hidden = true;
+      writeAddress();
     });
   }
 }
@@ -946,6 +1187,21 @@ async function show() {
       .map((node) => [node.lat, node.lon]);
     if (points.length) map.fitBounds(points, { padding: [30, 30], maxZoom: 11 });
   }
+
+  /*
+   * After the nodes, and not awaited.
+   *
+   * After, because a shared link runs the prediction and the summary
+   * counts what it reaches against the node list: a run started first
+   * would count nothing and say so.
+   *
+   * Not awaited, because `render` in app.js holds a `loading` flag for
+   * as long as this function runs and returns early while it is set. A
+   * run takes about ten seconds, and awaiting it here would leave any
+   * page the reader clicked to in the meantime unfilled. The form is
+   * filled synchronously either way, before the run starts.
+   */
+  applyShareLink().catch((error) => console.error(error));
 }
 
 /*

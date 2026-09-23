@@ -670,10 +670,36 @@
               <button type="button" class="primary" data-planner-run>Run prediction</button>
               <button type="button" class="toggle" data-planner-cancel hidden>Stop</button>
               <button type="button" class="toggle" data-planner-clear>Clear</button>
+              <!--
+                The share sheet is a phone thing. planner.js unhides this
+                only where `navigator.share` exists, so a browser without
+                one is not offered a button that cannot work.
+              -->
+              <button type="button" class="toggle" data-planner-send hidden>Share</button>
+              <button type="button" class="toggle" data-planner-share>Copy link</button>
             </div>
           </div>
 
           <p class="notice" data-planner-notice hidden></p>
+          <!-- What a link this page was opened from says about itself:
+               the day it was made, and anything in it that had to be
+               held to a sensible range or ignored. -->
+          <p class="notice" data-planner-shared hidden></p>
+          <p class="notice" data-planner-share-status hidden></p>
+          <!--
+            The link, in a box, whatever the clipboard did. `navigator.clipboard`
+            does not exist outside a secure context, and this dashboard is often
+            reached over plain HTTP on a LAN address, so the copy has a real
+            chance of not happening. It is read-only and selected, so the failure
+            path is one keystroke rather than a dead end.
+          -->
+          <div class="planner-share" data-planner-share-box hidden>
+            <!-- `aria-label` rather than a <label> beside it: the box is
+                 the one control on this page with no visible caption, and
+                 `test_every_control_has_a_name_that_is_not_a_placeholder`
+                 counts a label only when it wraps its control. -->
+            <input data-planner-share-url readonly aria-label="Link to this plan" />
+          </div>
           <p class="muted" data-planner-progress style="min-height: 1.2rem; font-size: .82rem"></p>
 
           <div class="planner-layout">

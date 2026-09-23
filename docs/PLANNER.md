@@ -181,6 +181,71 @@ the bearing.
 A hill that touches the straight line between the ends is the usual
 reason a link does not work.
 
+## 5.1 Sharing a plan
+
+"Copy link" makes a URL that carries the form. Somebody who opens it
+gets the same site, the same settings, and the prediction run again.
+
+```
+https://example.org/#planner?v=1&site_name=Shaw%20Butte&lat=33.5905&lon=-112.0865&tx_height=6&ran=2026-09-22
+```
+
+The prediction itself is not in the link. It is raster data made in the
+browser by the WebAssembly engine, far too large for a URL, and the API
+is GET only against a read-only role (`AGENTS.md` section 4), so there
+is nowhere on the server to keep it. The same settings over the same
+terrain give the same map, so the page that opens a link runs the model
+again. A link with a site on it runs by itself; a link without one fills
+the form and waits.
+
+### What the link holds
+
+| Key | Meaning |
+|---|---|
+| `v` | The format version. It is `1`. A link that names another version is still read, and the page says it did not know the number. |
+| `ran` | The day the prediction behind the link was made, as `YYYY-MM-DD`. The page that opens the link prints it, because terrain and the node list move. |
+
+Then any of the form fields, spelled as they are in
+`DEFAULTS` in `planner-params.js`: `site_name`, `lat`, `lon`,
+`tx_height`, `tx_power`, `tx_gain`, `frequency_mhz`, `preset`,
+`sensitivity`, `rx_height`, `rx_gain`, `system_loss`, `radio_climate`,
+`polarization`, `clutter_height`, `radius`, `ground_dielectric`,
+`ground_conductivity`, `atmosphere_bending`, `situation_fraction`,
+`time_fraction`.
+
+Units are the form's, not the engine's. `radius` is in kilometres, as
+the Range field asks for it, and the heights are in metres.
+
+Only what differs from the default is written. A link for a site with
+one field changed is 115 characters; the same link with all 21 fields
+in it is 478. `sensitivity` is left out when it is still the figure its
+preset implies, and the page that opens the link puts it back from the
+preset, so a link to Long fast arrives on Long fast's -139 dBm and not
+on the form default.
+
+Nothing goes in the link but what the reader typed. A site name and a
+pair of coordinates are their own words.
+
+### A link that has been edited
+
+Every number is held to a sensible range, an unknown choice falls back
+to the default, and an unknown key is dropped. Whatever was changed is
+printed on the page rather than applied quietly:
+
+```
+#planner?v=9&radius=99999&tx_height=abc&preset=NOT_A_PRESET&nonsense=1
+```
+
+opens on a 150 km range, the default antenna height, the default
+preset, and a line saying the version was not known, that the range was
+held, that the height was not a number, and that `nonsense` was
+ignored.
+
+The address bar follows the form as settings are committed, so it is
+always a link worth copying. It is rewritten with `history.replaceState`,
+which fires no `hashchange`, so the page is not re-drawn and the back
+button is not filled with one entry per edit.
+
 ## 6. Licence
 
 The prediction engine is the ITM / Longley-Rice model from SPLAT! by
@@ -206,5 +271,8 @@ engine sources closely, and the comments name them.
   not built.
 - Terrain is 90 m. The engine can read 30 m, which is nine times the
   data and is not served.
-- A plan cannot be saved or linked to. Nothing is stored anywhere.
+- A plan can be linked to but not saved. The link carries the settings
+  and the prediction is made again from them, so a plan opened later is
+  drawn from the terrain and the node list as they are then. Nothing is
+  stored on the server.
 - The area figure counts ground, not population and not roads.

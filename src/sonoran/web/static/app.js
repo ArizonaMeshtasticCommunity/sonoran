@@ -6306,7 +6306,18 @@ async function render(name) {
 let watchFragmentWrite = false;
 
 async function route() {
-  const parts = (location.hash.slice(1) || 'dashboard').split('/');
+  /*
+   * A page may carry settings after a `?`.
+   *
+   * The planner's share link is `#planner?v=1&lat=33.45&…`. Without
+   * this split the page name is the whole string, `PAGES` does not have
+   * `planner?v=1&lat=33.45&…` in it, and every shared link falls back
+   * to the dashboard — the same failure AGENTS.md 9.14 describes for a
+   * reload on `#planner`, and just as quiet. The page reads its own
+   * settings straight off `location.hash`.
+   */
+  const fragment = (location.hash.slice(1) || 'dashboard').split('?')[0];
+  const parts = (fragment || 'dashboard').split('/');
   const [name, nodeId] = parts;
 
   const known = Object.hasOwn(PAGES, name) ? name : 'dashboard';

@@ -103,6 +103,233 @@ const DEFAULTS = {
   time_fraction: 90,
 };
 
+/*
+ * The same defaults in the units the FORM asks for.
+ *
+ * One field differs: the form asks for a range in kilometres and the
+ * engine takes metres. Everything that fills or reads the form works in
+ * these units, and so does the share link, so the two cannot drift.
+ */
+const FORM_DEFAULTS = { ...DEFAULTS, radius: DEFAULTS.radius / 1000 };
+
+/* ---------------------------------------------------------------- */
+/* The share link                                                    */
+
+/*
+ * The version key in a share link.
+ *
+ * It is written into every link as `v=1`. Nothing reads it today
+ * beyond warning about a number it does not know, and that is the
+ * point: a link made now says which spelling of the fields it used, so
+ * a later rename can read old links rather than guess at them.
+ */
+const SHARE_VERSION = 1;
+
+/*
+ * The order a link writes its settings in.
+ *
+ * It is the order of the form: site, transmitter, receiver, ground and
+ * air. A link is read by people in chat clients before it is opened,
+ * so the order it reads in is worth keeping.
+ */
+const SHARE_FIELDS = [
+  'site_name',
+  'lat',
+  'lon',
+  'tx_height',
+  'tx_power',
+  'tx_gain',
+  'frequency_mhz',
+  'preset',
+  'sensitivity',
+  'rx_height',
+  'rx_gain',
+  'system_loss',
+  'radio_climate',
+  'polarization',
+  'clutter_height',
+  'radius',
+  'ground_dielectric',
+  'ground_conductivity',
+  'atmosphere_bending',
+  'situation_fraction',
+  'time_fraction',
+];
+
+/** The three fields that are a choice from a list, not a number. */
+const SHARE_CHOICES = {
+  preset: () => PRESETS.map((item) => item.key),
+  radio_climate: () => Object.keys(CLIMATE_CODES),
+  polarization: () => Object.keys(POLARIZATION_CODES),
+};
+
+/*
+ * Bounds for a number that arrives from a URL.
+ *
+ * These are wide sanity bounds, not the model's validity limits. A
+ * share link can be hand-typed, truncated by a chat client, or edited
+ * for fun, and the engine is a WebAssembly module that is given these
+ * numbers directly. The job here is to keep an absurd value out of it,
+ * not to argue with anybody's radio.
+ *
+ * Two are not arbitrary. The range ceiling is `MAX_RADIUS_METRES`,
+ * which is what the compiled page region can reach. The two fractions
+ * stop short of 0 and 100 because `toEngineParams` turns them into
+ * probabilities and the model's inverse-normal has no value at either
+ * end.
+ */
+const SHARE_BOUNDS = {
+  lat: [-90, 90],
+  lon: [-180, 180],
+  tx_height: [0, 3000],
+  tx_power: [-30, 60],
+  tx_gain: [-20, 40],
+  frequency_mhz: [20, 20000],
+  sensitivity: [-174, 0],
+  rx_height: [0, 3000],
+  rx_gain: [-20, 40],
+  system_loss: [0, 40],
+  clutter_height: [0, 100],
+  radius: [0.1, MAX_RADIUS_METRES / 1000],
+  ground_dielectric: [1, 100],
+  ground_conductivity: [0.00001, 100],
+  atmosphere_bending: [200, 450],
+  situation_fraction: [1, 99],
+  time_fraction: [1, 99],
+};
+
+/*
+ * The longest site name a link will carry.
+ *
+ * A name is the reader's own words and it goes in the link as they
+ * typed it. It is capped so that one pasted paragraph cannot turn a
+ * link into something no chat client will keep on one line.
+ */
+const SHARE_NAME_LIMIT = 60;
+
+/** The sensitivity a preset implies, or null when the key is unknown. */
+function sensitivityForPreset(key) {
+  const found = PRESETS.find((item) => item.key === key);
+  return found ? found.sensitivity : null;
+}
+
+/** Numbers compare by value, so "2.150" and 2.15 are the same setting. */
+function sameAsDefault(name, value) {
+  const fallback = FORM_DEFAULTS[name];
+  if (SHARE_CHOICES[name] || name === 'site_name') return String(value) === String(fallback);
+  if (fallback == null) return false;
+  return Number(value) === Number(fallback);
+}
+
+/**
+ * Write the form out as the query part of a share link.
+ *
+ * Only what differs from the default is written. A link for the
+ * defaults with a site on it is then three keys long rather than
+ * twenty-one, which is the difference between a link somebody reads
+ * and a link they scroll past.
+ *
+ * `ran` is the day the link was made, written only when there is a
+ * prediction behind it. Terrain and the node list move, so the page
+ * that opens the link says what the numbers are as of.
+ */
+function toShareQuery(values, ran) {
+  const parts = [`v=${SHARE_VERSION}`];
+  for (const name of SHARE_FIELDS) {
+    const value = values[name];
+    if (value == null || value === '') continue;
+    /*
+     * The sensitivity follows the preset unless it has been edited, and
+     * the reader below puts it back the same way. Writing it out when
+     * it is still the preset's own figure would put a number in every
+     * link that changes a preset.
+     */
+    if (name === 'sensitivity' && Number(value) === sensitivityForPreset(values.preset)) continue;
+    if (sameAsDefault(name, value)) continue;
+    const written = name === 'site_name' ? String(value).trim().slice(0, SHARE_NAME_LIMIT) : String(value);
+    if (!written) continue;
+    parts.push(`${name}=${encodeURIComponent(written)}`);
+  }
+  if (ran) parts.push(`ran=${encodeURIComponent(ran)}`);
+  return parts.join('&');
+}
+
+/**
+ * Read the query part of a share link.
+ *
+ * Returns the settings it could use, the day the link says it was
+ * made, and a note for everything it had to change or drop. Nothing is
+ * thrown: a bad link opens the planner on the settings it could read
+ * and says what it did with the rest.
+ */
+function fromShareQuery(search) {
+  const query = new URLSearchParams(search || '');
+  const values = {};
+  const notes = [];
+  const unknown = [];
+  let ran = null;
+  let used = 0;
+
+  for (const [key, raw] of query.entries()) {
+    if (key === 'v') {
+      if (raw !== String(SHARE_VERSION)) {
+        notes.push(`this link says it is version ${raw}, and this planner reads version ${SHARE_VERSION}`);
+      }
+      continue;
+    }
+    if (key === 'ran') {
+      // A date, not a setting. Anything that is not a date is dropped
+      // rather than printed back at the reader.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) ran = raw;
+      continue;
+    }
+    if (!SHARE_FIELDS.includes(key)) {
+      unknown.push(key);
+      continue;
+    }
+    if (SHARE_CHOICES[key]) {
+      if (!SHARE_CHOICES[key]().includes(raw)) {
+        notes.push(`${key} is not a choice this planner has, so it kept the default`);
+        continue;
+      }
+      values[key] = raw;
+      used += 1;
+      continue;
+    }
+    if (key === 'site_name') {
+      const name = raw.trim().slice(0, SHARE_NAME_LIMIT);
+      if (raw.trim().length > SHARE_NAME_LIMIT) notes.push('the site name was shortened');
+      if (name) {
+        values[key] = name;
+        used += 1;
+      }
+      continue;
+    }
+    const number = Number.parseFloat(raw);
+    if (!Number.isFinite(number)) {
+      notes.push(`${key.replace(/_/g, ' ')} is not a number, so it kept the default`);
+      continue;
+    }
+    const [low, high] = SHARE_BOUNDS[key];
+    const held = Math.min(high, Math.max(low, number));
+    if (held !== number) notes.push(`${key.replace(/_/g, ' ')} was held to ${held}`);
+    values[key] = held;
+    used += 1;
+  }
+
+  if (unknown.length) notes.push(`ignored: ${unknown.join(', ')}`);
+  /*
+   * A link that names a preset and no sensitivity means the preset's
+   * own figure, which is what the writer left out. Without this, a link
+   * to Long fast would open on Long fast with Medium fast's -134 dBm
+   * and predict a reach that preset does not have. See AGENTS.md 9.7.
+   */
+  if (values.preset && values.sensitivity == null) {
+    values.sensitivity = sensitivityForPreset(values.preset);
+  }
+  return { values, ran, notes, used };
+}
+
 /** Round to two decimal places, as the original backend wrote its files. */
 function round2(value) {
   return Number(value.toFixed(2));
@@ -167,6 +394,14 @@ window.SonoranPlannerParams = {
   PRESETS,
   MAX_RADIUS_METRES,
   DEFAULTS,
+  FORM_DEFAULTS,
+  SHARE_VERSION,
+  SHARE_FIELDS,
+  SHARE_BOUNDS,
+  SHARE_NAME_LIMIT,
+  sensitivityForPreset,
+  toShareQuery,
+  fromShareQuery,
   erpWatts,
   toEngineParams,
   receivedDbm,
