@@ -1,6 +1,6 @@
 """Position packet storage."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from google.protobuf.message import Message
@@ -8,21 +8,32 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.db.models import Node, PositionMetrics
+from sonoran.ingest.handlers.clocks import device_time
 from sonoran.ingest.handlers.context import HandlerContext
 from sonoran.positions import clean
 
 
-def _position_time(position: Any, fallback: datetime) -> datetime:
-    """Use the position time when the packet provides one."""
-    if position.time:
-        return datetime.fromtimestamp(position.time, UTC)
-    return fallback
+def _position_time(position: Any, context: HandlerContext) -> datetime:
+    """Use the position time when the packet provides a possible one.
+
+    A device that claims a time ahead of when we heard it is refused
+    and the receipt time is used. See `clocks.device_time`.
+    """
+    if not position.time:
+        return context.seen_at
+    return device_time(
+        datetime.fromtimestamp(position.time, UTC),
+        context.seen_at,
+        timedelta(seconds=context.mesh_future_slack_seconds),
+        kind="a position",
+        node_num=context.from_node_num,
+    )
 
 
 async def store_position(session: AsyncSession, message: Message, context: HandlerContext) -> None:
     """Store position history and update the latest node position."""
     position: Any = message
-    time = _position_time(position, context.seen_at)
+    time = _position_time(position, context)
     # A node with no fix still sends a position packet. The numbers in
     # it are whatever the field held, which puts the node in the ocean
     # off West Africa. Store nothing rather than store a wrong place.

@@ -1,26 +1,38 @@
 """Telemetry packet storage."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from google.protobuf.message import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.db.models import AirQualityMetrics, DeviceMetrics, EnvironmentMetrics, PowerMetrics
+from sonoran.ingest.handlers.clocks import device_time
 from sonoran.ingest.handlers.context import HandlerContext
 
 
-def _time(telemetry: Any, fallback: datetime) -> datetime:
-    """Use the telemetry timestamp when available."""
-    if telemetry.time:
-        return datetime.fromtimestamp(telemetry.time, UTC)
-    return fallback
+def _time(telemetry: Any, context: HandlerContext) -> datetime:
+    """Use the telemetry timestamp when it is possible.
+
+    A device that claims a time ahead of when we heard it is refused
+    and the receipt time is used, because it names a moment that had
+    not happened. See `clocks.device_time`.
+    """
+    if not telemetry.time:
+        return context.seen_at
+    return device_time(
+        datetime.fromtimestamp(telemetry.time, UTC),
+        context.seen_at,
+        timedelta(seconds=context.mesh_future_slack_seconds),
+        kind="telemetry",
+        node_num=context.from_node_num,
+    )
 
 
 async def store_telemetry(session: AsyncSession, message: Message, context: HandlerContext) -> None:
     """Store each telemetry variant in its matching metric table."""
     telemetry: Any = message
-    time = _time(telemetry, context.seen_at)
+    time = _time(telemetry, context)
     shared = {
         "node_num": context.from_node_num,
         "packet_pk": context.packet_pk,

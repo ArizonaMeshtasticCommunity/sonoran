@@ -121,6 +121,7 @@ async def process_message(
     message: RawMqttMessage,
     keys: list[bytes],
     store_text_messages: bool = False,
+    mesh_future_slack_seconds: int = 300,
 ) -> StoredPacket | None:
     """Decrypt, decode, and store one encrypted MQTT message."""
     if message.topic.payload_format != "e":
@@ -211,6 +212,7 @@ async def process_message(
                 emoji=bool(data.emoji),
                 store_text_messages=store_text_messages,
                 seen_at=packet_input.first_seen_at,
+                mesh_future_slack_seconds=mesh_future_slack_seconds,
             ),
         )
     return stored
@@ -231,6 +233,7 @@ async def main() -> None:
                         message,
                         keys,
                         settings.store_text_messages,
+                        settings.mesh_future_slack_seconds,
                     )
                     await session.commit()
                     if stored is not None:

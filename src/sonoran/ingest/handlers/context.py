@@ -22,3 +22,8 @@ class HandlerContext:
     emoji: bool
     store_text_messages: bool
     seen_at: datetime
+    # How far ahead of `seen_at` a device may claim its reading was
+    # taken before we refuse the claim. Carried here rather than read
+    # from settings in each handler, so every family answers to one
+    # number. See `clocks.device_time`.
+    mesh_future_slack_seconds: int = 300

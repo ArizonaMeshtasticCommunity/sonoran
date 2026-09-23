@@ -385,6 +385,14 @@ class Settings(BaseSettings):
     rf_bucket_seconds: int = 20
     # A point stamped this far ahead of our clock, or this far behind it,
     # is stored with the time we received it instead (design 5.3).
+    #: How far ahead of our own receipt time a NODE's timestamp may be
+    #: before it is refused. Only the impossible direction is bounded:
+    #: a stamp behind us is ordinary store-and-forward, a stamp ahead
+    #: of us names a moment that had not happened. The slack absorbs
+    #: our own clock being slightly behind, which is our fault and
+    #: should not be recorded against the node. See
+    #: ingest/handlers/clocks.py.
+    mesh_future_slack_seconds: int = 300
     rf_future_slack_seconds: int = 60
     rf_past_slack_seconds: int = 600
     # Things never stored or shown: aircraft on the FAA LADD and PIA
