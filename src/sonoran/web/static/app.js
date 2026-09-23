@@ -2939,6 +2939,28 @@ const LINK_STRENGTH = {
   unknown: 'Too few packets crossed it to say whether it carries',
 };
 
+/*
+ * A link's pull in the signal layout (#71).
+ *
+ * SNR on this mesh runs about -20 dB to +12 dB. The scale is shifted
+ * so the worst reading still has a small positive pull rather than
+ * none: a link that exists but carries badly is still a link, and an
+ * edge of zero weight would be drawn at the full `edgeLength`, which
+ * says "these two are unrelated" about a pair that demonstrably talk.
+ *
+ * An unmeasured link gets the floor. It is not evidence of a poor
+ * signal -- only of no measurement -- so it neither pulls a cluster
+ * together nor is pushed away as though it were bad.
+ */
+const SIGNAL_FLOOR = -20;
+const SIGNAL_CEILING = 12;
+
+function signalWeight(snr) {
+  if (snr == null) return 1;
+  const clamped = Math.max(SIGNAL_FLOOR, Math.min(SIGNAL_CEILING, snr));
+  return 1 + ((clamped - SIGNAL_FLOOR) / (SIGNAL_CEILING - SIGNAL_FLOOR)) * 9;
+}
+
 /* Layout units. The graph fits whatever bounds it is given, so this
  * only sets the resolution the seed is worked out in. */
 const GRAPH_SPAN = 1000;
@@ -3291,7 +3313,9 @@ PAGES.graph = async (page) => {
     // A pin belongs to the arrangement it was placed on.
     if (arrangement !== graphArrangement) graphPinned.clear();
     graphArrangement = arrangement;
-    graphSeeds = layout === 'free' ? new Map() : seedPositions(data.nodes, allLinks);
+    graphSeeds = layout === 'free' || layout === 'signal'
+      ? new Map()
+      : seedPositions(data.nodes, allLinks);
     if (layout === 'spread') separatePositions(graphSeeds, data.nodes);
   }
   /*
@@ -3391,7 +3415,7 @@ PAGES.graph = async (page) => {
    * solver from them instead (#74). With no positions at all there is
    * no ground, and every layout falls back to force.
    */
-  const solved = !onGround || layout === 'force-geo';
+  const solved = !onGround || layout === 'force-geo' || layout === 'signal';
   const seeds = new Map(graphSeeds);
   for (const [id, point] of graphPinned) {
     // On the ground the seed is already there and the pin moves it. In
@@ -3607,6 +3631,29 @@ PAGES.graph = async (page) => {
         kind: link.kind,
         kinds: link.kinds,
         snr: link.snr,
+        /*
+         * The signal layout, and the answer to #71's "divide graph
+         * based on ... snr".
+         *
+         * ECharts maps an edge's `value` across the `edgeLength`
+         * range: a larger value draws a shorter edge. So handing it
+         * the link's SNR makes nodes that hear each other well sit
+         * close, and the clusters that fall out are the mesh's actual
+         * communities rather than its map.
+         *
+         * `value` is only set for this layout. Everywhere else the
+         * edge length must stay uniform, or the geographic layouts
+         * would be pulled out of shape by signal -- a 45 km link with
+         * a good SNR drawn shorter than a 2 km link with a poor one
+         * puts nodes in the wrong place, which is the objection in
+         * #71's own option 1.
+         *
+         * A link with NO reading is given the weakest weight rather
+         * than being dropped or treated as zero. Unmeasured is not the
+         * same as bad, and it keeps its grey line either way -- but it
+         * cannot pull a cluster together on evidence nobody has.
+         */
+        ...(layout === 'signal' ? { value: signalWeight(link.snr) } : {}),
         count: link.count,
         eachWay: link.each_way,
         strength: link.strength,
