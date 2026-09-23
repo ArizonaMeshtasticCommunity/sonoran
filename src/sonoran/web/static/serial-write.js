@@ -154,10 +154,19 @@ function same(a, b) {
  * names them, because "the preview filtered it" is one refactor away
  * from being untrue.
  *
+ * `current` is the config as read off the node. **Each section is sent
+ * whole**: the current section with the chosen fields laid over it.
+ * The firmware REPLACES a section with what it is sent
+ * (`config.lora = validatedLora` in `AdminModule.cpp`), so a section
+ * that holds only the changed field sets every other field in it to
+ * zero. For `lora` that is region UNSET and `tx_enabled` false; for
+ * `security` it is every key.
+ *
  * `send` frames and writes one AdminMessage; injected so the tests can
  * drive the whole sequence without a radio.
  */
 export async function applyChanges(rows, {
+  current,
   send,
   allowProtected = [],
   onProgress = () => {},
@@ -171,17 +180,33 @@ export async function applyChanges(rows, {
     return { written: 0, refused, sections: [] };
   }
 
+  // Check every section before anything is sent. Refusing halfway
+  // would leave the node inside an open edit.
+  for (const row of allowed) {
+    const had = current && current[row.group] && current[row.group][row.section];
+    if (!had) {
+      throw new Error(`The node's ${row.section} settings were not read, so ${row.section} cannot be `
+        + 'written without setting the rest of that section to zero. Read the node again.');
+    }
+  }
+
   onProgress('Opening the node for editing…');
   await send({ beginEditSettings: true });
 
-  // One message per SECTION, not per field: the admin API sets a whole
-  // `Config` section at a time, and sending two messages for two
-  // fields of the same section would make the second overwrite the
-  // first with stale values.
+  // One message per SECTION, not per field, and each one carries the
+  // WHOLE section: the admin API replaces a section with what it is
+  // sent. Two messages for two fields of one section would make the
+  // second overwrite the first.
   const bySection = new Map();
   for (const row of allowed) {
     const key = `${row.group}:${row.section}`;
-    if (!bySection.has(key)) bySection.set(key, { group: row.group, section: row.section, fields: {} });
+    if (!bySection.has(key)) {
+      bySection.set(key, {
+        group: row.group,
+        section: row.section,
+        fields: { ...current[row.group][row.section] },
+      });
+    }
     bySection.get(key).fields[row.field] = row.to;
   }
 
