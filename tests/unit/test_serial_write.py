@@ -179,3 +179,48 @@ def test_the_port_is_released_when_the_page_goes_away() -> None:
     """
     body = _config_check()
     assert "'pagehide'" in body, "nothing releases the serial port when the reader leaves the page"
+
+
+def test_an_admin_message_is_wrapped_for_the_wire() -> None:
+    """The bug real firmware caught, and the reason it was invisible.
+
+    An `AdminMessage` is not sent on its own. It goes inside a
+    `MeshPacket` addressed to the local node on the admin port, inside
+    a `ToRadio`. #117 says so in one line.
+
+    Sending the bare message is **accepted by the firmware and does
+    nothing**. Measured against meshtasticd 2.7.26: the write reported
+    success and a re-read showed `lora.hopLimit` still at its old
+    value. Nothing errored.
+
+    That is the worst shape a bug can have on a path that writes to
+    somebody's radio, and no simulator would have caught it — a
+    simulator checks what we send, not what a node does with it. After
+    the fix, the same test read back `hopLimit = 5` with both
+    protected settings confirmed untouched.
+    """
+    body = MODULE.read_text(encoding="utf-8")
+    assert "export function adminEnvelope(" in body, (
+        "the wrapper is gone; bare AdminMessages are silently ignored by the firmware"
+    )
+    envelope = body[body.index("export function adminEnvelope(") :][:600]
+    assert "portnum: ADMIN_PORT" in envelope, "the admin port is no longer set"
+    assert "to: nodeNum" in envelope, (
+        "the packet is not addressed to the local node, so it is traffic "
+        "rather than an admin request"
+    )
+
+
+def test_the_ui_sends_the_wrapped_form() -> None:
+    """The same bug existed twice: in the module and in the page.
+
+    Fixing only the module would have left the button silently
+    no-opping while every unit test passed.
+    """
+    body = _config_check()
+    assert "adminEnvelope(message, nodeNum" in body, (
+        "the page sends bare AdminMessages again, which the firmware accepts and ignores"
+    )
+    assert "Read the node first" in body, (
+        "nothing checks that a node number is known before addressing an admin packet to it"
+    )

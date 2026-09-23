@@ -35,7 +35,7 @@ import { ConfigFixer } from './vendor/config-checker/js/fixer.js';
  */
 import { Diagnostics, STEPS } from './vendor/config-checker/js/diagnostics.js';
 import { readConfig, serialUnavailableReason } from './serial-read.js';
-import { planChanges, applyChanges } from './serial-write.js';
+import { planChanges, applyChanges, adminEnvelope } from './serial-write.js';
 import { frame as serialFrame } from './serial-frames.js';
 
 /*
@@ -777,13 +777,20 @@ async function applySerial(page) {
   try {
     const port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
-    const { root } = await serialSchema();
+    const { root, ToRadio } = await serialSchema();
     const AdminMessage = root.lookupType('meshtastic.AdminMessage');
+    const nodeNum = state.config.myInfo && state.config.myInfo.myNodeNum;
+    if (!nodeNum) {
+      throw new Error('Read the node first: its node number is needed to address the change.');
+    }
     const writer = port.writable.getWriter();
     const result = await applyChanges(rows, {
       send: async (message) => {
-        const bytes = AdminMessage.encode(AdminMessage.fromObject(message)).finish();
-        await writer.write(serialFrame(bytes));
+        // Wrapped in a MeshPacket to the local node on the admin port.
+        // Sending the bare AdminMessage is accepted and SILENTLY DOES
+        // NOTHING -- measured against meshtasticd 2.7.26, which
+        // reported success while the setting kept its old value.
+        await writer.write(serialFrame(adminEnvelope(message, nodeNum, { AdminMessage, ToRadio })));
       },
       onProgress: (line) => { status.textContent = line; status.hidden = false; },
     });
