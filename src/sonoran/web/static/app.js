@@ -4985,12 +4985,20 @@ async function loadNodeDetail(nodeId) {
    *
    * The seven health cards used to open the page and fill the screen
    * above them, so somebody checking the battery scrolled past a full
-   * assessment to reach it. The health panel now sits at the top of the
-   * grid below, one panel wide, with everything it used to show behind
+   * assessment to reach it. Everything they showed is now behind
    * "View all checks".
+   *
+   * The summary sits between the identity row and the map, and that
+   * position is measured rather than chosen. #95 asks for a first
+   * screen that shows identity and device AND summarises health; #103
+   * asks for the map "below the first row of panels". With the summary
+   * inside the grid under the map, health landed at y=1069 on a
+   * 1440x900 laptop and y=1081 at 1680x1050 -- below the fold on both,
+   * so the page satisfied #103 and only half of #95. One panel's worth
+   * of prose above the map costs the map nothing and puts the health
+   * line on the first screen, which is what the issue asked for.
    */
-  replace(body, summary, nodeMapPanel(detail), el('div', { class: 'grid two' },
-    health,
+  replace(body, summary, health, nodeMapPanel(detail), el('div', { class: 'grid two' },
     routes,
     history,
     messagesPanel(detail),
