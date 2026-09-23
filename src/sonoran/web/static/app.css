@@ -1657,14 +1657,31 @@ a.more { text-decoration: none; display: inline-block; }
      the heading below already names the page. */
   .brand-text { display: none; }
   .brand-mark { max-width: 6.5rem; }
-  .nav-toggle { flex: 1 1 8rem; width: auto; margin: 0; }
-  .sidebar .status { flex: 0 0 auto; margin: 0; font-size: .78rem; }
-  .theme-switch { flex: 0 0 auto; margin: 0; padding: .4rem .5rem; }
-  /* Room is scarce, so the theme shows its icon and its state is in
-     the accessible name. */
-  .theme-switch .theme-word { display: none; }
-  /* Open, the list still needs the full width under the row. */
-  .sidebar nav { flex: 1 1 100%; }
+  /*
+   * A hamburger, and nothing else (#175).
+   *
+   * "On mobile navigation I think the menu button should just simply
+   * be a hamburger menu. Also the light / dark mode toggle can live
+   * inside that menu and same with the updated time."
+   *
+   * The bar was two rows -- brand and menu on one, status and theme on
+   * the second. The status and the theme are now inside the menu, so
+   * the bar is one row: the mark and the hamburger. Measured on a
+   * 390x844 phone, the page heading moves from 129 px to 74 px.
+   */
+  .nav-toggle {
+    flex: 0 0 auto; width: auto; margin: 0 0 0 auto;
+    padding: .45rem .55rem; gap: 0;
+  }
+  .nav-toggle .nav-toggle-label,
+  .nav-toggle .nav-toggle-here { display: none; }
+  /* Inside the menu they stack with the links rather than competing
+     for the bar. Full width, so a thumb has the whole row. */
+  .site-menu { flex: 1 1 100%; }
+  .site-menu .status,
+  .site-menu .theme-switch { width: 100%; margin: .35rem 0 0; }
+  .sidebar .status { font-size: .78rem; }
+  .theme-switch { padding: .4rem .5rem; }
 }
 
 @media (max-width: 60rem) and (max-height: 32rem) {
@@ -1675,10 +1692,9 @@ a.more { text-decoration: none; display: inline-block; }
   }
   .brand { flex: 0 0 auto; }
   .brand-mark { max-width: 5.5rem; }
-  .nav-toggle { flex: 1 1 10rem; width: auto; min-height: 2.75rem; }
-  .sidebar .status { flex: 0 0 auto; margin: 0; }
-  /* Open, the list still needs the full width under the row. */
-  .sidebar nav { flex: 1 1 100%; }
+  .nav-toggle { flex: 0 0 auto; width: auto; min-height: 2.75rem; margin-left: auto; }
+  /* Open, the menu still needs the full width under the row. */
+  .site-menu { flex: 1 1 100%; }
 }
 
 /* Detail pages */

@@ -455,6 +455,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "tileAttribution": settings.map_tile_attribution,
             "mapCenter": [settings.map_default_lat, settings.map_default_lon],
             "mapZoom": settings.map_default_zoom,
+            # The preset every picker opens on when it has a choice
+            # (#177). Pages fall back to their old behaviour when this
+            # one is not in the data they were given.
+            "defaultPreset": settings.default_preset,
             # What the coverage page needs to hand somebody an embed
             # snippet, and to tell them the truth about whether it will
             # work. Three things can each stop an embed dead, and all

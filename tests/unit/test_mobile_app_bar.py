@@ -77,8 +77,17 @@ def test_the_theme_button_is_big_enough_for_a_thumb() -> None:
     The control must not opt out of that by being sized in the bar
     rule, which is the easy mistake when squeezing a row.
     """
+    # Bounded by the end of the media block rather than by a character
+    # count. The original took the 1800 characters after the comment,
+    # which stopped covering `.theme-switch` the moment the block grew
+    # -- and then failed with "substring not found" rather than with
+    # anything about thumbs. The rule it guards has not changed.
     start = CSS.index("One app bar at phone width")
-    block = CSS[start : start + 1800]
+    opening = CSS.index("@media", start)
+    block = CSS[opening : CSS.index("\n}", opening)]
+    assert ".theme-switch" in block, (
+        "the phone bar rule no longer mentions the theme button, so this test is measuring nothing"
+    )
     theme = block[block.index(".theme-switch") :][:200]
     for forbidden in ("height:", "min-height: 0", "min-height:0"):
         assert forbidden not in theme, (
