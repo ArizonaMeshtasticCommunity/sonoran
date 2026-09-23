@@ -2120,6 +2120,8 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* The planner's cable run (#112). Hidden until its catalogue arrives,
    so a failed fetch leaves no dead controls behind. */
 .cable-run[hidden] { display: none; }
+.antenna-run[hidden] { display: none; }
+.antenna-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 .cable-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 
 /* The off switch for the single-key shortcuts (#147). Small and beside

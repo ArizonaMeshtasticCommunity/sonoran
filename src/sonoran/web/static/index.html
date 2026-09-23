@@ -729,6 +729,17 @@
                 <label>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
                 <label>Frequency (MHz) <input data-planner="frequency_mhz" inputmode="decimal" /></label>
               </div>
+              <!--
+                Pick the antenna instead of typing its gain (#111, #113).
+                "Antenna gain (dBi)" asks for a number printed on a box
+                the buyer no longer has. The picker fills the field, so
+                the engine, the share link and anybody who already knows
+                their figure are all untouched.
+              -->
+              <div class="pair antenna-run" data-antenna-run="tx" hidden>
+                <label>Antenna at your site <select data-antenna-type="tx"></select></label>
+              </div>
+              <p class="muted antenna-note" data-antenna-note="tx" hidden></p>
 
               <h3>Receiver</h3>
               <label>Modem preset <select data-planner="preset"></select></label>
@@ -741,6 +752,17 @@
                 <label>Cable loss (dB), each end
                   <input data-planner="system_loss" inputmode="decimal" /></label>
               </div>
+              <!--
+                Pick the antenna instead of typing its gain (#111, #113).
+                "Antenna gain (dBi)" asks for a number printed on a box
+                the buyer no longer has. The picker fills the field, so
+                the engine, the share link and anybody who already knows
+                their figure are all untouched.
+              -->
+              <div class="pair antenna-run" data-antenna-run="rx" hidden>
+                <label>Antenna at the far end <select data-antenna-type="rx"></select></label>
+              </div>
+              <p class="muted antenna-note" data-antenna-note="rx" hidden></p>
               <!--
                 Work the cable loss out instead of asking for it (#112).
                 Nobody knows what to type into a dB box. They do know

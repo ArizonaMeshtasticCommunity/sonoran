@@ -1133,6 +1133,78 @@ function cableLossDb(cable, feet) {
   return (cable.db_per_100ft * feet) / FEET_PER_100;
 }
 
+/*
+ * Pick the antenna instead of typing its gain (#111, #113).
+ *
+ * "Antenna gain (dBi)" asks for a number printed on a box the buyer no
+ * longer has, and the catalogue's own caution applies here: every one
+ * of these figures is the SELLER'S CLAIM, not a measurement, and the
+ * note says so rather than presenting it as fact.
+ *
+ * Each end gets its own picker, because they are genuinely different
+ * antennas: a rooftop omni talking to a handheld is the normal case.
+ *
+ * The vertical beamwidth is shown where the listing gave one. It is the
+ * figure that decides whether high gain helps at all -- 12 degrees on
+ * the 10 dBi against 35 on the 5.8 -- and a planner that showed only
+ * the gain would be teaching the exact mistake the catalogue was
+ * written to prevent.
+ */
+let antennaCatalogue = null;
+
+async function loadAntennas() {
+  if (antennaCatalogue) return antennaCatalogue;
+  try {
+    const body = await get('api/radio/antennas');
+    antennaCatalogue = body && Array.isArray(body.antennas) ? body.antennas : null;
+  } catch {
+    antennaCatalogue = null;
+  }
+  return antennaCatalogue;
+}
+
+async function wireAntennaRun(end, gainField) {
+  const run = document.querySelector(`[data-antenna-run="${end}"]`);
+  const picker = document.querySelector(`[data-antenna-type="${end}"]`);
+  const note = document.querySelector(`[data-antenna-note="${end}"]`);
+  if (!run || !picker || !note) return;
+
+  const antennas = await loadAntennas();
+  if (!antennas || !antennas.length) return;
+
+  picker.replaceChildren(
+    el('option', { value: '', text: "I'll type the gain myself" }),
+    ...antennas.map((antenna) => el('option', {
+      value: antenna.key,
+      text: `${antenna.name} (${antenna.gain_dbi_claimed} dBi)`,
+    })),
+  );
+
+  picker.addEventListener('change', () => {
+    const antenna = antennas.find((item) => item.key === picker.value);
+    if (!antenna) {
+      note.hidden = true;
+      return;
+    }
+    const box = field(gainField);
+    if (box) {
+      box.value = String(antenna.gain_dbi_claimed);
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    note.hidden = false;
+    const beam = antenna.vertical_beamwidth_deg
+      ? ` Its pattern is about ${antenna.vertical_beamwidth_deg}° tall, so it reaches out rather than up or down.`
+      : '';
+    // "Claimed" is not hedging. It is the difference between a figure
+    // read off a retail listing and one somebody measured.
+    note.textContent =
+      `${antenna.gain_dbi_claimed} dBi claimed by ${antenna.maker}, not measured. `
+      + `${antenna.good_for}${beam}`;
+  });
+
+  run.hidden = false;
+}
+
 async function wireCableRun() {
   const run = document.querySelector('[data-cable-run]');
   const note = document.querySelector('[data-cable-note]');
@@ -1202,6 +1274,8 @@ function wirePlanner() {
   // The cable helper reveals itself only once the catalogue has
   // arrived, so a failed fetch leaves no dead controls on the form.
   wireCableRun();
+  wireAntennaRun('tx', 'tx_gain');
+  wireAntennaRun('rx', 'rx_gain');
 
   /*
    * The address follows a committed edit, not a keystroke.
