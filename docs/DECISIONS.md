@@ -231,3 +231,27 @@ wrong out loud.
 - An empty result and a true negative are indistinguishable until the
   instrument is proven — show it can find something known to be there.
 - Your own past claim is the same shape as a green check.
+
+### The cfgtest link is reworded, not removed (#115)
+
+**Decided:** point the USB sentence at this page's own control, and
+keep cfgtest named as a fallback.
+
+The old sentence — "cfgtest.azmsh.dev reads the config straight off it,
+with no export step" — became **false** the moment #116 and #117
+landed, so leaving it was not neutral.
+
+#115 asks for the link to be removed entirely once parity is reached.
+It is not removed, and the reason is specific rather than cautious:
+**cfgtest's USB path has been used against real boards and this one has
+not.** Every other row of the parity table is closed; this one rests on
+a simulator, and a simulator cannot reproduce how a driver splits
+reads, how fast a board answers, or what an nRF52 does that an ESP32
+does not.
+
+Removing the fallback would be promising parity that nothing has
+checked, to people who would then have nowhere to go when it failed.
+
+**What would change it:** `docs/USB-HARDWARE-TEST.md` coming back clean
+on one ESP32 and one nRF52. Then the sentence loses its second half and
+#115 closes with it.
