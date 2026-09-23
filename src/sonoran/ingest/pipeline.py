@@ -1,6 +1,7 @@
 """The MQTT to database ingest pipeline."""
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from sonoran.ingest.dedup import ObservationInput, PacketInput, StoredPacket, st
 from sonoran.ingest.handlers import HandlerContext, store_mesh_packet_metrics, store_payload
 from sonoran.ingest.handlers.presence import store_gateway, store_heard
 from sonoran.logging import configure_logging, get_logger
+from sonoran.meshtastic import mesh_pb2
 from sonoran.mqtt.client import RawMqttMessage, message_stream
 
 logger = get_logger(__name__)
@@ -53,11 +55,59 @@ def heard_at(message: RawMqttMessage) -> datetime:
 
 
 def _valid_data(payload: bytes) -> bool:
-    """Return true when bytes parse as a non-empty Data protobuf."""
+    """Return true when bytes are a Data this schema fully describes.
+
+    AES-CTR does not authenticate, so this is the ONLY integrity check
+    on a decrypted packet: a wrong key produces uniformly random bytes
+    and the question is whether they look like a `Data`.
+
+    "Parses as a non-empty Data" was too weak, and measurably so. The
+    rate is a function of LENGTH, because a short string has less room
+    for a byte that fails to parse -- 40,000 random plaintexts each:
+
+        12 bytes  2.025%      48 bytes  0.130%
+        24 bytes  0.427%      64 bytes  0.102%
+
+    Short packets are acks, routing and telemetry, which is the bulk of
+    what a foreign mesh emits, so the 1-in-800 on #157 is the best case
+    rather than the typical one.
+
+    **The extra condition: the known fields alone must reproduce the
+    input.** A real `Data` from a node contains only fields this schema
+    knows, so discarding unknown fields changes nothing and it
+    re-serialises byte for byte. Random bytes almost always decode into
+    unknown field numbers, which vanish on the discard and break the
+    round trip. Same 40,000 draws:
+
+        12 bytes  2.025% -> 0.0025%     810x fewer
+        24 bytes  0.427% -> 0.0000%
+        48 bytes  0.130% -> 0.0025%
+        64 bytes  0.102% -> 0.0025%
+
+    Not the same as the byte-exact round trip already tried on #157 and
+    measured useless (0.115% -> 0.107%): protobuf PRESERVES unknown
+    fields, so that check re-serialises them too and passes. Discarding
+    them first is the whole difference.
+
+    **The cost, which is real.** If Meshtastic adds a `Data` field this
+    vendored schema does not have, genuine packets stop round-tripping
+    and no key validates them. They are not lost: the caller stores
+    them through `_store_opaque`, which keeps them as traffic with an
+    unknown port, and `raw_bytes` retains the original -- so a schema
+    bump plus a backfill recovers them. Losing a port number for a
+    while is a better failure than fabricating a sender, which is what
+    a false accept does.
+    """
     try:
-        return bool(parse_data(payload).SerializeToString())
+        data = parse_data(payload)
     except ValueError:
         return False
+    if not data.SerializeToString():
+        return False
+    known: Any = mesh_pb2.Data()  # type: ignore[attr-defined]
+    known.CopyFrom(data)
+    known.DiscardUnknownFields()
+    return bytes(known.SerializeToString()) == bytes(payload)
 
 
 def _is_pki(packet: object, message: RawMqttMessage) -> bool:
