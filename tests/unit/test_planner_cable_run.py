@@ -5,14 +5,27 @@ arrive at. They do know which cable they bought and roughly how long the
 run is, and the answer matters: at 915 MHz, 30 ft of LMR-195 is 3.33 dB
 and the same run of LMR-400 is 1.18 dB.
 
-**What was verified, and what was not.** The endpoint's figures are
-checked in `test_radio_catalogue_api.py`, and the loss model against the
-datasheets in `test_cable_loss.py`. The browser half — selecting a cable
-and watching the dB box fill — I did **not** get a clean run of: the
-control is new markup, the deployed instance serves the old page, and
-three attempts at injecting it either corrupted the document or raced
-the planner's own initialisation. So the wiring below is asserted from
-the source, and a browser pass is still owed on this one.
+Measured in a browser, against this tree served locally with `/api`
+proxied to the dev instance:
+
+    on load          picker visible, options
+                     ["I'll type the loss myself", LMR-195, LMR-240, LMR-400],
+                     loss box "2"
+    LMR-400, 30 ft   loss box "1.18"
+                     "30 ft of LMR-400 loses about 1.18 dB at each end —
+                      roughly 24% of the power, before the antenna."
+    LMR-195, 30 ft   loss box "3.33"
+    back to manual   note hidden, the last figure left in the box
+
+Both figures match `test_cable_loss.py` exactly, so the browser is
+computing from the same datasheet numbers and not from a second copy.
+
+Getting that pass took a detour worth recording: three attempts to
+splice the new markup into the DEPLOYED page failed, because the
+deployed instance still serves the old `index.html`. The fix was to stop
+patching somebody else's HTML and serve this tree — `tools/dev/
+serve_local.js` does that now, and it is the right harness for any
+change that touches markup.
 """
 
 from pathlib import Path
