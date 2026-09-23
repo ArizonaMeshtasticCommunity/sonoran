@@ -525,18 +525,31 @@ async function main() {
      * see.
      */
     await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
-    const sized = '[data-page="stats"] canvas';
-    await page.waitForFunction(
-      (selector) => [...document.querySelectorAll(selector)]
-        .filter((canvas) => canvas.width > 0 && canvas.height > 0).length > 0,
-      sized,
-      { timeout: 30000 },
-    );
-    const canvases = await page.evaluate((selector) =>
-      [...document.querySelectorAll(selector)]
-        .filter((canvas) => canvas.width > 0 && canvas.height > 0).length, sized);
-    must(canvases > 0, 'no chart was drawn');
-    return `${canvases} charts`;
+    /*
+     * Through `waitFor`, and NOT `page.waitForFunction`. The first
+     * version of this fix used the latter and went red on CI with
+     *
+     *   EvalError: Refused to evaluate a string as JavaScript
+     *
+     * which is the trap the comment on `waitFor` above was written to
+     * stop -- and this journey was added after that comment. It passes
+     * locally either way, because Playwright evaluates the predicate
+     * once before it installs the poller, and on a warm cache the
+     * charts are already drawn by then. The condition is only ever
+     * POLLED on the run where it is not already true, which is the
+     * cold-cache run this journey exists for.
+     *
+     * The selector is written inside the predicate rather than passed
+     * in, because `page.evaluate` serialises the function and a closure
+     * over `sized` would arrive undefined.
+     */
+    const canvases = () => [...document.querySelectorAll('[data-page="stats"] canvas')]
+      .filter((canvas) => canvas.width > 0 && canvas.height > 0).length;
+    const drawn = await waitFor(page, () => [...document.querySelectorAll('[data-page="stats"] canvas')]
+      .filter((canvas) => canvas.width > 0 && canvas.height > 0).length > 0, 30000);
+    const count = await page.evaluate(canvases);
+    must(drawn && count > 0, 'no chart was drawn');
+    return `${count} charts`;
   });
 
   await journey(context, 'the planner offers its control', async (page) => {

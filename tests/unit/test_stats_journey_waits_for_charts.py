@@ -62,8 +62,41 @@ def test_it_does_not_wait_for_a_fixed_duration() -> None:
 
 
 def test_it_waits_for_the_charts_to_exist() -> None:
-    assert "waitForFunction" in _journey(), (
+    assert "waitFor(page," in _journey(), (
         "the journey no longer waits for a condition, so it is either racing or pausing"
+    )
+
+
+def test_no_journey_waits_with_the_one_helper_the_csp_refuses() -> None:
+    """This test used to REQUIRE the thing that broke CI.
+
+    It asserted `waitForFunction`, which is what the first fix for #154
+    used, and the e2e run went red on the deployed policy:
+
+        EvalError: Refused to evaluate a string as JavaScript because
+        'unsafe-eval' is not an allowed source of script in the following
+        Content Security Policy directive: "script-src 'self'
+        'nonce-...' 'wasm-unsafe-eval'".
+
+    Playwright installs that poller with CDP `Runtime.evaluate`, which
+    is a string. `page.evaluate` goes through `Runtime.callFunctionOn`
+    and is allowed, which is what the `waitFor` helper in this file
+    uses, and what the comment above it already said in prose before
+    this journey ignored it.
+
+    It is invisible locally: Playwright evaluates the predicate once
+    before it polls, so on a warm cache the charts are already there
+    and it never reaches the blocked path. Only the cold run this
+    journey was written for hits it. Hence a test rather than a note.
+
+    Comments are stripped first, because the explanation of why the
+    call is banned has to be able to name it. That is the third time
+    that has come up in this repo.
+    """
+    assert "waitForFunction" not in _strip_comments(E2E), (
+        "a journey uses page.waitForFunction, which this dashboard's "
+        "Content-Security-Policy refuses on any run where the condition "
+        "is not already true -- use the waitFor helper"
     )
 
 
@@ -82,7 +115,19 @@ def test_it_requires_the_canvases_to_have_a_size() -> None:
 
 def test_it_still_fails_when_no_chart_draws() -> None:
     """The assertion is the point of the journey; waiting is not."""
-    assert "must(canvases > 0, 'no chart was drawn')" in _journey(), (
+    assert "must(drawn && count > 0, 'no chart was drawn')" in _journey(), (
         "the journey waits for charts but no longer asserts it found any, "
         "so a timeout is the only way it can fail"
     )
+
+
+def test_a_wait_that_gave_up_is_not_a_pass() -> None:
+    """`waitFor` RETURNS false on timeout; `waitForFunction` threw.
+
+    That difference is easy to miss when swapping one for the other,
+    and missing it turns a timeout into a journey that carries on and
+    reports whatever it happens to find. The result has to be read.
+    """
+    body = _journey()
+    assert "const drawn = await waitFor(" in body, "the wait's result is discarded"
+    assert "drawn &&" in body, "the journey does not check whether the wait gave up"
