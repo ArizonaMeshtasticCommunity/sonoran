@@ -1029,3 +1029,44 @@ you can claim.**
 
 > After a write, re-read the whole section and diff it. Never just the
 > field you changed.
+
+### Board membership is a live value, not a remembered one (#178 family)
+
+**Corrected 2026-09-24.** The working belief for most of this session
+was that **#178 was the only issue on the Roadmap board**, so its three
+children were ungated and fair game. I said so more than once.
+
+Checked directly, four are on it and **all four are `Ideation`**:
+
+    #178  Ideation   Noise Floor Tracking
+    #179  Ideation   Sonoran-Contributor docker service
+    #181  Ideation   Sonoran - Contributor management
+    #182  Ideation   Sonoran - Noise Floor display
+
+`Ideation` is not `Ready`, so under Tyler's rule none of them may be
+started. Nothing was: no branch or PR references any of the three. The
+only thing that reached them was a comment on #182 about a naming
+collision, which is not starting work.
+
+**The fact was true when it was learned and false when it was used.**
+#178 really was the only one on the board when that was reported; the
+other three were filed afterwards. Repeating it later was not repeating
+a fact, it was repeating a *reading*.
+
+This is the same shape as everything else in this file — a gate result
+is a claim about a **moment** — and it is the more dangerous version,
+because the claim was accurate at the time and nothing about it looked
+stale. The fix is not to remember harder. It is that **membership is
+cheap to re-ask and must be re-asked**, which `AGENTS.md` 9.28 now
+requires with the query to do it.
+
+**And the instrument mattered.** Earlier in this session an empty
+`projectItems` was read as "not on a project". That call returns a bare
+`[]` when the token lacks the `project` scope — no error. The GraphQL
+form errors loudly instead, which is why 9.28 specifies it. An empty
+result and a true negative are the same bytes until the instrument is
+proven.
+
+**Credit where it is due:** this came from a peer session that had the
+scope to look, checked before telling me, and named its own part in
+propagating the stale reading rather than just reporting the fix.

@@ -666,6 +666,53 @@ of what a radio heard. `jobs/calibrate.py::read_peers` reads the role
 only to pick an antenna height. Do not add a role test to it.
 `test_the_fit_reads_every_role_and_the_map_does_not` pins it.
 
+### 9.28 Check the project board before starting an issue, every time
+
+Tyler gates work through the **Roadmap** board: an issue on it is not to
+be started until its Status is **Ready**. The statuses are `Ideation`,
+`Ready`, `Blocked`, `In progress`, `Done`.
+
+**Ask the board. Do not carry the answer.** As of 2026-09-24, four
+issues are on it and all four are `Ideation`:
+
+    #178 Noise Floor Tracking
+    #179 Sonoran-Contributor docker service
+    #181 Sonoran - Contributor management
+    #182 Sonoran - Noise Floor display
+
+That number was **one** when it was first reported, and three more were
+filed afterwards. A session repeated the original answer as though it
+were durable and came close to starting work that was gated. The fact
+was true when it was learned and false when it was used, which is the
+whole hazard: **board membership is a live value, not a remembered
+one.**
+
+    gh api graphql -f query='query{organization(login:"ArizonaMeshtasticCommunity")
+      {projectV2(number:1){items(first:60){nodes{content{... on Issue{number}}
+      fieldValues(first:12){nodes{... on ProjectV2ItemFieldSingleSelectValue
+      {name field{... on ProjectV2FieldCommon{name}}}}}}}}}}'
+
+An issue **absent** from the board is not gated and is fair game.
+
+#### The trap: an empty answer that means two different things
+
+`gh issue view N --json projectItems` returns a bare `[]` when the token
+lacks the `project` scope — **no error, no warning**. That is
+indistinguishable from "this issue is on no board", and it is how a
+session concluded an issue was ungated when it had simply been unable to
+look. See 9.19 and the entry on instruments in `docs/DECISIONS.md`: an
+empty result and a true negative are the same bytes until the instrument
+is proven.
+
+The GraphQL query above **errors loudly** on a missing scope, so prefer
+it. If you use the `gh issue view` form, check the scope first:
+
+    gh auth status | grep -i 'token scopes'   # needs `project`
+
+The token carries `project` (read and write) as of 2026-09-24, so a
+gated issue moved to `Ready` can also be set to `In progress` and then
+`Done` from here, which is what Tyler asked for.
+
 ### 9.25 A diagnostic coverage run never reaches the public embed
 
 `COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
