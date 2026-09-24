@@ -293,11 +293,45 @@ function drawResult(page) {
         el('div', { class: 'checks' }, category.checks.map(checkRow)))),
   ]);
 
+  /*
+   * The report replaces the input, it does not stack under it (#202.1).
+   *
+   * Walked before this change: the result began about 660 px down, under
+   * three cards inviting the reader to load a config they had already
+   * loaded. Hiding the input and showing a one-line strip puts the
+   * report at the top and keeps the way back to one click.
+   */
+  showReportView(page, true);
   $('[data-config-exports]', page).hidden = false;
   // The optional panel is only useful once there is a config to apply
   // it to, and it appears with the export controls for that reason.
   const extras = $('[data-config-extras]', page);
   if (extras) extras.hidden = false;
+}
+
+
+/** Swap between the input half and the report (#202.1). */
+function showReportView(page, showing) {
+  const input = $('[data-config-input]', page);
+  const strip = $('[data-config-loaded]', page);
+  if (input) input.hidden = showing;
+  if (strip) strip.hidden = !showing;
+  const what = $('[data-config-loaded-what]', page);
+  if (what && showing) {
+    /*
+     * What is being checked, so hiding the input costs no information.
+     * The region and node type were choices made in the panel that is
+     * now hidden, so they are named here rather than left behind it.
+     */
+    // `fileName`, not `filename`. The first draft used the latter,
+    // which is not a field of `state` and would have quietly said
+    // "a config" for every file ever loaded.
+    const bits = [state.fileName || 'a config'];
+    if (state.region) bits.push(state.region);
+    if (state.nodeType) bits.push(state.nodeType);
+    replace(what, [el('span', { class: 'muted', text: 'Checking ' }),
+      el('strong', { text: bits.join(' \u00b7 ') })]);
+  }
 }
 
 /** Say which config is loaded, and from where. */
@@ -519,6 +553,17 @@ function wire(page) {
   if (wired) return;
   wired = true;
   recall();
+
+  /*
+   * Back to the input half (#202.1).
+   *
+   * The report and the loaded config stay in `state`, so this only
+   * changes which half is on screen. Loading another file then replaces
+   * them as it always did, and nothing has to be re-chosen: the region
+   * and node type buttons keep their pressed state underneath.
+   */
+  const reload = $('[data-config-reload]', page);
+  if (reload) reload.addEventListener('click', () => showReportView(page, false));
 
   for (const button of $$('[data-config-region]', page)) {
     button.addEventListener('click', () => {

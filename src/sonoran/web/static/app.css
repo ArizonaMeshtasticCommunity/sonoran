@@ -609,6 +609,55 @@ h3 .node-map-link { margin-inline-start: auto; font-size: .8rem; font-weight: 40
 h3:has(.node-map-link) { display: flex; align-items: baseline; gap: .5rem; }
 
 /*
+ * The Config check page is one column, like the node page (#202.3).
+ *
+ * Measured before this: five widths on one page -- 1881 for the
+ * full-width panels and every check section, 1600 for the capped
+ * `.grid`s, 683 for the Optional panel, and 523 and 388 for the cards
+ * inside the capped rows -- with the capped rows' left edge 141 px to
+ * the right of the panels above and below them.
+ *
+ * The same shape of fix as `[data-node-body]`, and the same three
+ * traps, which are worth repeating because reading the stylesheet did
+ * not reveal any of them there:
+ *
+ *   `width: 100%` is required. `.grid` carries `margin-inline: auto`,
+ *   and an auto inline margin in a flex column makes an item
+ *   shrink-to-fit instead of stretch -- so a grid sizes to its content
+ *   and centres, which IS the mismatched left edge being fixed.
+ *
+ *   `margin-block: 0` needs three classes to beat `.grid.summary-row`,
+ *   which sets its own bottom margin and is defined later in this file.
+ *
+ *   Whether it worked is a question for the rendered page, not for this
+ *   comment.
+ *
+ * And the cause was not CSS at all. Measuring found `.page-head` -- a
+ * wrapping flex row with `justify-content: space-between` -- wrapped
+ * **all nine** of this page's blocks, so every one of them was a flex
+ * item sizing to its own content. That is the five widths. `page-head`
+ * now closes after the title, and the rest are siblings.
+ */
+/*
+ * `.page.active` is two classes, so a `display: flex` here loses to it
+ * and silently does nothing -- which is what the first attempt did.
+ * The column is set on the active page instead.
+ */
+.page.active[data-page="config"] {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.page.active[data-page="config"] > .grid,
+.page.active[data-page="config"] > .panel,
+.page.active[data-page="config"] > * {
+  max-width: 100rem;
+  margin-inline: auto;
+  margin-block: 0;
+  width: 100%;
+}
+
+/*
  * Device and Health share one track of the summary row (#193.3).
  *
  * The gap matches the grid's own, so the pair reads as two panels in a
