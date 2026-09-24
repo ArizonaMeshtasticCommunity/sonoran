@@ -1413,10 +1413,36 @@ function drawMapLegend(target, rows) {
   }
 }
 
+/* The region the map opens on, as Leaflet bounds, or null (#195).
+ *
+ * A deployment that has not set one falls back to the centre and zoom,
+ * which is what every page did before this. */
+function homeBounds() {
+  const home = CONFIG.mapHome;
+  if (!Array.isArray(home) || home.length !== 2) return null;
+  const bounds = L.latLngBounds(home);
+  return bounds.isValid() ? bounds : null;
+}
+
 function ensureMap() {
   if (mapState.map) return mapState.map;
-  const map = L.map('map', { preferCanvas: true, worldCopyJump: true })
-    .setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
+  /*
+   * `zoomSnap: 0.25` so a region can actually fill the box (#195).
+   *
+   * With the default snap of 1, `fitBounds` rounds down to a whole
+   * zoom, which on a wide short box left Arizona filling under a third
+   * of the width -- the same complaint the integer `mapZoom` produced.
+   * A quarter step costs nothing and lets the fit land where it means.
+   */
+  const map = L.map('map', { preferCanvas: true, worldCopyJump: true, zoomSnap: 0.25 });
+  const home = homeBounds();
+  if (home) {
+    // The deployment's own statement of what it is about, fitted to
+    // whatever shape of screen the reader has.
+    map.fitBounds(home, { padding: [20, 20] });
+  } else {
+    map.setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
+  }
   if (CONFIG.tileUrl) {
     L.tileLayer(CONFIG.tileUrl, {
       className: 'basemap-tiles',
@@ -2622,11 +2648,35 @@ PAGES.map = async (page) => {
    * zooming out reaches them.
    */
   if (bounds.length && !mapState.fitted) {
-    const wanted = CONFIG.mapZoom || 7;
-    const padding = { padding: [30, 30], maxZoom: 11 };
-    // What `fitBounds` would settle on, asked before committing to it.
-    const fitted = map.getBoundsZoom(L.latLngBounds(bounds), false, L.point(30, 30));
-    if (fitted >= wanted) map.fitBounds(bounds, padding);
+    /*
+     * Fit to the nodes at home, and only when that zooms in (#195).
+     *
+     * #114 stopped one far node zooming the map OUT. It did not stop
+     * one far node CANCELLING the zoom in, which is what was left:
+     * measured on the live instance at 1879x622, all 401 positioned
+     * MediumFast nodes fit at zoom 6, below the configured 7, so no fit
+     * ran at all -- and the 400 inside Arizona fit at 7, which would
+     * have. One node near Oakland decided the view for the whole mesh.
+     *
+     * So the nodes outside the home region do not vote. They are still
+     * drawn and still reached by panning or zooming out, which #114
+     * requires; they just do not choose where the map opens.
+     */
+    const home = homeBounds();
+    const voting = home ? bounds.filter((point) => home.contains(L.latLng(point))) : bounds;
+    const floor = home || null;
+    if (voting.length) {
+      const padding = { padding: [30, 30], maxZoom: 11 };
+      const box = L.latLngBounds(voting);
+      // What `fitBounds` would settle on, asked before committing to it.
+      const fitted = map.getBoundsZoom(box, false, L.point(30, 30));
+      // The floor is the home view when there is one, so the first fit
+      // still never opens wider than the deployment's own region.
+      const wanted = floor
+        ? map.getBoundsZoom(floor, false, L.point(20, 20))
+        : (CONFIG.mapZoom || 7);
+      if (fitted >= wanted) map.fitBounds(box, padding);
+    }
     mapState.fitted = true;
   }
 
