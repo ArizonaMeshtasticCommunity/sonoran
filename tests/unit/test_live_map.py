@@ -887,14 +887,27 @@ def test_the_opening_view_is_not_thrown_away_by_an_outlier() -> None:
     """
     source = _read("app.js")
     start = source.index("mapState.fitted")
-    window = source[start : start + 1200]
+    # 2,600 characters, not 1,200. #195 made the floor the home region
+    # rather than an integer zoom, and the explanation of why pushed the
+    # fallback past a 1,200-character window -- so this went red while
+    # the property it guards was intact and in fact stricter. The window
+    # is sized to the block, and the assertions below name the property
+    # rather than one spelling of it.
+    window = source[start : start + 2600]
     assert "getBoundsZoom" in window, (
         "the live map fit does not ask what zoom it would land on. An "
         "unconditional fitBounds re-opens the map on every mesh that "
         "reaches us over MQTT, not on the configured view."
     )
-    assert "CONFIG.mapZoom" in window, (
-        "the configured zoom is not consulted, so there is no floor to refuse a fit against"
+    assert "if (fitted >= wanted)" in window, (
+        "nothing refuses a fit that would widen the view, so one distant "
+        "node re-opens the map on half a continent"
+    )
+    # A floor exists. Either spelling is acceptable: the home region
+    # (#195, which is more precise because it is a box and not an
+    # integer) or the configured zoom it falls back to.
+    assert "getBoundsZoom(floor" in window or "CONFIG.mapZoom" in window, (
+        "there is no floor to refuse a fit against"
     )
 
 

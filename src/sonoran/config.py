@@ -129,6 +129,29 @@ class Settings(BaseSettings):
     map_default_lon: float = -111.5
     map_default_zoom: int = 7
 
+    # The region the live map opens on (#195).
+    #
+    # A centre and an INTEGER zoom show a different area on every shape
+    # of screen: measured at 1879x622, zoom 7 shows about 20 degrees of
+    # longitude, and Arizona -- about 6 degrees wide -- filled under a
+    # third of the width. A box is the thing the deployment actually
+    # means, and `fitBounds` makes it fill whatever box the browser has.
+    #
+    # It is also the set that decides the first fit. A single node in
+    # the Bay Area used to cancel the zoom-in for the whole mesh,
+    # because it dragged the fit out past the configured zoom; nodes
+    # outside this box are still drawn and still reachable by panning,
+    # they just do not get a vote on the opening view (#114).
+    #
+    # The default is Arizona, because this deployment is Arizona's.
+    # Another mesh sets its own four numbers and nothing in app.js
+    # changes. Bounds of the state, rounded outward slightly so border
+    # nodes are not clipped.
+    map_home_south: float = 31.2
+    map_home_west: float = -115.0
+    map_home_north: float = 37.1
+    map_home_east: float = -108.9
+
     # Coverage planner terrain. Pages are made once and kept on disk.
     terrain_cache_dir: str = "/var/lib/sonoran/terrain"
     terrain_source_url: str = "https://elevation-tiles-prod.s3.amazonaws.com"
