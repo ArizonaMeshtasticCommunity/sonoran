@@ -1893,6 +1893,23 @@ async function linkChannelOptions(page) {
     wrap.hidden = true;
     return null;
   }
+  /*
+   * A `#map/node/<id>?preset=...` link chooses the preset (#193.6).
+   *
+   * This is the trap the issue named, and carrying the preset in the
+   * fragment is worth nothing unless it is applied BEFORE the fetch --
+   * the map draws one preset at a time (AGENTS.md 9.7), so a node on
+   * any other one is simply not drawn and the link lands on empty
+   * ground.
+   *
+   * Only when the deployment actually has that channel. A link naming
+   * a preset this instance does not carry falls through to the normal
+   * choice, and the focus step below then says the node is not here.
+   */
+  if (mapFocus && mapFocus.preset
+      && channels.some((item) => item.channel === mapFocus.preset)) {
+    linkChannel = mapFocus.preset;
+  }
   if (!channels.some((item) => item.channel === linkChannel)) {
     linkChannel = channels[0].channel;
   }
@@ -4685,13 +4702,35 @@ function nodeMapPanel(detail) {
           + 'privacy choice. It can be kilometres from where the node really is, so no '
           + 'distance is measured from it.'
         : null,
-    }, 'Where it is'),
+    }, 'Where it is',
+      /*
+       * A link to THIS node on the live map (#193.6).
+       *
+       * The old note said "Open the live map", which went to `#map` and
+       * showed the whole mesh rather than this node.
+       *
+       * The node's channel rides along, because the map draws one
+       * preset at a time (AGENTS.md 9.7) and since #177 it opens on the
+       * deployment's own. Without the preset a node on any other one is
+       * not drawn and the link lands on empty ground.
+       */
+      node.channel
+        ? el('a', {
+            class: 'linky node-map-link',
+            href: `#map/node/${encodeURIComponent(node.node_id)}`
+              + `?preset=${encodeURIComponent(node.channel)}`,
+            text: 'View on full map',
+          })
+        : el('a', {
+            class: 'linky node-map-link',
+            href: `#map/node/${encodeURIComponent(node.node_id)}`,
+            text: 'View on full map',
+          })),
     box,
     el('p', { class: 'muted node-map-note' },
       confidence === 'coarse'
         ? 'Rounded position'
-        : `${round(position.lat, 5)}, ${round(position.lon, 5)}`,
-      el('a', { class: 'linky', href: '#map', text: 'Open the live map' })));
+        : `${round(position.lat, 5)}, ${round(position.lon, 5)}`));
 
   // Leaflet needs the element in the document before it measures it.
   setTimeout(() => drawNodeMap(box, position, confidence), 0);
@@ -5300,9 +5339,26 @@ async function loadNodeDetail(nodeId) {
    * A narrower minimum lets all four sit side by side when there is
    * room and still fall back to two, then one, when there is not.
    */
+  /*
+   * Health sits under Device, inside the first row (#193.3).
+   *
+   * Device is short and Activity sets the row's height -- 473 px at
+   * 1440 wide -- so there was empty space under Device while Health
+   * ran as a full-width strip below the row.
+   *
+   * The pair share one grid track, which keeps #95's requirement that
+   * the Health summary is on the first screen and in fact moves it
+   * UP: it was measured at y=631 at 1440x900 and lands higher here,
+   * because it starts where Device ends rather than where the whole
+   * row ends.
+   *
+   * When the grid falls to fewer columns the pair travels together, so
+   * a phone gets Device immediately followed by its Health rather than
+   * the two separated by Activity and Weather.
+   */
   const summary = el('div', { class: 'grid summary-row' },
     identityPanel(node),
-    devicePanel(detail),
+    el('div', { class: 'summary-stack' }, devicePanel(detail), health),
     activityPanel(detail),
     weatherPanel(detail));
 
@@ -5324,7 +5380,8 @@ async function loadNodeDetail(nodeId) {
    * of prose above the map costs the map nothing and puts the health
    * line on the first screen, which is what the issue asked for.
    */
-  replace(body, summary, health, nodeMapPanel(detail), el('div', { class: 'grid two' },
+  // `health` is inside `summary` now, so it is not passed again here.
+  replace(body, summary, nodeMapPanel(detail), el('div', { class: 'grid two' },
     routes,
     history,
     messagesPanel(detail),
