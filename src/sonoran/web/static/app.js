@@ -4245,14 +4245,59 @@ function neighborPanel(neighbors, windowHours) {
     ], neighbors, 'This node reports no neighbors.', { noun: 'neighbours' }));
 }
 
+/*
+ * What to say when a telemetry panel is empty (#192).
+ *
+ * Measured on the running instance over 7 days: of 1,189 active nodes,
+ * **849 (71%) show an empty Device panel and 1,117 (94%) an empty
+ * Weather panel**. This is not an edge case -- for most visitors the
+ * dead end IS the node page.
+ *
+ * Those two numbers also decide the wording. At 94% empty, the
+ * overwhelmingly common reason Weather is blank is that the node has
+ * **no sensor**, and no setting helps. Guidance that led with "turn on
+ * environment telemetry" would send about a thousand owners hunting
+ * for a setting that cannot work, so the sensor comes first.
+ *
+ * Setting names are quoted from `meshtastic/module_config.proto`
+ * (`ModuleConfig.TelemetryConfig`) at the revision in
+ * `proto/UPSTREAM_REV.txt`. No default interval is stated, because the
+ * proto does not state one and this project does not fill in what the
+ * vendor left out (AGENTS.md 9.27).
+ *
+ * The third cause is in both, and it is the one this page cannot see:
+ * telemetry has to reach an MQTT gateway to appear here at all. A node
+ * can be sending perfectly and have nothing uploaded.
+ */
+const TELEMETRY_HELP = {
+  device: 'Device telemetry is a setting, not a sensor: any node can send it. '
+    + 'In Config check, look for `device_telemetry_enabled` and '
+    + '`device_update_interval` under the Telemetry module. '
+    + 'It also has to reach an MQTT gateway to appear here, so a node that is '
+    + 'sending may still show nothing if no gateway uploaded it.',
+  weather: 'Weather needs a physical sensor on the node, such as a BME280. '
+    + 'Without one, no setting will fill this in. '
+    + 'With one, look for `environment_measurement_enabled` and '
+    + '`environment_update_interval` under the Telemetry module in Config check. '
+    + 'It also has to reach an MQTT gateway to appear here.',
+};
+
+/** The empty line, plus a way to the guidance (#192). */
+function telemetryEmpty(message) {
+  return el('p', { class: 'empty' }, message, ' ',
+    el('a', { class: 'linky', href: '#config', text: 'How to turn this on' }));
+}
 function heardByPanel(gateways) {
   return el('div', { class: 'panel' },
-    el('h3', {}, 'Heard by',
+    // The explanation moves behind the heading's hint (#191). It
+    // describes what the columns mean rather than qualifying a number
+    // that is shown, so hiding it does not turn an absence into a fact.
+    el('h3', {
+      'data-label': 'Heard by',
+      'data-hint': 'A gateway usually receives a packet after other nodes relayed it. '
+        + 'Signal figures here come only from packets that arrived direct, with no hop used.',
+    }, 'Heard by',
       el('span', { class: 'muted', text: `${count(gateways.length)} gateways` })),
-    el('p', { class: 'notice' },
-      'A gateway usually receives a packet after other nodes relayed it. '
-      + 'Signal figures below come only from packets that arrived direct, '
-      + 'with no hop used.'),
     expandingTable([
       { label: 'Gateway', cell: (row) => nodeChip(row) },
       { label: 'Relayed', num: true, cell: (row) => count(row.relayed_count) },
@@ -4266,18 +4311,26 @@ function heardByPanel(gateways) {
 function weatherPanel(detail) {
   const list = definitionList(detail.weather, WEATHER_LABELS);
   return el('div', { class: 'panel' },
-    el('h3', {}, 'Weather',
+    el('h3', {
+      'data-label': 'Weather',
+      // Only when there is nothing to explain away. A panel with
+      // readings needs no "why is this empty".
+      'data-hint': list ? null : TELEMETRY_HELP.weather,
+    }, 'Weather',
       detail.weather_time ? el('span', { class: 'muted', text: `${ago(detail.weather_time)} ago` }) : null),
-    list || empty('This node sends no environment telemetry.'));
+    list || telemetryEmpty('This node sends no environment telemetry.'));
 }
 
 function devicePanel(detail) {
   const list = definitionList(detail.device, DEVICE_LABELS);
   return el('div', { class: 'panel' },
-    el('h3', {}, 'Device',
+    el('h3', {
+      'data-label': 'Device',
+      'data-hint': list ? null : TELEMETRY_HELP.device,
+    }, 'Device',
       detail.device && detail.device.time
         ? el('span', { class: 'muted', text: `${ago(detail.device.time)} ago` }) : null),
-    list || empty('This node sends no device telemetry.'));
+    list || telemetryEmpty('This node sends no device telemetry.'));
 }
 
 function messagesPanel(detail) {
@@ -4616,14 +4669,27 @@ function nodeMapPanel(detail) {
 
   const box = el('div', { class: 'node-map', 'data-node-map': '' });
   const panel = el('section', { class: 'panel' },
-    el('h3', { text: 'Where it is' }),
+    /*
+     * "Rounded by its owner" moves behind the heading's hint (#191),
+     * which that issue allows by name. What stays printed is the thing
+     * it qualifies: where the coordinates would be, the page now says
+     * "Rounded" in their place rather than printing numbers that look
+     * exact. The map still draws no radius (#96) -- the payload carries
+     * the confidence but not the rounding distance, and a circle drawn
+     * to a guessed radius would claim a precision we do not have.
+     */
+    el('h3', {
+      'data-label': 'Where it is',
+      'data-hint': confidence === 'coarse'
+        ? 'This position is rounded to a coarser one by its owner, which is a normal '
+          + 'privacy choice. It can be kilometres from where the node really is, so no '
+          + 'distance is measured from it.'
+        : null,
+    }, 'Where it is'),
     box,
     el('p', { class: 'muted node-map-note' },
       confidence === 'coarse'
-        // Named, not drawn as a radius. The detail payload carries the
-        // confidence but not the rounding distance, and a circle drawn
-        // to a guessed radius would claim a precision we do not have.
-        ? 'Rounded to a coarser position by its owner, which is a normal privacy choice.'
+        ? 'Rounded position'
         : `${round(position.lat, 5)}, ${round(position.lon, 5)}`,
       el('a', { class: 'linky', href: '#map', text: 'Open the live map' })));
 
@@ -5013,8 +5079,23 @@ const km = (value) => (value == null ? '-' : `${round(value, value < 10 ? 1 : 0)
 
 function routesPanel(routes) {
   if (!routes) return el('div', { class: 'panel span-2' }, failure(new Error('Cannot load the routes.')));
+  /*
+   * The tile's explanation goes in `data-hint`, not `title` (#191).
+   *
+   * #99 removed `title` tooltips on purpose: a finger cannot hover and
+   * a keyboard cannot reach one. These four tiles kept theirs, so the
+   * only explanation of "Hops to the nearest gateway" was invisible to
+   * anybody on a phone.
+   *
+   * The tile keeps its own class. An earlier draft added `stat` to
+   * reuse that selector, and it only looked right by accident:
+   * `.stat` and `.route-tile` have equal specificity, so the tiles kept
+   * their padding and font size purely because `.route-tile` appears
+   * later in app.css. `revealHints` scans `.label[data-hint]` instead,
+   * which needs no class borrowed for its side effects.
+   */
   const tile = (label, value, detail, hint) => el('div', { class: 'route-tile' },
-    el('span', { class: 'label', text: label, title: hint || null }),
+    el('span', { class: 'label', text: label, 'data-label': label, 'data-hint': hint || null }),
     el('span', { class: 'value', text: value }),
     detail ? el('span', { class: 'muted', text: detail }) : null);
   const longest = routes.longest_segment;
@@ -6760,9 +6841,30 @@ function revealHints(root = document) {
    * reason those sentences matter: "Uploads" is not a count of gateways
    * and the tile that says so was readable only on hover.
    */
-  for (const label of $$('.stat .label[data-hint]', root)) {
+  // Any labelled figure, not only the dashboard's `.stat` blocks: the
+  // node page's route tiles carry the same shape (#191).
+  for (const label of $$('.label[data-hint]', root)) {
     fitHint(label, 'figure', label.dataset.label || label.textContent.trim(),
       label.dataset.hint, []);
+  }
+  /*
+   * And panel headings (#191).
+   *
+   * Explanatory prose under a heading is useful once and clutter every
+   * time after. #99 moved the column explanations of two tables behind
+   * these buttons and did not reach panel-level prose, so it was still
+   * printed in full on every visit.
+   *
+   * `data-hint` on the `h3` is all a panel needs; the button lands on
+   * the heading beside its text. What must NOT move is listed in #191
+   * and is worth repeating here, because the temptation is to sweep
+   * every paragraph: an empty state stays visible, and so does any
+   * sentence that changes what a number means -- if the reason a figure
+   * is missing is behind a button, the figure reads as a fact.
+   */
+  for (const heading of $$('h3[data-hint]', root)) {
+    fitHint(heading, 'panel', heading.dataset.label || heading.firstChild?.textContent?.trim()
+      || heading.textContent.trim(), heading.dataset.hint, []);
   }
 }
 
