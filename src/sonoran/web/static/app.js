@@ -1303,6 +1303,25 @@ function nodeStyle(node) {
 }
 
 /*
+ * The node a `#map/node/<id>` link asked the map to open on, or null.
+ *
+ * Cleared when the reader leaves the map, so a later visit opens
+ * normally rather than jumping to whatever was linked once.
+ */
+let mapFocus = null;
+
+/*
+ * How far in a focus link may zoom (#193.6, #96).
+ *
+ * Deliberately short of street level. A position rounded by its owner
+ * can be kilometres out, and a map zoomed to a building around a
+ * coarse position asserts a precision nobody has. 13 is close enough
+ * to see the node among its neighbours and far enough that the dot is
+ * not read as an address.
+ */
+const MAP_FOCUS_ZOOM = 13;
+
+/*
  * The roles the map is limited to. Empty means every role.
  *
  * The legend doubles as the control for it: each entry is a button.
@@ -2626,6 +2645,41 @@ PAGES.map = async (page) => {
   mapState.lastNodes = nodes;
   const bounds = drawMapNodes(nodes);
   drawMapLegend($('[data-map-legend]', page), nodes);
+  /*
+   * A `#map/node/<id>` link centres on its node (#193.6).
+   *
+   * After the draw, so the marker exists to open. It runs instead of
+   * the fit below -- `mapState.fitted` is set either way -- because a
+   * reader who asked for one node does not want the whole mesh framed
+   * on top of it.
+   *
+   * If the node is not in this preset's data the link says so rather
+   * than leaving the reader on empty ground looking for a dot that was
+   * never drawn. That is the trap the issue named.
+   */
+  if (mapFocus) {
+    const wanted = mapFocus.nodeId;
+    const found = nodes.find((row) => row.node_id === wanted);
+    const target = (mapState.marks || []).find(([, row]) => row.node_id === wanted);
+    if (found && found.lat != null && found.lon != null) {
+      map.setView([found.lat, found.lon], Math.min(MAP_FOCUS_ZOOM, 13));
+      if (target) target[0].openPopup();
+      mapState.fitted = true;
+    } else {
+      /*
+       * Say why, on the legend's own note line, rather than adding a
+       * second status mechanism to this page. The alternative is a
+       * reader hunting a dot that was never drawn.
+       */
+      mapNodeScope = found
+        ? `${found.display_name || wanted} has no position, so the map cannot centre on it.`
+        : `${wanted} is not among the nodes shown here \u2014 it may be on another preset, `
+          + 'or not heard in this window.';
+      drawMapLegend($('[data-map-legend]', page), nodes);
+      mapState.fitted = true;
+    }
+    mapFocus = null;
+  }
   /*
    * Fit only when fitting would zoom IN. Never when it would zoom out.
    *
@@ -6938,6 +6992,31 @@ async function route() {
     if (channel !== currentChatChannel) chatLimit = CHAT_STEP;
     currentChatChannel = channel;
     chatView = parts[2] === 'table' ? 'table' : 'chat';
+  }
+  /*
+   * `#map/node/<id>` opens the live map on one node (#193.6).
+   *
+   * Two traps, both named in the issue:
+   *
+   * - **Preset.** The map shows one preset at a time (AGENTS.md 9.7)
+   *   and since #177 it opens on the deployment's own. A node on a
+   *   different preset is simply not drawn, so the link would land on
+   *   empty ground. The node page knows the node's channel and puts it
+   *   in the fragment, and the map selects it before fetching.
+   * - **Rounded positions.** The focus must not zoom so far that a
+   *   coarse position looks exact (#96), so `MAP_FOCUS_ZOOM` is a long
+   *   way short of street level.
+   *
+   * `watch` is already a word after `map`, so this reads `parts[1]`
+   * and only claims the fragment when it says `node`.
+   */
+  if (known === 'map' && parts[1] === 'node' && parts[2]) {
+    mapFocus = {
+      nodeId: decodeURIComponent(parts[2]),
+      preset: new URLSearchParams(location.hash.split('?')[1] || '').get('preset') || null,
+    };
+  } else if (known !== 'map') {
+    mapFocus = null;
   }
   currentNodeId = known === 'node' ? decodeURIComponent(nodeId || '') : currentNodeId;
   const leavingMap = currentPage === 'map' && known !== 'map';
