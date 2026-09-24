@@ -687,6 +687,53 @@ non-regression half — uncapped callers must keep "View all", or the fix
 is a rename of every button on the site. Proven by mutation: forcing
 `cut = false` restores the bug and turns the comparison case red.
 
+### Prose moves behind a hint, guidance appears where a panel is empty (#191, #192)
+
+**Decided:** extend #99's hint mechanism to panel headings, and move
+only the prose that #191 allows.
+
+**What moved:** the "Heard by" explanation of relayed versus direct
+signal, the "Rounded by its owner" note, and the four route tiles'
+`title` attributes. #99 removed `title` tooltips deliberately — a
+finger cannot hover and a keyboard cannot reach one — and those four
+tiles had kept theirs, so the only explanation of "Hops to the nearest
+gateway" was invisible on a phone.
+
+**What deliberately did not move.** Empty states, and any sentence that
+changes what a number means. If the reason a figure is absent sits
+behind a button, the figure reads as a fact — which is the bug #193.7
+had just fixed, and sweeping it into a hint would have reintroduced it
+in the same session.
+
+**#192's ordering is decided by measurement, not taste.** Of 1,189
+active nodes over 7 days:
+
+| panel | empty | share |
+|---|---|---|
+| Device | 849 | 71% |
+| Weather | **1,117** | **94%** |
+
+At 94%, the common reason Weather is blank is **no sensor**. Guidance
+leading with "enable environment telemetry" would misdirect roughly a
+thousand owners toward a setting that cannot help them, so the sensor
+comes first and a test asserts that ordering rather than trusting the
+wording to survive an edit.
+
+**Setting names are quoted, and checked.** From
+`ModuleConfig.TelemetryConfig` in the vendored proto, with a test that
+every name the guidance prints is a real field — otherwise the page
+could name a plausible setting no firmware has and every other test
+would still pass. No default interval is stated, because the proto
+states none (AGENTS.md 9.27).
+
+**One near-miss worth keeping.** The route tiles were first given the
+`stat` class to reuse `revealHints`' existing selector. That looked
+correct and was an accident: `.stat` and `.route-tile` have equal
+specificity, so the tiles kept their padding and font size only because
+`.route-tile` appears later in `app.css`. Borrowing a class for a
+selector's side effect is a change that works until someone reorders a
+stylesheet. The selector was broadened instead, and a test now forbids
+the borrowed class.
 ### The live map opens on a region, and out-of-state nodes do not vote (#195)
 
 **Decided:** option **(a)** of the two the issue put to maintainers —
