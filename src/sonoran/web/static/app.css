@@ -985,7 +985,17 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
   width: 30px;
   height: 30px;
   padding: 0;
-  border: 0;
+  /*
+   * A real boundary (#196).
+   *
+   * This was `border: 0` on a `--panel` background over dark map
+   * tiles, so the button's edge was invisible: the icon was readable
+   * at 14.9:1 against its own background while the control itself had
+   * no discernible shape. WCAG 2.1 SC 1.4.11 asks for 3:1 for a
+   * control's boundary against what surrounds it, and there was no
+   * boundary at all to measure.
+   */
+  border: 1px solid var(--muted);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -1529,12 +1539,56 @@ body.chart-staged { overflow: hidden; }
 }
 .more:hover { border-color: var(--accent); }
 .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/*
+ * One message (#199).
+ *
+ * More space BETWEEN items than inside them, which is what turns a
+ * list of twelve from one block into twelve things. The gap on
+ * `.messages` above does the separating; the gap here stays tight so
+ * a header and its body read as one unit.
+ */
 .messages li { display: flex; flex-direction: column; gap: .15rem; }
-.messages .who { display: flex; gap: .45rem; align-items: baseline; font-size: .8rem; }
-.messages .who .name { font-weight: 600; }
-.messages .who time { color: var(--muted); }
+/*
+ * The header line had three accents competing: an orange name button,
+ * a boxed channel chip pressed against it, and an orange underlined
+ * time link that was the loudest and the least important.
+ *
+ * Now the name carries the line, the channel is a quiet label, and the
+ * time sits muted on the right. `margin-inline-start: auto` pushes the
+ * time over without a spacer element, so the markup stays flat.
+ */
+.messages .who { display: flex; gap: .5rem; align-items: baseline; font-size: .8rem; }
+.messages .who .name {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--text); font: inherit; font-weight: 600;
+}
+.messages .who .name:hover, .messages .who .name:focus-visible { text-decoration: underline; }
+.messages .who .channel-label { color: var(--muted); font-size: .75rem; }
+/* The time still opens the packet. It just stops looking like the
+ * point of the line: muted, right, and underlined only on purpose. */
+.messages .who .when {
+  margin-inline-start: auto; color: var(--muted); text-decoration: none; flex: none;
+}
+.messages a.when:hover, .messages a.when:focus-visible { text-decoration: underline; }
 .messages .body { overflow-wrap: anywhere; }
 .messages .body .hash { color: var(--accent); }
+/*
+ * A URL shown as shortened text, never as a link (#199). It is styled
+ * as a quiet monospace token so it reads as "an address", and
+ * deliberately NOT as an anchor: a message body is text anyone on the
+ * mesh can send, and a clickable link here would wear this site's
+ * credibility for a stranger's destination.
+ */
+.messages .body .link-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .92em; color: var(--muted); overflow-wrap: anywhere;
+}
+/*
+ * Automated senders stay, and stay readable -- the reporter decided
+ * that. Only the body's colour softens, so a person's message stands
+ * out without anything being hidden or folded away.
+ */
+.messages li.quiet .body { color: var(--muted); }
 .reactions { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .15rem; min-width: 0; }
 /*
  * A reaction is an emoji and a count. The senders open under it.

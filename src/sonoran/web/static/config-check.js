@@ -154,7 +154,73 @@ async function loadLatestFirmware() {
 /* ---------------------------------------------------------------- */
 /* Drawing                                                           */
 
-const STATUS_LABEL = { pass: 'pass', fail: 'fix this', warn: 'check', info: 'note' };
+/*
+ * The words this page uses for a check's outcome (#202).
+ *
+ * They were FIX THIS / PASS / NOTE in capitals. The node page's health
+ * checklist (#95) already solved this for the same kind of list, so
+ * two pages in one dashboard were shouting different vocabularies at
+ * the same reader.
+ *
+ * `pass` and `fail` map cleanly onto that vocabulary. **`warn` and
+ * `info` do not.** "Can't tell yet" means the evidence is missing;
+ * these two mean "we looked, and it is worth your attention". Folding
+ * them into the health page's third word to make the pages match would
+ * have the page say something slightly untrue, so they keep words of
+ * their own -- and "Worth a look" is already the phrase the score row
+ * above uses for exactly this count.
+ */
+const STATUS_LABEL = {
+  pass: 'Good',
+  fail: 'Needs fixing',
+  warn: 'Worth a look',
+  info: 'Note',
+};
+
+
+/* Which sprite icon stands for one checker category (#202). */
+const CATEGORY_ICONS = {
+  lora: 'i-rf',
+  radio: 'i-rf',
+  channel: 'i-rf',
+  mqtt: 'i-meshnet',
+  network: 'i-meshnet',
+  position: 'i-map',
+  gps: 'i-map',
+  telemetry: 'i-stats',
+  device: 'i-config',
+  power: 'i-config',
+  display: 'i-config',
+  bluetooth: 'i-config',
+  security: 'i-config',
+  storage: 'i-config',
+};
+
+/*
+ * The icon shown when a category is not in the map above.
+ *
+ * `i-config` because this is the Config check page. It must be a real
+ * symbol in the sprite -- an early draft of this mapping used names
+ * like `i-radio` and `i-shield` that do not exist, which renders
+ * nothing at all and looks like a missing icon rather than an error.
+ * `tests/unit/test_config_check_design.py` asserts every name here is
+ * in `index.html`.
+ */
+const FALLBACK_ICON = 'i-config';
+
+/** The category's icon, or a neutral one when it is not mapped. */
+function categoryIcon(category) {
+  const key = String(category.id || category.key || category.title || '').toLowerCase();
+  const found = Object.keys(CATEGORY_ICONS).find((name) => key.includes(name));
+  const icon = found ? CATEGORY_ICONS[found] : FALLBACK_ICON;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `#${icon}`);
+  svg.append(use);
+  return svg;
+}
 
 /** One check, as a row that can be opened for the reasoning. */
 function checkRow(check) {
@@ -208,7 +274,22 @@ function drawResult(page) {
           : 'This node matches the azmsh.net recommendations.'),
     ...result.categories.map((category) =>
       el('div', { class: 'panel', style: 'margin-top:1rem' },
-        el('h3', { text: `${category.icon || ''} ${category.title}`.trim() }),
+        /*
+         * The site's own icon, not the checker's emoji (#202).
+         *
+         * 📡 📢 🌐 💻 💾 come from the vendored checker's `icon:` field
+         * and nothing else on this dashboard is drawn that way.
+         *
+         * The mapping lives here and the vendored file is NOT edited,
+         * so the pin in PROVENANCE.md and the check_config_checker_pin
+         * guard both stay intact. A category this map does not know
+         * falls back to a neutral icon rather than to its emoji, so a
+         * new upstream category degrades quietly instead of putting an
+         * emoji back on the page.
+         */
+        el('h3', {},
+          categoryIcon(category),
+          el('span', { text: category.title })),
         el('div', { class: 'checks' }, category.checks.map(checkRow)))),
   ]);
 

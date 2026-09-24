@@ -515,11 +515,58 @@ const snrCell = (snr) =>
     : el('span', { class: `snr ${snrClass(snr)}`, text: `${round(snr, 1)} dB` });
 
 /** Split a message body so hashtags are highlighted. */
+/*
+ * A URL in a message body, shown short and NOT made clickable (#199).
+ *
+ * 21 of the latest 50 messages carry one, mostly long Maps links that
+ * wrap mid-token and are often longer than the message.
+ *
+ * **They stay text.** A message body is text anyone on the mesh can
+ * send and nothing checks who sent it, so a clickable link here would
+ * put an unchecked destination on the project's own page, wearing the
+ * project's credibility. That is the #81 shape -- stored XSS through a
+ * node name -- in a new place. Showing the URL shortened needs none of
+ * the mitigations a link would: no scheme allowlist, no `rel`, no
+ * question about whether a message can dress a link as something else.
+ * A reader who wants it can still select and copy it, and the full URL
+ * is on the element for anyone who hovers or opens the hint.
+ *
+ * Making them links is a separate decision, and #199 says so too. It
+ * must not ride along inside a visual change.
+ */
+const URL_IN_TEXT = /(https?:\/\/[^\s]+)/g;
+
+/** `https://www.google.com/maps?q=33.35%2C-111.91` as `google.com/maps`. */
+function shortUrl(raw) {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.replace(/^www\./, '');
+    const path = url.pathname.replace(/\/$/, '');
+    const shown = `${host}${path}`;
+    // A long path is still a long token. Keep the host, which is the
+    // part that tells a reader where this would go.
+    return shown.length > 40 ? `${host}\u2026` : shown;
+  } catch {
+    return raw;
+  }
+}
+
 function messageBody(text) {
   const node = el('span', { class: 'body' });
-  for (const part of String(text ?? '').split(/(#[A-Za-z0-9_]+)/g)) {
-    if (!part) continue;
-    node.append(part.startsWith('#') ? el('span', { class: 'hash', text: part }) : part);
+  for (const chunk of String(text ?? '').split(URL_IN_TEXT)) {
+    if (!chunk) continue;
+    // A stateless test. `URL_IN_TEXT` is global, and `.test()` on a
+    // global regex advances `lastIndex`, so using it here would give a
+    // different answer on every other chunk.
+    if (/^https?:\/\//.test(chunk)) {
+      // A span, not an anchor. See the note above.
+      node.append(el('span', { class: 'link-text', title: chunk, text: shortUrl(chunk) }));
+      continue;
+    }
+    for (const part of chunk.split(/(#[A-Za-z0-9_]+)/g)) {
+      if (!part) continue;
+      node.append(part.startsWith('#') ? el('span', { class: 'hash', text: part }) : part);
+    }
   }
   return node;
 }
@@ -642,23 +689,48 @@ function replyQuote(parent) {
 }
 
 /** Render one chat message list item. */
+/*
+ * The channels whose messages are drawn quietly (#199).
+ *
+ * In the latest 50 messages one automated sender had posted 23 and
+ * another 5; in the latest 12, which is what the dashboard shows, one
+ * sender had 7. A person's message is easy to lose among them.
+ *
+ * The reporter decided that every message stays -- no filter, no
+ * folding behind a count -- so this changes **weight, not presence**.
+ * Same size, same position, muted colour. Nothing is hidden and
+ * nothing is unreadable.
+ */
+const QUIET_CHANNELS = new Set(['Traffic', 'Weather']);
+
 function messageItem(message, options = {}) {
   const direct = message.to_node && message.to_node !== '^all';
-  return el('li', { class: direct ? 'dm' : null },
+  const quiet = QUIET_CHANNELS.has(message.channel);
+  return el('li', { class: [direct ? 'dm' : null, quiet ? 'quiet' : null].filter(Boolean).join(' ') || null },
     replyQuote(message.reply_to),
+    /*
+     * One accent on this line, not three (#199).
+     *
+     * The sender was an orange button, the channel a boxed chip pressed
+     * against it, and the time an orange underlined link -- the loudest
+     * of the three and the least important. Now: the name carries the
+     * line, the channel is a quiet label with a real gap, and the time
+     * sits muted on the right. The time is still the way into the
+     * packet and still a real link; it just stops competing.
+     */
     el('div', { class: 'who' },
       el('button', {
-        class: 'linky name', type: 'button', title: message.from_node,
+        class: 'name', type: 'button', title: message.from_node,
         onclick: () => openNode(message.from_node),
         text: message.from_name || message.from_node,
       }),
       options.showChannel && message.channel
-        ? el('span', { class: 'tag', text: message.channel }) : null,
+        ? el('span', { class: 'channel-label', text: message.channel }) : null,
       message.packet_id == null
-        ? el('time', { datetime: message.seen_at || '', title: stamp(message.seen_at),
-            text: `${ago(message.seen_at)} ago` })
+        ? el('time', { class: 'when', datetime: message.seen_at || '',
+            title: stamp(message.seen_at), text: `${ago(message.seen_at)} ago` })
         : el('a', {
-            class: 'linky', title: `Open packet ${message.packet_id}`,
+            class: 'when', title: `Open packet ${message.packet_id}`,
             href: `#packet/${encodeURIComponent(message.from_node)}/${message.packet_id}`,
             text: `${ago(message.seen_at)} ago`,
           })),
@@ -1287,15 +1359,53 @@ function nodeColour(node) {
 const isStale = (node) => ageHours(node.last_heard) > 24;
 
 /** The circle style for one node. */
-function nodeStyle(node) {
+/*
+ * How big a dot is at a given zoom (#196).
+ *
+ * Every node was a 5 px circle (7 px for a gateway) at EVERY zoom, so
+ * at the opening view Phoenix and Tucson -- hundreds of nodes each --
+ * merged into two solid blobs.
+ *
+ * Clustering was considered and rejected: a cluster replaces a
+ * position with a count drawn at a centroid, and these positions are
+ * already fuzzed to between 1.4 km and 5 km (#96). A centroid of
+ * uncertain coordinates invents a place. The blob at least tells the
+ * truth about density, so the fix is to make the marks fit the zoom
+ * rather than to stop drawing them.
+ */
+function nodeRadius(zoom) {
+  if (zoom <= 7) return 2.5;
+  if (zoom <= 10) return 3.5;
+  if (zoom <= 13) return 5;
+  return 6.5;
+}
+
+/*
+ * From which zoom a gateway wears its ring (#196).
+ *
+ * Sampled in light mode, the most common opaque colour on the whole
+ * map was `#25190f` -- the gateway stroke. 80 rings were more of the
+ * visible ink than any role colour, which inverts what the map is
+ * about: a gateway is not a role, and the ring must not take the
+ * colour over.
+ *
+ * At the opening view a gateway is a dot like any other. Where you can
+ * actually tell two nodes apart, it gains its ring.
+ */
+const GATEWAY_RING_FROM_ZOOM = 9;
+
+function nodeStyle(node, zoom) {
   const fill = nodeColour(node);
   const stale = isStale(node);
+  const level = typeof zoom === 'number' ? zoom : GATEWAY_RING_FROM_ZOOM;
+  const ringed = node.is_mqtt_gateway && level >= GATEWAY_RING_FROM_ZOOM;
+  const radius = nodeRadius(level);
   return {
-    radius: node.is_mqtt_gateway ? 7 : 5,
-    // A gateway wears a bright ring. Everything else outlines in its
-    // own colour, so the role stays the thing the eye picks up.
-    color: node.is_mqtt_gateway ? PALETTE.text : fill,
-    weight: node.is_mqtt_gateway ? 2.5 : 1.5,
+    radius: node.is_mqtt_gateway ? radius + 1 : radius,
+    // A gateway wears a ring, in a mid tone rather than the text
+    // colour, and only once the map is close enough to read it.
+    color: ringed ? PALETTE.muted : fill,
+    weight: 1.5,
     fillColor: fill,
     fillOpacity: stale ? 0.15 : 0.6,
     opacity: stale ? 0.35 : 1,
@@ -1462,6 +1572,17 @@ function ensureMap() {
   } else {
     map.setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
   }
+  /*
+   * Resize the dots when the zoom changes (#196).
+   *
+   * `setStyle` on existing markers, so this costs no request and no
+   * rebuild of the layer: at 1,268 nodes it is the same order of work
+   * the live map already does on each poll.
+   */
+  map.on('zoomend', () => {
+    const level = map.getZoom();
+    for (const [marker, row] of mapState.marks || []) marker.setStyle(nodeStyle(row, level));
+  });
   if (CONFIG.tileUrl) {
     L.tileLayer(CONFIG.tileUrl, {
       className: 'basemap-tiles',
@@ -1502,11 +1623,16 @@ function ensureMap() {
 function drawMapNodes(rows) {
   mapState.nodes.clearLayers();
   const bounds = [];
+  const zoom = mapState.map ? mapState.map.getZoom() : undefined;
+  // Every marker drawn this pass, so a zoom change can restyle them
+  // without refetching or rebuilding the layer (#196).
+  mapState.marks = [];
   for (const row of rows) {
     if (row.lat == null || row.lon == null) continue;
     if (!passesRoleFilter(row)) continue;
     bounds.push([row.lat, row.lon]);
-    const marker = L.circleMarker([row.lat, row.lon], nodeStyle(row));
+    const marker = L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom));
+    mapState.marks.push([marker, row]);
     const popup = el('div', {},
       el('div', { style: 'font-weight:650' }, row.display_name || row.node_id),
       el('div', { class: 'muted', style: 'font-size:.8rem' },

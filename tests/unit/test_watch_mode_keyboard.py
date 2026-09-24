@@ -30,11 +30,15 @@ Item 2 of #147 -- single-key shortcuts with no off switch, WCAG 2.1.4 --
 is a product decision and is deliberately NOT in this change.
 """
 
+import re
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static"
 WATCH = (STATIC / "map-watch.js").read_text(encoding="utf-8")
 CSS = (STATIC / "app.css").read_text(encoding="utf-8")
+# The same stylesheet with `/* ... */` removed, for assertions that mean
+# to read declarations rather than prose about them.
+CSS_CODE = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
 
 
 def _control_block() -> str:
@@ -77,7 +81,13 @@ def test_the_button_is_still_styled_like_a_leaflet_control() -> None:
     Getting the semantics right and shipping an unstyled grey box in the
     corner of the map is not a win.
     """
-    assert ".watch-control button {" in CSS, "the button has no styling at all"
-    block = CSS[CSS.index(".watch-control button {") :][:400]
+    assert ".watch-control button {" in CSS_CODE, "the button has no styling at all"
+    # The rule, to its closing brace, with comments stripped. This read a
+    # fixed 400 characters of raw CSS and went red when #196's
+    # explanation of the border pushed `background:` past the window --
+    # while every property was still set. A window measured in characters
+    # is a fragile instrument, and a comment is not code.
+    block = CSS_CODE[CSS_CODE.index(".watch-control button {") :]
+    rule = block[: block.index("}") + 1]
     for prop in ("background:", "color:", "border:", "width:", "height:"):
-        assert prop in block, f"the control's {prop} is not set, so it will not match"
+        assert prop in rule, f"the control's {prop} is not set, so it will not match"
