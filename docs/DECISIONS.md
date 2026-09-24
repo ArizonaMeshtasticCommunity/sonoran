@@ -783,3 +783,84 @@ spelling. Proven still sharp by mutation: removing the refusal turns it
 red. This is the second test in this session broken by a comment
 growing past a fixed character window; a window measured against a
 literal length is a fragile instrument.
+
+### The message item and the live map dots (#199, #196)
+
+Built to the proposals posted on both issues, after Will delegated the
+design calls.
+
+**URLs in a message body stay text, never links (#199).** 21 of the
+latest 50 messages carry one. A message body is text anyone on the mesh
+can send and nothing checks who sent it, so a clickable link would put
+an unchecked destination on the project's own page wearing the
+project's credibility — the #81 shape in a new place. Shortening needs
+**none** of a link's mitigations: no scheme allowlist, no `rel`, no
+question about a message dressing a link as something else. The full
+URL stays on the element for anyone who wants it.
+
+The test for this mutates the *plausible* future edit — "why isn't this
+clickable?" — into an `<a href>`, not an obviously broken one.
+
+**No clustering on the map (#196).** A cluster replaces a position with
+a count drawn at a centroid, and these positions are already fuzzed to
+between 1.4 km and 5 km (#96). A centroid of uncertain coordinates
+invents a place. The blob at least tells the truth about density, so
+the fix is marks that fit the zoom.
+
+**The gateway ring waits for zoom 9.** Sampled in light mode, the most
+common opaque colour on the whole map was the gateway stroke: 80 rings
+were more of the visible ink than any role colour, which inverts what
+the map is about. A gateway is not a role and the ring must not take
+the colour over.
+
+**Automated senders keep everything but their loudness.** The reporter
+decided they all stay — no filter, no folding. Only the body colour
+softens, and a test asserts nothing drops a message for being
+automated, because that is the change this must not become.
+
+**Three tests were repaired, none weakened**, and all three broke the
+same way: **a fixed character window around a rule, overrun by a
+comment.**
+
+| test | window | what it now does |
+|---|---|---|
+| halo never paints over a dot | literal `radius: ... ? 7 : 5` | computes the widest possible dot edge from the radius scale and compares it with the hole |
+| watch control styling | 400 chars of raw CSS | reads the rule to its closing brace, comments stripped |
+| (earlier, #195) opening view | 1,200 chars | sized to the block, asserts the property |
+
+The halo repair is strictly stronger than what it replaced: it caught a
+mutation from 6.5 px to 12 px, which the literal string match could not
+have seen. The invariant itself never moved — the widest gateway edge is
+8.25 px both before and after, being 7 + 2.5/2 and 7.5 + 1.5/2.
+
+**A window measured in characters is a fragile instrument**, and this
+is now the third and fourth instance in one session. The pattern to
+prefer: find the construct's own boundary, and strip comments first.
+
+### The Config check page's layout and vocabulary (#202)
+
+**`warn` and `info` keep words of their own.** The obvious move was to
+reuse the health checklist's Good / Needs fixing / Can't tell yet
+(#95), and two of the three map cleanly. The third does not: "Can't
+tell yet" means the evidence is missing, while `warn` and `info` mean
+"we looked, and it is worth your attention" — which is what the score
+row already calls **Worth a look**. Making two pages match by having
+one of them say something slightly untrue is the wrong trade.
+
+**The vendored checker is not edited.** The emoji come from its `icon:`
+field; the sprite mapping lives in `config-check.js`, so
+`PROVENANCE.md` and `check_config_checker_pin.sh` stay intact and
+nothing has to be redone on an upstream update.
+
+**An early draft of that mapping referenced icons that do not exist** —
+`i-radio`, `i-device`, `i-shield`, `i-check`. A `<use href="#i-nope">`
+renders **nothing**: it does not throw and does not warn, so it looks
+like a styling problem rather than a typo, and every other test would
+have passed. There is now a control asserting every icon name the page
+uses is a real symbol in `index.html`, proven by mutation.
+
+**The Optional panel and the downloads moved in the DOM, not in CSS.**
+`order:` on a flex container would have moved them visually and left a
+keyboard user tabbing through the old sequence, which fails WCAG 2.4.3.
+A test asserts the ordering is structural, and the HTML was parsed to
+confirm the move left no unbalanced tag.
