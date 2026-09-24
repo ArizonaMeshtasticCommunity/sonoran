@@ -789,3 +789,31 @@ have seen. The invariant itself never moved — the widest gateway edge is
 **A window measured in characters is a fragile instrument**, and this
 is now the third and fourth instance in one session. The pattern to
 prefer: find the construct's own boundary, and strip comments first.
+
+### The Config check page's layout and vocabulary (#202)
+
+**`warn` and `info` keep words of their own.** The obvious move was to
+reuse the health checklist's Good / Needs fixing / Can't tell yet
+(#95), and two of the three map cleanly. The third does not: "Can't
+tell yet" means the evidence is missing, while `warn` and `info` mean
+"we looked, and it is worth your attention" — which is what the score
+row already calls **Worth a look**. Making two pages match by having
+one of them say something slightly untrue is the wrong trade.
+
+**The vendored checker is not edited.** The emoji come from its `icon:`
+field; the sprite mapping lives in `config-check.js`, so
+`PROVENANCE.md` and `check_config_checker_pin.sh` stay intact and
+nothing has to be redone on an upstream update.
+
+**An early draft of that mapping referenced icons that do not exist** —
+`i-radio`, `i-device`, `i-shield`, `i-check`. A `<use href="#i-nope">`
+renders **nothing**: it does not throw and does not warn, so it looks
+like a styling problem rather than a typo, and every other test would
+have passed. There is now a control asserting every icon name the page
+uses is a real symbol in `index.html`, proven by mutation.
+
+**The Optional panel and the downloads moved in the DOM, not in CSS.**
+`order:` on a flex container would have moved them visually and left a
+keyboard user tabbing through the old sequence, which fails WCAG 2.4.3.
+A test asserts the ordering is structural, and the HTML was parsed to
+confirm the move left no unbalanced tag.
