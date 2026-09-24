@@ -1,6 +1,14 @@
 # Hand-testing the USB config path
 
-**Most of this is already verified against real Meshtastic firmware.**
+**Corrected 2026-09-24.** This file used to open by saying most of the
+work was verified against real firmware. It was not verified enough: a
+hardware test found that the write zeroed every setting it did not
+change, because the run it called "verified" re-read only the field it
+had changed and the fields it had protected. See "Results so far"
+below, and take the re-read instruction there seriously — it is the
+difference between the two runs.
+
+**Much of this is verified against real Meshtastic firmware.**
 `meshtasticd` 2.7.26 runs the actual firmware and speaks the same
 client API over TCP, so the protocol half was testable without a board
 after all — and it found a bug that every simulator missed.
@@ -46,6 +54,49 @@ The USB transport layer, which TCP cannot stand in for:
    and CLI can open it again.
 4. **nRF52 versus ESP32.** Different USB stacks; this is why both
    issues ask for one of each.
+
+## Results so far
+
+### T-Echo (nRF52, USB 239a:4405), firmware 2.7.26.54e0d8d — 2026-09-23
+
+**Read: pass.** Open to "Done" in about 400 ms. 16,378 bytes in **439
+reads of 1 to 108 bytes**, split at arbitrary points; 128 of them were
+exactly 64 bytes, the nRF52 packet size. The decoder reassembled all of
+them. The port was released afterwards and `meshtastic --port … --get`
+opened it immediately, twice. The check agreed with
+`meshtastic --export-config`.
+
+**Write: pass, after a fix.** Four frames in about 2 ms, node rebooted
+13.7 s later, back on the same port 0.9 s after that. A full
+`--export-config` diff before and after showed **only** the two
+intended changes. The keys, admin key, PSKs, bluetooth, MQTT and region
+were untouched.
+
+**Not tested:** an unplug during the read (it is too fast to pull the
+cable by hand), and the **ESP32 half, which is still to do.**
+
+### The bug that test found, and what it means for how you test
+
+The write **zeroed every setting it did not change.** The firmware
+*replaces* a config section with what it is sent
+(`config.lora = validatedLora` in `AdminModule.cpp`), and the page sent
+only the changed fields. A "change hopLimit" write would have set
+`region` UNSET and `txEnabled` false — stopping the radio — and any
+write touching the security section would have sent empty `adminKey`,
+`privateKey` and `publicKey`, which is the lockout this feature exists
+to prevent. Fixed in #201: each section is now sent whole, and a section
+that was not read is refused rather than zeroed.
+
+**The meshtasticd run did not catch it, and the reason is the important
+part.** That run re-read `hopLimit` and the protected fields — the field
+that was changed, and the fields explicitly guarded. It did not re-read
+the *rest* of the lora section. Every field it checked was a field
+somebody was already thinking about.
+
+> **So: after a write, re-read the WHOLE section and diff it, not the
+> field you changed.** `meshtastic --export-config` before and after is
+> the check that finds this class of bug; a targeted re-read is the
+> check that misses it.
 
 ## What you need
 

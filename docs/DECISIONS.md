@@ -974,3 +974,58 @@ bug. A test now forbids the wrong spelling.
 a layout claim read off a stylesheet is a prediction. Only the rendered
 page is an observation. Every one of the failures above was invisible in
 the source and obvious in the measurement.
+
+### The backup offered before a USB write could not restore a node (#117)
+
+**A correction, and the second one this feature has needed after real
+hardware met it.**
+
+The page offers "Download a backup of the current config first", ticked
+by default, directly above a control that writes to somebody's radio.
+The file it produced restored nothing. `ConfigFixer.exportFixed` writes
+a DeviceProfile — top-level `device:`, `lora:`, `module:` — and
+`meshtastic --configure` reads only `config:`, `module_config:`,
+`owner` and `channel_url`. The download worked, the YAML parsed, and
+the restore was a no-op. It also dropped the channels, keys, bandwidth,
+spreadFactor and txPower, wrote literal `undefined`, and named
+`--import-config`, which is not a CLI flag.
+
+**A backup that silently restores nothing is worse than no backup.**
+The tick box is what makes the write feel safe enough to attempt, so a
+file that cannot restore actively buys the risk it claims to cover.
+
+`config-backup.js` writes what the CLI reads, from what the USB read
+actually returned, and **refuses** rather than producing a file that
+would not work. A refusal now stops the write, because proceeding as
+though a backup had been taken is the dishonest half of the original
+bug.
+
+**An empty section is never written.** The CLI reads a present-but-empty
+section as "set this to nothing", which is the same shape as the
+whole-section bug #201 fixed.
+
+**The tests run under node**, because the thing under test is a *file
+format*: whether these bytes are bytes the CLI consumes. Every
+source-level check the old exporter had, it passed.
+
+### And the verification lesson, which is the real cost
+
+I described the USB write as "verified against real Meshtastic firmware
+2.7.26" repeatedly, including in the handoff written on #115 for
+whoever ran the hardware test. That description was wrong.
+
+The meshtasticd run re-read **the field it had changed and the fields it
+had explicitly protected**. Both are fields somebody was already
+thinking about. It never re-read the rest of the section — and the bug
+lived exactly there, in the fields nobody was thinking about, which is
+the only place a bug of that shape can live.
+
+This sits directly beside the entry above it about the bare
+`AdminMessage`, where running against real firmware *caught* what a
+simulator missed. Both are true, and together they say something
+sharper than either alone: **running against the real thing is
+necessary and not sufficient. What you re-read afterwards decides what
+you can claim.**
+
+> After a write, re-read the whole section and diff it. Never just the
+> field you changed.

@@ -23,6 +23,9 @@
 import { ConfigParser } from './vendor/config-checker/js/parser.js';
 import { ConfigChecker } from './vendor/config-checker/js/checker.js';
 import { ConfigFixer } from './vendor/config-checker/js/fixer.js';
+/* Ours, not upstream's: the vendored exporter writes a DeviceProfile
+ * that `meshtastic --configure` does not read. See config-backup.js. */
+import { ConfigBackup } from './config-backup.js';
 /*
  * Upstream's diagnostics module, imported rather than reimplemented
  * (#119). Its privacy model is a WHITELIST: the report is built
@@ -796,6 +799,22 @@ function wireSerial(page) {
       });
       port = null;
       $('[data-serial-disconnect]', page).hidden = true;
+      /*
+       * Carry the firmware version where the checker looks for it
+       * (#117).
+       *
+       * The read gets it -- `metadata.firmwareVersion`, which is how a
+       * node reports it -- but `parser.js` looks at the top level and
+       * at `myNodeInfo`, so a USB read showed "not found" for a version
+       * it was holding, and the "is it current" check silently had
+       * nothing to compare.
+       *
+       * Set beside the metadata rather than instead of it, so nothing
+       * that already reads `metadata` changes.
+       */
+      if (config.metadata && config.metadata.firmwareVersion && !config.firmwareVersion) {
+        config.firmwareVersion = config.metadata.firmwareVersion;
+      }
       state.config = config;
       state.fileName = 'node-over-usb';
       say('Read the configuration. Checking it…');
@@ -888,13 +907,38 @@ async function applySerial(page) {
   if (!rows.length) return;
 
   if ($('[data-serial-backup]', page).checked) {
-    // Before, not after. A backup written after a failed write is a
-    // backup of whatever the node ended up as.
-    const out = ConfigFixer.exportFixed(state.config, 'node-backup', true);
-    download(out.data, out.filename, out.mimeType);
+    /*
+     * Before, not after. A backup written after a failed write is a
+     * backup of whatever the node ended up as.
+     *
+     * And it has to be a file the CLI can actually restore (#117).
+     * This used to write `ConfigFixer.exportFixed`, whose top-level
+     * keys are `device:`, `lora:` and `module:` -- none of which
+     * `meshtastic --configure` reads. The download succeeded, the file
+     * looked like a config, and restoring from it would have done
+     * nothing. Found on real hardware.
+     *
+     * A refusal stops the write. The tick box is what makes this feel
+     * safe enough to do, so if the backup cannot be written the honest
+     * thing is not to proceed as though it had been.
+     */
+    try {
+      const out = ConfigBackup.buildBackup(state.config);
+      download(out.data, out.filename, out.mimeType);
+    } catch (error) {
+      setNotice(page, `No backup was written, so nothing was sent: ${error.message}`, 'bad');
+      return;
+    }
   }
 
-  const name = (state.config.myInfo && state.config.myInfo.myNodeNum) || 'this node';
+  /*
+   * Name the node, not its number (#117). `myNodeNum` is a decimal
+   * integer nobody recognises; the confirm dialog is the last thing a
+   * person reads before their radio reboots.
+   */
+  const info = state.config.myInfo || {};
+  const name = info.longName || info.shortName
+    || (info.myNodeNum != null ? `!${Number(info.myNodeNum).toString(16).padStart(8, '0')}` : 'this node');
   // eslint-disable-next-line no-alert
   if (!window.confirm(`Write ${rows.length} setting${rows.length === 1 ? '' : 's'} to ${name} and reboot it?`)) {
     return;
@@ -902,7 +946,21 @@ async function applySerial(page) {
 
   const status = $('[data-serial-status]', page);
   try {
-    const port = await navigator.serial.requestPort();
+    /*
+     * Reuse the port the reader was already granted (#117).
+     *
+     * The read releases its port on purpose -- so the Meshtastic app
+     * and CLI can open it straight afterwards, which is worth keeping
+     * -- but `requestPort()` here then opened a second picker for a
+     * device the person had already chosen a moment earlier.
+     *
+     * `getPorts()` returns what the user has already granted this
+     * origin, so the common path needs no picker at all. The prompt
+     * stays as the fallback for a first-time write or a port that was
+     * unplugged in between.
+     */
+    const granted = navigator.serial.getPorts ? await navigator.serial.getPorts() : [];
+    const port = granted.length === 1 ? granted[0] : await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
     const { root, ToRadio } = await serialSchema();
     const AdminMessage = root.lookupType('meshtastic.AdminMessage');
