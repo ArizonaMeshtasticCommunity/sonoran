@@ -1397,20 +1397,43 @@ const GATEWAY_RING_FROM_ZOOM = 9;
 function nodeStyle(node, zoom) {
   const fill = nodeColour(node);
   const stale = isStale(node);
+  // The node a `#map/node/<id>` link asked for keeps its mark through
+  // every redraw and every zoom change (#193.6).
+  const focused = mapState.focusNodeId && node.node_id === mapState.focusNodeId;
   const level = typeof zoom === 'number' ? zoom : GATEWAY_RING_FROM_ZOOM;
   const ringed = node.is_mqtt_gateway && level >= GATEWAY_RING_FROM_ZOOM;
   const radius = nodeRadius(level);
   return {
-    radius: node.is_mqtt_gateway ? radius + 1 : radius,
+    radius: (node.is_mqtt_gateway ? radius + 1 : radius) + (focused ? 2 : 0),
     // A gateway wears a ring, in a mid tone rather than the text
-    // colour, and only once the map is close enough to read it.
-    color: ringed ? PALETTE.muted : fill,
-    weight: 1.5,
+    // colour, and only once the map is close enough to read it. A
+    // focused node's ring takes the accent, which no role uses.
+    color: focused ? PALETTE.accent : ringed ? PALETTE.muted : fill,
+    weight: focused ? 3 : 1.5,
     fillColor: fill,
     fillOpacity: stale ? 0.15 : 0.6,
     opacity: stale ? 0.35 : 1,
   };
 }
+
+/*
+ * The node a `#map/node/<id>` link asked the map to open on, or null.
+ *
+ * Cleared when the reader leaves the map, so a later visit opens
+ * normally rather than jumping to whatever was linked once.
+ */
+let mapFocus = null;
+
+/*
+ * How far in a focus link may zoom (#193.6, #96).
+ *
+ * Deliberately short of street level. A position rounded by its owner
+ * can be kilometres out, and a map zoomed to a building around a
+ * coarse position asserts a precision nobody has. 13 is close enough
+ * to see the node among its neighbours and far enough that the dot is
+ * not read as an address.
+ */
+const MAP_FOCUS_ZOOM = 13;
 
 /*
  * The roles the map is limited to. Empty means every role.
@@ -1999,6 +2022,23 @@ async function linkChannelOptions(page) {
   if (!channels.length) {
     wrap.hidden = true;
     return null;
+  }
+  /*
+   * A `#map/node/<id>?preset=...` link chooses the preset (#193.6).
+   *
+   * This is the trap the issue named, and carrying the preset in the
+   * fragment is worth nothing unless it is applied BEFORE the fetch --
+   * the map draws one preset at a time (AGENTS.md 9.7), so a node on
+   * any other one is simply not drawn and the link lands on empty
+   * ground.
+   *
+   * Only when the deployment actually has that channel. A link naming
+   * a preset this instance does not carry falls through to the normal
+   * choice, and the focus step below then says the node is not here.
+   */
+  if (mapFocus && mapFocus.preset
+      && channels.some((item) => item.channel === mapFocus.preset)) {
+    linkChannel = mapFocus.preset;
   }
   if (!channels.some((item) => item.channel === linkChannel)) {
     linkChannel = channels[0].channel;
@@ -2752,6 +2792,56 @@ PAGES.map = async (page) => {
   mapState.lastNodes = nodes;
   const bounds = drawMapNodes(nodes);
   drawMapLegend($('[data-map-legend]', page), nodes);
+  /*
+   * A `#map/node/<id>` link centres on its node (#193.6).
+   *
+   * After the draw, so the marker exists to open. It runs instead of
+   * the fit below -- `mapState.fitted` is set either way -- because a
+   * reader who asked for one node does not want the whole mesh framed
+   * on top of it.
+   *
+   * If the node is not in this preset's data the link says so rather
+   * than leaving the reader on empty ground looking for a dot that was
+   * never drawn. That is the trap the issue named.
+   */
+  if (mapFocus) {
+    const wanted = mapFocus.nodeId;
+    const found = nodes.find((row) => row.node_id === wanted);
+    const target = (mapState.marks || []).find(([, row]) => row.node_id === wanted);
+    if (found && found.lat != null && found.lon != null) {
+      map.setView([found.lat, found.lon], MAP_FOCUS_ZOOM);
+      /*
+       * Mark the node, rather than opening its popup.
+       *
+       * A popup was the obvious choice and does not survive. The live
+       * map polls, `drawMapNodes` clears the layer, and the popup goes
+       * with it -- measured, it was already closed six seconds after
+       * the link was followed.
+       *
+       * `focusNodeId` is read by `nodeStyle`, so the mark is reapplied
+       * on every redraw and on every zoom change. A thicker ring in the
+       * accent, which no role uses: a size and a hue together, so it
+       * survives a greyscale render (the rule the live map's own layers
+       * follow).
+       */
+      mapState.focusNodeId = found.node_id;
+      if (target) target[0].setStyle(nodeStyle(found, map.getZoom()));
+      mapState.fitted = true;
+    } else {
+      /*
+       * Say why, on the legend's own note line, rather than adding a
+       * second status mechanism to this page. The alternative is a
+       * reader hunting a dot that was never drawn.
+       */
+      mapNodeScope = found
+        ? `${found.display_name || wanted} has no position, so the map cannot centre on it.`
+        : `${wanted} is not among the nodes shown here \u2014 it may be on another preset, `
+          + 'or not heard in this window.';
+      drawMapLegend($('[data-map-legend]', page), nodes);
+      mapState.fitted = true;
+    }
+    mapFocus = null;
+  }
   /*
    * Fit only when fitting would zoom IN. Never when it would zoom out.
    *
@@ -4757,13 +4847,35 @@ function nodeMapPanel(detail) {
           + 'privacy choice. It can be kilometres from where the node really is, so no '
           + 'distance is measured from it.'
         : null,
-    }, 'Where it is'),
+    }, 'Where it is',
+      /*
+       * A link to THIS node on the live map (#193.6).
+       *
+       * The old note said "Open the live map", which went to `#map` and
+       * showed the whole mesh rather than this node.
+       *
+       * The node's channel rides along, because the map draws one
+       * preset at a time (AGENTS.md 9.7) and since #177 it opens on the
+       * deployment's own. Without the preset a node on any other one is
+       * not drawn and the link lands on empty ground.
+       */
+      node.channel
+        ? el('a', {
+            class: 'linky node-map-link',
+            href: `#map/node/${encodeURIComponent(node.node_id)}`
+              + `?preset=${encodeURIComponent(node.channel)}`,
+            text: 'View on full map',
+          })
+        : el('a', {
+            class: 'linky node-map-link',
+            href: `#map/node/${encodeURIComponent(node.node_id)}`,
+            text: 'View on full map',
+          })),
     box,
     el('p', { class: 'muted node-map-note' },
       confidence === 'coarse'
         ? 'Rounded position'
-        : `${round(position.lat, 5)}, ${round(position.lon, 5)}`,
-      el('a', { class: 'linky', href: '#map', text: 'Open the live map' })));
+        : `${round(position.lat, 5)}, ${round(position.lon, 5)}`));
 
   // Leaflet needs the element in the document before it measures it.
   setTimeout(() => drawNodeMap(box, position, confidence), 0);
@@ -5372,9 +5484,26 @@ async function loadNodeDetail(nodeId) {
    * A narrower minimum lets all four sit side by side when there is
    * room and still fall back to two, then one, when there is not.
    */
+  /*
+   * Health sits under Device, inside the first row (#193.3).
+   *
+   * Device is short and Activity sets the row's height -- 473 px at
+   * 1440 wide -- so there was empty space under Device while Health
+   * ran as a full-width strip below the row.
+   *
+   * The pair share one grid track, which keeps #95's requirement that
+   * the Health summary is on the first screen and in fact moves it
+   * UP: it was measured at y=631 at 1440x900 and lands higher here,
+   * because it starts where Device ends rather than where the whole
+   * row ends.
+   *
+   * When the grid falls to fewer columns the pair travels together, so
+   * a phone gets Device immediately followed by its Health rather than
+   * the two separated by Activity and Weather.
+   */
   const summary = el('div', { class: 'grid summary-row' },
     identityPanel(node),
-    devicePanel(detail),
+    el('div', { class: 'summary-stack' }, devicePanel(detail), health),
     activityPanel(detail),
     weatherPanel(detail));
 
@@ -5396,7 +5525,8 @@ async function loadNodeDetail(nodeId) {
    * of prose above the map costs the map nothing and puts the health
    * line on the first screen, which is what the issue asked for.
    */
-  replace(body, summary, health, nodeMapPanel(detail), el('div', { class: 'grid two' },
+  // `health` is inside `summary` now, so it is not passed again here.
+  replace(body, summary, nodeMapPanel(detail), el('div', { class: 'grid two' },
     routes,
     history,
     messagesPanel(detail),
@@ -7166,6 +7296,33 @@ async function route() {
     if (channel !== currentChatChannel) chatLimit = CHAT_STEP;
     currentChatChannel = channel;
     chatView = parts[2] === 'table' ? 'table' : 'chat';
+  }
+  /*
+   * `#map/node/<id>` opens the live map on one node (#193.6).
+   *
+   * Two traps, both named in the issue:
+   *
+   * - **Preset.** The map shows one preset at a time (AGENTS.md 9.7)
+   *   and since #177 it opens on the deployment's own. A node on a
+   *   different preset is simply not drawn, so the link would land on
+   *   empty ground. The node page knows the node's channel and puts it
+   *   in the fragment, and the map selects it before fetching.
+   * - **Rounded positions.** The focus must not zoom so far that a
+   *   coarse position looks exact (#96), so `MAP_FOCUS_ZOOM` is a long
+   *   way short of street level.
+   *
+   * `watch` is already a word after `map`, so this reads `parts[1]`
+   * and only claims the fragment when it says `node`.
+   */
+  if (known === 'map' && parts[1] === 'node' && parts[2]) {
+    mapFocus = {
+      nodeId: decodeURIComponent(parts[2]),
+      preset: new URLSearchParams(location.hash.split('?')[1] || '').get('preset') || null,
+    };
+  } else if (known !== 'map') {
+    mapFocus = null;
+    // The mark belongs to one visit, not to the page for ever.
+    mapState.focusNodeId = null;
   }
   currentNodeId = known === 'node' ? decodeURIComponent(nodeId || '') : currentNodeId;
   const leavingMap = currentPage === 'map' && known !== 'map';

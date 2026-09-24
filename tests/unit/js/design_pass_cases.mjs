@@ -112,3 +112,55 @@ if (failed) {
   process.exit(1);
 }
 console.log('design pass: all cases passed');
+
+// --- #193.6: a focused node keeps its mark -------------------------
+//
+// Appended after the #199/#196 cases because it reads the same
+// `nodeStyle`. Extracted with the module's own globals stubbed, so the
+// focus branch is exercised rather than described.
+
+const styleSrc = [
+  constant('GATEWAY_RING_FROM_ZOOM'),
+  extract('nodeRadius'),
+  extract('nodeStyle'),
+  'return nodeStyle;',
+].join('\n');
+
+const makeStyle = (focusNodeId) => new Function(
+  'mapState', 'nodeColour', 'isStale', 'PALETTE', styleSrc,
+)({ focusNodeId }, () => '#123456', () => false,
+  { muted: '#888888', accent: '#ff8800', text: '#000000' });
+
+{
+  const plain = makeStyle(null);
+  const focused = makeStyle('!abc');
+  const node = { node_id: '!abc', is_mqtt_gateway: false };
+  const other = { node_id: '!zzz', is_mqtt_gateway: false };
+
+  const marked = focused(node, 13);
+  const unmarked = plain(node, 13);
+  ok('a focused node is drawn wider', marked.radius > unmarked.radius,
+    `${marked.radius} vs ${unmarked.radius}`);
+  ok('a focused node is drawn thicker', marked.weight > unmarked.weight,
+    `${marked.weight} vs ${unmarked.weight}`);
+  eq('a focused node takes the accent', marked.color, '#ff8800');
+  // Size AND hue, so the mark survives a greyscale render -- the rule
+  // the live map's own layers follow.
+  ok('the mark is not colour alone', marked.radius !== unmarked.radius);
+
+  // The mark belongs to ONE node.
+  const neighbour = focused(other, 13);
+  eq('another node is untouched', neighbour.radius, unmarked.radius);
+  ok('another node keeps its role colour', neighbour.color !== '#ff8800');
+
+  // And it survives a zoom change, because it is computed per call.
+  for (const z of [7, 10, 13, 17]) {
+    ok(`the mark holds at zoom ${z}`, focused(node, z).weight > plain(node, z).weight);
+  }
+}
+
+if (failed) {
+  console.error(`${failed} failed`);
+  process.exit(1);
+}
+console.log('focus mark: all cases passed');

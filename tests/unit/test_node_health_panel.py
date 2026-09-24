@@ -41,14 +41,28 @@ def _panel() -> str:
 
 
 def test_the_identity_row_is_drawn_before_health() -> None:
-    """The whole point: what somebody came for is above the fold."""
-    start = APP.index("replace(body, summary")
+    """The whole point: what somebody came for is above the fold.
+
+    #193.3 put health inside the summary row, stacked under Device, so
+    it no longer appears in the `replace(body, ...)` call. The window
+    here starts at the row's construction instead, and the claim is
+    unchanged: identity is built before health.
+
+    A 200-character window was also part of why this broke. Sized to the
+    construct rather than to a character count.
+    """
+    start = APP.index("  const summary = el('div', { class: 'grid summary-row' }")
     assert start > 0, (
-        "the node page no longer draws the summary row first; the health "
-        "cards are back at the top and fill the first screen"
+        "the node page no longer builds a summary row; the health cards "
+        "may be back at the top filling the first screen"
     )
-    body = APP[start : start + 200]
-    assert body.index("summary") < body.index("health"), "health is drawn before identity again"
+    body = APP[start : APP.index("const id = encodeURIComponent(nodeId);", start)]
+    assert body.index("identityPanel(node)") < body.index("health"), (
+        "health is drawn before identity again"
+    )
+    assert body.index("health") < body.index("nodeMapPanel(detail)"), (
+        "the map is built before health, which puts health below the fold"
+    )
 
 
 def test_checks_are_data_so_two_views_can_read_them() -> None:

@@ -33,8 +33,22 @@ APP = (
 
 
 def _assembly() -> str:
-    """The `replace(body, ...)` call that lays the node page out."""
-    start = APP.index("  replace(body, summary,")
+    """The region of `loadNodeDetail` that lays the node page out.
+
+    From the summary row's construction through the `replace(body, ...)`
+    call, not just the call. #193.3 moved the health summary INSIDE the
+    summary row -- it shares a grid track with Device, to fill the space
+    Activity's height left empty -- so a window over the `replace` call
+    alone can no longer see it, and these tests failed with
+    `ValueError: substring not found` while the ordering they guard was
+    intact and in fact better: health starts where Device ends rather
+    than where the whole row ends.
+
+    The assertions below are unchanged. Only the window they read moved,
+    which is the third time in this session that a window sized to
+    yesterday's code has been mistaken for a broken property.
+    """
+    start = APP.index("  const summary = el('div', { class: 'grid summary-row' }")
     return APP[start : APP.index("const id = encodeURIComponent(nodeId);", start)]
 
 
@@ -55,9 +69,15 @@ def test_the_health_summary_comes_before_the_map() -> None:
 
 
 def test_the_identity_row_still_comes_first() -> None:
-    """#95's first clause. The summary row is what it is about."""
+    """#95's first clause. The summary row is what it is about.
+
+    Identity is the first cell of the row; health is inside the second,
+    stacked under Device. So the check is that `identityPanel` is built
+    before `health`, which holds whether health is a row of its own or a
+    panel inside the row.
+    """
     body = _assembly()
-    assert body.index("summary") < body.index("health"), (
+    assert body.index("identityPanel(node)") < body.index("health"), (
         "something now precedes the identity row, which is the one thing #95 asked to be at the top"
     )
 

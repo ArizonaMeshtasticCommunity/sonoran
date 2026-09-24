@@ -71,8 +71,15 @@ def test_the_four_summary_panels_can_share_a_row() -> None:
     [1338, 1338, 1338, 1800] became [598, 598, 598, 598].
     """
     assert "grid summary-row" in APP, "the summary panels have no row of their own"
-    start = CSS.index(".grid.summary-row")
-    rule = CSS[start : CSS.index("}", start)]
+    # Into the code, not into a comment that mentions the selector. A
+    # rule added elsewhere in app.css explains why it overrides
+    # `.grid.summary-row`'s own margin, and naming it in prose was
+    # enough to make a raw `index` find the wrong place -- the sixth
+    # time a source-text assertion in this repository has answered from
+    # a comment.
+    code = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
+    start = code.index(".grid.summary-row {")
+    rule = code[start : code.index("}", start)]
     assert "minmax(min(" in rule, (
         "the summary row omits the `min(..., 100%)` guard every other grid "
         "here uses; that is what stops the track floor exceeding the "

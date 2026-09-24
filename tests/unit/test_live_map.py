@@ -917,7 +917,13 @@ def test_the_opening_view_is_not_thrown_away_by_an_outlier() -> None:
     This fails against an unconditional `fitBounds`.
     """
     source = _read("app.js")
-    start = source.index("mapState.fitted")
+    # Anchored on the fit block itself, not on the first mention of
+    # `mapState.fitted`. #193.6 added a focus branch that also sets that
+    # flag, so a window starting at the first occurrence began in the
+    # wrong block entirely -- the fourth time in this session a window
+    # anchored on a token rather than on a construct has gone red while
+    # the property was intact.
+    start = source.index("if (bounds.length && !mapState.fitted) {")
     # 2,600 characters, not 1,200. #195 made the floor the home region
     # rather than an integer zoom, and the explanation of why pushed the
     # fallback past a 1,200-character window -- so this went red while

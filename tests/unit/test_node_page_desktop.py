@@ -154,12 +154,19 @@ def test_the_cap_is_scoped_to_the_node_page() -> None:
     is a panel among panels. Scoping is the whole reason this is safe,
     so it is asserted rather than assumed.
     """
-    css = (STATIC / "app.css").read_text(encoding="utf-8")
-    body = css[css.index("[data-node-body] > .panel") :]
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    # The cap lives on the rule that matches EVERY direct child. Naming
+    # `.panel` was not enough: `.grid` carries `margin-inline: auto`,
+    # which in a flex column makes an item shrink-to-fit rather than
+    # stretch, so the summary row measured 1438 px wide at left 494
+    # while the panels below reached 1600 at left 413 -- the very
+    # mismatch #193.1 reported, still there after the first fix.
+    body = css[css.index("[data-node-body] > * {") :]
     rule = body[: body.index("}")]
     assert "max-width" in rule
-    # The selector must not be a bare `.panel` or a bare `.map`.
-    assert css.count("[data-node-body] > .panel") == 1
+    # Scoped: never a bare `.panel`, which would cap the Map and
+    # Planner pages that #70 deliberately left uncapped.
+    assert "\n.panel {" not in css or "max-width: 100rem" not in css.split("\n.panel {")[1][:200]
 
 
 def test_every_gap_on_the_node_page_comes_from_one_value() -> None:

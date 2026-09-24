@@ -603,10 +603,66 @@ button:disabled:hover { border-color: var(--line); background: none; }
   flex-direction: column;
   gap: 1rem;
 }
-[data-node-body] > .panel {
+/* "View on full map" sits at the right of the heading it belongs to
+ * (#193.6), the way the node page's other headings carry a count. */
+h3 .node-map-link { margin-inline-start: auto; font-size: .8rem; font-weight: 400; }
+h3:has(.node-map-link) { display: flex; align-items: baseline; gap: .5rem; }
+
+/*
+ * Device and Health share one track of the summary row (#193.3).
+ *
+ * The gap matches the grid's own, so the pair reads as two panels in a
+ * column rather than as one odd tall panel.
+ */
+.summary-stack { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
+/*
+ * EVERY direct child, not only the bare panels.
+ *
+ * The first version of this rule named `.panel`, and measuring the
+ * running page found the job half done: the summary row still sat at
+ * left 494 with width 1438 while the panels below reached left 413 and
+ * width 1600. `.grid` carries `margin-inline: auto`, and an auto inline
+ * margin in a flex column makes the item shrink-to-fit instead of
+ * stretching -- so the grid sized to its content and centred inside the
+ * column, which is exactly the mismatched left edge #193.1 reported.
+ *
+ * `width: 100%` overrides the shrink-to-fit; the cap and the auto
+ * margins then centre the column as a whole.
+ *
+ * `margin-block: 0` is the other half. The summary row carried a
+ * 16 px bottom margin of its own on top of the flex `gap`, so the
+ * measured gaps were 32 px then 16 px -- uneven in a rule whose whole
+ * purpose is one spacing value.
+ */
+[data-node-body] > * {
   max-width: 100rem;
   margin-inline: auto;
   width: 100%;
+}
+/*
+ * One spacing value for the column, which takes three classes to say.
+ *
+ * `.grid.summary-row` below sets its own `margin-bottom: 1rem`, which
+ * stacked on top of the column's `gap` and produced measured gaps of
+ * 32 px then 16 px -- uneven, in the rule whose whole purpose is that
+ * they are not.
+ *
+ * Two attempts failed before this one, and both looked right in the
+ * stylesheet:
+ *
+ *   `[data-node-body] > *`      one attribute selector, loses to two classes
+ *   `[data-node-body] > .grid`  ties on specificity, and LOSES on source
+ *                               order because `.grid.summary-row` is
+ *                               defined later in this file
+ *
+ * Both were caught by measuring the running page rather than by reading
+ * the CSS, which is the only reason they were caught at all.
+ */
+[data-node-body] > .grid.summary-row,
+[data-node-body] > .grid,
+[data-node-body] > .panel {
+  margin-block: 0;
 }
 /*
  * The node page's four short summary panels (#102).
