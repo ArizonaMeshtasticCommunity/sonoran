@@ -931,3 +931,46 @@ something.
 comment that named `.grid.summary-row` made an existing test's
 `CSS.index(".grid.summary-row")` find the prose instead of the rule.
 Both affected tests now strip comments before indexing.
+
+### The Config check report view, and the cause of the five widths (#202.1, #202.3)
+
+**Measured on the rendered page, before and after:**
+
+| | before | after |
+|---|---|---|
+| where the report starts | ~660 px | **258 px** |
+| left edges | 5 widths, capped rows 141 px inset | **one (272)** |
+| widths | 1881 / 1600 / 683 / 523 / 388 | **one (1136)** |
+| gaps | uneven | **16 / 16 / 16** |
+
+**The five widths were not a CSS problem.** `.page-head` — a wrapping
+flex row with `justify-content: space-between` — wrapped **all nine** of
+the page's blocks, so every one was a flex item sizing to its own
+content. No amount of capping fixes that. `page-head` now closes after
+the title and the rest are siblings.
+
+I found it only by asking the rendered page what the section's children
+were, and getting **one**.
+
+**Three further things that looked right and did nothing**, each caught
+by re-measuring:
+
+1. `[data-page="config"] { display: flex }` — loses to `.page.active`,
+   which is two classes. The column simply never applied. (It also
+   means the feared side effect — the config section showing on every
+   page — never existed.)
+2. `margin-block: 0` — beaten by **inline** `style="margin-top:1rem"` on
+   two blocks. An inline style beats every selector.
+3. The browser served a cached `index.html`, so the restructure appeared
+   not to work. Disk and served bytes had to be compared to tell a stale
+   cache from a broken edit.
+
+**`state.fileName`, not `state.filename`.** My first draft read a field
+that does not exist, so the strip would have said "Checking a config"
+for every file ever loaded — a fallback quietly doing the work of a
+bug. A test now forbids the wrong spelling.
+
+**The standing lesson, now earned four separate times in one session:**
+a layout claim read off a stylesheet is a prediction. Only the rendered
+page is an observation. Every one of the failures above was invisible in
+the source and obvious in the measurement.

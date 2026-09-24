@@ -914,6 +914,7 @@
               -->
               <p class="sub">Node plugged in by USB? Use <strong>Connect a node by USB</strong> below &mdash; it reads the config straight off the node, with no export step (Chrome or Edge on a computer). If that does not work for your board, <a class="linky" href="https://cfgtest.azmsh.dev" target="_blank" rel="noopener">cfgtest.azmsh.dev</a> does the same thing and has been used against more hardware.</p>
             </div>
+          </div>
 
           <p class="notice" data-config-notice hidden></p>
           <!--
@@ -947,6 +948,15 @@
             </div>
           </div>
 
+          <!--
+            The input half of the page (#202.1).
+            Hidden once a report is showing: the three cards asking for
+            a config stayed on screen after one was loaded, so the
+            result began about 660 px down under an invitation to do
+            what the reader had just done. `config-check.js` swaps this
+            for the compact strip below.
+          -->
+          <div data-config-input>
           <div class="panel">
             <h3>1. Where is the node</h3>
             <div class="controls">
@@ -968,7 +978,10 @@
             </div>
           </div>
 
-          <div class="grid two" style="margin-top:1rem">
+          <!-- No inline margin: the page column owns the spacing (#202.3).
+               An inline style beats every selector, so this one survived
+               `margin-block: 0` and left a 32 px gap among 16s. -->
+          <div class="grid two">
             <div class="panel">
               <h3>3. Load a config</h3>
               <!--
@@ -1049,7 +1062,18 @@
             </div>
           </div>
 
-          <div data-config-source style="margin-top:1rem"></div>
+          </div>
+          <!--
+            What is being checked, and the way back (#202.1).
+            Replaces the input half once a report is showing, so the
+            report starts at the top of the page instead of under three
+            cards asking for a config that is already loaded.
+          -->
+          <p class="config-loaded" data-config-loaded hidden>
+            <span data-config-loaded-what></span>
+            <button type="button" class="toggle" data-config-reload>Load a different config</button>
+          </p>
+          <div data-config-source></div>
           <div data-config-result></div>
 
           <!--
@@ -1114,7 +1138,6 @@
               <button type="button" class="primary" data-config-fix>Download corrected config</button>
               <button type="button" class="toggle" data-config-report>Download report</button>
             </div>
-          </div>
         </section>
 
         <!-- Mesh graph -->
