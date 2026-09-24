@@ -872,6 +872,7 @@ function drawSerialPlan(page) {
 
 function format(value) {
   if (value === undefined || value === null) return 'unset';
+  if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
 
@@ -911,6 +912,7 @@ async function applySerial(page) {
     }
     const writer = port.writable.getWriter();
     const result = await applyChanges(rows, {
+      current: state.config,
       send: async (message) => {
         // Wrapped in a MeshPacket to the local node on the admin port.
         // Sending the bare AdminMessage is accepted and SILENTLY DOES

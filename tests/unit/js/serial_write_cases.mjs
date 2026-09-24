@@ -62,7 +62,7 @@ const fixed = {
 {
   const sent = [];
   const rows = planChanges(current, fixed);
-  const out = await applyChanges(rows, { send: async (m) => sent.push(m) });
+  const out = await applyChanges(rows, { current, send: async (m) => sent.push(m) });
   const wroteSecurity = JSON.stringify(sent).includes('adminKey')
     || JSON.stringify(sent).includes('isManaged');
   eq('never writes a key or is_managed', wroteSecurity, false);
@@ -75,7 +75,7 @@ const fixed = {
 {
   const sent = [];
   const rows = planChanges(current, fixed);
-  await applyChanges(rows, { send: async (m) => sent.push(m) });
+  await applyChanges(rows, { current, send: async (m) => sent.push(m) });
   eq('begins with beginEditSettings', Boolean(sent[0].beginEditSettings), true);
   eq('ends with commitEditSettings', Boolean(sent[sent.length - 1].commitEditSettings), true);
   eq('commits exactly once',
@@ -91,7 +91,7 @@ const fixed = {
   };
   const before = { config: { position: { positionBroadcastSecs: 900, gpsUpdateInterval: 60 } }, moduleConfig: {} };
   const sent = [];
-  await applyChanges(planChanges(before, twoFields), { send: async (m) => sent.push(m) });
+  await applyChanges(planChanges(before, twoFields), { current: before, send: async (m) => sent.push(m) });
   const sets = sent.filter((m) => m.setConfig);
   eq('one setConfig for the section', sets.length, 1);
   eq('carrying both fields',
@@ -103,7 +103,7 @@ const fixed = {
   const sent = [];
   const rows = planChanges(current, fixed);
   const out = await applyChanges(rows, {
-    send: async (m) => sent.push(m), allowProtected: ['bluetooth.enabled'],
+    current, send: async (m) => sent.push(m), allowProtected: ['bluetooth.enabled'],
   });
   eq('writes bluetooth when asked for by name',
     JSON.stringify(sent).includes('bluetooth'), true);
@@ -134,6 +134,73 @@ const fixed = {
   eq('and lets ordinary fields through', isProtected('lora', 'region'), false);
   eq('psk is protected', PROTECTED.channel.includes('psk'), true);
   eq('mesh-changing list is non-empty', CHANGES_WHICH_MESH.length > 0, true);
+}
+
+// 10. A nested message that did not change is not a change. The fixer
+//     deep-clones, so it is never the same object; the preview used to
+//     offer "mqtt.mapReportSettings: [object Object] → [object Object]".
+{
+  const node = { config: {}, moduleConfig: { mqtt: { mapReportSettings: { publishIntervalSecs: 3600 } } } };
+  const rows = planChanges(node, JSON.parse(JSON.stringify(node)));
+  eq('an equal nested object is not a change', rows.length, 0);
+}
+
+// 11. A section is sent WHOLE. The firmware replaces a section with
+//     what it is sent (`config.lora = validatedLora`), so a lora
+//     message that holds only hopLimit sets region to UNSET and
+//     tx_enabled to false. Found on a T-Echo, 2.7.26: the preview
+//     offered exactly that write.
+{
+  const node = {
+    config: { lora: { region: 1, modemPreset: 4, usePreset: true, txEnabled: true, channelNum: 18, hopLimit: 7 } },
+    moduleConfig: {
+      mqtt: { enabled: true, address: 'mqtt.example', username: 'u', password: 'p' },
+      neighborInfo: { enabled: true, transmitOverLora: true, updateInterval: 14400 },
+    },
+  };
+  const want = JSON.parse(JSON.stringify(node));
+  want.config.lora.hopLimit = 3;
+  want.moduleConfig.neighborInfo.updateInterval = 39600;
+  const sent = [];
+  await applyChanges(planChanges(node, want), { current: node, send: async (m) => sent.push(m) });
+  const lora = sent.find((m) => m.setConfig).setConfig.lora;
+  eq('sends the whole lora section, changed field laid over it', lora,
+    { region: 1, modemPreset: 4, usePreset: true, txEnabled: true, channelNum: 18, hopLimit: 3 });
+  const neighbor = sent.find((m) => m.setModuleConfig).setModuleConfig.neighborInfo;
+  eq('sends the whole module section too', neighbor,
+    { enabled: true, transmitOverLora: true, updateInterval: 39600 });
+  eq('leaves the read config untouched', node.config.lora.hopLimit, 7);
+}
+
+// 12. Writing an ordinary security field must carry the keys it did
+//     not change. A security message without them would set every
+//     key to empty: the lockout #117 exists to prevent.
+{
+  const node = { config: { security: { adminKey: ['AAAA'], privateKey: 'PPPP', publicKey: 'QQQQ', isManaged: false, debugLogApiEnabled: false } }, moduleConfig: {} };
+  const want = JSON.parse(JSON.stringify(node));
+  want.config.security.debugLogApiEnabled = true;
+  const sent = [];
+  await applyChanges(planChanges(node, want), { current: node, send: async (m) => sent.push(m) });
+  const security = sent.find((m) => m.setConfig).setConfig.security;
+  eq('keeps every key it was not asked to change',
+    [security.adminKey, security.privateKey, security.publicKey, security.isManaged],
+    [['AAAA'], 'PPPP', 'QQQQ', false]);
+  eq('and writes the field it was asked to', security.debugLogApiEnabled, true);
+}
+
+// 13. With no read of a section, refuse before sending anything.
+//     Half a write leaves the node inside an open edit.
+{
+  const sent = [];
+  let error = null;
+  try {
+    await applyChanges(
+      planChanges({ config: {}, moduleConfig: {} }, { config: { lora: { hopLimit: 3 } }, moduleConfig: {} }),
+      { current: { config: {}, moduleConfig: {} }, send: async (m) => sent.push(m) },
+    );
+  } catch (e) { error = e; }
+  eq('refuses a section it did not read', Boolean(error), true);
+  eq('and sends nothing at all', sent.length, 0);
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
