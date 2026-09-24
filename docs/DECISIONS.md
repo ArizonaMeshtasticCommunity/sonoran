@@ -1067,6 +1067,16 @@ form errors loudly instead, which is why 9.28 specifies it. An empty
 result and a true negative are the same bytes until the instrument is
 proven.
 
+**It is worse than an unreliable command, because it survives being
+tested.** The call is truthful on a machine with the scope and silent on
+one without, and nothing in its output distinguishes them. So checking
+it *confirms* it — on the host where it happens to work — and that
+confirmation then travels to a host where it does not. A passing test is
+no evidence at all here: the failing case is indistinguishable from
+inside the passing one. This is the sharpest form of a false green in
+this file, and it was named by the peer session that found the stale
+board reading, correcting its own first framing to get there.
+
 **Credit where it is due:** this came from a peer session that had the
 scope to look, checked before telling me, and named its own part in
 propagating the stale reading rather than just reporting the fix.

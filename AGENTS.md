@@ -704,6 +704,14 @@ look. See 9.19 and the entry on instruments in `docs/DECISIONS.md`: an
 empty result and a true negative are the same bytes until the instrument
 is proven.
 
+**The worst part is that it survives being tested.** Someone checks the
+`gh issue view` form on a machine that has the scope, sees correct data,
+concludes the command is sound, and carries that conclusion to a host
+where it is false. The command is not wrong; it is wrong *conditionally*,
+and the condition is invisible in its output. A test that passes is not
+evidence here, because the failing case looks identical from inside the
+passing one.
+
 The GraphQL query above **errors loudly** on a missing scope, so prefer
 it. If you use the `gh issue view` form, check the scope first:
 
