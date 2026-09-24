@@ -10,6 +10,8 @@ Each one is here because it either cost debugging time already or is
 recorded in AGENTS.md as the kind of thing that does.
 """
 
+import re
+
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import STATIC_DIR, create_app
@@ -447,15 +449,44 @@ def test_a_halo_can_never_paint_over_a_node_dot() -> None:
     the hole has to clear the widest dot, its stroke, and the widest the
     upload ring can ever be.
 
-    The gateway dot is radius 7 with a 2.5 px stroke, so its outer edge
-    is at 8.25.
+    This used to assert the literal `radius: node.is_mqtt_gateway ? 7 : 5`.
+    #196 made the radius scale with zoom, and the invariant was intact
+    the whole time -- the widest gateway edge is 8.25 either way: 7 plus
+    half a 2.5 px stroke before, 7.5 plus half a 1.5 px stroke now.
+
+    So this now computes the widest edge the dot can ever have and
+    compares it with the hole, which is a stronger claim than the string
+    was: it catches a radius increase written in any form, not only the
+    one spelling it happened to know.
     """
     script = _read("map-live.js")
     assert "const HALO_HOLE_PX = 10;" in script
     assert "ctx.arc(x, y, HALO_HOLE_PX, 0, Math.PI * 2, true);" in script
-    # The node style the hole has to clear, unchanged.
+    hole = int(re.search(r"const HALO_HOLE_PX = (\d+);", script).group(1))
+    widest = _widest_node_edge()
+    assert widest < hole, (
+        f"the widest node dot reaches {widest} px and the halo's hole is "
+        f"{hole} px, so volume would paint over identity"
+    )
+
+
+def _widest_node_edge() -> float:
+    """The furthest a node dot's stroke can reach from its centre.
+
+    Read out of `app.js` rather than written down here, so a change to
+    the radius scale cannot pass this by leaving a stale number behind.
+    """
     app = _read("app.js")
-    assert "radius: node.is_mqtt_gateway ? 7 : 5," in app
+    radii = [
+        float(value) for value in re.findall(r"^\s*if \(zoom <= \d+\) return ([\d.]+);", app, re.M)
+    ]
+    tail = re.search(r"return ([\d.]+);\n\}", app[app.index("function nodeRadius(") :])
+    assert radii and tail, "the radius scale is not where this test reads it"
+    biggest = max([*radii, float(tail.group(1))])
+    # A gateway is one pixel wider than the dot for its zoom, and the
+    # stroke straddles the edge, so half of it lies outside.
+    stroke = float(re.search(r"^\s*weight: ([\d.]+),", app, re.M).group(1))
+    return biggest + 1 + stroke / 2
 
 
 def test_heat_is_a_size_not_a_hue() -> None:

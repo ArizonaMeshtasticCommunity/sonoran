@@ -291,7 +291,17 @@
                 channel such as Weather has few nodes of its own, so
                 this brings the whole mesh back when that is wanted.
               -->
-              <button type="button" class="toggle" data-map-all-nodes aria-pressed="false">Every node</button>
+              <!--
+                The label says what the control does (#196).
+                "Every node" removed the preset filter AND the time
+                window, taking the map from 401 nodes to 1,268 -- every
+                other preset, and nodes not heard for a long time. A
+                reader could not tell that, and the reporter guessed it
+                "just shows offline nodes". It does that and more.
+                AGENTS.md 9.7 requires that mixing presets is said, so
+                it is said here rather than in a tooltip nobody reaches.
+              -->
+              <button type="button" class="toggle" data-map-all-nodes aria-pressed="false">Every preset, any time</button>
               <!--
                 Motion off paints each event as a static tapered arc with
                 a chevron instead of a moving particle. It starts from the
