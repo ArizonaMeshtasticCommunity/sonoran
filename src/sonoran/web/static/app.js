@@ -1397,15 +1397,19 @@ const GATEWAY_RING_FROM_ZOOM = 9;
 function nodeStyle(node, zoom) {
   const fill = nodeColour(node);
   const stale = isStale(node);
+  // The node a `#map/node/<id>` link asked for keeps its mark through
+  // every redraw and every zoom change (#193.6).
+  const focused = mapState.focusNodeId && node.node_id === mapState.focusNodeId;
   const level = typeof zoom === 'number' ? zoom : GATEWAY_RING_FROM_ZOOM;
   const ringed = node.is_mqtt_gateway && level >= GATEWAY_RING_FROM_ZOOM;
   const radius = nodeRadius(level);
   return {
-    radius: node.is_mqtt_gateway ? radius + 1 : radius,
+    radius: (node.is_mqtt_gateway ? radius + 1 : radius) + (focused ? 2 : 0),
     // A gateway wears a ring, in a mid tone rather than the text
-    // colour, and only once the map is close enough to read it.
-    color: ringed ? PALETTE.muted : fill,
-    weight: 1.5,
+    // colour, and only once the map is close enough to read it. A
+    // focused node's ring takes the accent, which no role uses.
+    color: focused ? PALETTE.accent : ringed ? PALETTE.muted : fill,
+    weight: focused ? 3 : 1.5,
     fillColor: fill,
     fillOpacity: stale ? 0.15 : 0.6,
     opacity: stale ? 0.35 : 1,
@@ -2805,8 +2809,23 @@ PAGES.map = async (page) => {
     const found = nodes.find((row) => row.node_id === wanted);
     const target = (mapState.marks || []).find(([, row]) => row.node_id === wanted);
     if (found && found.lat != null && found.lon != null) {
-      map.setView([found.lat, found.lon], Math.min(MAP_FOCUS_ZOOM, 13));
-      if (target) target[0].openPopup();
+      map.setView([found.lat, found.lon], MAP_FOCUS_ZOOM);
+      /*
+       * Mark the node, rather than opening its popup.
+       *
+       * A popup was the obvious choice and does not survive. The live
+       * map polls, `drawMapNodes` clears the layer, and the popup goes
+       * with it -- measured, it was already closed six seconds after
+       * the link was followed.
+       *
+       * `focusNodeId` is read by `nodeStyle`, so the mark is reapplied
+       * on every redraw and on every zoom change. A thicker ring in the
+       * accent, which no role uses: a size and a hue together, so it
+       * survives a greyscale render (the rule the live map's own layers
+       * follow).
+       */
+      mapState.focusNodeId = found.node_id;
+      if (target) target[0].setStyle(nodeStyle(found, map.getZoom()));
       mapState.fitted = true;
     } else {
       /*
@@ -7302,6 +7321,8 @@ async function route() {
     };
   } else if (known !== 'map') {
     mapFocus = null;
+    // The mark belongs to one visit, not to the page for ever.
+    mapState.focusNodeId = null;
   }
   currentNodeId = known === 'node' ? decodeURIComponent(nodeId || '') : currentNodeId;
   const leavingMap = currentPage === 'map' && known !== 'map';

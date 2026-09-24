@@ -864,3 +864,70 @@ uses is a real symbol in `index.html`, proven by mutation.
 keyboard user tabbing through the old sequence, which fails WCAG 2.4.3.
 A test asserts the ordering is structural, and the HTML was parsed to
 confirm the move left no unbalanced tag.
+
+### #193 items 3 and 6, and two defects the first attempt had shipped
+
+**Health sits under Device, inside the summary row.** Device is short
+and Activity sets the row's height, so there was empty space under
+Device while Health ran as a full-width strip below. Measured on the
+running page after the change: Health at **y=320**, against **y=631**
+before — #95's first-screen requirement is not merely preserved, it is
+better, because Health now starts where Device ends rather than where
+the whole row ends.
+
+**`#map/node/<id>?preset=...` opens the map on one node.** The preset
+travels in the fragment because the map draws one preset at a time
+(9.7); without it a node on any other preset is not drawn and the link
+lands on empty ground.
+
+**I wrote that comment and then did not implement it.**
+`mapFocus.preset` was stored and never read. The trap the issue warned
+about was live in my own code, behind an explanation of why it must not
+be. Verified afterwards on the running page: following `?preset=Weather`
+selects Weather, not the MediumFast default. There is now a test that
+the preset is read where the channel is chosen.
+
+**The focus mark is a style, not a popup.** A popup was the obvious
+choice and does not survive: the live map polls, `drawMapNodes` clears
+the layer, and the popup goes with it — measured, already closed six
+seconds after following the link. The mark is recomputed inside
+`nodeStyle`, so it is reapplied on every redraw and zoom change, and it
+is a width *and* a hue so it survives a greyscale render.
+
+### The part that matters most: #193 items 1 and 2 were not fixed by #207
+
+I claimed them from reading the CSS. Measuring the rendered page found
+both still broken:
+
+| | claimed in #207 | actually measured |
+|---|---|---|
+| left edges | one | **413 and 494** |
+| widths | one | **1600 and 1438** |
+| gaps | uniform | **32, 16** |
+
+`.grid` carries `margin-inline: auto`, and an auto inline margin in a
+flex column makes an item **shrink-to-fit instead of stretch** — so the
+summary row sized to its content and centred, which is exactly the
+mismatched left edge the issue reported.
+
+Then the fix failed **twice more**, both times looking correct in the
+stylesheet:
+
+1. `[data-node-body] > *` — one attribute selector, loses to two classes
+2. `[data-node-body] > .grid` — ties on specificity and **loses on
+   source order**, because `.grid.summary-row` is defined later
+
+Three attempts, two silent no-ops, caught only by re-measuring each
+time. Final state, measured: one left edge (413), one width (1600),
+gaps 16 and 16.
+
+**The lesson is not about CSS.** A layout claim read off a stylesheet is
+a prediction; the rendered page is the observation. `docs/DECISIONS.md`
+already says "done means measured on the running thing" — this is the
+first time in this session that rule caught *me* having shipped
+something.
+
+**A sixth comment-vs-code false result**, in the same stretch: adding a
+comment that named `.grid.summary-row` made an existing test's
+`CSS.index(".grid.summary-row")` find the prose instead of the rule.
+Both affected tests now strip comments before indexing.

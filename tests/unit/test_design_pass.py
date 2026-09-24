@@ -166,3 +166,45 @@ def test_automated_senders_are_quieter_but_still_there() -> None:
     # Nothing may drop a message for being automated.
     assert ".filter((m) => !QUIET" not in app
     assert "QUIET_CHANNELS.has(message.channel) ? null" not in app
+
+
+def test_a_focus_mark_that_did_not_hold_would_be_caught() -> None:
+    """Control for #193.6's marker.
+
+    The mutation is the implementation I first wrote and rejected: mark
+    the node by opening its popup. That does not survive -- the live map
+    polls, `drawMapNodes` clears the layer, and the popup goes with it
+    within seconds (measured: already closed six seconds after following
+    the link). So the mutation removes the per-call mark and the cases
+    must notice.
+    """
+    source = MODULE.read_text(encoding="utf-8")
+    broken = source.replace(
+        "const focused = mapState.focusNodeId && node.node_id === mapState.focusNodeId;",
+        "const focused = false;  // the popup-only version",
+    )
+    assert broken != source, "the focus mark is no longer computed where this control mutates it"
+    with _temporarily(MODULE, broken):
+        done = _run()
+    assert done.returncode != 0, (
+        "the cases pass with no focus mark at all, so a #map/node link "
+        "would centre on a node the reader cannot pick out"
+    )
+
+
+def test_the_focus_preset_is_applied_before_the_fetch() -> None:
+    """Carrying the preset is worthless unless it is used (#193.6).
+
+    I wrote the comment explaining this trap and then did not implement
+    it: `mapFocus.preset` was stored and never read, so a link to a node
+    on any other preset would have landed on empty ground -- exactly
+    what the issue warned about. Verified live afterwards: following
+    `?preset=Weather` selects Weather, not the MediumFast default.
+    """
+    source = MODULE.read_text(encoding="utf-8")
+    choose = source.index("async function linkChannelOptions(")
+    body = source[choose : source.index("\n}", choose)]
+    assert "mapFocus.preset" in body, (
+        "the preset in a #map/node link is not applied where the channel "
+        "is chosen, so it cannot affect the fetch"
+    )
