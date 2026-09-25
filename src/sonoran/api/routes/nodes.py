@@ -1,5 +1,6 @@
 """Read-only node endpoints."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -229,11 +230,41 @@ async def _activity(session: AsyncSession, node_num: int, since: datetime) -> di
     ).all()
     return {
         "packet_count": sum(row.total for row in rows),
-        "by_portnum": [
-            {"portnum": traffic_label(row.portnum, row.payload_state), "count": row.total}
-            for row in rows
-        ],
+        # One row per BAND, not per (port, state) pair.
+        #
+        # #198 grouped this query by `payload_state` as well as
+        # `portnum`, so a label could be produced more than once: every
+        # port except 0 maps to the same band whatever its state, and a
+        # node with both readable and unrecorded traffic on one port
+        # therefore appeared twice. Live example, before this: sixteen
+        # rows for nine bands, with TEXT_MESSAGE_APP, POSITION_APP,
+        # TELEMETRY_APP and four more each listed twice and their counts
+        # split between the copies.
+        #
+        # The grouping has to stay -- it is what tells a PKI direct
+        # message from a genuine UNKNOWN_APP -- so the merge happens
+        # here, after the label is chosen. Summed, not overwritten: two
+        # halves of one port's traffic are one number.
+        "by_portnum": _bands(rows),
     }
+
+
+def _bands(rows: Sequence[Any]) -> list[dict[str, object]]:
+    """Collapse (portnum, payload_state) rows into one row per band.
+
+    Order is preserved from the query, which sorts by count descending,
+    so the busiest band still leads. A band that gains rows by merging
+    can therefore sit slightly out of order against a band below it;
+    re-sorting after the merge fixes that and costs nothing.
+    """
+    totals: dict[str, int] = {}
+    for row in rows:
+        label = traffic_label(row.portnum, row.payload_state)
+        totals[label] = totals.get(label, 0) + row.total
+    return [
+        {"portnum": label, "count": total}
+        for label, total in sorted(totals.items(), key=lambda pair: (-pair[1], pair[0]))
+    ]
 
 
 async def _messages(
