@@ -112,3 +112,30 @@ def test_a_value_at_the_limit_is_kept_and_one_past_it_is_not() -> None:
 def test_none_stays_none() -> None:
     assert _meta(None) is None
     assert _meta({}) == {}
+
+
+def test_the_longest_aprs_comment_is_kept_whole() -> None:
+    """An AX.25 information field is at most 256 octets.
+
+    A value over the limit is dropped, not cut, so a limit below this
+    loses the longest comments entirely.
+    """
+    comment = "North Phoenix WX3in1 #YAESUGANG RF & iGate K7XYG-10 U=13.3V " * 5
+    comment = comment[:256]
+    readings: dict[str, object] = {
+        "symbol": "/_",
+        "path": "WIDE1-1*,WIDE2-1",
+        "destination": "APMI06",
+        "wind_dir_deg": 120,
+        "wind_kn": 0.0,
+        "gust_kn": 1.74,
+        "temperature_f": 64,
+        "rain_today_in": 0.0,
+        "rain_1h_in": 0.0,
+        "pressure_hpa": 1014.0,
+        "humidity": 40,
+    }
+    kept = _meta({"comment": comment, **readings})
+    assert kept is not None
+    assert kept["comment"] == comment
+    assert len(kept) == len(readings) + 1

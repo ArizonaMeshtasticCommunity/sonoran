@@ -161,6 +161,129 @@ def test_aprs_and_sondes_are_stored_and_a_bad_id_is_refused(
     assert rows == {("aprs", "kd7abc-9"), ("sonde", "v1234567")}
 
 
+def test_a_relayed_aprs_packet_is_mapped_but_not_heard(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """A digipeated packet says where the sender is, not how far we hear.
+
+    Missing `direct` counts as relayed: a NULL is not an unknown to
+    include (AGENTS.md 9.22). An aircraft carries no such field and is
+    always heard.
+    """
+    now = datetime.now(UTC)
+    (aprs, adsb) = asyncio.run(
+        _write(
+            timescale_url,
+            _batch(
+                "north-site",
+                "aprs",
+                [
+                    {
+                        "id": "na7sv-9",
+                        "t": now,
+                        "lat": 33.6,
+                        "lon": -112.1,
+                        "rssi_db": -80.0,
+                        "direct": True,
+                    },
+                    # Tucson, through a mountaintop digipeater.
+                    {
+                        "id": "w7sa-12",
+                        "t": now,
+                        "lat": 32.1,
+                        "lon": -110.9,
+                        "rssi_db": -70.0,
+                        "direct": False,
+                    },
+                    # An older agent that sends no flag at all.
+                    {"id": "kg0km", "t": now, "lat": 33.6, "lon": -112.3, "rssi_db": -75.0},
+                ],
+            ),
+            _batch("north-site", "adsb", [_obs("a1b2c3", now, -20.0)]),
+        )
+    )
+    assert (aprs.stored, aprs.relayed) == (3, 2)
+    assert (adsb.stored, adsb.relayed) == (1, 0)
+
+    latest = {
+        r.thing_id: r.rssi_db
+        for r in _rows(migrated_engine, "SELECT thing_id, rssi_db FROM rf_latest")
+    }
+    # Every one is on the map. Only the direct one keeps a signal level.
+    assert latest == {"na7sv-9": -80.0, "w7sa-12": None, "kg0km": None, "a1b2c3": -20.0}
+    heard = {r.thing_id for r in _rows(migrated_engine, "SELECT thing_id FROM rf_heard")}
+    assert heard == {"na7sv-9", "a1b2c3"}
+
+
+def test_a_digipeater_is_credited_and_placed_from_its_own_beacon(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """The station heard W7MOT-3, so the heard layer says so, where W7MOT-3 is.
+
+    The relayed packet is louder than the digipeater's own beacon. The
+    louder hearing places nothing, so it must not erase the position the
+    beacon gave. An object is never a hearing, and its sender, never
+    heard on its own, has no position to be drawn at.
+    """
+    now = datetime.now(UTC)
+    (tally,) = asyncio.run(
+        _write(
+            timescale_url,
+            _batch(
+                "north-site",
+                "aprs",
+                [
+                    {
+                        "id": "w7mot-3",
+                        "t": now,
+                        "lat": 33.62,
+                        "lon": -112.56,
+                        "rssi_db": -60.0,
+                        "direct": True,
+                    },
+                    {
+                        "id": "w7sa-12",
+                        "t": now,
+                        "lat": 32.1,
+                        "lon": -110.9,
+                        "rssi_db": -50.0,
+                        "direct": False,
+                        "via": "W7MOT-3",
+                    },
+                    {
+                        "id": ";field_day",
+                        "t": now,
+                        "lat": 33.4,
+                        "lon": -111.9,
+                        "rssi_db": -70.0,
+                        "direct": True,
+                        "via": "kd7abc",
+                        "meta": {"owner": "kd7abc", "object": "object"},
+                    },
+                ],
+            ),
+        )
+    )
+    assert (tally.stored, tally.relayed) == (3, 2)
+    heard = {
+        r.thing_id: (r.heard, r.best_rssi_db, r.lat)
+        for r in _rows(migrated_engine, "SELECT thing_id, heard, best_rssi_db, lat FROM rf_heard")
+    }
+    assert heard == {"w7mot-3": (2, -50.0, 33.62), "kd7abc": (1, -70.0, None)}
+    meta = {
+        r.thing_id: r.meta for r in _rows(migrated_engine, "SELECT thing_id, meta FROM rf_latest")
+    }
+    assert meta["w7sa-12"] == {"direct": False, "via": "w7mot-3"}
+    assert meta[";field_day"]["owner"] == "kd7abc"
+
+    with _client(timescale_url) as client:
+        cells = client.get("/api/rf/heard/north-site?kind=aprs").json()["cells"]
+        track = client.get("/api/rf/track/aprs/%3Bfield_day").json()
+    # One cell, the digipeater's. Tucson and the object are not reach.
+    assert [(c["lat"], c["lon"], c["heard"]) for c in cells] == [(33.62, -112.56, 2)]
+    assert len(track["points"]) == 1
+
+
 def _sensor(thing_id: str, model: str | None, when: datetime) -> dict[str, object]:
     meta: dict[str, object] = {"temperature_c": 31.5}
     if model is not None:

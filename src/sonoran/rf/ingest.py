@@ -130,6 +130,7 @@ async def main() -> None:
                         totals["retimed"] += tally.retimed
                         totals["hidden"] += tally.hidden
                         totals["not_allowed"] += tally.not_allowed
+                        totals["relayed"] += tally.relayed
                         totals["rejected"] += tally.rejected
                         totals["kind_not_stored"] += tally.kind_not_stored
                     await session.commit()

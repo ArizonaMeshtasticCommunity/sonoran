@@ -1,6 +1,7 @@
 """The RF map's message contract and its small rules (docs/design/rf-map.md)."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -21,7 +22,15 @@ from sonoran.rf.schema import (
     json_schema,
     parse_topic,
 )
-from sonoran.rf.store import Rules, floor_time, guarded_time, ism_model
+from sonoran.rf.store import (
+    Hearing,
+    Rules,
+    aprs_meta,
+    floor_time,
+    guarded_time,
+    hearings,
+    ism_model,
+)
 
 NOW = datetime(2026, 9, 22, 18, 0, 0, tzinfo=UTC)
 
@@ -359,3 +368,138 @@ def test_the_ism_allow_list_is_read_as_lower_case_and_empty_by_default() -> None
     assert rules_from(Settings(_env_file=None)).ism_allow == frozenset()
     settings = Settings(_env_file=None, rf_ism_allow="Acurite-Tower, Fineoffset-WH51")
     assert rules_from(settings).ism_allow == frozenset({"acurite-tower", "fineoffset-wh51"})
+
+
+def test_direct_is_optional_so_older_agents_still_validate() -> None:
+    """A v1 field added later must be optional, or every running agent breaks."""
+    older = Batch.model_validate(_batch(kind="aprs", obs=[{**_bare_obs(), "id": "kd7abc-9"}]))
+    assert older.obs[0].direct is None
+    newer = Batch.model_validate(
+        _batch(kind="aprs", obs=[{**_bare_obs(), "id": "kd7abc-9", "direct": True}])
+    )
+    assert newer.obs[0].direct is True
+
+
+def _bare_obs() -> dict[str, object]:
+    return {"t": "2026-09-22T17:59:58Z", "lat": 33.5, "lon": -112.0}
+
+
+def test_the_tooltip_shows_a_comment_whole() -> None:
+    """A comment is what a person typed. It is never cut to fit.
+
+    The other `meta` fields are cut to 40 characters and to four
+    entries. The comment is taken out of that list first, so neither
+    cut can reach it, and it wraps instead.
+    """
+    rf = _static("rf.js")
+    assert "const { comment, ...meta } = row.meta || {};" in rf
+    line = next(text for text in rf.splitlines() if "'rf-comment'" in text)
+    assert "text: String(comment)" in line
+    assert "slice" not in line
+    assert re.search(r"\.rf-tip \.rf-comment \{[^}]*white-space: normal", _static("app.css"))
+
+
+# --- how an APRS packet reached the station (design 5.1) ---------------
+
+
+def _aprs(thing_id: str, **fields: object) -> Observation:
+    return Observation.model_validate(
+        {"id": thing_id, "t": NOW, "lat": 33.6, "lon": -112.1, "rssi_db": -80.0, **fields}
+    )
+
+
+@pytest.mark.parametrize(
+    "thing_id",
+    ["cw1234", "kf7abcdef-15", ";eoc_tempe", ";146.94-px", ";field_day"],
+)
+def test_internet_sources_objects_and_items_have_aprs_ids(thing_id: str) -> None:
+    assert THING_ID["aprs"].match(thing_id)
+
+
+@pytest.mark.parametrize("thing_id", [";", "; x", ";a/b", ";a#b", ";toolongname", "kd7abc-100"])
+def test_a_bad_object_or_station_id_is_refused(thing_id: str) -> None:
+    assert not THING_ID["aprs"].match(thing_id)
+
+
+def test_a_direct_packet_is_a_hearing_of_the_sender_where_it_is() -> None:
+    assert hearings("aprs", _aprs("na7sv-9", direct=True)) == [
+        Hearing("na7sv-9", -80.0, 33.6, -112.1)
+    ]
+
+
+def test_a_relayed_packet_credits_the_digipeater_and_places_nothing() -> None:
+    """The station heard W7MOT-3, at W7MOT-3's level, not the sender."""
+    found = hearings("aprs", _aprs("w7sa-12", direct=False, via="W7MOT-3"))
+    assert found == [Hearing("w7mot-3", -80.0, None, None)]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"direct": False},
+        {},
+        {"direct": False, "via": "wide2-1*"},
+        {"direct": False, "via": "WIDE2-1"},
+        {"direct": False, "via": "wide1"},
+        {"direct": False, "via": "tcpip"},
+        {"direct": False, "via": "qar"},
+    ],
+)
+def test_a_relayed_packet_through_an_unnamed_digipeater_credits_nobody(
+    fields: dict[str, object],
+) -> None:
+    """An untraced alias, or an older agent that sends no flag: no hearing."""
+    assert hearings("aprs", _aprs("w7sa-12", **fields)) == []
+
+
+def test_an_object_is_never_heard_but_its_sender_is() -> None:
+    """An object's position is not where its transmitter is."""
+    found = hearings("aprs", _aprs(";field_day", direct=True, via="kd7abc"))
+    assert found == [Hearing("kd7abc", -80.0, None, None)]
+
+
+def test_a_blurred_sender_is_counted_but_places_no_cell() -> None:
+    assert hearings("aprs", _aprs("kd7abc", direct=True, precision_m=18_500)) == [
+        Hearing("kd7abc", -80.0, None, None)
+    ]
+    # Blurred less than a cell still places it.
+    assert hearings("aprs", _aprs("kd7abc", direct=True, precision_m=185)) == [
+        Hearing("kd7abc", -80.0, 33.6, -112.1)
+    ]
+
+
+def test_every_other_kind_is_heard_directly_whatever_it_says() -> None:
+    obs = _aprs("a1b2c3", direct=False, via="w7mot-3")
+    assert hearings("adsb", obs) == [Hearing("a1b2c3", -80.0, 33.6, -112.1)]
+
+
+def test_the_stored_meta_says_how_it_was_heard_and_the_agent_cannot_forge_it() -> None:
+    obs = _aprs(
+        "w7sa-12",
+        direct=False,
+        via="W7MOT-3",
+        precision_m=185.0,
+        meta={"comment": "hi", "direct": True, "via": "nobody"},
+    )
+    assert aprs_meta(obs) == {
+        "comment": "hi",
+        "direct": False,
+        "via": "w7mot-3",
+        "precision_m": 185.0,
+    }
+    # No via, no precision: the keys are removed, not left as the agent sent them.
+    bare = _aprs("kd7abc", direct=True, meta={"via": "forged", "precision_m": 1})
+    assert aprs_meta(bare) == {"direct": True}
+
+
+def test_the_tooltip_says_how_an_aprs_packet_was_heard() -> None:
+    rf = _static("rf.js")
+    for phrase in (
+        "Heard through ",
+        "Relayed by a digipeater",
+        "From the internet, put on the air by ",
+        "not a transmitter",
+        # We never blurred it: the wording must say who did.
+        "The sender blurred its own position",
+    ):
+        assert phrase in rf, phrase

@@ -152,16 +152,51 @@
   }
 
   /* Any other kind: what it is, its id, and the plain fields it sent. */
+  /* How an APRS packet reached the receiver, in words (design 5.1). The
+     ingest writes these keys into `meta` from the contract fields, so
+     they are facts about the hearing, not something the sender said. */
+  const APRS_KEYS = ['direct', 'via', 'precision_m', 'owner', 'object', 'third_party', 'path'];
+
+  function aprsLines(meta) {
+    const call = (value) => String(value).toUpperCase();
+    const lines = [];
+    if (meta.object) {
+      lines.push(`${meta.object === 'item' ? 'An item' : 'An object'} placed by ${meta.owner ? call(meta.owner) : 'another station'}, not a transmitter`);
+    }
+    if (meta.third_party) {
+      lines.push(`From the internet, put on the air by ${meta.via ? call(meta.via) : 'a gateway'}`);
+    } else if (meta.direct === false) {
+      lines.push(meta.via ? `Heard through ${call(meta.via)}` : 'Relayed by a digipeater');
+    } else if (meta.direct === true && !meta.object) {
+      lines.push('Heard directly');
+    }
+    if (meta.path) lines.push(`Path ${meta.path}`);
+    if (meta.precision_m) {
+      const metres = Number(meta.precision_m);
+      const size = metres >= 1000 ? `${(metres / 1000).toFixed(metres >= 10000 ? 0 : 1)} km` : `${Math.round(metres)} m`;
+      lines.push(`The sender blurred its own position to about ${size}`);
+    }
+    return lines.map((text) => el('div', { class: 'muted', text }));
+  }
+
+  /* Any other kind: what it is, its id, and the plain fields it sent. */
   function otherTooltip(row) {
     const style = KIND_STYLE[row.kind] || { label: row.kind };
-    const meta = row.meta || {};
-    const extras = Object.entries(meta).slice(0, 4)
+    const { comment, ...meta } = row.meta || {};
+    const aprs = row.kind === 'aprs';
+    const extras = Object.entries(meta)
+      .filter(([key]) => !(aprs && APRS_KEYS.includes(key)))
+      .slice(0, 4)
       .map(([key, value]) => el('div', { text: `${key.replaceAll('_', ' ')}: ${String(value).slice(0, 40)}` }));
     return el('div', { class: 'rf-tip' },
-      el('strong', { text: row.id }),
+      el('strong', { text: aprs && row.id.startsWith(';') ? row.id.slice(1) : row.id }),
       el('div', { text: style.label }),
       row.alt_m == null ? null : el('div', { text: `${Math.round(row.alt_m).toLocaleString()} m` }),
       extras,
+      /* The comment is what a person typed. It is shown whole and
+         wrapped, never cut to fit the tooltip. */
+      comment == null || comment === '' ? null : el('div', { class: 'rf-comment', text: String(comment) }),
+      aprs ? aprsLines(meta) : null,
       style.heardHere
         ? el('div', { class: 'muted', text: 'It sends no position. The mark is the receiver that heard it.' })
         : null,
