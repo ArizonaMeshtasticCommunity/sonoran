@@ -436,6 +436,11 @@ class Settings(BaseSettings):
     # programmes, as lower case ICAO hex. Loaded by an operator, never
     # fetched (design 8).
     rf_hidden_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # The rtl_433 model names whose readings are stored. rtl_433 decodes
+    # tyre sensors, doorbells and car keys as easily as weather stations,
+    # so empty means NONE pass. The agent applies its own ISM_ALLOW, and
+    # this applies it again (design 8).
+    rf_ism_allow: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     # Logging.
     log_level: str = "INFO"
@@ -444,6 +449,7 @@ class Settings(BaseSettings):
         "mqtt_topics",
         "rf_topics",
         "rf_hidden_ids",
+        "rf_ism_allow",
         "channel_keys",
         "core_channels",
         "embed_frame_ancestors",

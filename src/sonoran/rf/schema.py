@@ -23,14 +23,27 @@ STATION_ID = re.compile(r"^[a-z0-9-]{3,32}$")
 # that is not an ICAO one, such as a TIS-B target.
 ICAO = re.compile(r"^~?[0-9a-f]{6}$")
 
-# Everything an observation may be. Phase 1 stores `adsb` and `uat`; the
-# ingest drops the rest, counted, until their phase lands.
+# Everything an observation may be.
 Kind = Literal["adsb", "uat", "aprs", "sonde", "ism"]
 KINDS: tuple[str, ...] = ("adsb", "uat", "aprs", "sonde", "ism")
 AIRCRAFT_KINDS = frozenset({"adsb", "uat"})
-# What the ingest stores today. The RF page reads this through
+# What the ingest stores. The RF page reads this through
 # `/api/rf/kinds`, so it never shows a source as working before it does.
-STORED_KINDS = AIRCRAFT_KINDS
+STORED_KINDS = frozenset(KINDS)
+
+# What an `id` may be, one rule for each kind (design 4.2). Ids arrive
+# lower-cased. One loose rule for every kind would store a bad id; this
+# way a bad id is still refused and counted.
+THING_ID: dict[str, re.Pattern[str]] = {
+    "adsb": ICAO,
+    "uat": ICAO,
+    # A callsign with its SSID, which is how APRS names a station.
+    "aprs": re.compile(r"^[a-z0-9]{1,6}(-[a-z0-9]{1,2})?$"),
+    # A radiosonde serial as the decoder prints it.
+    "sonde": re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$"),
+    # An rtl_433 model and device id, joined.
+    "ism": re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$"),
+}
 
 MAX_OBS = 100
 MAX_META_BYTES = 1024

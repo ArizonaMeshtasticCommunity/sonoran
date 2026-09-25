@@ -114,24 +114,94 @@ def test_an_older_point_never_overwrites_a_newer_one(
     assert latest[0].lat == 33.7
 
 
-def test_hidden_aircraft_and_later_kinds_are_not_stored(
+def test_hidden_aircraft_are_not_stored(timescale_url: str, migrated_engine, clean: None) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC)
+    tallies = asyncio.run(
+        _write(
+            timescale_url,
+            _batch("north-site", "adsb", [_obs("a1b2c3", now, -20.0), _obs("bbbbbb", now, -9.0)]),
+            _batch("north-site", "uat", [_obs("cccccc", now, -15.0)]),
+            rules=Rules(hidden=frozenset({"bbbbbb"})),
+        )
+    )
+    assert (tallies[0].stored, tallies[0].hidden) == (1, 1)
+    assert tallies[1].stored == 1
+    ids = {r.thing_id for r in _rows(migrated_engine, "SELECT thing_id FROM rf_latest")}
+    assert ids == {"a1b2c3", "cccccc"}
+
+
+def test_aprs_and_sondes_are_stored_and_a_bad_id_is_refused(
     timescale_url: str, migrated_engine, clean: None
 ) -> None:  # type: ignore[no-untyped-def]
     now = datetime.now(UTC)
     tallies = asyncio.run(
         _write(
             timescale_url,
-            _batch("north-site", "adsb", [_obs("a1b2c3", now, -20.0), _obs("bbbbbb", now, -9.0)]),
-            _batch("north-site", "aprs", [{"id": "n0call-9", "t": now, "lat": 33, "lon": -112}]),
-            _batch("north-site", "uat", [_obs("cccccc", now, -15.0)]),
-            rules=Rules(hidden=frozenset({"bbbbbb"})),
+            _batch(
+                "north-site",
+                "aprs",
+                [
+                    {"id": "KD7ABC-9", "t": now, "lat": 33.4, "lon": -112.1},
+                    # An aircraft address is not a callsign with an SSID.
+                    {"id": "kd7abc-100", "t": now, "lat": 33.4, "lon": -112.1},
+                ],
+            ),
+            _batch(
+                "north-site",
+                "sonde",
+                [{"id": "V1234567", "t": now, "lat": 33.6, "lon": -112.3, "alt_m": 18000}],
+            ),
         )
     )
-    assert (tallies[0].stored, tallies[0].hidden) == (1, 1)
-    assert tallies[1].kind_not_stored == 1
-    assert tallies[2].stored == 1
-    ids = {r.thing_id for r in _rows(migrated_engine, "SELECT thing_id FROM rf_latest")}
-    assert ids == {"a1b2c3", "cccccc"}
+    assert (tallies[0].stored, tallies[0].rejected) == (1, 1)
+    assert tallies[1].stored == 1
+    rows = {
+        (r.kind, r.thing_id) for r in _rows(migrated_engine, "SELECT kind, thing_id FROM rf_latest")
+    }
+    assert rows == {("aprs", "kd7abc-9"), ("sonde", "v1234567")}
+
+
+def _sensor(thing_id: str, model: str | None, when: datetime) -> dict[str, object]:
+    meta: dict[str, object] = {"temperature_c": 31.5}
+    if model is not None:
+        meta["model"] = model
+    return {"id": thing_id, "t": when, "lat": 33.5, "lon": -112.0, "meta": meta}
+
+
+def test_a_sensor_is_stored_only_when_its_model_is_allowed(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """rtl_433 hears the neighbours' tyres and doorbells too (design 8)."""
+    now = datetime.now(UTC)
+    sensors = _batch(
+        "north-site",
+        "ism",
+        [
+            _sensor("acurite-tower-1234", "Acurite-Tower", now),
+            # A tyre sensor: decoded, never allow-listed.
+            _sensor("schrader-00a1b2c3", "Schrader", now),
+            # A prefix of an allowed model is not that model.
+            _sensor("acurite-5", "Acurite", now),
+            # Malformed: no model, and a model the id does not carry.
+            _sensor("acurite-tower-99", None, now),
+            _sensor("acurite-tower-77", "Fineoffset-WH51", now),
+        ],
+    )
+    # The default: an empty allow-list stores nothing. Malformed readings
+    # are still told apart from readings nobody allowed.
+    (closed,) = asyncio.run(_write(timescale_url, sensors, rules=Rules()))
+    assert (closed.stored, closed.not_allowed, closed.rejected) == (0, 3, 2)
+    assert _rows(migrated_engine, "SELECT 1 FROM rf_latest WHERE kind = 'ism'") == []
+
+    (opened,) = asyncio.run(
+        _write(timescale_url, sensors, rules=Rules(ism_allow=frozenset({"acurite-tower"})))
+    )
+    assert (opened.stored, opened.not_allowed, opened.rejected) == (1, 2, 2)
+    ids = {
+        r.thing_id
+        for r in _rows(migrated_engine, "SELECT thing_id FROM rf_latest WHERE kind = 'ism'")
+    }
+    assert ids == {"acurite-tower-1234"}
 
 
 def test_a_heartbeat_is_kept_and_updated(timescale_url: str, migrated_engine, clean: None) -> None:  # type: ignore[no-untyped-def]
@@ -215,7 +285,7 @@ def test_rf_never_counts_as_meshtastic(timescale_url: str, migrated_engine, clea
         assert after[key] == before[key], key
     assert kinds == {
         "known": ["adsb", "uat", "aprs", "sonde", "ism"],
-        "stored": ["adsb", "uat"],
+        "stored": ["adsb", "aprs", "ism", "sonde", "uat"],
         "views": ["spectrum"],
     }
 

@@ -22,7 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.db.models import RfHeard, RfLatest, RfSpectrum, RfStation, RfTrack
-from sonoran.rf.schema import ICAO, STORED_KINDS, Batch, Observation, Spectrum, Status
+from sonoran.rf.schema import STORED_KINDS, THING_ID, Batch, Observation, Spectrum, Status
 
 # The receiver layer's resolution. Five minutes per thing per station is
 # enough to draw where a station hears, and keeps `rf_heard` small.
@@ -47,6 +47,9 @@ class Rules:
     future_slack: timedelta = timedelta(seconds=60)
     past_slack: timedelta = timedelta(seconds=600)
     hidden: frozenset[str] = frozenset()
+    # rtl_433 model names that may be stored, lower case. Empty means
+    # none: see `ism_model`.
+    ism_allow: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -56,6 +59,7 @@ class Tally:
     stored: int = 0
     retimed: int = 0
     hidden: int = 0
+    not_allowed: int = 0
     rejected: int = 0
     kind_not_stored: int = 0
     reasons: list[str] = field(default_factory=list)
@@ -243,23 +247,57 @@ async def _store_latest(
     )
 
 
+def ism_model(obs: Observation) -> str | None:
+    """Return the rtl_433 model of an `ism` observation, lower case.
+
+    Returns None when the observation is malformed: no `meta["model"]`,
+    or an id that does not begin with that model and `-`. The agent
+    builds the id as `<model>-<device id>`. The model is read from
+    `meta` and not split out of the id, because a model name can hold
+    `-` itself, such as `Acurite-Tower`. Checking the id against it
+    stops a reading that names an allowed model in `meta` and carries
+    another device's id.
+    """
+    model = (obs.meta or {}).get("model")
+    if not isinstance(model, str) or not model.strip():
+        return None
+    model = model.strip().lower()
+    if not obs.id.startswith(model + "-"):
+        return None
+    return model
+
+
 async def store_batch(
     session: AsyncSession, batch: Batch, received: datetime, rules: Rules
 ) -> Tally:
     """Store one batch of observations. Returns what happened to each."""
     tally = Tally()
     if batch.kind not in STORED_KINDS:
-        # Phase 1 stores aircraft only. The rest waits for its phase.
+        # A kind the contract names and this sonoran does not store yet.
         tally.kind_not_stored = len(batch.obs)
         return tally
+    id_rule = THING_ID[batch.kind]
     for obs in batch.obs:
-        if not ICAO.match(obs.id):
+        if not id_rule.match(obs.id):
             tally.rejected += 1
-            tally.reasons.append(f"not an aircraft address: {obs.id!r}")
+            tally.reasons.append(f"not a {batch.kind} id: {obs.id!r}")
             continue
         if obs.id in rules.hidden:
             tally.hidden += 1
             continue
+        if batch.kind == "ism":
+            # rtl_433 decodes tyre sensors, doorbells and car keys in the
+            # neighbours' houses as easily as weather stations. So this
+            # fails closed: an empty allow-list stores nothing, and the
+            # match is the whole model name, never a prefix (design 8).
+            model = ism_model(obs)
+            if model is None:
+                tally.rejected += 1
+                tally.reasons.append(f"an ism id without a matching meta.model: {obs.id!r}")
+                continue
+            if model not in rules.ism_allow:
+                tally.not_allowed += 1
+                continue
         when, retimed = guarded_time(obs.t, received, rules)
         tally.retimed += int(retimed)
         point = _point(obs, when, batch.station)
