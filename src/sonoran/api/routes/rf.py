@@ -9,14 +9,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import func, select, true
+from sqlalchemy import Float, and_, case, cast, func, or_, select, true
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session
 from sonoran.db.models import RfHeard, RfLatest, RfSpectrum, RfStation, RfTrack
 from sonoran.radio.channels import US_END_HZ, US_START_HZ, all_channels
-from sonoran.rf.schema import KINDS, STATION_ID, STORED_KINDS
+from sonoran.rf.schema import HEARD_PRECISION_M, KINDS, STATION_ID, STORED_KINDS
 
 router = APIRouter(prefix="/api/rf", tags=["rf"])
 
@@ -168,8 +168,15 @@ async def heard(
     if not STATION_ID.match(station):
         raise HTTPException(status_code=422, detail="not a station id")
     since = datetime.now(UTC) - timedelta(hours=hours)
-    cell_lat = func.round(RfHeard.lat / CELL_DEG) * CELL_DEG
-    cell_lon = func.round(RfHeard.lon / CELL_DEG) * CELL_DEG
+    # A hearing with no position of its own is a digipeater named in an
+    # APRS path (design 5.1). It is placed where that station's own
+    # beacons put it, unless those beacons blur it past a cell.
+    own_precision = cast(RfLatest.meta["precision_m"].astext, Float)
+    placeable = or_(own_precision.is_(None), own_precision <= HEARD_PRECISION_M)
+    lat = case((RfHeard.lat.is_not(None), RfHeard.lat), (placeable, RfLatest.lat))
+    lon = case((RfHeard.lat.is_not(None), RfHeard.lon), (placeable, RfLatest.lon))
+    cell_lat = func.round(lat / CELL_DEG) * CELL_DEG
+    cell_lon = func.round(lon / CELL_DEG) * CELL_DEG
     rows = (
         await session.execute(
             select(
@@ -178,11 +185,16 @@ async def heard(
                 func.max(RfHeard.best_rssi_db).label("best_rssi_db"),
                 func.sum(RfHeard.heard).label("heard"),
             )
+            .select_from(RfHeard)
+            .outerjoin(
+                RfLatest,
+                and_(RfLatest.kind == RfHeard.kind, RfLatest.thing_id == RfHeard.thing_id),
+            )
             .where(
                 RfHeard.station_id == station,
                 RfHeard.kind == kind,
                 RfHeard.bucket >= since,
-                RfHeard.lat.is_not(None),
+                lat.is_not(None),
             )
             .group_by(cell_lat, cell_lon)
         )

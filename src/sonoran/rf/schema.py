@@ -23,6 +23,25 @@ STATION_ID = re.compile(r"^[a-z0-9-]{3,32}$")
 # that is not an ICAO one, such as a TIS-B target.
 ICAO = re.compile(r"^~?[0-9a-f]{6}$")
 
+# An APRS station: a callsign and optional SSID. Up to nine characters,
+# not AX.25's six, because a third-party packet carries an internet
+# source name such as a CWOP station's.
+APRS_STATION = re.compile(r"^[a-z0-9]{1,9}(?:-[a-z0-9]{1,2})?$")
+# An APRS object or item, named by the station that sends it: `;` and
+# the name. `;` never appears in a callsign, so an object cannot take a
+# station's id. No `/` or `#`: the id is a URL path segment.
+APRS_OBJECT = re.compile(r"^;[a-z0-9._+-][a-z0-9._+-]{0,8}$")
+# Path words that name no station: the generic digipeating aliases and
+# the internet markers. One of these as `via` credits nobody, even
+# though it is shaped like a callsign.
+APRS_ALIAS = re.compile(
+    r"^(?:wide[1-7]?|trace[1-7]?|relay|echo|gate|tcpip|tcpxx|nogate|rfonly|q[a-z]{2})(?:-[0-9]{1,2})?$"
+)
+# A sender may blur its position (APRS position ambiguity). Past this,
+# a position does not place a cell in the heard layer, which is about
+# 2 km on a side.
+HEARD_PRECISION_M = 1000.0
+
 # Everything an observation may be.
 Kind = Literal["adsb", "uat", "aprs", "sonde", "ism"]
 KINDS: tuple[str, ...] = ("adsb", "uat", "aprs", "sonde", "ism")
@@ -37,8 +56,8 @@ STORED_KINDS = frozenset(KINDS)
 THING_ID: dict[str, re.Pattern[str]] = {
     "adsb": ICAO,
     "uat": ICAO,
-    # A callsign with its SSID, which is how APRS names a station.
-    "aprs": re.compile(r"^[a-z0-9]{1,6}(-[a-z0-9]{1,2})?$"),
+    # A station, or an object or item that a station reports (design 5.1).
+    "aprs": re.compile(rf"^(?:{APRS_STATION.pattern[1:-1]}|{APRS_OBJECT.pattern[1:-1]})$"),
     # A radiosonde serial as the decoder prints it.
     "sonde": re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$"),
     # An rtl_433 model and device id, joined.
@@ -87,12 +106,26 @@ class Observation(_Model):
     # receiver hears. Missing is not true. See design 5.1 and
     # AGENTS.md 9.5, the same trap on Meshtastic.
     direct: bool | None = None
+    # APRS only: the station the receiver actually decoded, when that is
+    # not the thing named by `id`. The last digipeater that repeated a
+    # packet, the gateway that put a third-party packet on the air, or
+    # the station that sent an object. The receiver did hear this
+    # station, so it counts in the heard layer (design 5.1).
+    via: Annotated[str | None, Field(max_length=16)] = None
+    # How far the sender blurred its own position, in metres. Missing
+    # means not blurred.
+    precision_m: Annotated[float | None, Field(ge=0, le=500_000)] = None
     meta: dict[str, object] | None = None
 
     @field_validator("id")
     @classmethod
     def _lower(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("via")
+    @classmethod
+    def _lower_via(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip().lower() or None
 
     @field_validator("meta")
     @classmethod

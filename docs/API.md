@@ -1734,10 +1734,11 @@ Where one station has heard things, on a grid of about 2 km
 `kind` defaults to `adsb`, `hours` is 1 to 336, default 24. Measured,
 not modelled: the RF page draws a station's reach from it.
 
-For `kind=aprs` it holds only packets the station heard **directly**
-(`direct: true` in the message). A digipeated packet is on the map at the
-sender's own position, but it is not in this answer, because it was
-heard somewhere else first.
+For `kind=aprs` it holds what the station itself decoded (design 5.1):
+a sender heard **directly**, or the digipeater or gateway named as `via`
+for a relayed packet. A digipeater is placed where its own beacons put
+it. A relayed sender, an object, and a position its sender blurred past
+1 km place no cell. All of them are still on the map in `/api/rf/latest`.
 
 ### 12.5 `GET /api/rf/spectrum/{station}`
 

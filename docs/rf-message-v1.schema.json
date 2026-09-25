@@ -163,6 +163,20 @@
           "default": null,
           "title": "Meta"
         },
+        "precision_m": {
+          "anyOf": [
+            {
+              "maximum": 500000,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Precision M"
+        },
         "rssi_db": {
           "anyOf": [
             {
@@ -195,6 +209,19 @@
           ],
           "default": null,
           "title": "Track Deg"
+        },
+        "via": {
+          "anyOf": [
+            {
+              "maxLength": 16,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Via"
         }
       },
       "required": [

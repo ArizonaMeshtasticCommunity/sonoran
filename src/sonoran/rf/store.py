@@ -22,7 +22,18 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.db.models import RfHeard, RfLatest, RfSpectrum, RfStation, RfTrack
-from sonoran.rf.schema import STORED_KINDS, THING_ID, Batch, Observation, Spectrum, Status
+from sonoran.rf.schema import (
+    APRS_ALIAS,
+    APRS_OBJECT,
+    APRS_STATION,
+    HEARD_PRECISION_M,
+    STORED_KINDS,
+    THING_ID,
+    Batch,
+    Observation,
+    Spectrum,
+    Status,
+)
 
 # The receiver layer's resolution. Five minutes per thing per station is
 # enough to draw where a station hears, and keeps `rf_heard` small.
@@ -186,8 +197,24 @@ async def _store_track(
     )
 
 
+@dataclass(frozen=True)
+class Hearing:
+    """One thing a station heard itself, for `rf_heard`.
+
+    `lat` and `lon` are None when the hearing places nothing: a
+    digipeater named in a path, whose position comes from its own
+    beacons when the layer is read, or a sender that blurred its
+    position past the size of a cell.
+    """
+
+    thing_id: str
+    rssi_db: float | None
+    lat: float | None
+    lon: float | None
+
+
 async def _store_heard(
-    session: AsyncSession, station: str, kind: str, obs: Observation, when: datetime
+    session: AsyncSession, station: str, kind: str, hearing: Hearing, when: datetime
 ) -> None:
     """Count one hearing, and keep the loudest one's position."""
     bucket = floor_time(when, HEARD_BUCKET)
@@ -197,12 +224,12 @@ async def _store_heard(
         .values(
             station_id=station,
             kind=kind,
-            thing_id=obs.id,
+            thing_id=hearing.thing_id,
             bucket=bucket,
             heard=1,
-            best_rssi_db=obs.rssi_db,
-            lat=obs.lat,
-            lon=obs.lon,
+            best_rssi_db=hearing.rssi_db,
+            lat=hearing.lat,
+            lon=hearing.lon,
         )
         .on_conflict_do_nothing(index_elements=["station_id", "kind", "thing_id", "bucket"]),
     )
@@ -211,19 +238,78 @@ async def _store_heard(
     key = (
         RfHeard.station_id == station,
         RfHeard.kind == kind,
-        RfHeard.thing_id == obs.id,
+        RfHeard.thing_id == hearing.thing_id,
         RfHeard.bucket == bucket,
     )
     await session.execute(update(RfHeard).where(*key).values(heard=RfHeard.heard + 1))
-    if obs.rssi_db is not None:
+    placed = {"lat": hearing.lat, "lon": hearing.lon} if hearing.lat is not None else {}
+    if hearing.rssi_db is not None:
+        # A louder hearing that places nothing must not erase a position
+        # an earlier hearing gave.
         await session.execute(
             update(RfHeard)
             .where(
                 *key,
-                or_(RfHeard.best_rssi_db.is_(None), RfHeard.best_rssi_db < obs.rssi_db),
+                or_(RfHeard.best_rssi_db.is_(None), RfHeard.best_rssi_db < hearing.rssi_db),
             )
-            .values(best_rssi_db=obs.rssi_db, lat=obs.lat, lon=obs.lon)
+            .values(best_rssi_db=hearing.rssi_db, **placed)
         )
+    if placed:
+        await session.execute(update(RfHeard).where(*key, RfHeard.lat.is_(None)).values(**placed))
+
+
+def credited(via: str) -> bool:
+    """True when `via` names a real station, not a path alias."""
+    return bool(APRS_STATION.match(via)) and not APRS_ALIAS.match(via)
+
+
+def hearings(kind: str, obs: Observation) -> list[Hearing]:
+    """Return what the station itself heard, from one observation.
+
+    Every kind but `aprs` is heard directly: a receiver decodes the
+    aircraft or the sensor itself. APRS is not (design 5.1):
+
+    - A packet heard with no digipeater (`direct`) is a hearing of the
+      sender, at its own position.
+    - A relayed packet was heard from `via`, the last digipeater, and
+      its level is that digipeater's. The sender is not credited.
+    - An object's position is not where its transmitter is. Only the
+      station that sent it, `via`, is credited.
+    - A position blurred past `HEARD_PRECISION_M` is counted but places
+      no cell.
+
+    `via` has no position in the message. Its row stores none, and the
+    heard layer takes it from the digipeater's own beacons.
+    """
+    if kind != "aprs":
+        return [Hearing(obs.id, obs.rssi_db, obs.lat, obs.lon)]
+    found: list[Hearing] = []
+    is_object = bool(APRS_OBJECT.match(obs.id))
+    if obs.direct is True and not is_object:
+        blurred = obs.precision_m is not None and obs.precision_m > HEARD_PRECISION_M
+        lat, lon = (None, None) if blurred else (obs.lat, obs.lon)
+        found.append(Hearing(obs.id, obs.rssi_db, lat, lon))
+    elif obs.via and obs.via != obs.id and credited(obs.via):
+        found.append(Hearing(obs.via, obs.rssi_db, None, None))
+    return found
+
+
+def aprs_meta(obs: Observation) -> dict[str, object]:
+    """Return the stored `meta`, with how the packet was heard added.
+
+    The RF tab reads these to say "heard through W7MOT-3" or "blurred to
+    about 2 km". They are facts from the contract fields, so they
+    replace any keys of the same name the agent put in `meta`.
+    """
+    meta: dict[str, object] = dict(obs.meta or {})
+    meta["direct"] = obs.direct is True
+    for key in ("via", "precision_m"):
+        meta.pop(key, None)
+    if obs.via and credited(obs.via):
+        meta["via"] = obs.via
+    if obs.precision_m:
+        meta["precision_m"] = obs.precision_m
+    return meta
 
 
 async def _store_latest(
@@ -300,20 +386,28 @@ async def store_batch(
             if model not in rules.ism_allow:
                 tally.not_allowed += 1
                 continue
-        relayed = batch.kind == "aprs" and obs.direct is not True
-        if relayed:
-            # A digipeater's signal, not the sender's. Keep the point,
-            # which is the sender's own position, and drop the level.
-            obs = obs.model_copy(update={"rssi_db": None})
-            tally.relayed += 1
+        heard = hearings(batch.kind, obs)
+        mapped = obs
+        if batch.kind == "aprs":
+            # The level belongs to whatever the station decoded. Unless
+            # that was the sender itself, it is not the sender's.
+            sender_heard = any(h.thing_id == obs.id for h in heard)
+            if not sender_heard:
+                tally.relayed += 1
+            mapped = obs.model_copy(
+                update={
+                    "rssi_db": obs.rssi_db if sender_heard else None,
+                    "meta": aprs_meta(obs),
+                }
+            )
         when, retimed = guarded_time(obs.t, received, rules)
         tally.retimed += int(retimed)
-        point = _point(obs, when, batch.station)
-        await _store_track(session, batch.kind, obs, floor_time(when, rules.bucket), point)
-        if not relayed:
-            # `rf_heard` is where a station hears. A relayed packet was
-            # heard somewhere else first.
-            await _store_heard(session, batch.station, batch.kind, obs, when)
-        await _store_latest(session, batch.kind, obs, point)
+        # The map takes every packet, relayed or not: the position is
+        # the sender's own report.
+        point = _point(mapped, when, batch.station)
+        await _store_track(session, batch.kind, mapped, floor_time(when, rules.bucket), point)
+        for hearing in heard:
+            await _store_heard(session, batch.station, batch.kind, hearing, when)
+        await _store_latest(session, batch.kind, mapped, point)
         tally.stored += 1
     return tally

@@ -327,13 +327,54 @@ cases apart:
   the id does not carry).
 - `not_allowed`: a well-formed reading of a model nobody allowed.
 
-An APRS packet can reach a station through digipeaters. It still
-carries the sender's own position, so it goes on the map. But its
-`rssi_db` is the last digipeater's signal, and the station did not hear
-the sender. So an `aprs` observation counts in `rf_heard`, and keeps its
-`rssi_db`, only when it has `direct: true`: the path has no used hop.
-A missing `direct` is not direct. This is `AGENTS.md` 9.5, the relayed
-Meshtastic packet, again. The count of such packets is `relayed`.
+**How an APRS packet reached the station.** A packet can come
+straight from its sender, through digipeaters, or from the internet
+through a gateway. It can also describe an object that is not a
+transmitter. Every one of these goes on the map, because the position
+is what the sender reported. What differs is what the station can
+claim it *heard*, which is what `rf_heard` and the receiver layer are
+for. This is `AGENTS.md` 9.5, the relayed Meshtastic packet, again.
+
+Three optional observation fields carry it. They are additions to
+version 1, so an older ingest ignores them:
+
+| Field | Meaning |
+|---|---|
+| `direct` | True when no digipeater repeated the packet. Missing is not true (`AGENTS.md` 9.22). |
+| `via` | The station the receiver actually decoded, when that is not the thing named by `id`: the **last** used digipeater, when the path names it; the gateway that put a third-party packet on the air; the station that sent an object. Null when direct, and null when the last used hop is an alias such as `WIDE2*`. |
+| `precision_m` | How far the **sender** blurred its own position (APRS position ambiguity). The point is the centre of the blurred area. |
+
+The ingest turns them into hearings (`hearings` in `rf/store.py`):
+
+- A direct packet is a hearing of the sender, at its position, with
+  its level.
+- A relayed packet is a hearing of `via`, with the packet's level,
+  which is the digipeater's. The sender is not credited, and the point
+  on the map keeps no level. The row has no position: the heard layer
+  places it where that station's own beacons put it, when it is read.
+- An object or item (id `;name`) is never a hearing. Its sender, as
+  `via`, is.
+- A position blurred past 1 km (`HEARD_PRECISION_M`) is counted and
+  places no cell.
+- A path alias (`WIDE2-1`, `TCPIP`, `qAR` and the like) as `via`
+  credits nobody.
+
+The count of packets whose sender was not heard directly is `relayed`.
+The ingest also writes `direct`, `via` and `precision_m` into the
+stored `meta`, replacing any keys of that name the agent sent, and the
+RF tab reads them to say "heard through W7MOT-3" or "the sender blurred
+its own position to about 2 km".
+
+APRS ids:
+
+| Thing | `id` |
+|---|---|
+| Station | Callsign and optional SSID, up to 9 characters for internet sources: `kd7abc-9` |
+| Object or item | `;` and the name, lower case, other characters as `_`: `;field_day` |
+
+`;` never appears in a callsign, so an object cannot take a station's
+id. Two stations that name the same object make it one thing on the
+map, as APRS itself does, and `meta.owner` names who placed it last.
 
 ### 5.2 Tables
 
