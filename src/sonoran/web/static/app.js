@@ -22,9 +22,28 @@ const API_BASE = CONFIG.apiBase || '';
 const api = (path) =>
   new URL(String(path).replace(/^\//, ''), API_BASE || document.baseURI).toString();
 
+/*
+ * Say WHICH request failed, not just that one did.
+ *
+ * "Request failed (500)" was the whole message. A page that makes six
+ * requests then reports one number, and a reader -- or a maintainer
+ * reading a bug report -- cannot tell which. A 500 was reported on the
+ * node page and took a long scan of every endpoint at every window
+ * value to chase, because the report could not name the path. It is
+ * still unreproduced.
+ *
+ * The path only. No query string: those carry node ids, and a message
+ * that ends up in a screenshot or an issue should not widen what is
+ * shared beyond what the page already shows.
+ */
+function requestFailed(path, status) {
+  const where = String(path).split('?')[0];
+  return new Error(`Request failed (${status}) on ${where}`);
+}
+
 async function get(path) {
   const response = await fetch(api(path));
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
+  if (!response.ok) throw requestFailed(path, response.status);
   return response.json();
 }
 
@@ -43,7 +62,7 @@ async function get(path) {
  */
 async function getList(path) {
   const response = await fetch(api(path));
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
+  if (!response.ok) throw requestFailed(path, response.status);
   const rows = await response.json();
   const header = response.headers.get('X-Total-Count');
   // No header is not zero. An older server, or a proxy that dropped it,
@@ -5930,8 +5949,9 @@ PAGES.firehose = async (page) => {
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
   if (rows instanceof Error) {
-    // 422 here is always the filter, and "Request failed (422)" tells
-    // the reader nothing they can act on.
+    // 422 here is always the filter, and the bare status tells the
+    // reader nothing they can act on. The test is on the status, which
+    // `requestFailed` still puts in the message ahead of the path.
     return replace(target, /422/.test(rows.message || '')
       ? failure(new Error(`No packet type is called "${typed}". Try one of the suggestions, or a port number.`))
       : failure(rows));
