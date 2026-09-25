@@ -1,6 +1,7 @@
 """The RF map's message contract and its small rules (docs/design/rf-map.md)."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -373,3 +374,18 @@ def test_direct_is_optional_so_older_agents_still_validate() -> None:
 
 def _bare_obs() -> dict[str, object]:
     return {"t": "2026-09-22T17:59:58Z", "lat": 33.5, "lon": -112.0}
+
+
+def test_the_tooltip_shows_a_comment_whole() -> None:
+    """A comment is what a person typed. It is never cut to fit.
+
+    The other `meta` fields are cut to 40 characters and to four
+    entries. The comment is taken out of that list first, so neither
+    cut can reach it, and it wraps instead.
+    """
+    rf = _static("rf.js")
+    assert "const { comment, ...meta } = row.meta || {};" in rf
+    line = next(text for text in rf.splitlines() if "'rf-comment'" in text)
+    assert "text: String(comment)" in line
+    assert "slice" not in line
+    assert re.search(r"\.rf-tip \.rf-comment \{[^}]*white-space: normal", _static("app.css"))

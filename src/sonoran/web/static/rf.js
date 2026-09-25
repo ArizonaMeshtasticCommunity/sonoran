@@ -154,7 +154,7 @@
   /* Any other kind: what it is, its id, and the plain fields it sent. */
   function otherTooltip(row) {
     const style = KIND_STYLE[row.kind] || { label: row.kind };
-    const meta = row.meta || {};
+    const { comment, ...meta } = row.meta || {};
     const extras = Object.entries(meta).slice(0, 4)
       .map(([key, value]) => el('div', { text: `${key.replaceAll('_', ' ')}: ${String(value).slice(0, 40)}` }));
     return el('div', { class: 'rf-tip' },
@@ -162,6 +162,9 @@
       el('div', { text: style.label }),
       row.alt_m == null ? null : el('div', { text: `${Math.round(row.alt_m).toLocaleString()} m` }),
       extras,
+      /* The comment is what a person typed. It is shown whole and
+         wrapped, never cut to fit the tooltip. */
+      comment == null || comment === '' ? null : el('div', { class: 'rf-comment', text: String(comment) }),
       style.heardHere
         ? el('div', { class: 'muted', text: 'It sends no position. The mark is the receiver that heard it.' })
         : null,

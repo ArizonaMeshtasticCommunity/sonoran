@@ -2134,6 +2134,8 @@ div.check { cursor: default; }
 .rf-source.waiting { border-style: dashed; }
 .rf-source.off { opacity: .7; }
 .rf-tip strong { font-size: .9rem; }
+/* Leaflet tooltips do not wrap. A comment is shown whole, so it wraps. */
+.rf-tip .rf-comment { white-space: normal; overflow-wrap: anywhere; min-width: 12rem; max-width: 22rem; }
 
 /* Vertical rhythm down the coverage page.
  *

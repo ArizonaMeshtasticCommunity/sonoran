@@ -46,11 +46,16 @@ THING_ID: dict[str, re.Pattern[str]] = {
 }
 
 MAX_OBS = 100
-MAX_META_BYTES = 1024
 # A flat map of short scalars is all any station needs to describe a
 # contact, and all the RF page can display.
 MAX_META_KEYS = 16
-MAX_META_VALUE_CHARS = 120
+# Long enough for any APRS comment whole. The AX.25 information field
+# is at most 256 octets, so no comment in it is longer. A value over
+# the limit is dropped, not cut, so a lower limit loses the longest
+# comments entirely. Never cut what somebody sent (design 4.2).
+MAX_META_VALUE_CHARS = 256
+# Room for one comment at the limit beside a full set of readings.
+MAX_META_BYTES = 4096
 META_KEY = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,31}$")
 # A Meshtastic node ID, as the firmware prints it.
 MESH_NODE = re.compile(r"^![0-9a-f]{8}$")
