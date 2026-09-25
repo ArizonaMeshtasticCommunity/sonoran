@@ -40,6 +40,7 @@ def rules_from(settings: Settings) -> Rules:
         future_slack=timedelta(seconds=settings.rf_future_slack_seconds),
         past_slack=timedelta(seconds=settings.rf_past_slack_seconds),
         hidden=frozenset(item.lower() for item in settings.rf_hidden_ids),
+        ism_allow=frozenset(item.strip().lower() for item in settings.rf_ism_allow),
     )
 
 
@@ -128,6 +129,7 @@ async def main() -> None:
                         totals["stored"] += tally.stored
                         totals["retimed"] += tally.retimed
                         totals["hidden"] += tally.hidden
+                        totals["not_allowed"] += tally.not_allowed
                         totals["rejected"] += tally.rejected
                         totals["kind_not_stored"] += tally.kind_not_stored
                     await session.commit()

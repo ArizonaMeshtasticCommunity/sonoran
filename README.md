@@ -84,6 +84,7 @@ them all with a comment on each. The ones you are most likely to change:
 | `RADIO_OVERRIDES_PATH` | The file naming each node's antenna, mast, and power |
 | `COVERAGE_*` | The coverage job: how often, how far, how many workers |
 | `EMBED_ENABLED`, `EMBED_FRAME_ANCESTORS` | The public coverage embed, off by default |
+| `BACKUP_HOST_DIR`, `BACKUP_KEEP_*`, `BACKUP_UID` | The daily database backup. See [docs/DATABASE.md](docs/DATABASE.md) 9.1 |
 
 > [!NOTE]
 > If you use `tile.openstreetmap.org` as the basemap, the browser must send a

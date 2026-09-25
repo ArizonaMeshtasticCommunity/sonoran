@@ -7,9 +7,21 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sonoran.rf.ingest import decode
-from sonoran.rf.schema import Batch, Spectrum, Status, TopicError, json_schema, parse_topic
-from sonoran.rf.store import Rules, floor_time, guarded_time
+from sonoran.config import Settings
+from sonoran.rf.ingest import decode, rules_from
+from sonoran.rf.schema import (
+    KINDS,
+    STORED_KINDS,
+    THING_ID,
+    Batch,
+    Observation,
+    Spectrum,
+    Status,
+    TopicError,
+    json_schema,
+    parse_topic,
+)
+from sonoran.rf.store import Rules, floor_time, guarded_time, ism_model
 
 NOW = datetime(2026, 9, 22, 18, 0, 0, tzinfo=UTC)
 
@@ -259,3 +271,91 @@ def test_the_page_says_what_it_does_not_claim() -> None:
     page = page[: page.index("</section>")]
     assert "was not received by any of our stations" in page
     assert "not for navigation" in page
+
+
+# --- phases 3 and 4: APRS, radiosondes, weather sensors ---------------
+
+
+def test_every_kind_is_stored_and_has_an_id_rule() -> None:
+    """A kind with no rule would raise a KeyError in the writer, not be refused."""
+    assert STORED_KINDS == frozenset(KINDS)
+    assert set(THING_ID) == set(KINDS)
+
+
+@pytest.mark.parametrize(
+    ("kind", "thing_id"),
+    [
+        ("adsb", "a1b2c3"),
+        ("adsb", "~a1b2c3"),
+        ("uat", "a1b2c3"),
+        ("aprs", "kd7abc-9"),
+        ("aprs", "kd7abc"),
+        ("aprs", "n0call-15"),
+        ("sonde", "v1234567"),
+        ("sonde", "dfm-21012345"),
+        ("ism", "acurite-tower-1234"),
+        ("ism", "fineoffset-wh51-0a3b"),
+        ("ism", "lacrosse-tx141thbv2-17"),
+    ],
+)
+def test_an_id_of_the_right_shape_is_accepted(kind: str, thing_id: str) -> None:
+    assert THING_ID[kind].match(thing_id)
+
+
+@pytest.mark.parametrize(
+    ("kind", "thing_id"),
+    [
+        # A callsign is not an aircraft address, and the reverse.
+        ("adsb", "kd7abc-9"),
+        ("aprs", "a1b2c3d4e5"),
+        ("aprs", "kd7abc-100"),
+        ("aprs", "kd7abc-"),
+        ("aprs", "kd7abc>apdw16"),
+        ("sonde", "-v1234567"),
+        ("sonde", "v123 4567"),
+        ("ism", "-acurite"),
+        ("ism", "acurite tower 1234"),
+        ("ism", "a" * 65),
+        ("ism", "<script>"),
+    ],
+)
+def test_an_id_of_the_wrong_shape_is_refused(kind: str, thing_id: str) -> None:
+    assert not THING_ID[kind].match(thing_id)
+
+
+def _ism(thing_id: str, meta: dict[str, object] | None) -> Observation:
+    return Observation.model_validate(
+        {"id": thing_id, "t": NOW, "lat": 33.5, "lon": -112.0, "meta": meta}
+    )
+
+
+def test_the_ism_model_comes_from_meta_even_when_it_holds_a_dash() -> None:
+    """Splitting the id would make `acurite` of `acurite-tower-1234`."""
+    obs = _ism("acurite-tower-1234", {"model": "Acurite-Tower", "id": 1234})
+    assert ism_model(obs) == "acurite-tower"
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        None,
+        {},
+        {"model": ""},
+        {"model": 7},
+        # The id names another device than meta does.
+        {"model": "Fineoffset-WH51"},
+        # A prefix of the model in the id is not the model.
+        {"model": "Acurite-Tower-Plus"},
+    ],
+)
+def test_an_ism_reading_without_a_matching_model_is_malformed(
+    meta: dict[str, object] | None,
+) -> None:
+    assert ism_model(_ism("acurite-tower-1234", meta)) is None
+
+
+def test_the_ism_allow_list_is_read_as_lower_case_and_empty_by_default() -> None:
+    assert Settings(_env_file=None).rf_ism_allow == []
+    assert rules_from(Settings(_env_file=None)).ism_allow == frozenset()
+    settings = Settings(_env_file=None, rf_ism_allow="Acurite-Tower, Fineoffset-WH51")
+    assert rules_from(settings).ism_allow == frozenset({"acurite-tower", "fineoffset-wh51"})

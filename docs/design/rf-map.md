@@ -304,6 +304,29 @@ It validates every message against the schema in 4.2, drops what does
 not fit, and counts what it dropped per station. A bad station must not
 be able to stop the ingest.
 
+Each kind has its own rule for what an `id` may be (`THING_ID` in
+`rf/schema.py`). An id that breaks its kind's rule is refused and
+counted as `rejected`. One loose rule for every kind would store it.
+
+| Kind | `id` |
+|---|---|
+| `adsb`, `uat` | ICAO hex, with `~` for a non-ICAO address |
+| `aprs` | Callsign and optional SSID: `kd7abc-9` |
+| `sonde` | The serial as the decoder prints it |
+| `ism` | The rtl_433 model, `-`, and the device id: `acurite-tower-1234` |
+
+An `ism` observation must also carry the model in `meta.model`, and the
+id must start with that model and `-`. The ingest reads the model from
+`meta`, never by splitting the id, because a model name can hold `-`
+itself. Then it applies `RF_ISM_ALLOW` again, after the agent's
+`ISM_ALLOW` (section 8). The match is the whole model name, ignoring
+case. `Acurite` does not allow `Acurite-Tower`. The counts keep two
+cases apart:
+
+- `rejected`: the agent sent a malformed reading (no model, or a model
+  the id does not carry).
+- `not_allowed`: a well-formed reading of a model nobody allowed.
+
 ### 5.2 Tables
 
 | Table | Kind | Holds | Retention |
@@ -400,6 +423,13 @@ packet kind filter on the Live map (issue #48):
 - **Radiosondes**: the flight path, with the predicted landing area
   left out, because it would be a prediction.
 - **Sensors**: a dot per allowed weather station, with its last reading.
+  **A sensor sends no position.** The agent gives each reading the
+  rounded position of the station that heard it, the one in its
+  heartbeat. So every sensor a station hears lands on one point, and two
+  stations that hear one sensor put it in two places. The mark says
+  where it was heard, never where it is. The legend and the tooltip say
+  so. APRS stations and sondes send their own positions, so this applies
+  to sensors only.
 
 ### 7.2 Receivers
 

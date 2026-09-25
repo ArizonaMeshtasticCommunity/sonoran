@@ -55,11 +55,15 @@
   const sourceOf = (kind) => SOURCES.find((source) => source.kinds.includes(kind));
 
   /* How each kind is drawn. Shape and colour both differ, so a mark
-     reads without colour. Aircraft take their colour from altitude. */
+     reads without colour. Aircraft take their colour from altitude.
+
+     `heardHere` marks a kind that sends no position of its own. A weather
+     sensor is drawn at the rounded position of the receiver that heard
+     it, so the mark says where it was heard, never where it is. */
   const KIND_STYLE = {
     aprs: { colour: '#a48fd0', radius: 6, label: 'APRS station' },
     sonde: { colour: '#f6ece2', radius: 5, label: 'Radiosonde' },
-    ism: { colour: '#8fd0a4', radius: 4, label: 'Weather sensor' },
+    ism: { colour: '#8fd0a4', radius: 4, label: 'Weather sensor', heardHere: true },
   };
 
   const state = {
@@ -158,6 +162,9 @@
       el('div', { text: style.label }),
       row.alt_m == null ? null : el('div', { text: `${Math.round(row.alt_m).toLocaleString()} m` }),
       extras,
+      style.heardHere
+        ? el('div', { class: 'muted', text: 'It sends no position. The mark is the receiver that heard it.' })
+        : null,
       el('div', { class: 'muted', text: `heard ${ago(row.t)} by ${row.station}` }));
   }
 
@@ -288,7 +295,8 @@
       const source = sourceOf(kind);
       if (!source || !state.shown[source.key]) continue;
       target.append(el('span', { class: 'legend-note' },
-        el('span', { class: 'swatch ring', style: `border-color:${style.colour}` }), style.label));
+        el('span', { class: 'swatch ring', style: `border-color:${style.colour}` }),
+        style.heardHere ? `${style.label} (drawn where heard)` : style.label));
     }
     if (state.shown.stations) {
       target.append(el('span', { class: 'legend-note' },

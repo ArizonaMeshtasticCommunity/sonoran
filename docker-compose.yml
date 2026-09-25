@@ -301,6 +301,54 @@ services:
     # and are not a second copy of the broker address that can disagree.
     command: ["awk -v host=\"$$MQTT_HOST\" -v port=\"$$MQTT_PORT\" -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^broker[[:space:]]*=/{print \"broker = \\\"\" host \"\\\"\"; next} {print} /^\\[mqtt\\]/{print \"port = \" port; print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"}' /config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]
 
+  backup:
+    # A daily logical dump of the database, kept in rotation. See
+    # tools/db_backup_scheduled.sh and docs/DATABASE.md section 9.
+    #
+    # It is its own service and not a task in `jobs`, for two reasons.
+    # The jobs process has the azmsh_jobs role only, and the roles dump
+    # needs the superuser. And pg_dump must have the major version of
+    # the server, which the database image gives and the app image does
+    # not.
+    build:
+      context: .
+      dockerfile: tools/backup.Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    # No `env_file`, for the same reason as mesh-graph: this service
+    # gets the one credential it uses, and nothing else from `.env`.
+    environment:
+      PGHOST: timescaledb
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: azmsh
+      BACKUP_DIR: /backups
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-7}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-4}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    # The uid that writes the files. The default is the postgres user of
+    # the image. Under rootless Docker, set 0: root in the container is
+    # the account that runs Docker, so the files on the host belong to
+    # that account. See .env.example.
+    user: "${BACKUP_UID:-1000}:${BACKUP_GID:-1000}"
+    # pg_dump streams, so it needs little memory. The limit keeps a
+    # fault here out of the rest of the box.
+    mem_limit: ${BACKUP_MEMORY_LIMIT:-512m}
+    volumes:
+      # A host directory, not a named volume, so a person can find the
+      # files and copy them off the box without Docker.
+      - ${BACKUP_HOST_DIR:-./backups}:/backups
+    healthcheck:
+      # Unhealthy when the last good backup is older than the interval
+      # plus 12 hours, so a backup that has stopped is visible.
+      test: ["CMD", "/usr/local/bin/sonoran-backup", "check"]
+      interval: 5m
+      timeout: 10s
+      start_period: 30m
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
 volumes:
   tsdb_data:
   meshgraph_data:
