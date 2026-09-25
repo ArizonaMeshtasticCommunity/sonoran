@@ -378,6 +378,67 @@ Prefer a logical dump over a raw copy of the data volume. A raw copy only
 works when both ends run the exact same image, and it carries none of the
 safety a dump has.
 
+### 9.1 Scheduled backups
+
+The `backup` service takes a backup once a day (#216). It runs
+`tools/db_backup_scheduled.sh` in an image built from the database image,
+so `pg_dump` always has the major version of the server.
+
+Why it exists: on 2026-09-25 the production box rebooted, and the
+database did not start again. The storage lost writes that Postgres had
+flushed, so `pg_control` was stale. The recovery needed `pg_resetwal`
+and a repair of the catalog. The newest backup was two days old.
+
+Each backup is the same two files that `tools/db_backup.sh` makes, so
+`tools/db_restore.sh` restores either one:
+
+- `azmsh-<UTC timestamp>.dump`
+- `roles-<UTC timestamp>.sql`
+
+The rules:
+
+- A dump is written under a temporary name. It gets its real name only
+  after `pg_restore` reads the whole file back. A failed dump never enters
+  the rotation, and never pushes a good backup out.
+- The service does not start a dump if the free space is less than two
+  times the newest dump.
+- The rotation keeps the newest `BACKUP_KEEP_DAILY` backups (default 7).
+  It also keeps the newest backup of each of the newest
+  `BACKUP_KEEP_WEEKLY` ISO weeks (default 4). It never removes the newest
+  backup.
+- The rotation touches only files named exactly
+  `azmsh-YYYYMMDD-HHMMSS.dump`. A dump made by hand with another name
+  stays until a person removes it.
+- `last-good` in the backup directory holds the time and the name of the
+  last good backup. The container healthcheck fails when that backup is
+  older than the interval plus 12 hours. Look at `docker compose ps`: an
+  `unhealthy` backup service means the backups have stopped.
+- After a restart, the service waits out the rest of the interval if the
+  last good backup is recent. A container that restarts often does not
+  dump the database each time.
+
+The settings are in `.env.example`. The files go to `BACKUP_HOST_DIR`
+(default `./backups` in the project root), which is a host directory so
+that a person can copy the files without Docker. It is in `.gitignore`
+and in `.dockerignore`: without the second, every `docker build` sends
+every dump to the daemon.
+
+The container writes as `BACKUP_UID`:`BACKUP_GID`, default `1000:1000`,
+the `postgres` user of the image. The host directory must be writable by
+that uid. Under rootless Docker, set both to `0`: root in the container
+is the account that runs Docker, so the files belong to that account on
+the host.
+
+To take a backup now, or to test the service:
+
+```
+docker compose run --rm backup once
+docker compose run --rm backup check
+```
+
+A backup on the same disk does not survive the loss of that disk. Copy
+the files to another machine for that case.
+
 The data volume mounts at `/home/postgres/pgdata`, which is where the
 `timescaledb-ha` image keeps `PGDATA`. Mounting it anywhere else leaves
 the data in the container's writable layer, where a container rebuild

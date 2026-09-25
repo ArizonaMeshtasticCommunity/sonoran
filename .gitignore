@@ -14,3 +14,6 @@ build/
 
 # Agent worktrees, which are checkouts of this same repository.
 .agent/worktrees/
+
+# Scheduled database backups. See tools/db_backup_scheduled.sh.
+backups/
