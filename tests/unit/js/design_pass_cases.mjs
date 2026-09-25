@@ -164,3 +164,35 @@ if (failed) {
   process.exit(1);
 }
 console.log('focus mark: all cases passed');
+
+// --- a failed request says WHICH request -----------------------------
+//
+// "Request failed (500)" was the whole message. A page that makes six
+// requests then reports one number, and neither the reader nor a
+// maintainer reading the bug report can tell which one broke. A real 500
+// on the node page cost a scan of every endpoint at every window value
+// to chase, and is still unreproduced.
+
+{
+  const src2 = source;
+  const start = src2.indexOf('function requestFailed(');
+  ok('requestFailed exists', start > 0);
+  const body = src2.slice(start, src2.indexOf('\n}', start) + 2);
+  const requestFailed = new Function(`${body}; return requestFailed;`)();
+
+  const e = requestFailed('api/nodes/%21abcd1234/detail?hours=720', 500);
+  ok('names the status', e.message.includes('500'), e.message);
+  ok('names the path', e.message.includes('api/nodes/%21abcd1234/detail'), e.message);
+  // No query string: it carries node ids, and this message can end up in
+  // a screenshot or an issue.
+  ok('drops the query string', !e.message.includes('hours=720'), e.message);
+  ok('it is an Error', e instanceof Error);
+
+  // The firehose distinguishes a 422 by testing the message. That test
+  // must keep working now the path is appended.
+  const filter = requestFailed('api/packets?type=nope', 422);
+  ok('a 422 is still recognisable by /422/', /422/.test(filter.message), filter.message);
+}
+
+if (failed) { console.error(`${failed} failed`); process.exit(1); }
+console.log('request errors: all cases passed');
