@@ -327,6 +327,14 @@ cases apart:
   the id does not carry).
 - `not_allowed`: a well-formed reading of a model nobody allowed.
 
+An APRS packet can reach a station through digipeaters. It still
+carries the sender's own position, so it goes on the map. But its
+`rssi_db` is the last digipeater's signal, and the station did not hear
+the sender. So an `aprs` observation counts in `rf_heard`, and keeps its
+`rssi_db`, only when it has `direct: true`: the path has no used hop.
+A missing `direct` is not direct. This is `AGENTS.md` 9.5, the relayed
+Meshtastic packet, again. The count of such packets is `relayed`.
+
 ### 5.2 Tables
 
 | Table | Kind | Holds | Retention |

@@ -1734,6 +1734,11 @@ Where one station has heard things, on a grid of about 2 km
 `kind` defaults to `adsb`, `hours` is 1 to 336, default 24. Measured,
 not modelled: the RF page draws a station's reach from it.
 
+For `kind=aprs` it holds only packets the station heard **directly**
+(`direct: true` in the message). A digipeated packet is on the map at the
+sender's own position, but it is not in this answer, because it was
+heard somewhere else first.
+
 ### 12.5 `GET /api/rf/spectrum/{station}`
 
 One station's minutes of the 900 MHz band, for the waterfall (design

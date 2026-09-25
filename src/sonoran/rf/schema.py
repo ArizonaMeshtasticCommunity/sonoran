@@ -75,6 +75,13 @@ class Observation(_Model):
     gs_kn: Annotated[float | None, Field(ge=0, le=2000)] = None
     track_deg: Annotated[float | None, Field(ge=0, le=360)] = None
     rssi_db: Annotated[float | None, Field(ge=-200, le=50)] = None
+    # APRS only: true when the receiver heard the sender itself, with no
+    # digipeater in between (no used hop, `*`, in the path). A relayed
+    # packet still carries the sender's own position, but its signal is
+    # the last digipeater's, and it says nothing about how far the
+    # receiver hears. Missing is not true. See design 5.1 and
+    # AGENTS.md 9.5, the same trap on Meshtastic.
+    direct: bool | None = None
     meta: dict[str, object] | None = None
 
     @field_validator("id")

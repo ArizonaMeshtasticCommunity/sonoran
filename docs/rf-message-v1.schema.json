@@ -106,6 +106,18 @@
           "default": null,
           "title": "Alt Ref"
         },
+        "direct": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direct"
+        },
         "gs_kn": {
           "anyOf": [
             {

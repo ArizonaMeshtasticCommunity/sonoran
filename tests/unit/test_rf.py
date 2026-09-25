@@ -359,3 +359,17 @@ def test_the_ism_allow_list_is_read_as_lower_case_and_empty_by_default() -> None
     assert rules_from(Settings(_env_file=None)).ism_allow == frozenset()
     settings = Settings(_env_file=None, rf_ism_allow="Acurite-Tower, Fineoffset-WH51")
     assert rules_from(settings).ism_allow == frozenset({"acurite-tower", "fineoffset-wh51"})
+
+
+def test_direct_is_optional_so_older_agents_still_validate() -> None:
+    """A v1 field added later must be optional, or every running agent breaks."""
+    older = Batch.model_validate(_batch(kind="aprs", obs=[{**_bare_obs(), "id": "kd7abc-9"}]))
+    assert older.obs[0].direct is None
+    newer = Batch.model_validate(
+        _batch(kind="aprs", obs=[{**_bare_obs(), "id": "kd7abc-9", "direct": True}])
+    )
+    assert newer.obs[0].direct is True
+
+
+def _bare_obs() -> dict[str, object]:
+    return {"t": "2026-09-22T17:59:58Z", "lat": 33.5, "lon": -112.0}

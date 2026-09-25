@@ -60,6 +60,8 @@ class Tally:
     retimed: int = 0
     hidden: int = 0
     not_allowed: int = 0
+    # Stored on the map, but not counted as heard by the station.
+    relayed: int = 0
     rejected: int = 0
     kind_not_stored: int = 0
     reasons: list[str] = field(default_factory=list)
@@ -298,11 +300,20 @@ async def store_batch(
             if model not in rules.ism_allow:
                 tally.not_allowed += 1
                 continue
+        relayed = batch.kind == "aprs" and obs.direct is not True
+        if relayed:
+            # A digipeater's signal, not the sender's. Keep the point,
+            # which is the sender's own position, and drop the level.
+            obs = obs.model_copy(update={"rssi_db": None})
+            tally.relayed += 1
         when, retimed = guarded_time(obs.t, received, rules)
         tally.retimed += int(retimed)
         point = _point(obs, when, batch.station)
         await _store_track(session, batch.kind, obs, floor_time(when, rules.bucket), point)
-        await _store_heard(session, batch.station, batch.kind, obs, when)
+        if not relayed:
+            # `rf_heard` is where a station hears. A relayed packet was
+            # heard somewhere else first.
+            await _store_heard(session, batch.station, batch.kind, obs, when)
         await _store_latest(session, batch.kind, obs, point)
         tally.stored += 1
     return tally
