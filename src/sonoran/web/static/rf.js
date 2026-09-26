@@ -425,7 +425,13 @@
   const ElementIcon = L.Icon.extend({
     createIcon() {
       const node = this.options.element;
+      /* `_setIconStyles` REPLACES className with Leaflet's own. The
+         element's classes are what size and place an APRS symbol's two
+         sprite layers, so without them the icon is an empty box and
+         draws nothing. Put them back. */
+      const own = node.className.split(/\s+/).filter(Boolean);
       this._setIconStyles(node, 'icon');
+      node.classList.add(...own);
       return node;
     },
     createShadow() { return null; },

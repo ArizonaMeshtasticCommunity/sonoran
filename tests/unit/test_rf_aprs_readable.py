@@ -212,3 +212,45 @@ def test_the_icon_set_is_credited() -> None:
     assert "hessu/aprs-symbols" in html
     provenance = (STATIC / "vendor" / "aprs" / "PROVENANCE.md").read_text(encoding="utf-8")
     assert "f2286a9cd4" in provenance and "COPYRIGHT.md" in provenance
+
+
+def test_an_icon_keeps_its_own_classes_after_leaflet_styles_it() -> None:
+    """Leaflet's `_setIconStyles` replaces className outright.
+
+    `rf-aprs` is what sizes an APRS symbol's sprite layers; losing it made
+    every APRS icon an empty, invisible box on the live map (2026-09-26).
+    Runs the real icon class against Leaflet's real method under node.
+    """
+    start = RF.index("  const ElementIcon = L.Icon.extend({")
+    end = RF.index("  const SVG = ", start)
+    leaflet = (STATIC / "vendor" / "leaflet.js").read_text(encoding="utf-8")
+    method = leaflet[leaflet.index("_setIconStyles:function") :]
+    method = method[: method.index("},_createImg")] + "}"
+    script = (
+        "const node = { className: 'rf-aprs relayed', style: {}, classList: { add(...c) {"
+        " node.className += ' ' + c.join(' '); } } };\n"
+        "function m(p) { return p && { x: p[0], y: p[1],"
+        " divideBy: (d) => ({ x: p[0] / d, y: p[1] / d }) }; }\n"
+        "const L = { Icon: { extend(proto) { return function (options) {"
+        f" const self = Object.assign({{ options, {method} }}, proto);"
+        " return self; }; } } };\n"
+        f"{RF[start:end]}\n"
+        "new ElementIcon({ element: node, className: 'rf-icon', iconSize: [24, 24] })"
+        ".createIcon();\n"
+        "console.log(JSON.stringify(node.className.split(' ')));"
+    )
+    done = subprocess.run(
+        [_node(), "-e", script], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    classes = json.loads(done.stdout)
+    assert {"rf-aprs", "relayed", "rf-icon", "leaflet-marker-icon"} <= set(classes)
+
+
+def test_the_aprs_icon_css_leaves_leaflets_positioning_alone() -> None:
+    """app.css loads after leaflet.css; a `position` on `.rf-aprs` would win
+    and take every APRS symbol out of the place Leaflet put it."""
+    css = (STATIC / "app.css").read_text(encoding="utf-8")
+    rule = css[css.index(".rf-aprs {") :]
+    rule = rule[: rule.index("}")]
+    assert "position" not in rule
