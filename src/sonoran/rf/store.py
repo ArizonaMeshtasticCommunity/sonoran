@@ -294,6 +294,21 @@ def hearings(kind: str, obs: Observation) -> list[Hearing]:
     return found
 
 
+def stored_meta(kind: str, obs: Observation) -> dict[str, object] | None:
+    """Return the `meta` to store: the agent's, plus the contract facts.
+
+    Every kind carries `raw` there, for the RF tab's table. APRS also
+    carries how it was heard. Each is set from its contract field and
+    replaces any key of that name the agent put in `meta`, so a station
+    cannot pass off its own text as the frame it sent.
+    """
+    meta = aprs_meta(obs) if kind == "aprs" else dict(obs.meta or {})
+    meta.pop("raw", None)
+    if obs.raw:
+        meta["raw"] = obs.raw
+    return meta or None
+
+
 def aprs_meta(obs: Observation) -> dict[str, object]:
     """Return the stored `meta`, with how the packet was heard added.
 
@@ -394,12 +409,8 @@ async def store_batch(
             sender_heard = any(h.thing_id == obs.id for h in heard)
             if not sender_heard:
                 tally.relayed += 1
-            mapped = obs.model_copy(
-                update={
-                    "rssi_db": obs.rssi_db if sender_heard else None,
-                    "meta": aprs_meta(obs),
-                }
-            )
+            mapped = obs.model_copy(update={"rssi_db": obs.rssi_db if sender_heard else None})
+        mapped = mapped.model_copy(update={"meta": stored_meta(batch.kind, obs)})
         when, retimed = guarded_time(obs.t, received, rules)
         tally.retimed += int(retimed)
         # The map takes every packet, relayed or not: the position is

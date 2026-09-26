@@ -145,7 +145,7 @@
     const name = meta.callsign || meta.flight || row.id.toUpperCase();
     return el('div', { class: 'rf-tip' },
       el('strong', { text: name }),
-      el('div', { text: `ICAO ${row.id.toUpperCase()} · ${row.kind === 'uat' ? 'UAT' : 'ADS-B'}` }),
+      el('div', { text: `${CATEGORY_NAME[String(meta.category || '').toUpperCase()] || 'Aircraft'} · ICAO ${row.id.toUpperCase()} · ${row.kind === 'uat' ? 'UAT' : 'ADS-B'}` }),
       el('div', { text: row.alt_m == null ? 'altitude not reported' : `${Math.round(row.alt_m).toLocaleString()} m${row.alt_ref === 'geom' ? ' (GNSS)' : ''}` }),
       row.gs_kn == null ? null : el('div', { text: `${Math.round(row.gs_kn)} kn` }),
       el('div', { class: 'muted', text: `heard ${ago(row.t)} by ${row.station}` }));
@@ -155,48 +155,211 @@
   /* How an APRS packet reached the receiver, in words (design 5.1). The
      ingest writes these keys into `meta` from the contract fields, so
      they are facts about the hearing, not something the sender said. */
-  const APRS_KEYS = ['direct', 'via', 'precision_m', 'owner', 'object', 'third_party', 'path'];
+  /* --- APRS and weather, in words ----------------------------------
 
-  function aprsLines(meta) {
-    const call = (value) => String(value).toUpperCase();
+     APRS carries most of what it says in codes: a two-character symbol,
+     a destination that names the sending software, a path of callsigns.
+     These turn each one into what a person would say. The names come
+     from aprs.fi's lists (vendor/aprs/PROVENANCE.md); nothing here
+     decodes a packet, it only names what the agent decoded. */
+  const APRS_TABLES = window.SonoranAprsTables || { symbols: {}, tocalls: [] };
+
+  /* What an overlay character means on the two symbols that use it to
+     say what kind of station this is. Anything else is just a letter
+     printed on the symbol. */
+  const OVERLAYS = {
+    '#': {
+      1: 'WIDE1-1 fill-in digipeater',
+      A: 'digipeater on an alternate input frequency',
+      E: 'emergency-powered digipeater',
+      I: 'digipeater with an I-gate',
+      L: 'WIDEn-N digipeater with path trapping',
+      S: 'state SSn-N digipeater',
+      W: 'WIDEn-N digipeater',
+      X: 'experimental digipeater',
+    },
+    '&': {
+      I: 'I-gate',
+      R: 'receive-only I-gate',
+      T: 'I-gate that transmits one hop',
+      2: 'I-gate that transmits two hops',
+      W: 'Yaesu WIRES-X gateway',
+    },
+  };
+
+  const call = (value) => String(value).toUpperCase();
+  const round1 = (value) => Math.round(Number(value) * 10) / 10;
+
+  /** Name a symbol: `/#` "Digipeater", `S#` "State SSn-N digipeater". */
+  function symbolName(symbol) {
+    if (typeof symbol !== 'string' || symbol.length !== 2) return null;
+    let [table, code] = symbol;
+    /* A compressed position writes the overlay digits 0 to 9 as the
+       letters a to j, so `b#` is the `1#` fill-in digipeater. */
+    if (table >= 'a' && table <= 'j') table = String(table.charCodeAt(0) - 97);
+    if (table === '/' || table === '\\') return APRS_TABLES.symbols[symbol] || null;
+    const special = OVERLAYS[code] && OVERLAYS[code][table];
+    if (special) return special.charAt(0).toUpperCase() + special.slice(1);
+    const base = APRS_TABLES.symbols[`\\${code}`];
+    return base ? `${base}, marked ${table}` : null;
+  }
+
+  /** The software or radio a destination names, such as APMI06. */
+  function deviceName(destination) {
+    if (typeof destination !== 'string' || !destination) return null;
+    const dest = destination.toUpperCase();
+    for (const [pattern, name] of APRS_TABLES.tocalls) {
+      if (pattern.length > dest.length && !pattern.includes('*')) continue;
+      let ok = true;
+      for (let i = 0; i < pattern.length && ok; i += 1) {
+        const p = pattern[i];
+        if (p === '*') return name;
+        const d = dest[i];
+        if (d === undefined) ok = false;
+        else if (p === '?') ok = true;
+        else if (p === 'n') ok = d >= '0' && d <= '9';
+        else ok = p === d;
+      }
+      if (ok && pattern.length === dest.length) return name;
+    }
+    return null;
+  }
+
+  const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+    'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+  const compass = (deg) => COMPASS[Math.round((((Number(deg) % 360) + 360) % 360) / 22.5) % 16];
+  const mph = (knots) => Math.round(Number(knots) * 1.15078);
+  const fahrenheit = (c) => Math.round(Number(c) * 9 / 5 + 32);
+  const celsius = (f) => Math.round((Number(f) - 32) * 5 / 9);
+
+  /* The readings a weather station or sensor sends, with their units.
+     The keys are the agent's, shared by APRS weather and rtl_433 where
+     they overlap. Returns the lines and the keys it used. */
+  const WEATHER_KEYS = ['wind_dir_deg', 'wind_kn', 'gust_kn', 'wind_avg_kmh', 'wind_max_kmh',
+    'temperature_f', 'temperature_c', 'humidity', 'pressure_hpa', 'rain_1h_in', 'rain_24h_in',
+    'rain_today_in', 'rain_mm', 'snow_24h_in', 'luminosity_wm2', 'battery_ok', 'wx_type'];
+
+  function weatherLines(meta) {
+    const lines = [];
+    const has = (key) => meta[key] != null && meta[key] !== '';
+    if (has('wind_kn') || has('wind_dir_deg') || has('gust_kn')) {
+      let text = 'Wind';
+      if (has('wind_dir_deg')) text += ` from ${compass(meta.wind_dir_deg)} (${Math.round(meta.wind_dir_deg)}°)`;
+      if (has('wind_kn')) text += ` at ${mph(meta.wind_kn)} mph`;
+      if (has('gust_kn')) text += `, gusts ${mph(meta.gust_kn)} mph`;
+      lines.push(text);
+    }
+    if (has('wind_avg_kmh') || has('wind_max_kmh')) {
+      const parts = [];
+      if (has('wind_avg_kmh')) parts.push(`${round1(meta.wind_avg_kmh)} km/h`);
+      if (has('wind_max_kmh')) parts.push(`gusts ${round1(meta.wind_max_kmh)} km/h`);
+      lines.push(`Wind ${parts.join(', ')}`);
+    }
+    if (has('temperature_f')) lines.push(`Temperature ${Math.round(meta.temperature_f)} °F (${celsius(meta.temperature_f)} °C)`);
+    else if (has('temperature_c')) lines.push(`Temperature ${round1(meta.temperature_c)} °C (${fahrenheit(meta.temperature_c)} °F)`);
+    if (has('humidity')) lines.push(`Humidity ${Math.round(meta.humidity)} %`);
+    if (has('pressure_hpa')) lines.push(`Pressure ${round1(meta.pressure_hpa)} hPa`);
+    const rain = [];
+    if (has('rain_1h_in')) rain.push(`${Number(meta.rain_1h_in).toFixed(2)} in in the last hour`);
+    if (has('rain_24h_in')) rain.push(`${Number(meta.rain_24h_in).toFixed(2)} in in 24 hours`);
+    if (has('rain_today_in')) rain.push(`${Number(meta.rain_today_in).toFixed(2)} in since midnight`);
+    if (has('rain_mm')) rain.push(`${round1(meta.rain_mm)} mm total`);
+    if (rain.length) lines.push(`Rain ${rain.join(', ')}`);
+    if (has('snow_24h_in')) lines.push(`Snow ${round1(meta.snow_24h_in)} in in 24 hours`);
+    if (has('luminosity_wm2')) lines.push(`Sunlight ${Math.round(meta.luminosity_wm2)} W/m²`);
+    if (has('battery_ok')) lines.push(meta.battery_ok === false || meta.battery_ok === 0 ? 'Battery low' : 'Battery OK');
+    if (has('wx_type')) lines.push(`Weather station type ${meta.wx_type}`);
+    return lines;
+  }
+
+  /* How an APRS packet reached the receiver, in words (design 5.1). The
+     ingest writes `direct`, `via` and `precision_m` into `meta` from the
+     contract fields, so they are facts about the hearing, not something
+     the sender said. */
+  function hearingLines(meta) {
     const lines = [];
     if (meta.object) {
       lines.push(`${meta.object === 'item' ? 'An item' : 'An object'} placed by ${meta.owner ? call(meta.owner) : 'another station'}, not a transmitter`);
     }
+    /* Every hop that repeated the packet, in order: the `*` ones that
+       name a station. An alias such as WIDE2* names nobody. */
+    const hops = String(meta.path || '').split(',').map((hop) => hop.trim())
+      .filter((hop) => hop.endsWith('*')).map((hop) => hop.slice(0, -1))
+      .filter((hop) => hop && !/^(WIDE|TRACE|RELAY|ECHO|GATE|TCPIP|TCPXX|NOGATE|RFONLY|Q[A-Z]{2})/i.test(hop));
     if (meta.third_party) {
       lines.push(`From the internet, put on the air by ${meta.via ? call(meta.via) : 'a gateway'}`);
-    } else if (meta.direct === false) {
-      lines.push(meta.via ? `Heard through ${call(meta.via)}` : 'Relayed by a digipeater');
     } else if (meta.direct === true && !meta.object) {
-      lines.push('Heard directly');
+      lines.push('Heard directly, with no digipeater');
+    } else if (hops.length) {
+      lines.push(`Repeated by ${hops.map(call).join(', then ')}`);
+    } else if (meta.direct === false) {
+      lines.push(meta.via ? `Heard through ${call(meta.via)}` : 'Repeated by a digipeater that did not sign the path');
     }
-    if (meta.path) lines.push(`Path ${meta.path}`);
     if (meta.precision_m) {
       const metres = Number(meta.precision_m);
       const size = metres >= 1000 ? `${(metres / 1000).toFixed(metres >= 10000 ? 0 : 1)} km` : `${Math.round(metres)} m`;
       lines.push(`The sender blurred its own position to about ${size}`);
     }
-    return lines.map((text) => el('div', { class: 'muted', text }));
+    return lines;
+  }
+
+  /* Keys the APRS tooltip turns into words. Anything else the agent
+     sends is listed plainly, so a new field is never hidden. */
+  const APRS_KEYS = ['direct', 'via', 'precision_m', 'owner', 'object', 'third_party', 'path',
+    'symbol', 'destination', 'device', 'message', 'comment', ...WEATHER_KEYS];
+
+  function aprsTooltip(row) {
+    const meta = row.meta || {};
+    const isObject = row.id.startsWith(';');
+    const muted = (text) => el('div', { class: 'muted', text });
+    const kind = symbolName(meta.symbol);
+    const device = meta.device || deviceName(meta.destination);
+    const motion = [];
+    if (row.gs_kn != null && Number(row.gs_kn) > 0) {
+      motion.push(`Moving ${mph(row.gs_kn)} mph (${Math.round(row.gs_kn)} kn)`
+        + (row.track_deg != null ? `, heading ${compass(row.track_deg)} (${Math.round(row.track_deg)}°)` : ''));
+    } else if (row.track_deg != null) {
+      motion.push(`Heading ${compass(row.track_deg)} (${Math.round(row.track_deg)}°)`);
+    }
+    if (row.alt_m != null) {
+      motion.push(`Altitude ${Math.round(row.alt_m * 3.28084).toLocaleString()} ft (${Math.round(row.alt_m).toLocaleString()} m)`);
+    }
+    const others = Object.entries(meta)
+      .filter(([key, value]) => !APRS_KEYS.includes(key) && value != null && value !== '')
+      .slice(0, 6)
+      .map(([key, value]) => el('div', { text: `${key.replaceAll('_', ' ')}: ${String(value).slice(0, 40)}` }));
+    return el('div', { class: 'rf-tip' },
+      el('strong', { text: isObject ? row.id.slice(1).toUpperCase() : call(row.id) }),
+      el('div', { text: kind ? `${kind} · APRS` : 'APRS station' }),
+      meta.message ? el('div', { text: `Status: ${meta.message}` }) : null,
+      motion.map((text) => el('div', { text })),
+      weatherLines(meta).map((text) => el('div', { text })),
+      /* The comment is what a person typed. It is shown whole and
+         wrapped, never cut to fit the tooltip. */
+      meta.comment ? el('div', { class: 'rf-comment', text: String(meta.comment) }) : null,
+      others,
+      device ? muted(`Sent with ${device}`) : null,
+      hearingLines(meta).map(muted),
+      muted(`heard ${ago(row.t)} by ${row.station}`));
   }
 
   /* Any other kind: what it is, its id, and the plain fields it sent. */
   function otherTooltip(row) {
+    if (row.kind === 'aprs') return aprsTooltip(row);
     const style = KIND_STYLE[row.kind] || { label: row.kind };
     const { comment, ...meta } = row.meta || {};
-    const aprs = row.kind === 'aprs';
+    const readings = weatherLines(meta);
     const extras = Object.entries(meta)
-      .filter(([key]) => !(aprs && APRS_KEYS.includes(key)))
+      .filter(([key]) => !WEATHER_KEYS.includes(key))
       .slice(0, 4)
       .map(([key, value]) => el('div', { text: `${key.replaceAll('_', ' ')}: ${String(value).slice(0, 40)}` }));
     return el('div', { class: 'rf-tip' },
-      el('strong', { text: aprs && row.id.startsWith(';') ? row.id.slice(1) : row.id }),
+      el('strong', { text: row.id }),
       el('div', { text: style.label }),
       row.alt_m == null ? null : el('div', { text: `${Math.round(row.alt_m).toLocaleString()} m` }),
+      readings.map((text) => el('div', { text })),
       extras,
-      /* The comment is what a person typed. It is shown whole and
-         wrapped, never cut to fit the tooltip. */
       comment == null || comment === '' ? null : el('div', { class: 'rf-comment', text: String(comment) }),
-      aprs ? aprsLines(meta) : null,
       style.heardHere
         ? el('div', { class: 'muted', text: 'It sends no position. The mark is the receiver that heard it.' })
         : null,
@@ -220,6 +383,117 @@
     return kind === 'adsb' || kind === 'uat';
   }
 
+  /* --- Icons ---------------------------------------------------------
+
+     An aircraft is drawn as what it is, from the ADS-B emitter category
+     it broadcasts, pointing the way it is going and coloured by
+     altitude. Shape carries the kind and colour the height, so each
+     still reads without the other. The silhouettes are drawn here, in a
+     24 unit box pointing north. */
+  const AIRCRAFT_SHAPES = {
+    plane: 'M12 2c.9 0 1.4 1 1.4 2.4V9l7.6 4.6v2l-7.6-2.3V18l2.4 1.8v1.6L12 20.4l-3.8 1V19.8L10.6 18v-4.7L3 15.6v-2L10.6 9V4.4C10.6 3 11.1 2 12 2z',
+    jet: 'M12 1.5c.7 0 1.2 1.3 1.2 3v4.6L21 19v1.6l-7.8-4.1v3.6l2.1 1.6v1.2L12 22l-3.3 1V21.7l2.1-1.6v-3.6L3 20.6V19l7.8-9.9V4.5c0-1.7.5-3 1.2-3z',
+    rotor: 'M12 6.2a3.3 3.3 0 0 1 3.3 3.3v2.8a3.3 3.3 0 0 1-2.4 3.2V21h2.2v1.4H8.9V21h2.2v-5.5a3.3 3.3 0 0 1-2.4-3.2V9.5A3.3 3.3 0 0 1 12 6.2zM2.5 8.2l.8-1.2L21.5 17l-.8 1.2zM3.3 18.2l-.8-1.2L20.7 7l.8 1.2z',
+    glider: 'M12 3c.6 0 1 .9 1 2v5.4l10 1.2v1.6l-10-.4V19l2.4 1.4V22H8.6v-1.6L11 19v-6.2l-10 .4v-1.6l10-1.2V5c0-1.1.4-2 1-2z',
+    balloon: 'M12 1.5a7 7 0 0 1 7 7c0 4.2-4 7.8-5.6 9.6h-2.8C9 16.3 5 12.7 5 8.5a7 7 0 0 1 7-7zM10.2 19.2h3.6V22h-3.6z',
+    drone: 'M9.5 9.5h5v5h-5zM4 4l6 6M20 4l-6 6M4 20l6-6M20 20l-6-6M1.5 4a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0M17.5 4a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0M1.5 20a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0M17.5 20a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0',
+    vehicle: 'M7 4h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z',
+  };
+
+  /* Emitter category (DO-260B) to a shape and a size in pixels. The
+     size grows with the class of aircraft, so a heavy reads as heavy. */
+  const CATEGORY_ICON = {
+    A1: ['plane', 18], A2: ['plane', 20], A3: ['plane', 22], A4: ['plane', 24],
+    A5: ['plane', 26], A6: ['jet', 22], A7: ['rotor', 22],
+    B1: ['glider', 22], B2: ['balloon', 20], B3: ['plane', 16], B4: ['plane', 16],
+    B6: ['drone', 18], B7: ['jet', 22],
+    C1: ['vehicle', 14], C2: ['vehicle', 14],
+  };
+
+  /** What an aircraft's category says it is, in words, for the tooltip. */
+  const CATEGORY_NAME = {
+    A1: 'Light aircraft', A2: 'Small aircraft', A3: 'Large aircraft', A4: 'Large aircraft (B757)',
+    A5: 'Heavy aircraft', A6: 'High-performance aircraft', A7: 'Helicopter',
+    B1: 'Glider', B2: 'Balloon or airship', B3: 'Parachutist', B4: 'Ultralight',
+    B6: 'Drone', B7: 'Space vehicle', C1: 'Emergency vehicle', C2: 'Service vehicle',
+  };
+
+  /* A Leaflet icon that shows an element this file built node by node.
+     Leaflet's div icon would take the same element through its `html` option;
+     this keeps rf.js free of any markup path at all (see
+     test_text_off_the_air_is_never_built_into_html). */
+  const ElementIcon = L.Icon.extend({
+    createIcon() {
+      const node = this.options.element;
+      this._setIconStyles(node, 'icon');
+      return node;
+    },
+    createShadow() { return null; },
+  });
+
+  const SVG = 'http://www.w3.org/2000/svg';
+
+  function aircraftIcon(row, colour) {
+    const category = String((row.meta || {}).category || '').toUpperCase();
+    const [shape, size] = CATEGORY_ICON[category] || ['plane', 20];
+    /* A balloon, a drone and a vehicle have no nose to point with. */
+    const turns = !['balloon', 'drone', 'vehicle'].includes(shape) && row.track_deg != null;
+    const angle = turns ? Math.round(Number(row.track_deg)) : 0;
+    const stroked = shape === 'drone';
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.transform = `rotate(${angle}deg)`;
+    const path = document.createElementNS(SVG, 'path');
+    path.setAttribute('d', AIRCRAFT_SHAPES[shape]);
+    path.setAttribute('fill', stroked ? 'none' : colour);
+    path.setAttribute('stroke', stroked ? colour : 'rgba(0,0,0,.75)');
+    path.setAttribute('stroke-width', stroked ? 2 : 0.8);
+    svg.append(path);
+    const node = document.createElement('div');
+    node.className = 'rf-plane';
+    node.append(svg);
+    return new ElementIcon({ element: node, className: 'rf-icon', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
+  }
+
+  /* An APRS station is drawn as the symbol it chose, from the aprs.fi
+     symbol set (vendor/aprs/PROVENANCE.md). A sheet is 16 symbols wide
+     and six high, from `!` onwards. An overlay letter or digit is the
+     alternate table's symbol with the character printed on top. */
+  const APRS_SHEETS = ['static/vendor/aprs/aprs-symbols-24-0@2x.png',
+    'static/vendor/aprs/aprs-symbols-24-1@2x.png', 'static/vendor/aprs/aprs-symbols-24-2@2x.png'];
+
+  function spriteCell(sheet, char) {
+    const index = char.charCodeAt(0) - 33;
+    if (!(index >= 0 && index < 96)) return null;
+    const span = document.createElement('span');
+    span.style.backgroundImage = `url("${APRS_SHEETS[sheet]}")`;
+    span.style.backgroundPosition = `-${(index % 16) * 24}px -${Math.floor(index / 16) * 24}px`;
+    return span;
+  }
+
+  function aprsIcon(row) {
+    const meta = row.meta || {};
+    const symbol = meta.symbol;
+    if (typeof symbol !== 'string' || symbol.length !== 2) return null;
+    let [table, code] = symbol;
+    if (table >= 'a' && table <= 'j') table = String(table.charCodeAt(0) - 97);
+    const overlay = table !== '/' && table !== '\\' && /^[0-9A-Z]$/.test(table);
+    if (table !== '/' && table !== '\\' && !overlay) return null;
+    const base = spriteCell(table === '/' ? 0 : 1, code);
+    if (!base) return null;
+    const node = document.createElement('div');
+    /* Relayed stations are drawn fainter: the map puts them where they
+       say they are, but this receiver did not hear them there. */
+    node.className = meta.direct === false ? 'rf-aprs relayed' : 'rf-aprs';
+    node.append(base);
+    const letter = overlay ? spriteCell(2, table) : null;
+    if (letter) node.append(letter);
+    return new ElementIcon({ element: node, className: 'rf-icon', iconSize: [24, 24], iconAnchor: [12, 12] });
+  }
+
   function drawThings(rows) {
     state.aircraft.clearLayers();
     for (const row of rows) {
@@ -228,25 +502,20 @@
       const aircraft = isAircraft(row.kind);
       const style = aircraft ? null : KIND_STYLE[row.kind] || { colour: '#b59c88', radius: 4 };
       const colour = aircraft ? altitudeColour(row.alt_m) : style.colour;
-      const marker = L.circleMarker([row.lat, row.lon], {
-        radius: aircraft ? 5 : style.radius,
-        color: colour,
-        fillColor: colour,
-        // Hollow for anything that is not an aircraft, so the two read
-        // apart without colour.
-        fillOpacity: aircraft ? 0.9 : 0.15,
-        weight: aircraft ? 1 : 2,
-        /* Built on hover, not on draw. Leaflet calls this when the
-           tooltip opens, so a busy sky no longer builds six elements
-           per aircraft on every poll for tooltips nobody hovered. */
-      }).bindTooltip(() => (aircraft ? aircraftTooltip(row) : otherTooltip(row)), { direction: 'top' });
+      const icon = aircraft ? aircraftIcon(row, colour) : row.kind === 'aprs' ? aprsIcon(row) : null;
+      /* Anything without an icon keeps the hollow ring, so it still
+         reads apart from an aircraft without colour. */
+      const marker = (icon
+        ? L.marker([row.lat, row.lon], { icon, keyboard: false })
+        : L.circleMarker([row.lat, row.lon], {
+          radius: style.radius, color: colour, fillColor: colour, fillOpacity: 0.15, weight: 2,
+        })
+      /* Built on hover, not on draw. Leaflet calls this when the
+         tooltip opens, so a busy sky no longer builds six elements
+         per aircraft on every poll for tooltips nobody hovered. */
+      ).bindTooltip(() => (aircraft ? aircraftTooltip(row) : otherTooltip(row)), { direction: 'top' });
       marker.on('click', () => selectThing(row));
       state.aircraft.addLayer(marker);
-      if (aircraft && row.track_deg != null) {
-        state.aircraft.addLayer(L.polyline([[row.lat, row.lon], ahead(row.lat, row.lon, row.track_deg, 4)], {
-          color: colour, weight: 2, opacity: 0.9, interactive: false,
-        }));
-      }
     }
   }
 
@@ -654,6 +923,181 @@
     drawBusy(page);
   }
 
+  /* --- The table ----------------------------------------------------
+
+     Everything on the map, as rows: the decoded fields in words, and
+     beside them the raw frame the decoder gave the agent (`meta.raw`,
+     contract field `raw`). The rows are the ones the map drew, so the
+     table never disagrees with it. Text only, like the tooltips. */
+  const RAW_NOTE = 'Not sent: this source gives the agent decoded data only';
+  const ft = (metres) => (metres == null ? null : Math.round(Number(metres) * 3.28084));
+  const heardAt = (row) => Date.parse(row.t) || 0;
+  const aprsMotion = (row) => {
+    if (row.gs_kn != null && Number(row.gs_kn) > 0) {
+      return `${mph(row.gs_kn)} mph${row.track_deg != null ? ` ${compass(row.track_deg)}` : ''}`;
+    }
+    return '';
+  };
+
+  const TABLES = [
+    {
+      key: 'aircraft', label: 'Aircraft', kinds: ['adsb', 'uat'],
+      columns: [
+        { label: 'ICAO', value: (row) => row.id.toUpperCase() },
+        { label: 'Callsign', value: (row) => (row.meta || {}).callsign || (row.meta || {}).flight || '' },
+        { label: 'Type', value: (row) => CATEGORY_NAME[String((row.meta || {}).category || '').toUpperCase()] || '' },
+        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        { label: 'Speed kn', num: true, value: (row) => (row.gs_kn == null ? null : Math.round(row.gs_kn)) },
+        { label: 'Heading', num: true, value: (row) => (row.track_deg == null ? null : Math.round(row.track_deg)) },
+        { label: 'Squawk', value: (row) => (row.meta || {}).squawk || '' },
+        { label: 'Signal dB', num: true, value: (row) => (row.rssi_db == null ? null : round1(row.rssi_db)) },
+      ],
+    },
+    {
+      key: 'aprs', label: 'APRS', kinds: ['aprs'],
+      columns: [
+        { label: 'Callsign', value: (row) => (row.id.startsWith(';') ? row.id.slice(1) : row.id).toUpperCase() },
+        { label: 'Symbol', value: (row) => symbolName((row.meta || {}).symbol) || (row.meta || {}).symbol || '' },
+        { label: 'Status', value: (row) => (row.meta || {}).message || '' },
+        { label: 'Moving', value: aprsMotion },
+        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        { label: 'Weather', wrap: true, value: (row) => weatherLines(row.meta || {}).join(' · ') },
+        { label: 'Comment', wrap: true, value: (row) => (row.meta || {}).comment || '' },
+        { label: 'How heard', wrap: true, value: (row) => hearingLines(row.meta || {}).join(' · ') },
+        { label: 'Sent with', value: (row) => (row.meta || {}).device || deviceName((row.meta || {}).destination) || '' },
+      ],
+    },
+    {
+      key: 'sonde', label: 'Radiosondes', kinds: ['sonde'],
+      columns: [
+        { label: 'Serial', value: (row) => row.id.toUpperCase() },
+        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        { label: 'Speed kn', num: true, value: (row) => (row.gs_kn == null ? null : Math.round(row.gs_kn)) },
+        { label: 'Heading', num: true, value: (row) => (row.track_deg == null ? null : Math.round(row.track_deg)) },
+      ],
+    },
+    {
+      key: 'ism', label: 'Weather sensors', kinds: ['ism'],
+      columns: [
+        { label: 'Sensor', value: (row) => row.id },
+        { label: 'Readings', wrap: true, value: (row) => weatherLines(row.meta || {}).join(' · ') },
+      ],
+    },
+  ];
+  /* Every table ends with where and when, and the raw frame. */
+  const TAIL_COLUMNS = [
+    { label: 'Latitude', num: true, value: (row) => Number(row.lat).toFixed(4) },
+    { label: 'Longitude', num: true, value: (row) => Number(row.lon).toFixed(4) },
+    { label: 'Heard', value: heardAt, text: (row) => ago(row.t) },
+    { label: 'Station', value: (row) => row.station || '' },
+    { label: 'Raw', raw: true, wrap: true, value: (row) => (row.meta || {}).raw || '' },
+  ];
+  /* A busy sky is thousands of rows. The filter narrows it; the table
+     draws this many and says so. */
+  const TABLE_MAX_ROWS = 500;
+
+  const tableState = { open: false, which: 'aircraft', sort: {}, filter: '' };
+
+  function tableRows(table) {
+    const kinds = new Set(table.kinds);
+    return (state.lastRows || []).filter((row) => kinds.has(row.kind));
+  }
+
+  function cellText(column, row) {
+    if (column.text) return column.text(row);
+    const value = column.value(row);
+    return value == null ? '' : String(value);
+  }
+
+  function drawTable(page) {
+    const panel = $('[data-rf-table]', page);
+    if (!panel) return;
+    panel.hidden = !tableState.open;
+    if (!tableState.open) return;
+    const available = TABLES.filter((table) => tableRows(table).length);
+    if (!available.some((table) => table.key === tableState.which) && available.length) {
+      tableState.which = available[0].key;
+    }
+    const tabs = $('[data-rf-table-tabs]', page);
+    tabs.replaceChildren(...TABLES.map((table) => {
+      const count = tableRows(table).length;
+      const button = el('button', {
+        type: 'button', class: 'toggle', 'aria-pressed': String(table.key === tableState.which),
+        text: `${table.label} (${count.toLocaleString()})`,
+      });
+      button.disabled = !count;
+      button.addEventListener('click', () => { tableState.which = table.key; drawTable(page); });
+      return button;
+    }));
+    const table = TABLES.find((item) => item.key === tableState.which) || TABLES[0];
+    const columns = table.columns.concat(TAIL_COLUMNS);
+    const sort = tableState.sort[table.key] || { index: columns.findIndex((c) => c.label === 'Heard'), order: 'desc' };
+    const needle = tableState.filter.trim().toLowerCase();
+    let rows = tableRows(table);
+    if (needle) {
+      rows = rows.filter((row) => columns.some((column) => cellText(column, row).toLowerCase().includes(needle)));
+    }
+    const key = columns[sort.index];
+    rows = rows.slice().sort((a, b) => {
+      const x = key.value(a);
+      const y = key.value(b);
+      if (x == null || x === '') return 1;
+      if (y == null || y === '') return -1;
+      const order = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+      return sort.order === 'asc' ? order : -order;
+    });
+    const shown = rows.slice(0, TABLE_MAX_ROWS);
+    const head = el('tr', {}, columns.map((column, index) => {
+      const active = index === sort.index;
+      const button = el('button', { type: 'button', class: 'sort-button' },
+        el('span', { text: column.label }),
+        el('span', { class: 'sort-arrow', 'aria-hidden': 'true',
+          text: active ? (sort.order === 'asc' ? '↑' : '↓') : '↕' }));
+      button.addEventListener('click', () => {
+        tableState.sort[table.key] = { index, order: active && sort.order === 'asc' ? 'desc' : 'asc' };
+        drawTable(page);
+      });
+      return el('th', {
+        scope: 'col',
+        class: ['sortable', active ? 'sorted' : '', column.num ? 'num' : ''].join(' ').trim(),
+        'aria-sort': active ? (sort.order === 'asc' ? 'ascending' : 'descending') : 'none',
+      }, button);
+    }));
+    const body = shown.map((row) => el('tr', {}, columns.map((column) => {
+      const text = cellText(column, row);
+      const classes = [column.num ? 'num' : '', column.wrap ? 'wrap' : ''].join(' ').trim() || null;
+      if (column.raw) {
+        return el('td', { class: classes },
+          text ? el('code', { class: 'rf-raw', text }) : el('span', { class: 'muted', title: RAW_NOTE, text: 'not sent' }));
+      }
+      return el('td', { class: classes, text });
+    })));
+    $('[data-rf-table-grid]', page).replaceChildren(
+      el('table', { class: 'rf-table' }, el('thead', {}, head), el('tbody', {}, body)));
+    const total = tableRows(table).length;
+    $('[data-rf-table-note]', page).textContent = !total
+      ? 'Nothing of this kind is on the map right now.'
+      : `${shown.length.toLocaleString()} of ${rows.length.toLocaleString()} rows`
+        + (needle ? ` matching "${tableState.filter.trim()}"` : '')
+        + (rows.length > shown.length ? '; narrow the filter to see the rest.' : '.')
+        + ' The same things the map shows, over the same window.';
+  }
+
+  function bindTable(page) {
+    const button = $('[data-rf-table-toggle]', page);
+    if (!button || button.dataset.bound) return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', () => {
+      tableState.open = !tableState.open;
+      button.setAttribute('aria-pressed', String(tableState.open));
+      drawTable(page);
+    });
+    $('[data-rf-table-filter]', page).addEventListener('input', (event) => {
+      tableState.filter = event.target.value;
+      drawTable(page);
+    });
+  }
+
   async function show(page) {
     const map = ensureMap();
     setTimeout(() => map.invalidateSize(), 0);
@@ -682,6 +1126,9 @@
     drawLegend(page);
     drawStations(stations.body);
     drawThings(latest.body);
+    state.lastRows = latest.body;
+    bindTable(page);
+    drawTable(page);
     drawBand(page, stations.body, false);
     if (!stations.body.length) {
       summary.textContent = 'No RF station has reported yet. A station runs rf-agent beside its SDR.';

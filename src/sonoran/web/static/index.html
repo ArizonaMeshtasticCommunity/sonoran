@@ -469,6 +469,7 @@
               <!-- One toggle per source that is stored, built by rf.js
                    from /api/rf/kinds, then the receivers. -->
               <span class="rf-layers" data-rf-layers></span>
+              <button type="button" class="toggle" data-rf-table-toggle aria-pressed="false">Table</button>
               <label class="muted">Window
                 <select data-rf-minutes aria-label="How far back to show">
                   <option value="1">1 min</option>
@@ -491,6 +492,16 @@
           <div class="map-shell"><div id="rf-map"></div></div>
           <p class="muted" data-rf-selected>Click a mark for its track, or a receiver for where it hears.</p>
           <div class="legend" data-rf-legend aria-label="What the marks mean"></div>
+          <!-- Everything on the map as rows: decoded, and the raw frame it
+               was decoded from. Built by rf.js, "The table". -->
+          <section class="panel rf-table-panel" data-rf-table hidden aria-label="RF data table">
+            <div class="rf-table-head">
+              <div class="segmented" role="group" aria-label="Which kind" data-rf-table-tabs></div>
+              <label class="muted">Filter <input type="search" data-rf-table-filter placeholder="callsign, ICAO, comment…" /></label>
+            </div>
+            <div class="table-wrap" data-rf-table-grid></div>
+            <p class="muted" data-rf-table-note></p>
+          </section>
 
           <!--
             The 900 MHz band (design 7.4). One station at a time: an SDR
@@ -533,6 +544,9 @@
             <p class="sub">The share of sweeps in which a bin stood 6 dB above its own median. Inside a mesh channel that is mostly our own packets. <strong>Outside every mesh channel</strong> it is something else on the band.</p>
             <div class="chart" data-rf-band-busy></div>
           </section>
+          <!-- The two name lists are CC BY-SA and ask to be credited in
+               the small print. See vendor/aprs/PROVENANCE.md. -->
+          <p class="sub rf-credit">APRS symbol names, device names and icons from Hessu, OH7LZB, for aprs.fi: the symbol index and device list (CC BY-SA) and the aprs-symbols set (github.com/hessu/aprs-symbols).</p>
         </section>
 
         <section class="page" data-page="coverage">
@@ -1492,6 +1506,7 @@
     -->
     <script src="static/coverage.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!-- The RF page, its own map, before app.js like coverage.js. -->
+    <script src="static/vendor/aprs/aprs-tables.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/rf.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The coverage gaps page loads before app.js for the same reason the

@@ -12,6 +12,7 @@ from sonoran.config import Settings
 from sonoran.rf.ingest import decode, rules_from
 from sonoran.rf.schema import (
     KINDS,
+    MAX_RAW_CHARS,
     STORED_KINDS,
     THING_ID,
     Batch,
@@ -30,6 +31,7 @@ from sonoran.rf.store import (
     guarded_time,
     hearings,
     ism_model,
+    stored_meta,
 )
 
 NOW = datetime(2026, 9, 22, 18, 0, 0, tzinfo=UTC)
@@ -387,15 +389,18 @@ def _bare_obs() -> dict[str, object]:
 def test_the_tooltip_shows_a_comment_whole() -> None:
     """A comment is what a person typed. It is never cut to fit.
 
-    The other `meta` fields are cut to 40 characters and to four
-    entries. The comment is taken out of that list first, so neither
-    cut can reach it, and it wraps instead.
+    Other `meta` fields are cut to 40 characters and to a few entries.
+    The comment is kept out of that list, so neither cut can reach it,
+    and it wraps instead. Both tooltips that show one are checked.
     """
     rf = _static("rf.js")
     assert "const { comment, ...meta } = row.meta || {};" in rf
-    line = next(text for text in rf.splitlines() if "'rf-comment'" in text)
-    assert "text: String(comment)" in line
-    assert "slice" not in line
+    assert "'comment'" in rf[rf.index("const APRS_KEYS") : rf.index("function aprsTooltip")]
+    lines = [text for text in rf.splitlines() if "'rf-comment'" in text]
+    assert len(lines) == 2, lines
+    for line in lines:
+        assert re.search(r"text: String\((meta\.)?comment\)", line), line
+        assert "slice" not in line, line
     assert re.search(r"\.rf-tip \.rf-comment \{[^}]*white-space: normal", _static("app.css"))
 
 
@@ -496,10 +501,47 @@ def test_the_tooltip_says_how_an_aprs_packet_was_heard() -> None:
     rf = _static("rf.js")
     for phrase in (
         "Heard through ",
-        "Relayed by a digipeater",
+        "Repeated by a digipeater that did not sign the path",
+        "Repeated by ",
         "From the internet, put on the air by ",
         "not a transmitter",
         # We never blurred it: the wording must say who did.
         "The sender blurred its own position",
     ):
         assert phrase in rf, phrase
+
+
+# --- the raw frame, for the RF table ------------------------------------
+
+
+def test_raw_is_optional_and_an_over_long_one_is_dropped_not_the_batch() -> None:
+    """One bad frame must not cost the other 99 points, or be cut to fit."""
+    obs = [
+        {**_bare_obs(), "id": "kd7abc-9", "raw": "KD7ABC-9>APRS,WIDE2-1:!3330.00N/11200.00W>"},
+        {**_bare_obs(), "id": "kd7abc-8", "raw": "x" * (MAX_RAW_CHARS + 1)},
+        {**_bare_obs(), "id": "kd7abc-7"},
+    ]
+    batch = Batch.model_validate(_batch(kind="aprs", obs=obs))
+    assert [o.raw for o in batch.obs] == [obs[0]["raw"], None, None]
+
+
+def test_raw_is_stored_from_the_contract_field_and_cannot_be_forged_in_meta() -> None:
+    forged = {"comment": "hi", "raw": "not what I sent"}
+    aircraft = _aprs("a1b2c3", raw="8D4840D6202CC371C32CE0576098", meta=forged)
+    assert stored_meta("adsb", aircraft) == {"comment": "hi", "raw": "8D4840D6202CC371C32CE0576098"}
+    # No raw sent: the forged key is removed, not kept.
+    assert stored_meta("adsb", _aprs("a1b2c3", meta=forged)) == {"comment": "hi"}
+    # APRS keeps its hearing facts beside it.
+    aprs = stored_meta("aprs", _aprs("kd7abc", direct=True, raw="KD7ABC>APRS:>hi"))
+    assert aprs == {"direct": True, "raw": "KD7ABC>APRS:>hi"}
+    assert stored_meta("sonde", _aprs("v1234567")) is None
+
+
+def test_the_rf_page_has_a_table_with_the_raw_frame_beside_the_decoded() -> None:
+    rf = _static("rf.js")
+    html = _static("index.html")
+    assert "data-rf-table-toggle" in html and "data-rf-table-grid" in html
+    for label in ("'ICAO'", "'Callsign'", "'Squawk'", "'How heard'", "'Sent with'", "'Raw'"):
+        assert f"label: {label}" in rf, label
+    # The raw frame is set as text inside <code>, like every other cell.
+    assert "el('code', { class: 'rf-raw', text })" in rf
