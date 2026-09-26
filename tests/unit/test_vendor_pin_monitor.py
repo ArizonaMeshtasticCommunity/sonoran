@@ -33,9 +33,7 @@ SCRIPT = ROOT / "tools" / "check_config_checker_pin.sh"
 def _steps() -> str:
     """The workflow's shell, with YAML comment lines dropped."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    return "\n".join(
-        line for line in text.splitlines() if not line.strip().startswith("#")
-    )
+    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
 
 
 def test_the_comment_stripper_works() -> None:
