@@ -50,11 +50,17 @@ If we follow your list exactly, an MQTT-delivered ack and an ack from an
 older node stop being delivery signals and get drawn as reactions people
 chose.
 
-- **(a) Keep `#`, `0` and 🎯 as auto-acks** *(recommended)* — your rule
-  plus the three the upstream engine documents.
-- **(b) Follow your list exactly** — only `1`–`7` and `*`.
-- **(c) Keep them but label them separately** — e.g. a "via MQTT" chip
-  distinct from the hop-count ones.
+- ~~(a) Keep `#`, `0` and 🎯 as auto-acks~~
+- **(b) DECIDED, 2026-09-26: follow the list exactly** — only `1`–`7`
+  and `*`.
+- ~~(c) Keep them but label them separately~~
+
+**The consequence, recorded so it is not later read as a bug.** An ack
+that arrived over MQTT (`#`) and an ack from an older node (`0`, 🎯) will
+now be drawn as reactions a person chose, because nothing in the packet
+distinguishes them. This is a deliberate choice in favour of matching what
+the operators see on their own radios, and the code comment must say so
+and cite this decision -- otherwise the next person will "fix" it back.
 
 ### 2.2 "Auto-acked" without the hedge
 
@@ -82,10 +88,10 @@ already use it for the preset:
 
 A cookie would only be needed if the server had to render units itself.
 
-- **(a) `localStorage`** *(recommended)*.
-- **(b) Cookies** — choose this if you want the setting to survive in a
-  context where `localStorage` is blocked but cookies are not, which is
-  rare and usually the reverse.
+- **(a) DECIDED, 2026-09-26: `localStorage`.** One mechanism for the
+  preset and the settings, nothing on the wire, and the same wrapping
+  `preset.js` already proved against a private window.
+- ~~(b) Cookies~~
 
 ### 2.4 Radio climate from the location — we cannot do this properly
 
@@ -98,14 +104,39 @@ prediction.
 
 Options, none of them free:
 
-- **(a) Keep `desert` as the default for every Arizona site, expose it
-  only in advanced** *(recommended)* — honest, and right for most of the
-  mesh. Flagstaff is the case it is wrong for.
-- **(b) Derive it from elevation** — e.g. above ~1,800 m use continental
-  temperate. Cheap, and a rule we invented; it would need to be labelled
-  as a guess wherever it shows.
-- **(c) Ship a climate lookup** — a real dataset, real work, and probably
-  not worth it for one state.
+- **(a) DECIDED, 2026-09-26 (revised the same day): `desert` in Simple,
+  choosable in Advanced, and the lookup filed as its own issue — #239.**
+- ~~(b) Derive it from elevation~~
+- ~~(c) Ship a climate lookup~~ — chosen, then reversed once costed. The
+  costing is kept below because it is the useful part and the next person
+  should not have to redo it.
+
+**What the separate issue has to carry.** A lookup is not a UI change. The
+five codes the engine takes are ITM's: equatorial, continental
+subtropical, maritime subtropical, desert, continental temperate.
+Answering "which of these five, for this coordinate" well enough to
+improve a prediction means:
+
+1. choosing a **Köppen-Geiger** dataset — the standard source, published
+   as a raster — and checking its licence permits redistribution;
+2. writing the Köppen → ITM mapping and documenting each decision, since
+   that is where the judgement is and it must be reviewable;
+3. picking a resolution. Arizona spans desert (Phoenix, BWh) and
+   continental temperate (Flagstaff, Dsb) within 200 km, so a coarse grid
+   defeats the purpose;
+4. deciding what ships. A world raster is megabytes; cropping to this
+   region is smaller and honest, but a site outside the crop must then
+   fall back rather than answer wrongly;
+5. serving it. `src/sonoran/terrain/` is the precedent for shipping
+   geographic data and the obvious home.
+
+**The risk that made it its own issue.** A lookup that is confidently
+wrong is worse than a default that is openly a default, because the reader
+has no reason to check it.
+
+**Until then:** Simple uses `desert` and does not hide that it is a
+choice — a beginner in Flagstaff is the case it is wrong for, so Advanced
+stays the answer.
 
 ---
 
@@ -251,7 +282,7 @@ ranking — and moves into the tooltip.
 caveats are the difference between a leaderboard and a scoreboard, so the
 icon must be obviously interactive, not decorative.
 
-### 4.2 Auto-ack rules
+### 4.2 Auto-ack rules — SHIPPED 2026-09-26
 
 **What.** Auto-ack marks only count on **MediumFast, LongFast, azmsh**.
 In Trivia, 1️⃣–4️⃣ are people answering questions. Label becomes
@@ -273,7 +304,8 @@ MediumFast → a reaction. Whichever of §2.1 Will picks, asserted per mark.
 
 ### 4.3 Copy and padding
 
-- **Config checker:** remove the "Node plugged in by USB?…" paragraph.
+- **SHIPPED 2026-09-26. Config checker:** remove the "Node plugged in by
+  USB?…" paragraph.
   **[found]** `#115`'s "Done when" includes removing the cfgtest link,
   and this paragraph is that link. Removing it here partly satisfies an
   open issue — worth saying on #115 rather than silently.
@@ -282,14 +314,18 @@ MediumFast → a reaction. Whichever of §2.1 Will picks, asserted per mark.
   carries no margin. Same fix, and the same trap — `width: 100%` on the
   children, because `.grid`'s `margin-inline: auto` makes a flex item
   shrink-to-fit (#193.1).
-- **Live map:** "Packet kinds" → "Packet Types", "Other kinds" → "Other
-  Types", "All kinds" → "All Types".
-- **Live map:** remove "Every preset, any time". **[found]** This is the
+- **SHIPPED 2026-09-26. Live map:** "Packet kinds" → "Packet Types",
+  "Other kinds" → "Other Types", "All kinds" → "All Types". Three further
+  sentences said "kinds" about packets and were changed with them.
+- **SHIPPED 2026-09-26. Live map:** remove "Every preset, any time". **[found]** This is the
   override that shows every preset at once; with the global selector it is
   the last per-page preset control on the site, so removing it is
   consistent — but it is also the only way to see the whole mesh on one
   map. Flagging rather than assuming.
-- **Graph:** remove the "Open mesh-graph" link.
+- **SHIPPED 2026-09-26. Graph:** remove the "Open mesh-graph" link. It was
+  the last use of `CONFIG.graphBaseUrl` in the browser; the SETTING stays,
+  because it feeds the CSP and the server builds the node page's link from
+  it.
 - **Chat:** remove the caption. Quoted in the brief as "The newest 100
   messages in the window, newest first."; the actual string is a template,
   `app.js:5853`: ``The newest ${count(messages.length)} messages in the
@@ -400,8 +436,9 @@ squeezed. The map already has a documented tight-height mode
 Moves to advanced: Frequency, Sensitivity, gain typed by hand, radio
 power typed by hand, cable loss typed by hand, and all of Ground and air.
 
-Simple defaults: MediumFast on **slot 18**; ground and air from the site
-(§2.4).
+Simple defaults: MediumFast on **slot 18**; ground and air fixed at
+`desert` (§2.4). **This item waits on nothing** -- the climate lookup is a
+separate issue and Phase D proceeds without it.
 
 Advanced: preset, slot and frequency **linked** — changing one updates
 the others.
@@ -503,3 +540,18 @@ Per item, before it is called done:
    tablet and desktop, so a desktop screenshot is not a pass.
 5. **Both themes**, since two of these items are colour changes.
 6. **Keyboard only**, for anything that gained a click target.
+
+**A gap worth knowing before Phase D.** Nothing in this repository catches
+an undefined identifier in the frontend. `node --check` parses and does no
+scope analysis, and the unit tests read source text -- to them a name that
+is merely absent looks the same as a name never used. Removing the live
+map's preset override left one `allNodes` reference behind and the map
+page threw on every render; the **e2e journeys** caught it, and they
+reported 23/23 passing while the console filled with the error, so the
+signal is in the console check rather than the journey results.
+
+Phase D removes a lot of controls, so this will happen again. Options:
+ESLint with `no-undef` (a new dev dependency and CI time on Logan's
+hardware, so Will's call), or accept the e2e as the net and never merge on
+a red console. Recorded because the cheap-looking answer -- "run
+`node --check`" -- does not work.

@@ -4,6 +4,9 @@ There is no JavaScript test runner in this project, so these pin the
 rules that a later edit could drop without the page looking broken.
 """
 
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import STATIC_DIR, create_app
@@ -55,15 +58,59 @@ def test_a_reaction_hides_its_senders_until_asked() -> None:
     assert "el('summary'" in chip
 
 
-def test_numeral_tapbacks_are_labelled_as_possible_auto_acks() -> None:
-    """A delivery signal is not an opinion, and a person may send a numeral.
+def test_numeral_tapbacks_are_auto_acks_only_where_they_cannot_be_people() -> None:
+    """The rule changed on 2026-09-26, reported by Will.
 
-    MeshMonitor's Auto Acknowledge sends a keycap: `*` direct, `1` to `7`
-    hops, `#` via MQTT. They are drawn apart, each read in words, and the
-    label says "possibly".
+    Trivia's 1-4 are people answering the quiz and were being drawn as
+    delivery receipts. Measured on the live instance while fixing it: of 40
+    recent Trivia messages, 7 carried a numeral tapback, every one of them
+    an answer.
+
+    So a mark only counts on MediumFast, LongFast and azmsh, and the label
+    dropped its hedge -- on those channels a digit is not ambiguous.
+
+    Two things this test deliberately no longer requires. `#` (via MQTT),
+    `0` and the older direct hit (U+1F3AF) are NO LONGER auto-acks: Will
+    chose to recognise only the marks operators see on their own radios,
+    accepting that an MQTT ack now reads as a reaction somebody chose. That
+    is recorded in `docs/design/2026-09-26-ux-overhaul.md` §2.1, and the
+    assertions below are written to fail if somebody restores them without
+    revisiting it.
     """
+    labels = _read("labels.js")
+    assert "const AUTO_ACK_MARK = /^(?:[1-7*]" in labels, "the mark set changed"
+    assert "u{1F3AF}" not in labels, (
+        "the direct-hit mark is back as an auto-ack; see ux-overhaul §2.1 first"
+    )
+    assert "'#'" not in labels.split("AUTO_ACK_CHANNELS")[0], (
+        "the MQTT mark is back as an auto-ack; see ux-overhaul §2.1 first"
+    )
+    assert "AUTO_ACK_CHANNELS = new Set(['MediumFast', 'LongFast', 'azmsh'])" in labels
+    assert "function isAutoAck(emoji, channel)" in labels
+    assert "function autoAckMeaning(emoji)" in labels
+
     app = _read("app.js")
-    assert "const AUTO_ACK = /^(?:[0-7*#]" in app
-    assert "u{1F3AF}" in app, "older builds acknowledged a direct message with a direct hit"
-    assert "'Possibly auto-acked'" in app
-    assert "function autoAckMeaning(emoji)" in app
+    assert "'Auto-acked'" in app, "the label still hedges"
+    assert "'Possibly auto-acked'" not in app
+    # The channel has to reach the renderer, or the rule can never fire.
+    assert "reactionChips(message.reactions, message.channel)" in app, (
+        "the channel is not passed to the chips, so no tapback can be classified"
+    )
+
+
+def test_the_auto_ack_cases_pass_under_node() -> None:
+    """The rule itself, run against the emoji the live payload carries.
+
+    Written after reading real messages: `2️⃣ 7️⃣ 🐦‍⬛` on one MediumFast
+    message is why acks and reactions have to be split per-emoji rather
+    than per-message, and Trivia's numerals are the reported bug.
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    cases = Path(__file__).resolve().parent / "js" / "auto_ack_cases.mjs"
+    done = subprocess.run([node, str(cases)], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr

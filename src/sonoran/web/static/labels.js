@@ -193,6 +193,53 @@
    * run MediumFast, or a window with no MediumFast traffic in it, must
    * not land on an empty page to honour a preference.
    */
+  /*
+   * An automation tapback: a node saying how a message reached it.
+   *
+   * `*` direct, `1` to `7` the hop count (`7` is seven or more). A bare
+   * digit is accepted, because some clients drop the keycap.
+   *
+   * WHAT IS DELIBERATELY NOT HERE, and it is a decision rather than an
+   * oversight -- `docs/design/2026-09-26-ux-overhaul.md` §2.1. The
+   * automation engine also sends `#` for "arrived over MQTT", and older
+   * builds sent `0` or a direct hit (U+1F3AF); both are documented in
+   * `docs/features/automation-engine.md` in Yeraze/meshmonitor. Will chose
+   * on 2026-09-26 to recognise only the marks operators see on their own
+   * radios, so an MQTT ack and an ack from an older node are now drawn as
+   * reactions a person chose. That is the accepted cost. Do not "fix" it
+   * back without checking that decision.
+   */
+  const AUTO_ACK_MARK = /^(?:[1-7*]\uFE0F?\u20E3?)$/u;
+
+  /*
+   * The channels where such a mark means a node rather than a person.
+   *
+   * In **Trivia** the digits are people answering the quiz, which is the
+   * bug this rule fixes: an answer was being drawn as a delivery receipt.
+   *
+   * A literal list, not "presets plus core channels", although the server
+   * marks both. azmsh is core and so is any channel the operators add
+   * next, so the derived rule would quietly start claiming auto-acks on a
+   * channel nobody had thought about. Three names that have to be edited
+   * on purpose is the safer shape for a rule that puts words in somebody's
+   * mouth.
+   */
+  const AUTO_ACK_CHANNELS = new Set(['MediumFast', 'LongFast', 'azmsh']);
+
+  /** True when this tapback, on this channel, is a delivery receipt. */
+  function isAutoAck(emoji, channel) {
+    if (!AUTO_ACK_CHANNELS.has(String(channel ?? ''))) return false;
+    return AUTO_ACK_MARK.test(String(emoji ?? '').trim());
+  }
+
+  /** What one auto-ack mark says about how the message arrived. */
+  function autoAckMeaning(emoji) {
+    const mark = String(emoji ?? '').trim().charAt(0);
+    if (mark === '*') return 'direct';
+    if (mark === '7') return '7 or more hops';
+    return mark === '1' ? '1 hop' : `${mark} hops`;
+  }
+
   /**
    * A preset's wire name, made readable: `MediumFast` -> `Medium Fast`.
    *
@@ -246,6 +293,6 @@
   }
 
   window.SonoranLabels = {
-    ROLES, roleLabel, portnumLabel, portnumWire, sentence, preferredPreset, presetLabel,
+    ROLES, roleLabel, portnumLabel, portnumWire, sentence, preferredPreset, presetLabel, isAutoAck, autoAckMeaning,
   };
 }());

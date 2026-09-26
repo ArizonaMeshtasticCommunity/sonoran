@@ -605,29 +605,13 @@ function messageBody(text) {
 const REACTION_CAP = 4;
 
 /*
- * MeshMonitor's Auto Acknowledge answers a message with a tapback that
- * says how the message arrived. Its `hopEmoji` mapping is a keycap:
- * `*` direct, `1` to `7` the hop count (`7` is seven or more), `#` via
- * MQTT. Older builds sent `0` and a direct hit (U+1F3AF) for direct.
- * See docs/features/automation-engine.md in Yeraze/meshmonitor. On the
- * live mesh these were nine in ten of all tapbacks in a month.
- *
- * That is a delivery signal, not an opinion, so it is drawn apart from
- * the reactions people chose, with each sender's reading in words. A
- * person can send any of these too, and nothing in the packet tells the
- * two apart, so the chip says "possibly". A bare digit is accepted,
- * because some clients drop the keycap.
+ * The auto-ack rule lives in `labels.js`, as `SonoranLabels.isAutoAck`.
+ * It is pure -- an emoji and a channel in, a yes or no out -- so it is
+ * tested directly rather than through this page, and there is one
+ * definition of which marks count and where.
  */
-const AUTO_ACK = /^(?:[0-7*#]\uFE0F?\u20E3?|\u{1F3AF})$/u;
 
-/** What one auto-ack tapback says about how the message arrived. */
-function autoAckMeaning(emoji) {
-  const mark = emoji.trim().charAt(0);
-  if (mark === '*' || mark === '0' || emoji.includes('\u{1F3AF}')) return 'direct';
-  if (mark === '#') return 'via MQTT';
-  if (mark === '7') return '7 or more hops';
-  return mark === '1' ? '1 hop' : `${mark} hops`;
-}
+
 
 /** The senders of one reaction, each a node link with its own packet. */
 function reactionSenders(reaction) {
@@ -665,11 +649,20 @@ function reactionChip(reaction, label, extra) {
     reactionSenders(reaction));
 }
 
-function reactionChips(reactions) {
+function reactionChips(reactions, channel) {
   if (!reactions || !reactions.length) return null;
-  const acks = reactions.filter((reaction) => AUTO_ACK.test(reaction.emoji.trim()));
+  /*
+   * A mark only counts as an ack on a channel where it cannot be
+   * anything else. Off those channels every tapback is a reaction, which
+   * is what puts Trivia's 1-4 back with the people who sent them.
+   *
+   * The channel is passed in rather than read from a global, because this
+   * renders inside a message row and the row already knows.
+   */
+  const isAck = (reaction) => SonoranLabels.isAutoAck(reaction.emoji, channel);
+  const acks = reactions.filter(isAck);
   const people = reactions
-    .filter((reaction) => !AUTO_ACK.test(reaction.emoji.trim()))
+    .filter((reaction) => !isAck(reaction))
     .sort((a, b) => (b.count || 0) - (a.count || 0));
   const shown = people.slice(0, REACTION_CAP);
   const folded = people.slice(REACTION_CAP);
@@ -686,9 +679,9 @@ function reactionChips(reactions) {
           emoji: acks.map((reaction) => reaction.emoji).join(' '),
           count: ackSenders,
           senders: acks.flatMap((reaction) => (reaction.senders || []).map((sender) => ({
-            ...sender, display_name: `${sender.display_name}: ${autoAckMeaning(reaction.emoji)}`,
+            ...sender, display_name: `${sender.display_name}: ${SonoranLabels.autoAckMeaning(reaction.emoji)}`,
           }))),
-        }, 'Possibly auto-acked', 'auto-ack')
+        }, 'Auto-acked', 'auto-ack')
       : null);
 }
 
@@ -754,7 +747,7 @@ function messageItem(message, options = {}) {
             text: `${ago(message.seen_at)} ago`,
           })),
     messageBody(message.body),
-    reactionChips(message.reactions));
+    reactionChips(message.reactions, message.channel));
 }
 
 /* ECharts instances are kept so a redraw does not leak canvases. */
@@ -1762,7 +1755,7 @@ function familyShown(packet) {
 /**
  * Build the packet kind chips, once.
  *
- * Each chip is a toggle with the family's own mark on it. "All kinds"
+ * Each chip is a toggle with the family's own mark on it. "All Types"
  * appears only while something is hidden, as the way back.
  */
 function wireFamilyFilter() {
@@ -1785,7 +1778,7 @@ function wireFamilyFilter() {
   const all = el('button', {
     type: 'button',
     class: 'family-chip clear',
-    text: 'All kinds',
+    text: 'All Types',
     onclick: () => {
       hiddenFamilies.clear();
       familyFilterChanged();
@@ -1806,8 +1799,8 @@ function paintFamilyFilter() {
   const summary = $('[data-family-summary]');
   if (summary) {
     summary.textContent = hiddenFamilies.size
-      ? `Packet kinds: ${shown} of ${total}`
-      : 'Packet kinds: all';
+      ? `Packet Types: ${shown} of ${total}`
+      : 'Packet Types: all';
   }
 }
 
@@ -2579,7 +2572,7 @@ function installMapKey(map) {
  */
 function liveCounters(counts) {
   const held = mapState.lastPackets ? mapState.lastPackets.length : 0;
-  const kinds = hiddenFamilies.size ? ' of the chosen kinds' : '';
+  const kinds = hiddenFamilies.size ? ' of the chosen types' : '';
   const drawing = counts.dropped
     ? `drawing ${count(counts.offered - counts.dropped)} of ${count(counts.offered)} packets`
     : `${count(held)} packets${kinds} in the window`
@@ -2822,12 +2815,18 @@ PAGES.map = async (page) => {
    * The window is the one the neighbour links use, so a line always has
    * both of its nodes on the map.
    */
-  const allNodes = $('[data-map-all-nodes]', page).getAttribute('aria-pressed') === 'true';
+  /*
+   * The channel always applies now.
+   *
+   * "Every preset, any time" used to override it and draw every preset on
+   * one map. It was removed at Will's request, 2026-09-26, and reading its
+   * `aria-pressed` here would have thrown on a missing element -- the same
+   * failure that removing the map's preset picker caused, which is why
+   * this is a deliberate simplification and not a left-behind flag.
+   */
   const nodes = await mapNodes(
     'api/map/nodes'
-    + (channel && !allNodes
-      ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}`
-      : ''),
+    + (channel ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}` : ''),
   );
   if (!nodes) return;
   const [traffic, edges, traces] = await getAll([
@@ -2844,7 +2843,21 @@ PAGES.map = async (page) => {
       : null,
   ]);
 
-  mapNodeScope = channel && !allNodes
+  /*
+   * The scope line, which now only ever describes one preset.
+   *
+   * It used to branch on `allNodes`, the "Every preset, any time"
+   * override. Removing that toggle left this reference behind and the map
+   * page threw `allNodes is not defined` on every render -- caught by the
+   * e2e journeys, which reported 23/23 passing while the console filled
+   * with the error. The unit tests could not see it: they read source text
+   * and a name that is merely absent looks the same as a name never used.
+   *
+   * The "every preset" wording is kept for the case where there is no
+   * channel at all, which is a deployment with no preset channels rather
+   * than a reader's choice.
+   */
+  mapNodeScope = channel
     ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
     : `${count(nodes.length)} nodes, every preset`;
 
@@ -3013,7 +3026,7 @@ PAGES.map = async (page) => {
     const filtered = hiddenFamilies.size > 0;
     const shown = filtered ? packets.filter(familyShown) : packets;
     const nothing = filtered
-      ? 'Nothing of the chosen packet kinds in the window.'
+      ? 'Nothing of the chosen packet types in the window.'
       : 'No traffic in the window.';
     // A refresh of slack past the window covers any late upload, so a
     // key is only forgotten once nothing can bring it back.
@@ -3034,7 +3047,7 @@ PAGES.map = async (page) => {
       `${count(traffic.event_count)} uploads in ${traffic.window_minutes} min, `
       + `${count(direct)} direct, from ${count(packets.length)} packets.`
       + (traffic.truncated ? ` Newest ${count(traffic.returned_count)} shown.` : '')
-      + (filtered ? ` ${count(shown.length)} of the chosen kinds.` : '')
+      + (filtered ? ` ${count(shown.length)} of the chosen types.` : '')
       + (fresh ? ` ${count(fresh)} new.` : '');
     /*
      * One coalesced list, two renderings. The list is updated in place
@@ -7757,15 +7770,29 @@ function wire() {
     else mark.addEventListener('load', reveal);
   }
 
-  const external = $('[data-graph-external]');
-  if (CONFIG.graphBaseUrl) external.href = CONFIG.graphBaseUrl;
-  else external.hidden = true;
+  /*
+   * The "Open mesh-graph" link was wired here and is gone (Will,
+   * 2026-09-26).
+   *
+   * That was the LAST use of `CONFIG.graphBaseUrl` in the browser --
+   * checked, because the first version of this comment claimed the value
+   * was still needed for an embedded frame and there is no frame: the
+   * graph page draws its own ECharts, and the node page's "Open in
+   * mesh-graph" link uses `detail.graph.node_graph`, a URL the server
+   * builds.
+   *
+   * The SETTING is still live and must not be removed with the link:
+   * `mesh_graph_base_url` feeds the CSP's frame-src and img-src in
+   * `api/app.py`, and the server builds that node link from it.
+   * `graphBaseUrl` in the config JSON is now unread by this file, which
+   * is worth knowing before anybody prunes it.
+   */
 
   wireNav();
 }
 
 /*
- * The thirteen nav links, behind a button on a phone.
+ * The fourteen nav links, behind a button on a phone.
  *
  * Stacked at phone width the nav wrapped to seven rows, and with the
  * wordmark and the status line above and below it that was about

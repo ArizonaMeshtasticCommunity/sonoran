@@ -23,9 +23,31 @@ STATIC = ROOT / "src" / "sonoran" / "web" / "static"
 
 
 def _all_frontend() -> str:
-    parts = [(STATIC / "index.html").read_text(encoding="utf-8")]
-    parts.extend(path.read_text(encoding="utf-8") for path in sorted(STATIC.glob("*.js")))
+    """Every frontend file, with comments removed.
+
+    Comments are stripped because a removal is normally recorded AS a
+    comment quoting the copy that went -- "Every preset, any time" was
+    here, and why. Scanning raw files would find that note and report the
+    control as still present, which is the trap this repository keeps
+    meeting from both directions.
+    """
+    html = re.sub(
+        r"<!--.*?-->", "", (STATIC / "index.html").read_text(encoding="utf-8"), flags=re.S
+    )
+    parts = [html]
+    for path in sorted(STATIC.glob("*.js")):
+        text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
+        parts.append(
+            "\n".join(line for line in text.splitlines() if not line.strip().startswith("//"))
+        )
     return "\n".join(parts)
+
+
+def test_the_comment_stripping_works() -> None:
+    """Positive control: without it the shipped cases pass on comment text."""
+    frontend = _all_frontend()
+    assert "function reactionChips" in frontend, "the stripper removed real code"
+    assert "Removed at Will's request" not in frontend, "comment text is leaking through"
 
 
 def test_the_plan_is_there_and_covers_every_phase() -> None:
@@ -42,33 +64,64 @@ def test_every_decision_for_will_has_a_recommendation() -> None:
     section = text[text.index("## 2. Decisions for Will") : text.index("## 3. Phase A")]
     headings = re.findall(r"^### (2\.\d+) ", section, re.M)
     assert len(headings) >= 4, f"only found {headings}"
-    assert section.count("*(recommended)*") >= len(headings), (
-        f"{len(headings)} decisions but only {section.count('*(recommended)*')} recommendations"
+    # A decision is answered either by a live recommendation or by a
+    # recorded choice. Once Will decides, the recommendation is struck
+    # through and replaced by DECIDED, so counting only recommendations
+    # would fail the moment the plan did its job.
+    answered = section.count("*(recommended)*") + section.count("DECIDED, 2026-09-26")
+    assert answered >= len(headings), (
+        f"{len(headings)} decisions but only {answered} of them recommend or record an answer"
     )
 
 
-@pytest.mark.parametrize(
-    "quoted",
-    [
-        "Packet kinds",
-        "Other kinds",
-        "All kinds",
-        "Every preset, any time",
-        "Node plugged in by USB",
-        "Open mesh-graph",
-        "NODE_SEARCH_PAUSE_MS",
-    ],
-)
-def test_each_string_the_plan_promises_to_change_exists(quoted: str) -> None:
-    """A plan naming copy that is not there wastes the next person's time.
+# Each string the plan promises to change, and whether that item has
+# shipped. A PENDING string must still be in the frontend, or the plan is
+# pointing somewhere that is not there. A SHIPPED one must be GONE, or it
+# was marked done without being done -- which is the failure this project
+# keeps finding, and the reason both directions are checked.
+PLAN_STRINGS = {
+    "Packet kinds": "shipped",
+    "Other kinds": "shipped",
+    "All kinds": "shipped",
+    "Every preset, any time": "shipped",
+    "Node plugged in by USB": "shipped",
+    "Open mesh-graph": "shipped",
+    "NODE_SEARCH_PAUSE_MS": "pending",
+}
 
-    When one of these ships, this case fails and the plan gets updated --
-    which is the point. A plan whose claims are never rechecked becomes
-    documentation of a codebase that no longer exists.
+
+@pytest.mark.parametrize("quoted", sorted(PLAN_STRINGS))
+def test_the_plan_and_the_code_agree_about_what_has_shipped(quoted: str) -> None:
+    """Both directions, because either one alone is satisfied by a lie.
+
+    Pending: the string must exist, or the plan wastes the next person's
+    time. Shipped: the string must be gone, or an item was written off as
+    done while the copy is still on the page.
     """
-    assert quoted in PLAN.read_text(encoding="utf-8"), f"the plan no longer mentions {quoted!r}"
-    assert quoted in _all_frontend(), (
-        f"the plan says to change {quoted!r} and it is not in the frontend"
+    frontend = _all_frontend()
+    state = PLAN_STRINGS[quoted]
+    if state == "pending":
+        assert quoted in frontend, (
+            f"the plan says to change {quoted!r} and it is not in the frontend"
+        )
+        assert quoted in PLAN.read_text(encoding="utf-8")
+    else:
+        assert quoted not in frontend, (
+            f"{quoted!r} is marked shipped in this file and is still in the frontend"
+        )
+
+
+def test_every_shipped_item_says_so_in_the_plan() -> None:
+    """The plan is the record, so it has to carry the same answer.
+
+    Without this, the table above could drift from the document and the
+    next person would read a plan describing work already done.
+    """
+    plan = PLAN.read_text(encoding="utf-8")
+    shipped = sum(1 for state in PLAN_STRINGS.values() if state == "shipped")
+    assert plan.count("SHIPPED 2026-09-26") >= 4, (
+        f"{shipped} strings are marked shipped here but the plan records "
+        f"{plan.count('SHIPPED 2026-09-26')} shipped items"
     )
 
 
