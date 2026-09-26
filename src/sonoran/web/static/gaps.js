@@ -588,8 +588,54 @@
     if (wrap) wrap.hidden = listed.length < 2;
   }
 
+  /*
+   * The preset the address names, or null.
+   *
+   * The picker used to keep its choice in `state.preset` alone, which is
+   * closure state: switching worked, and then reopening #gaps -- or a
+   * reload, or navigating away and back -- dropped it and the page went
+   * back to whatever the server offers first. Will reported it as "still
+   * set to LF even if I set it to MF", which is exactly that.
+   *
+   * The router strips the query before matching (`app.js` splits the
+   * fragment on `?`), so `#gaps?channel=MediumFast` still reaches this
+   * page. That also makes the choice shareable, which the planner
+   * already relies on.
+   */
+  function presetFromAddress() {
+    if (!location.hash.startsWith('#gaps')) return null;
+    const query = location.hash.split('?')[1] || '';
+    const named = new URLSearchParams(query).get('channel');
+    return named ? decodeURIComponent(named) : null;
+  }
+
+  /*
+   * Keep the address holding the preset being read.
+   *
+   * `history.replaceState` and not `location.hash`: writing the hash
+   * fires `hashchange`, the router re-enters the page, and `show` runs
+   * again -- a second fetch for every change of the picker, and a redraw
+   * the reader sees.
+   */
+  function writeAddress(preset) {
+    if (!location.hash.startsWith('#gaps')) return;
+    const next = preset ? `#gaps?channel=${encodeURIComponent(preset)}` : '#gaps';
+    if (location.hash === next) return;
+    history.replaceState(null, '', next);
+  }
+
   async function show(page) {
     let summary;
+    /*
+     * The address wins whenever it names one.
+     *
+     * Not `if (!state.preset)`, which was the first version: `state` is
+     * closure state that outlives a visit to the page, so opening
+     * somebody's #gaps?channel=X link after having chosen Y earlier in
+     * the same tab would have silently shown Y and ignored the link.
+     */
+    const named = presetFromAddress();
+    if (named) state.preset = named;
     try {
       summary = await fetchJson(
         state.preset ? `api/gaps?channel=${encodeURIComponent(state.preset)}` : 'api/gaps');
@@ -683,6 +729,9 @@
         picker.addEventListener('change', () => {
           state.preset = picker.value;
           state.filter = null;
+          // Before the fetch, so a reader who reloads mid-request still
+          // lands on what they picked.
+          writeAddress(state.preset);
           show(page);
         });
       }
@@ -690,5 +739,11 @@
     }
   }
 
-  window.SonoranGaps = { show, state };
+  /*
+   * `presetFromAddress` and `writeAddress` are exposed for the tests.
+   * They carry the bug this page had -- a chosen preset that did not
+   * survive a reload -- and reading them out of the source proves much
+   * less than running them against a fake address bar.
+   */
+  window.SonoranGaps = { show, state, presetFromAddress, writeAddress };
 }());

@@ -129,6 +129,43 @@ def read_index(settings: Settings) -> dict[str, object] | None:
     return _read(gaps_dir(settings) / INDEX_NAME)
 
 
+def assessed_presets(settings: Settings) -> list[dict[str, object]]:
+    """The assessed presets in the order a page should offer them.
+
+    `settings.default_preset` leads, then the rest by node count (#177).
+    It leads **only when it was assessed**: a preferred preset absent
+    from the index would otherwise put an empty page at the top, which
+    is a worse answer than the wrong preset.
+
+    Why preferred rather than busiest, which this used to be: the
+    busiest preset moves with the traffic, so the page a reader lands on
+    changed underneath them. The one the community actually runs does
+    not.
+
+    Lives here, beside the index it reads, because two routes need the
+    same order. The gaps page took `listed[0]` instead -- and the index
+    is written in channel-name order, so "LongFast" sorted above
+    "MediumFast" and the gaps page opened on a preset this mesh does not
+    run. The leaderboards route had already been fixed; a second copy of
+    the sort is how the two would have drifted again.
+    """
+    index = read_index(settings)
+    listed = index.get("presets") if index else None
+    items = [
+        item
+        for item in (listed if isinstance(listed, list) else [])
+        if isinstance(item, dict) and isinstance(item.get("preset"), str)
+    ]
+    items.sort(key=lambda item: -_count(item, "node_count"))
+    items.sort(key=lambda item: item.get("preset") != settings.default_preset)
+    return items
+
+
+def _count(row: dict[str, object], key: str) -> int:
+    value = row.get(key)
+    return value if isinstance(value, int) else 0
+
+
 def read_preset(settings: Settings, preset: str) -> dict[str, object] | None:
     """Return one preset's assessment, or None."""
     path = preset_path(settings, preset)

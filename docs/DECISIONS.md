@@ -130,6 +130,38 @@ met.
 criteria hold on the *running* thing, not when the diff implementing
 them merged.
 
+### The gaps page never honoured that setting (#177, follow-up)
+
+**Reported:** the gaps page defaulted to LongFast.
+
+**The default was never wrong.** `_resolve` took `listed[0]` from the
+gaps index, and `jobs/gaps.py` writes that index in **channel-name
+order** — so "LongFast" sorted above "MediumFast" and the first entry
+was an accident of the alphabet. Measured on the live instance before
+the fix: LongFast selected, with **309 assessed nodes against
+MediumFast's 763**. The page opened on a preset carrying under half the
+mesh.
+
+Two other pages had already met this. `coverage.js` carries a comment
+describing the identical bug and picks the busiest preset instead;
+`leaderboards.py` had the full preference logic from #177. The gaps page
+had neither, and each of the three had its own copy of the ordering.
+
+**Decided:** the ordering lives once, in `gaps.store.assessed_presets` —
+`default_preset` first when it was assessed, then by node count — and
+both routes read it. A test holds the two routes to the same answer,
+because three copies of one sort is how only one of them got fixed.
+
+Also removed `DEFAULT_PRESET_KEY = "LONG_FAST"` from `radio/presets.py`.
+It had no consumers, contradicted the setting decided in #177, and a
+constant sitting beside a setting is a second answer to one question
+waiting for somebody to reach for it.
+
+**Standing rule from it:** when a fix is about ORDER, the fixture has to
+reproduce the real order. Two of these cases first used counts where
+by-count and alphabetical happened to agree, so deleting the node-count
+sort left them green. The mutation check found that, not the tests.
+
 ### The preferred preset is a setting, not a constant (#177)
 
 **Decided:** `DEFAULT_PRESET`, defaulting to `MediumFast`, falling back

@@ -130,12 +130,12 @@ def _read_file(
 
 
 def _presets(settings: Settings) -> list[dict[str, object]]:
-    """Return the presets that have an assessment, for the picker."""
-    index = store.read_index(settings)
-    if index is None:
-        return []
-    listed = index.get("presets")
-    return [item for item in listed if isinstance(item, dict)] if isinstance(listed, list) else []
+    """Return the presets that have an assessment, for the picker.
+
+    Ordered by `store.assessed_presets`, so the deployment's own preset
+    is first in the picker as well as selected.
+    """
+    return store.assessed_presets(settings)
 
 
 def _resolve(channel: str | None, settings: Settings) -> tuple[str | None, str | None]:
@@ -147,6 +147,12 @@ def _resolve(channel: str | None, settings: Settings) -> tuple[str | None, str |
     setting nobody is using. See `AGENTS.md` 9.7.
     """
     if channel is None:
+        # `_presets` puts `settings.default_preset` first when it was
+        # assessed (#177), so the first entry IS the deployment's preset
+        # rather than whichever one sorted first alphabetically. This
+        # used to take the index in its written order, which is channel
+        # NAME order -- "LongFast" above "MediumFast" -- so the page
+        # opened on a preset this mesh does not run.
         listed = _presets(settings)
         if not listed:
             return None, "no_assessment"
