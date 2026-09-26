@@ -533,6 +533,9 @@
             <p class="sub">The share of sweeps in which a bin stood 6 dB above its own median. Inside a mesh channel that is mostly our own packets. <strong>Outside every mesh channel</strong> it is something else on the band.</p>
             <div class="chart" data-rf-band-busy></div>
           </section>
+          <!-- The two name lists are CC BY-SA and ask to be credited in
+               the small print. See vendor/aprs/PROVENANCE.md. -->
+          <p class="sub rf-credit">APRS symbol names, device names and icons from Hessu, OH7LZB, for aprs.fi: the symbol index and device list (CC BY-SA) and the aprs-symbols set (github.com/hessu/aprs-symbols).</p>
         </section>
 
         <section class="page" data-page="coverage">
@@ -1492,6 +1495,7 @@
     -->
     <script src="static/coverage.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!-- The RF page, its own map, before app.js like coverage.js. -->
+    <script src="static/vendor/aprs/aprs-tables.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/rf.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The coverage gaps page loads before app.js for the same reason the

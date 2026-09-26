@@ -387,15 +387,18 @@ def _bare_obs() -> dict[str, object]:
 def test_the_tooltip_shows_a_comment_whole() -> None:
     """A comment is what a person typed. It is never cut to fit.
 
-    The other `meta` fields are cut to 40 characters and to four
-    entries. The comment is taken out of that list first, so neither
-    cut can reach it, and it wraps instead.
+    Other `meta` fields are cut to 40 characters and to a few entries.
+    The comment is kept out of that list, so neither cut can reach it,
+    and it wraps instead. Both tooltips that show one are checked.
     """
     rf = _static("rf.js")
     assert "const { comment, ...meta } = row.meta || {};" in rf
-    line = next(text for text in rf.splitlines() if "'rf-comment'" in text)
-    assert "text: String(comment)" in line
-    assert "slice" not in line
+    assert "'comment'" in rf[rf.index("const APRS_KEYS") : rf.index("function aprsTooltip")]
+    lines = [text for text in rf.splitlines() if "'rf-comment'" in text]
+    assert len(lines) == 2, lines
+    for line in lines:
+        assert re.search(r"text: String\((meta\.)?comment\)", line), line
+        assert "slice" not in line, line
     assert re.search(r"\.rf-tip \.rf-comment \{[^}]*white-space: normal", _static("app.css"))
 
 
@@ -496,7 +499,8 @@ def test_the_tooltip_says_how_an_aprs_packet_was_heard() -> None:
     rf = _static("rf.js")
     for phrase in (
         "Heard through ",
-        "Relayed by a digipeater",
+        "Repeated by a digipeater that did not sign the path",
+        "Repeated by ",
         "From the internet, put on the air by ",
         "not a transmitter",
         # We never blurred it: the wording must say who did.
