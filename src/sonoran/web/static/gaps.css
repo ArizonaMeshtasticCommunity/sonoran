@@ -105,7 +105,6 @@
   color: var(--muted);
 }
 .gap-tile .gap-half.bad .gap-n { color: var(--gap-bad); }
-.gap-tile .gap-half.unknown .gap-n { color: var(--gap-unknown); }
 .gap-tile .gap-label {
   font-size: .8rem;
   color: var(--muted);
@@ -113,21 +112,10 @@
   line-height: 1.35;
 }
 
-/* The lead sentence. It is prose, so it gets a reading measure. */
-.gap-lead {
-  font-size: 1rem;
-  line-height: 1.55;
-  max-width: 62ch;
-  margin: 0 0 .2rem;
-}
 
-.gap-lead strong { color: var(--accent); font-weight: 650; }
 
-.gap-window { color: var(--muted); font-size: .8rem; margin: 0; }
 
 /* What the feature cannot answer. Permanently visible, never a toggle. */
-.gap-limits { margin: 0; padding-left: 1.1rem; display: grid; gap: .4rem; }
-.gap-limits li { color: var(--muted); font-size: .82rem; line-height: 1.45; }
 
 .gap-map-shell { position: relative; }
 #gaps-map {
@@ -295,9 +283,6 @@
 .gap-toolbar input[type="search"] { min-width: 12rem; }
 .gap-filter { display: inline-flex; gap: .5rem; align-items: center; padding: .2rem .6rem; border: 1px solid var(--line); border-radius: 999px; font-size: .82rem; }
 .gap-open { white-space: nowrap; font-size: .82rem; }
-.gap-more > summary { cursor: pointer; font-weight: 600; }
-.gap-more[open] > summary { margin-bottom: .5rem; }
-details.panel.gap-more { padding-top: .8rem; padding-bottom: .8rem; }
 
 /* The light theme (#50). See the note at the end of app.css. */
 :root[data-theme="light"] {
@@ -305,3 +290,66 @@ details.panel.gap-more { padding-top: .8rem; padding-bottom: .8rem; }
   --gap-unknown-line: #a9b8cc;
   --gap-candidate: #94650f;
 }
+
+/*
+ * The page as a column, with one spacing value (Will, 2026-09-26:
+ * "There needs to be a space between the widgets and the table, you can
+ * see no padding on desktop").
+ *
+ * `.page.active` is `display: block` and `.panel` carries no margin, so
+ * every block on this page touched the one below it. A gap on the column
+ * fixes all of them at once rather than adding a margin per block.
+ *
+ * Two traps, both paid for on the node page in #193:
+ *
+ * 1. `width: 100%` is NOT redundant. `.grid` carries `margin-inline:
+ *    auto`, and an auto inline margin on a flex item makes it
+ *    shrink-to-fit instead of stretching, so the tiles would sit in a
+ *    narrower column than the panels below and the page would have two
+ *    left edges. That is exactly what #193.1 reported.
+ * 2. `.page.active` is two classes. A single-class selector here loses,
+ *    which is why the display is restated with the same weight. This
+ *    file also loads AFTER app.css, so the tie is broken by source
+ *    order in our favour -- worth knowing before anyone reorders the
+ *    <link> tags.
+ */
+.page.active[data-page="gaps"] {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.page.active[data-page="gaps"] > * {
+  width: 100%;
+}
+
+/*
+ * One row on desktop (Will).
+ *
+ * The shared `.grid` asks for a 17rem minimum, and six signals at 17rem
+ * plus gaps needs about 107rem against the 100rem cap, so they wrapped
+ * onto two rows. Each tile now holds ONE number instead of two, so a
+ * 10rem minimum is honest: six of them plus gaps come to about 65rem,
+ * inside the cap and inside a 1280px window.
+ *
+ * Still `auto-fit` rather than `repeat(6, …)`: the number of signals
+ * comes from the server, and a hard six would break the day one is
+ * added or a deployment reports fewer.
+ */
+[data-gaps-counts].grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
+}
+
+/* One number per tile, so the row that separated two of them goes. */
+.gap-tile .gap-pair { gap: 0; }
+
+/*
+ * Removed with the elements they styled (Will, 2026-09-26):
+ * `.gap-lead` (the headline sentence), `.gap-window` (the measurement
+ * window line), `.gap-limits` and `.gap-more` (the two <details>
+ * blocks), and `.gap-half.unknown` (the "cannot tell" number).
+ *
+ * Deleted rather than left behind. Dead CSS that still looks live is how
+ * the next person concludes the markup must exist somewhere.
+ * `--gap-unknown` is NOT dead: the map still marks nodes with not enough
+ * evidence, and the legend still names them.
+ */

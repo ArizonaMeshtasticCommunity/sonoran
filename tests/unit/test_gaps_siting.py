@@ -14,6 +14,7 @@ thrown away in silence and nothing downstream can get it back.
 
 import inspect
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -31,7 +32,8 @@ from sonoran.terrain.srtm import PAGE_SIZE, page_cell, srtm2sdf_transform
 LONG_FAST = preset_by_key("LONG_FAST")
 assert LONG_FAST is not None
 
-STATIC = Path(__file__).parent.parent.parent / "src" / "sonoran" / "web" / "static"
+ROOT = Path(__file__).parent.parent.parent
+STATIC = ROOT / "src" / "sonoran" / "web" / "static"
 
 
 def _settings(**extra: object) -> Settings:
@@ -830,22 +832,58 @@ def test_a_candidate_pin_cannot_be_mistaken_for_a_node() -> None:
     assert "gap-candidate-pin" in page
 
 
-def test_the_page_says_what_it_cannot_know_and_never_hides_it() -> None:
-    """The limits list is permanently visible, not a toggle."""
-    index = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "data-siting-limits" in index
-    assert "data-siting-limits hidden" not in index
-    page = (STATIC / "siting.js").read_text(encoding="utf-8")
-    # The words come from the endpoint, so the page cannot soften them.
-    assert "caveats" in page
+def test_the_caveats_are_still_decided_by_the_server() -> None:
+    """The list left the page; the words are still not the page's to soften.
+
+    This used to require a permanently visible limits list on the page.
+    Will asked for it to go (2026-09-26) along with the rest of the
+    explanatory prose, so what remains to protect is the part that made
+    the list trustworthy: the caveats are written by `gaps/siting.py` and
+    served by the API, not composed in the browser, so nothing in the
+    frontend can quietly reword them.
+
+    Asserted against the SERVER, deliberately. `siting.js` now mentions
+    `caveats` only in a comment explaining the removal, so checking the
+    JavaScript would pass on that comment and prove nothing -- which is
+    how this test first "passed" after the change.
+    """
+    siting = (ROOT / "src" / "sonoran" / "gaps" / "siting.py").read_text(encoding="utf-8")
+    assert "caveat" in siting.lower(), "the server no longer decides the caveats"
 
 
-def test_the_page_prints_the_radio_it_assumed() -> None:
-    """A 1 W node at 9 m is an assumption and a reader must see it."""
-    page = (STATIC / "siting.js").read_text(encoding="utf-8")
-    assert "assumed_radio" in page
-    assert "tx_power_dbm" in page
-    assert "antenna_height_m" in page
+def test_the_radio_it_assumed_is_still_sent_and_still_fixed_in_one_place() -> None:
+    """The page stopped printing it. It is still an assumption.
+
+    The four figures -- 30 dBm, a 2.15 dBi antenna, no cable loss, a 9 m
+    mast -- were printed under the heading, and that line went with the
+    rest of the prose on 2026-09-26. They are not a setting a reader can
+    change, so the thing worth protecting is that they are decided in ONE
+    place and still sent, which keeps them showable and keeps them from
+    being quietly different from what the engine actually ran.
+    """
+    # Read from config.py, which is where they actually live. Pointing
+    # this at gaps/siting.py first was a guess about where a figure is
+    # decided, and it was wrong -- the settings are named
+    # `gaps_candidate_*` and carry the defaults the docs quote.
+    config = (ROOT / "src" / "sonoran" / "config.py").read_text(encoding="utf-8")
+    for setting, expected in (
+        ("gaps_candidate_tx_power_dbm", "30.0"),
+        ("gaps_candidate_height_m", "9.0"),
+        ("gaps_candidate_radius_km", "25.0"),
+    ):
+        found = re.search(rf"{setting}:\s*float\s*=\s*([0-9.]+)", config)
+        assert found, f"{setting} is no longer a setting"
+        assert found.group(1) == expected, (
+            f"{setting} is now {found.group(1)}, not the {expected} the page used to print; "
+            "if that was deliberate, the figure changed for every prediction"
+        )
+    # Still reported, so anything that wants to show them can. Asserted
+    # against the job that writes it and the route that passes it on --
+    # NOT `gaps/siting.py`, which is the scoring module and never had it.
+    job = (ROOT / "src" / "sonoran" / "jobs" / "gaps_siting.py").read_text(encoding="utf-8")
+    route = (ROOT / "src" / "sonoran" / "api" / "routes" / "gaps.py").read_text(encoding="utf-8")
+    assert "assumed_radio" in job, "the job no longer records the assumed radio"
+    assert "assumed_radio" in route, "the API no longer passes the assumed radio on"
 
 
 def test_the_page_tells_a_screened_row_from_a_predicted_one() -> None:

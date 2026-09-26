@@ -642,13 +642,46 @@
 
           <p class="notice" data-gaps-notice hidden></p>
 
-          <p class="gap-lead" data-gaps-lead></p>
+          <!--
+            One tile per signal, carrying the count we FOUND. The tile is
+            a button that filters the table below to those nodes (#62).
 
-          <!-- One tile per signal. Each carries the count we found and
-               the count we cannot judge, side by side. The second number
-               is never hidden. Each half is a button that filters the
-               table below to those nodes (#62). -->
+            It used to carry a second number beside it, the count we
+            cannot judge, on the reasoning that the unknown half is the
+            honest half. Will asked for it to go: a reader scanning a row
+            of tiles reads every number as a finding, and "639 cannot
+            tell" beside "11 found" buries the 11. The unknowns are not
+            lost -- the table still has its own view of them, with its
+            own count, which is where somebody looking for them goes.
+          -->
           <div class="grid" data-gaps-counts></div>
+
+          <!--
+            Map before table (Will, 2026-09-26): the widgets say how many,
+            the map says where, and the table is the detail you go to
+            afterwards. It read backwards with the table in between.
+
+            Two captions were removed from here rather than reworded. One
+            said no line is drawn between nodes because no signal on this
+            page names both ends of a link -- true, and a statement about
+            what the page does NOT draw, which only raises a question the
+            reader did not have. The other counted the markers left off
+            the map for a coarse position. Both now live in `gaps.js`,
+            where the next person to wonder why there are no lines will
+            actually look.
+          -->
+          <div class="panel span-2">
+            <h3>Where a node would help, and who it would help</h3>
+            <div class="gap-map-shell">
+              <div id="gaps-map"></div>
+            </div>
+            <div class="gap-legend">
+              <span><i class="area"></i>An area worth siting against</span>
+              <span><i class="candidate"></i>A place a node could go</span>
+              <span><i class="bad"></i>A node with a fault we can measure</span>
+              <span><i class="unknown"></i>A node with not enough evidence</span>
+            </div>
+          </div>
 
           <!--
             One table, not two (#62). "Something we can measure" and "not
@@ -668,50 +701,49 @@
             <div class="table-wrap" data-gaps-table></div>
           </div>
 
-          <div class="panel span-2">
-            <h3>Where a node would help, and who it would help</h3>
-            <div class="gap-map-shell">
-              <div id="gaps-map"></div>
-            </div>
-            <div class="gap-legend">
-              <span><i class="area"></i>An area worth siting against</span>
-              <span><i class="candidate"></i>A place a node could go</span>
-              <span><i class="bad"></i>A node with a fault we can measure</span>
-              <span><i class="unknown"></i>A node with not enough evidence</span>
-              <span class="muted">No line is drawn between nodes: no signal on this page names both ends of one link.</span>
-            </div>
-            <p class="sub" data-gaps-map-note style="margin:.5rem 0 0"></p>
-          </div>
+          <!--
+            The siting half. It is a PREDICTION and the measured half
+            above is not, so it keeps its own panel and its own shape on
+            the map.
 
-          <!-- The siting half. It is a PREDICTION and the measured half
-               above is not, so it gets its own panel, its own shape on
-               the map, and its own list of what it cannot know. -->
+            Will, 2026-09-26: the prose here went. It carried the engine
+            run count and its ceiling, the four assumed radio figures, the
+            clustering rule for what makes an area, and a list of what a
+            siting suggestion cannot know. All of it was true and none of
+            it was readable, and a reader who cannot parse it cannot use
+            it either. It is kept in full in `siting.js`; the figures
+            themselves are settings in `config.py` (`gaps_candidate_*`,
+            and `gaps_cluster_link_km` for the eight-kilometre rule),
+            reported by `jobs/gaps_siting.py`.
+
+            One word stayed: "predicted". That is not explanation, it is
+            the difference between this panel and the measured one above,
+            and dropping it would let the two read alike.
+          -->
           <div class="panel span-2 gap-siting">
             <h3 data-siting-heading>Where a node would help</h3>
-            <p class="sub" style="margin:0 0 .6rem">Places a 1&nbsp;W node could stand near the nodes that struggle. <strong>This half is predicted, not measured.</strong></p>
-            <p class="gap-lead" data-siting-lead></p>
-            <p class="gap-window" data-siting-note></p>
+            <p class="sub" style="margin:0 0 .6rem"><strong>Predicted, not measured.</strong></p>
             <div class="table-wrap" data-siting-table></div>
-            <details class="gap-more">
-              <summary>What a siting suggestion cannot know</summary>
-              <p class="sub">The struggling nodes are grouped into neighbourhoods, and each neighbourhood is offered places a node could stand: a node that is already there on a taller mast, or high ground taken from the terrain.</p>
-              <ul class="gap-limits" data-siting-limits></ul>
-            </details>
           </div>
 
           <!--
-            The reasoning that keeps this page honest, kept but moved out
-            of the way (#62). The full reasoning also lives as comments in
-            gaps/signals.py and gaps.js, for whoever works on this next.
+            "How this is measured" was here: the window and gateway
+            counts, the sort order, what "not enough evidence" does and
+            does not mean, and the list of caveats.
+
+            Removed at Will's request, 2026-09-26. It was behind a
+            `<details>` already, so it was not in anybody's way -- the
+            objection was that it existed to be read and could not be.
+            The reasoning is not lost: it is written at length in
+            `gaps/signals.py`, which is where it belongs, and the
+            caveats are still served on `/api/gaps` for anything that
+            wants them.
+
+            Worth knowing before putting it back: the sort is findings
+            first, then a fixed order between signals, then how much is
+            known about the node. It is NOT a score, and no colour on
+            this page comes from a number.
           -->
-          <details class="panel gap-more">
-            <summary>How this is measured</summary>
-            <p class="gap-window" data-gaps-window></p>
-            <p class="sub">Nodes are listed worst first: the number of findings, then a fixed order between them, then how much we know about the node. It is not a score, and no colour here comes from a number.</p>
-            <p class="sub">A node in "not enough evidence" shows no fault we can measure and at least one thing we cannot judge. That is not a clean bill of health. A node that reports almost nothing is usually a node that is switched off.</p>
-            <h4>What this cannot tell you</h4>
-            <ul class="gap-limits" data-gaps-limits></ul>
-          </details>
         </section>
 
         <section class="page" data-page="planner">

@@ -820,15 +820,21 @@ def test_the_page_uses_base_relative_api_paths() -> None:
     assert "'/api/" not in page
 
 
-def test_the_page_names_the_unknown_bucket_and_the_limits() -> None:
-    """Neither may be cut, and the unknown count is never hidden.
+def test_the_page_names_the_unknown_bucket() -> None:
+    """The unknown rows keep their own view, with their own count.
 
     Since #62 the two lists are two views of one table rather than two
     tables stacked on one screen. The unknown view keeps its own button
-    with its own count, so the number is always on the page, and its
-    rows are never merged into the measured ones. The limits moved into
-    a "How this is measured" disclosure; the list itself still carries
-    no `hidden` attribute.
+    with its own count, and its rows are never merged into the measured
+    ones.
+
+    The "How this is measured" disclosure, and the limits list inside it,
+    were REMOVED at Will's request on 2026-09-26, so the two assertions
+    about `data-gaps-limits` are gone with them. What they were protecting
+    is unchanged and still checked: the unknown rows are still reachable
+    and still counted separately. The caveats themselves did not go
+    anywhere either -- `/api/gaps` still serves them, which
+    `test_gaps_page_layout.py` holds.
     """
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     page = (STATIC / "gaps.js").read_text(encoding="utf-8")
@@ -838,8 +844,6 @@ def test_the_page_names_the_unknown_bucket_and_the_limits() -> None:
     assert "`${label} (${counts[key]})`" in page
     # An unknown row is a row with no finding and something not judged.
     assert "row.bad_count === 0 && row.unknown_count > 0" in page
-    assert "data-gaps-limits" in index
-    assert "data-gaps-limits hidden" not in index
 
 
 def test_the_page_draws_no_link_between_two_nodes() -> None:
@@ -856,14 +860,18 @@ def test_the_page_draws_no_link_between_two_nodes() -> None:
 def test_an_unplaceable_node_is_not_drawn_on_the_map() -> None:
     """A marker is a claim about where something is.
 
-    A coarse or missing position cannot support one, so such a node
-    stays in the table where its confidence is named. The page also says
-    how many it left off, because a map that silently drops nodes is
-    worse than one that admits it.
+    A coarse or missing position cannot support one, so such a node stays
+    in the table, where its confidence is named.
+
+    This used to also require a caption counting how many were left off,
+    on the reasoning that a map which silently drops nodes is worse than
+    one that admits it. Will asked for that caption to go (2026-09-26).
+    The rule it described is untouched, and is the assertion below -- the
+    caption was the announcement, not the mechanism, and only the
+    announcement was removed.
     """
     page = (STATIC / "gaps.js").read_text(encoding="utf-8")
     assert "position_confidence !== 'exact'" in page
-    assert "data-gaps-map-note" in page
 
 
 # ---------------------------------------------------------- the sentences
