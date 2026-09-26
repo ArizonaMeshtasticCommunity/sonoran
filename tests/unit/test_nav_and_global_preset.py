@@ -297,3 +297,138 @@ def test_a_shared_plan_link_still_decides_its_own_preset() -> None:
         "the global preset reaches into the share path, so a shared plan would "
         "predict something other than what was shared"
     )
+
+
+# --- the three pages that were missing it ---------------------------
+#
+# Will asked "is the firehose getting filtered... did we miss anything?".
+# Three were: the firehose, the dashboard's message feed and the node
+# list. All three endpoints already took `channel` and none of the pages
+# sent one. Verified against the live instance before wiring them, because
+# a parameter existing is not proof that it filters:
+#
+#   api/packets  unfiltered -> both presets; channel=LongFast -> LongFast
+#   api/chat     unfiltered -> MediumFast, Traffic, Weather; filtered -> LongFast
+#   api/nodes    2,557 nodes total; 836 on LongFast, 1,276 on MediumFast
+#
+# The node count is why that page is the one to watch: filtering HIDES
+# nodes, and it is where somebody goes to find a specific one.
+
+
+def test_one_helper_decides_the_preset_for_all_three() -> None:
+    """Three call sites, one rule, so they cannot drift apart."""
+    code = _code("app.js")
+    assert "function presetChannel()" in code
+    assert code.count("presetChannel()") >= 3, (
+        "not every page that gained the filter is using the shared helper"
+    )
+
+
+def test_the_firehose_asks_for_one_preset() -> None:
+    code = _code("app.js")
+    body = code[code.index("limit: '150', summary: 'true'") :]
+    body = body[: body.index("api/packets?")]
+    assert "params.set('channel'" in body, "the firehose still shows every preset"
+
+
+def test_the_dashboard_feed_asks_for_one_preset() -> None:
+    code = _code("app.js")
+    assert "chatFeedChannel()" in code, "the dashboard feed still mixes presets"
+
+
+def test_the_node_list_asks_for_one_preset() -> None:
+    code = _code("app.js")
+    body = code[code.index("function nodeQuery(") :]
+    body = body[: body.index("api/nodes?")]
+    assert "presetChannel()" in body, "the node list still shows every preset"
+
+
+def test_a_filter_chosen_in_the_panel_still_beats_the_menu() -> None:
+    """The existing precedence rule, kept.
+
+    The panel wins where both can say the same thing, because the panel is
+    the one that SHOWS what it chose. So the menu's channel has to be set
+    before the panel loop overwrites it -- set after, a reader picking a
+    channel in the panel would watch it be ignored.
+    """
+    code = _code("app.js")
+    body = code[code.index("function nodeQuery(") :]
+    body = body[: body.index("api/nodes?")]
+    assert body.index("presetChannel()") < body.index("for (const [key, chosen] of nodeFilters)"), (
+        "the menu's preset is applied after the panel, so the panel no longer wins"
+    )
+
+
+def test_the_facet_counts_follow_the_same_filters_as_the_rows() -> None:
+    """Counts that describe a larger set than the rows are a lie.
+
+    `nodeFacetQuery` derives its query from `nodeQuery`, so the channel
+    reaches both. Held because the two could easily be built separately.
+    """
+    code = _code("app.js")
+    body = code[code.index("function nodeFacetQuery(") :]
+    body = body[: body.index("api/nodes/facets?")]
+    assert "nodeQuery(page)" in body, "the facet counts no longer follow the row filters"
+
+
+def test_the_filtering_is_silent() -> None:
+    """Will's choice: no per-page notice.
+
+    The menu says which preset is selected. A line on each page repeating
+    it is the wordiness he had just asked to be taken out of the nav --
+    which is also why the preset hint is gone.
+    """
+    html = _html()
+    assert "data-preset-hint" not in html, "the nav hint is back"
+    assert "Radios on one preset cannot hear" not in re.sub(r"<!--.*?-->", "", html, flags=re.S), (
+        "the sentence Will disliked is still rendered"
+    )
+
+
+def test_the_graph_has_no_channel_tabs_of_its_own() -> None:
+    """Will: "Graph page probably needs the filter as well."
+
+    It did. The graph defaulted to the menu's preset through
+    `preferredPreset`, which is why it looked done -- but it also drew a
+    clickable tab per channel, INCLUDING the topic ones, so a reader could
+    end up on a Weather graph while every other page showed MediumFast.
+
+    Removed rather than left empty: a `role="tablist"` holding no tabs is a
+    promise to a screen reader that there is something to choose.
+    """
+    html = _html()
+    bare = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    assert "data-graph-tabs" not in bare, "the graph still has a channel tab strip"
+    code = _code("app.js")
+    body = code[code.index("function graphTabs(") :]
+    body = body[: body.index("\n}")]
+    assert "role: 'tab'" not in body, "the graph still builds clickable channel tabs"
+    assert "SonoranLabels.preferredPreset" in body, "the graph no longer follows the menu"
+
+
+def test_the_graph_still_falls_back_rather_than_drawing_nothing() -> None:
+    """An empty graph is worse than the wrong one (#177).
+
+    `preferredPreset` takes the menu's choice where that channel HAS link
+    reports and otherwise falls back to the first that does, so a reader
+    whose preset is quiet in the window still sees a mesh. The filter on
+    `link_report_count` is the other half: the channel list carries
+    channels with traffic but no links, and those would open empty.
+    """
+    code = _code("app.js")
+    body = code[code.index("function graphTabs(") :]
+    body = body[: body.index("\n}")]
+    assert "link_report_count > 0" in body, (
+        "channels with no links are back, and they open an empty graph"
+    )
+
+
+def test_the_dead_tab_styling_went_with_the_tabs() -> None:
+    """Dead CSS that still looks live is how the next person keeps it.
+
+    `.watch-tabs` on the live map is a different class and keeps its own
+    rules; nothing else used `.tabs`.
+    """
+    css = (STATIC / "app.css").read_text(encoding="utf-8")
+    assert not re.search(r"^\.tabs[ {]", css, re.M), ".tabs rules are still here"
+    assert ".watch-tabs" in css, "the live map's tab styling was removed by mistake"
