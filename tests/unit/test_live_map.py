@@ -353,7 +353,13 @@ def test_the_preset_and_the_scope_never_hide() -> None:
     text = _client().get("/").text
     assert "data-watch-preset" in text
     assert "data-watch-scope" in text
-    assert "mapPresetLabel = (chosen && chosen.label) || linkChannel" in _read("app.js")
+    # Still assigned, and the assignment moved when the map's own preset
+    # picker was replaced by the global one. Kept as an assertion because
+    # removing the picker took this line with it once, and the symptom was
+    # quiet: the bar fell back to "Every preset" on a map drawing exactly
+    # one, so the thing a viewer must not forget was WRONG, not missing.
+    app = _read("app.js")
+    assert "mapPresetLabel = (chosen && chosen.label) || linkChannel" in app
 
 
 def test_the_expanded_table_adds_no_signal_to_a_relayed_row() -> None:

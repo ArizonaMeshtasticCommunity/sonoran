@@ -438,23 +438,29 @@
     picker.value = currentSiteSet();
   }
 
+  /*
+   * Follow the menu's preset, and tell the store what this run holds.
+   *
+   * The page had its own picker. It is gone: the choice is global now,
+   * so the coverage map, the gaps page, the graph and the map's link
+   * layer cannot disagree about which mesh is being looked at.
+   *
+   * `setAvailable` is the other half of that bargain. The global control
+   * starts on a two-name guess, and this is a page that knows what was
+   * actually published, so it says -- and the control stops offering a
+   * preset this run has nothing for.
+   */
   function drawPresets(page) {
-    const picker = $('[data-coverage-preset]', page);
-    if (!picker || !state.summary) return;
+    if (!state.summary) return;
     const presets = presetsOf(state.summary);
-    replace(
-      picker,
-      presets.map((item) =>
-        el('option', { value: item.preset, text: `${item.label} (${item.node_count})` }),
-      ),
-    );
-    // The deployment's preset first, then whatever the run published
-    // (#177). `state.preset` still wins once somebody has chosen.
-    if (!state.preset && presets.length) {
-      const wanted = SonoranLabels.preferredPreset(presets, (item) => item.preset);
-      if (wanted) state.preset = wanted.preset;
+    if (window.SonoranPreset && presets.length) {
+      SonoranPreset.setAvailable(presets.map((item) => item.preset));
     }
-    if (state.preset) picker.value = state.preset;
+    // `preferredPreset` consults the menu first, then the deployment
+    // default (#177), and falls back to the first published preset so a
+    // run without the chosen one still draws something.
+    const wanted = SonoranLabels.preferredPreset(presets, (item) => item.preset);
+    if (wanted) state.preset = wanted.preset;
   }
 
   function drawLegend(page) {
@@ -1019,13 +1025,6 @@
       return;
     }
     if (!state.loaded) {
-      const picker = $('[data-coverage-preset]', page);
-      if (picker) {
-        picker.addEventListener('change', () => {
-          state.preset = picker.value;
-          drawAll(page);
-        });
-      }
       const opacity = $('[data-coverage-opacity]', page);
       if (opacity) {
         opacity.addEventListener('input', () => {

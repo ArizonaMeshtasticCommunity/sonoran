@@ -193,16 +193,59 @@
    * run MediumFast, or a window with no MediumFast traffic in it, must
    * not land on an empty page to honour a preference.
    */
+  /**
+   * A preset's wire name, made readable: `MediumFast` -> `Medium Fast`.
+   *
+   * DERIVED from the name rather than looked up in a table. The server
+   * has a label for every preset in `radio/presets.py` ("Medium fast"),
+   * and copying those nine strings here would be a second list to keep
+   * in step -- the failure this repository has already had with the
+   * antenna and cable catalogues, which is why those are fetched.
+   *
+   * The cost of deriving is capitalisation: this says "Medium Fast" where
+   * the server says "Medium fast". That is a visible difference and a
+   * deliberate one, because the alternative is two lists that can
+   * disagree about which presets exist at all.
+   *
+   * Unknown or empty names come back unchanged, so a new preset shows its
+   * wire name rather than nothing.
+   */
+  function presetLabel(name) {
+    const text = String(name ?? '').trim();
+    if (!text) return '';
+    return text.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  }
+
   function preferredPreset(items, nameOf = (item) => item) {
     const list = [...(items || [])];
     if (!list.length) return null;
-    const wanted = (window.SONORAN && window.SONORAN.defaultPreset) || '';
+    /*
+     * The READER'S choice first, then the deployment's default.
+     *
+     * `SonoranPreset` holds the menu's global selector. Consulting it
+     * here rather than at each call site means every caller of this
+     * helper follows the menu without knowing the menu exists -- which
+     * is how the graph tab strip and the coverage page started obeying
+     * it without being rewritten.
+     *
+     * Guarded rather than assumed. If `preset.js` is ever absent -- a
+     * future document that loads this file alone, or a reordered script
+     * tag -- a missing store falls back to the server default, which is
+     * exactly what this function did before the menu existed. Checked
+     * before writing this: the embed document loads neither file, so it
+     * is not the reason; the reason is that a helper four callers depend
+     * on should not need a second script to work.
+     */
+    const store = window.SonoranPreset;
+    const wanted = (store && store.current())
+      || (window.SONORAN && window.SONORAN.defaultPreset)
+      || '';
     if (!wanted) return list[0];
     const match = list.find((item) => String(nameOf(item) ?? '') === wanted);
     return match === undefined ? list[0] : match;
   }
 
   window.SonoranLabels = {
-    ROLES, roleLabel, portnumLabel, portnumWire, sentence, preferredPreset,
+    ROLES, roleLabel, portnumLabel, portnumWire, sentence, preferredPreset, presetLabel,
   };
 }());
