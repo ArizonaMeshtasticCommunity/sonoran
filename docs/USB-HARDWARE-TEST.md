@@ -98,6 +98,25 @@ somebody was already thinking about.
 > the check that finds this class of bug; a targeted re-read is the
 > check that misses it.
 
+**That check has now been run, and the fix holds.**
+`tools/firmware-write-check/` drives the shipped `serial-write.js`
+against meshtasticd over TCP and then diffs a whole
+`--export-config`. Changing `lora.hopLimit` 3 → 5: **43 fields
+compared, 3 changed** — `hopLimit` itself, `channel_url` (which
+encodes LoRa settings), and `codingRate` absent → 5, which the
+firmware recomputed from `usePreset`. **Nothing was lost**, and
+`txEnabled` and `region` both survived; those are the two the old code
+destroyed.
+
+The detector is held to its job by `tests/unit/test_firmware_write_diff.py`,
+including the failing state: fed a config with the lora section zeroed,
+it must name `txEnabled` as lost. A comparison only ever seen passing is
+not evidence that it can fail.
+
+So what is left for a board is the **USB transport specifically** —
+meshtasticd speaks the same client API but it is not a serial port. The
+protocol and payload questions are answered.
+
 ## What you need
 
 - A board on USB. Both issues ask for **one ESP32** (Heltec V3,
