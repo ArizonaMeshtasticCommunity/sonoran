@@ -3160,11 +3160,26 @@ function strongestLinks(links, perNode) {
 }
 
 /** Pick the node the focus view centres on: the search, or the busiest. */
+/*
+ * Does this node answer what was typed into "Find a node" (#223)?
+ *
+ * All three names, because a reader types whichever one they know. The
+ * highlight used to test `display_name` alone while `focusNode` tested
+ * `display_name` and `node_id`, so a **short name** matched nothing at
+ * all -- and a short name is exactly what the reporter typed.
+ *
+ * One function, so the node the search highlights and the node the
+ * focus view centres on can never disagree again.
+ */
+function matchesGraphQuery(node, query) {
+  if (!query) return false;
+  const fields = [node.display_name, node.short_name, node.long_name, node.node_id];
+  return fields.some((field) => String(field || '').toLowerCase().includes(query));
+}
+
 function focusNode(data, query) {
   if (query) {
-    const found = data.nodes.find((node) =>
-      node.display_name.toLowerCase().includes(query)
-      || node.node_id.toLowerCase().includes(query));
+    const found = data.nodes.find((node) => matchesGraphQuery(node, query));
     if (found) return found.node_id;
   }
   if (graphFocus && data.nodes.some((node) => node.node_id === graphFocus)) return graphFocus;
@@ -3655,7 +3670,8 @@ PAGES.graph = async (page) => {
    * Nothing is deleted. These only choose what to draw.
    */
   const view = $('[data-graph-view]', page).value || 'all';
-  const query = ($('[data-graph-search]', page).value || '').trim().toLowerCase();
+  const queryShown = ($('[data-graph-search]', page).value || '').trim();
+  const query = queryShown.toLowerCase();
   const total = data.links.length;
 
   if (view === 'backbone') {
@@ -3670,6 +3686,31 @@ PAGES.graph = async (page) => {
   const linked = new Set(data.links.flatMap((link) => [link.source, link.target]));
   data.nodes = data.nodes.filter((node) => linked.has(node.node_id));
   const hiddenByView = total - data.links.length;
+  /*
+   * Say what the search found (#223).
+   *
+   * "It does nothing" was the report, and the box really did look that
+   * way: the highlight missed short names, and where it did match it
+   * was a 2 px ring on a 3 px dot. Even fixed, a reader needs to know
+   * the difference between "found, look for the ringed node" and "that
+   * name is not in this graph" -- and between both of those and "it is
+   * here but this view does not draw it", which is a real state when
+   * the backbone view keeps only the strongest links.
+   */
+  const matches = query ? data.nodes.filter((node) => matchesGraphQuery(node, query)).length : 0;
+  const searchNote = $('[data-graph-search-note]', page);
+  if (searchNote) {
+    searchNote.hidden = !query;
+    if (query) {
+      searchNote.textContent = matches
+        ? `${count(matches)} node${matches === 1 ? '' : 's'} match "${queryShown}"`
+          + `${view === 'focus' ? '' : ' - ringed in the graph'}`
+        : `No node in this view matches "${queryShown}"`
+          + (view === 'backbone'
+            ? '. The backbone view draws only the strongest links, so try Whole preset.'
+            : '');
+    }
+  }
   const heading = $('[data-graph-counts]', page);
   const label = selected ? selected.label : graphChannel;
   const focusName = graphFocus
@@ -3874,15 +3915,27 @@ PAGES.graph = async (page) => {
        */
       lineStyle: { color: 'source', curveness: lerp(0.3, 0.16), opacity: 0.45 },
       data: data.nodes.map((node) => {
-        const match = query && node.display_name.toLowerCase().includes(query);
+        const match = matchesGraphQuery(node, query);
         const seed = seeds.get(node.node_id);
         return {
           id: node.node_id,
           name: node.display_name,
           raw: node,
           category: graphCategory(node, categories),
-          symbolSize: (data.nodes.length > 120 ? 3 : 6)
-            + (data.nodes.length > 120 ? 9 : 18) * Math.sqrt((node.packet_count || 0) / busiest),
+          /*
+           * A match is drawn large enough to find (#223).
+           *
+           * Past 120 nodes a dot is 3 px, and the match used to be a
+           * 2 px border on it -- invisible in a mesh of four hundred,
+           * which is why the box read as doing nothing. A match now
+           * gets a floor of 14 px whatever the size of the graph, so it
+           * is the thing the eye lands on.
+           */
+          symbolSize: match
+            ? Math.max(14, (data.nodes.length > 120 ? 3 : 6)
+              + (data.nodes.length > 120 ? 9 : 18) * Math.sqrt((node.packet_count || 0) / busiest))
+            : (data.nodes.length > 120 ? 3 : 6)
+              + (data.nodes.length > 120 ? 9 : 18) * Math.sqrt((node.packet_count || 0) / busiest),
           x: seed ? seed[0] : undefined,
           y: seed ? seed[1] : undefined,
           // A dragged node stays where it was put while the layout
@@ -3907,7 +3960,10 @@ PAGES.graph = async (page) => {
            * A search match outranks all of it while it lasts.
            */
           itemStyle: match
-            ? { borderColor: PALETTE.text, borderWidth: 2 }
+            // The accent, which no role uses, and a ring thick enough
+            // to read against a dense graph. Full opacity too: a stale
+            // match is still the node that was asked for.
+            ? { borderColor: PALETTE.accent, borderWidth: 3, opacity: 1 }
             : {
                 borderColor: node.is_mqtt_gateway ? PALETTE.text : undefined,
                 borderWidth: node.is_mqtt_gateway ? 1.5 : 0,
