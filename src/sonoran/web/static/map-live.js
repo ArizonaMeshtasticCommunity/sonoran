@@ -75,6 +75,27 @@ const SonoranLive = (() => {
    */
   const STATIC_LIFE_MS = HOLD_MS + FADE_MS;
 
+  /*
+   * How long a line lasts with motion off (#222).
+   *
+   * The two states are meant to answer different questions. Motion on
+   * says "just now, and that way" (rule B) and is deliberately brief.
+   * Motion off has no movement to carry that, so its job is the lasting
+   * picture: what has crossed the mesh recently.
+   *
+   * It did not do that job. Motion off painted a line whole, held it
+   * 5 s and faded it over 3 s -- 8 s in total, against a 15 s poll, so
+   * the map spent half of every cycle empty. Both states looked like
+   * the same short-lived thing, which is the report.
+   *
+   * 30 s of hold is longer than the poll by design: the map is never
+   * empty between fetches, which is the property that makes it read as
+   * a picture rather than a flicker. The fade is unchanged -- opacity
+   * is not movement, so it is honest in both states.
+   */
+  const LIVE_HOLD_MS = 30000;
+  const LIVE_LIFE_MS = LIVE_HOLD_MS + FADE_MS;
+
   /* --- Caps ------------------------------------------------------- */
 
   /*
@@ -280,6 +301,35 @@ const SonoranLive = (() => {
     if (perSecond <= 20) return 1;
     if (perSecond <= 50) return 3;
     return 4;
+  }
+
+  /*
+   * Thin the arcs before the pool starts refusing packets whole (#222).
+   *
+   * The rate ladder and the frame governor both miss this case. A mark
+   * held for 30 s instead of 8 s is alive about four times as long, so
+   * the number on screen is four times the rate's worth -- and the cap
+   * binds long before frames get slow, because refused packets are
+   * cheap to draw. The map would sit at the cap quietly showing less.
+   *
+   * Pressure is measured against the cap that actually refuses, so this
+   * escalates only when the pool is genuinely close to full. It is the
+   * same lever the rate ladder pulls, and the rung is named in the
+   * status line, so the thinning is reported rather than quiet -- which
+   * is the condition the caps comment above sets for thinning at all.
+   */
+  const MARK_PRESSURE_RUNGS = [
+    [0.95, 3],
+    [0.85, 2],
+    [0.70, 1],
+  ];
+
+  function rungForMarks(alive) {
+    const share = alive / MAX_LIVE;
+    for (const [threshold, rung] of MARK_PRESSURE_RUNGS) {
+      if (share >= threshold) return rung;
+    }
+    return 0;
   }
 
   /* The frame budget is 8 ms for the whole canvas, leaving 8 ms for
@@ -1123,7 +1173,7 @@ const SonoranLive = (() => {
           slot.kind = KIND_PULSE;
           slot.family = familyKey(packet.portnum);
           slot.born = at;
-          slot.life = reduced ? STATIC_LIFE_MS : ARC_LIFE_MS;
+          slot.life = reduced ? LIVE_LIFE_MS : ARC_LIFE_MS;
           slot.lat0 = packet.from.lat;
           slot.lng0 = packet.from.lon;
           slot.colour = colourOf(packet.portnum);
@@ -1157,7 +1207,7 @@ const SonoranLive = (() => {
         slot.kind = KIND_ARC;
         slot.family = familyKey(packet.portnum);
         slot.born = at;
-        slot.life = reduced ? STATIC_LIFE_MS : ARC_LIFE_MS;
+        slot.life = reduced ? LIVE_LIFE_MS : ARC_LIFE_MS;
         slot.lat0 = packet.from.lat;
         slot.lng0 = packet.from.lon;
         slot.lat1 = arc.gateway.lat;
@@ -1756,7 +1806,9 @@ const SonoranLive = (() => {
       while (rateWindow.length && rateWindow[0] < rateFloor) rateWindow.shift();
       stats.perSecond = rateWindow.length / (RATE_WINDOW_MS / 1000);
       governor(started);
-      rung = Math.max(rungForRate(stats.perSecond), governorRung);
+      // Three inputs, whichever is worst: the release rate, the frame
+      // governor, and how full the pool is (#222).
+      rung = Math.max(rungForRate(stats.perSecond), governorRung, rungForMarks(liveCount));
 
       drawFrame(started);
 
@@ -1839,10 +1891,36 @@ const SonoranLive = (() => {
       setReduced(value) {
         if (reduced === value) return;
         reduced = value;
-        // Held marks were sized for the other timing, so drop them
-        // rather than let a static mark linger for a flight's worth.
-        for (const slot of pool) slot.live = false;
-        liveCount = 0;
+        /*
+         * Keep the lines already on screen (#222).
+         *
+         * This used to drop every live mark, so the toggle blanked the
+         * map -- which is most of why switching "felt broken". A mark is
+         * evidence that a packet crossed the mesh; that does not stop
+         * being true because the reader changed how it is drawn.
+         *
+         * What does change is how long it should last, so each mark's
+         * remaining life is rescaled into the new timing rather than
+         * left as it was. Without this, a mark born with motion on
+         * would linger for a flight's worth after the flight stopped
+         * being drawn -- which was the original reason for dropping
+         * them, and is a reason to convert rather than to discard.
+         */
+        const nowAt = performance.now();
+        const target = reduced ? LIVE_LIFE_MS : ARC_LIFE_MS;
+        for (const slot of pool) {
+          // Traceroute hops keep their own timing, which #222 does not
+          // change. `KIND_HOP`, not an invented name: an undefined
+          // constant here would read as `undefined` and silently
+          // rescale the hops too.
+          if (!slot.live || slot.kind === KIND_HOP) continue;
+          const age = nowAt - slot.born;
+          const left = Math.max(0, slot.life - age);
+          const fraction = slot.life > 0 ? left / slot.life : 0;
+          // Born now, with the share of its life it had left.
+          slot.born = nowAt;
+          slot.life = Math.max(1, target * fraction);
+        }
         /*
          * The heat survives the switch. It is a quantity rather than an
          * animation, so it means the same thing in both states and
