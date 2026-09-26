@@ -63,9 +63,6 @@ PRESETS: tuple[ModemPreset, ...] = (
     ModemPreset("VERY_LONG_SLOW", "VeryLongSlow", "Very long slow", 12, 62_500, -147.5),
 )
 
-# The preset this mesh runs on when nothing says otherwise.
-DEFAULT_PRESET_KEY = "LONG_FAST"
-
 _BY_KEY = {preset.key: preset for preset in PRESETS}
 
 _WORD = re.compile(r"[^a-z0-9]+")

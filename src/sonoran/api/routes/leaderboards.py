@@ -130,28 +130,11 @@ async def leaderboards(
 def _assessed_presets(settings: Settings) -> list[str]:
     """Return the assessed presets, the deployment's own one first.
 
-    `settings.default_preset` leads, then the rest by node count (#177).
-    This used to be busiest-first alone, on the reasoning that the
-    busiest preset is where most of the mesh is. That is true and it is
-    not the same question: the busiest preset moves with the traffic,
-    so the page a reader lands on changed underneath them. The one the
-    community actually runs does not.
-
-    **It leads only when it was assessed.** A preferred preset that is
-    not in the index would otherwise put an empty board at the top,
-    which is a worse answer than the wrong preset.
+    The ordering moved to `gaps_store.assessed_presets` so the gaps page
+    can share it: it had this fix and the gaps page did not, which is
+    exactly the drift a second copy of a sort produces.
     """
-    index = gaps_store.read_index(settings)
-    listed = index.get("presets") if index else None
-    items = [
-        item
-        for item in (listed if isinstance(listed, list) else [])
-        if isinstance(item, dict) and isinstance(item.get("preset"), str)
-    ]
-    items.sort(key=lambda item: -_count(item, "node_count"))
-    preferred = settings.default_preset
-    items.sort(key=lambda item: item.get("preset") != preferred)
-    return [str(item["preset"]) for item in items]
+    return [str(item["preset"]) for item in gaps_store.assessed_presets(settings)]
 
 
 def _rows(document: dict[str, object] | None) -> list[dict[str, object]]:
