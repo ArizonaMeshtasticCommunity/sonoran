@@ -16,7 +16,10 @@ both routes read it. A second copy of that sort is precisely how the two
 drifted apart in the first place.
 """
 
+import re
 from pathlib import Path
+
+import pytest
 
 from sonoran.api.routes.gaps import _presets, _resolve
 from sonoran.api.routes.leaderboards import _assessed_presets
@@ -173,3 +176,73 @@ def test_both_routes_agree_because_they_share_one_sort(tmp_path: Path) -> None:
     """
     settings = _index(tmp_path, [("LongFast", 900), ("MediumFast", 40), ("ShortFast", 5)])
     assert _assessed_presets(settings) == [item["preset"] for item in _presets(settings)]
+
+
+# --- the chosen preset has to survive a reload ----------------------
+
+
+def test_the_address_cases_pass_under_node() -> None:
+    """Reported as "still set to LF even if I set it to MF".
+
+    The default was only half the problem. The picker kept its choice in
+    `state.preset`, which is closure state, so switching worked and then
+    reopening `#gaps` dropped it and the page went back to the server's
+    first offer. Now the choice is written into the address and read back
+    out of it, which also makes it shareable.
+
+    Run under node against a fake address bar rather than asserted from
+    the source, because the bug was behavioural.
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    cases = Path(__file__).resolve().parents[1] / "unit" / "js" / "gaps_preset_address_cases.mjs"
+    done = subprocess.run([node, str(cases)], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_router_still_reaches_the_page_with_a_query_on_it() -> None:
+    """`#gaps?channel=X` has to route, or the fix breaks the page.
+
+    `app.js` matches the fragment after splitting on `?`. If that ever
+    stopped, every link written by this change would land on the
+    dashboard instead, which is worse than the bug it fixes.
+    """
+    app = (
+        Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
+    assert "location.hash.slice(1) || 'dashboard').split('?')[0]" in app, (
+        "the router no longer strips the query from the fragment"
+    )
+
+
+def test_the_picker_records_the_choice_in_the_address() -> None:
+    """The half the node cases cannot reach.
+
+    Firing the picker's `change` handler needs a real DOM, so this reads
+    the handler instead. It is asserted because the mutation check found
+    it: deleting `writeAddress` from the handler leaves every behavioural
+    case green — the helpers work and `show` reads the address — while
+    the reported bug comes straight back, because nothing ever puts the
+    choice into the address for `show` to find.
+    """
+    source = (
+        Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static" / "gaps.js"
+    ).read_text(encoding="utf-8")
+    # Comments stripped: this file explains the fix in prose that names
+    # `writeAddress`, and matching that would pass on the explanation.
+    code = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    code = "\n".join(
+        line
+        for line in code.splitlines()
+        if (stripped := line.strip()) and not stripped.startswith("//")
+    )
+    handler = code[code.index("picker.addEventListener('change'") :]
+    handler = handler[: handler.index("});")]
+    assert "writeAddress" in handler, (
+        "the picker no longer records the chosen preset in the address, so it "
+        "will not survive a reload"
+    )
