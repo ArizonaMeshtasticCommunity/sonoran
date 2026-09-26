@@ -609,7 +609,17 @@ def test_the_frame_time_governor_has_hysteresis_in_both_directions() -> None:
     assert "frameLog[0].at < started - 1200" in script
     # Both drive it: the rate band is a floor and the governor may go
     # finer, so the rung in force is the higher of the two.
-    assert "rung = Math.max(rungForRate(stats.perSecond), governorRung);" in script
+    # The governor's rung must be one of the inputs to the drawn rung.
+    # Named rather than matched as a whole argument list: #222 added a
+    # third input (pool pressure), and pinning the exact call made this
+    # go red while the hysteresis it guards was untouched.
+    rung_line = next(line for line in script.splitlines() if "rung = Math.max(" in line)
+    assert "governorRung" in rung_line, (
+        "the frame-time governor no longer feeds the rung, so hysteresis cannot reach what is drawn"
+    )
+    assert "rungForRate(stats.perSecond)" in rung_line, (
+        "the release-rate ladder no longer feeds the rung"
+    )
 
 
 def test_the_ladder_never_drops_anything_silently() -> None:
