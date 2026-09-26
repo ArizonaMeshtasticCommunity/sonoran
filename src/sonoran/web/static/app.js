@@ -1207,7 +1207,16 @@ let leaderboardPreset = '';
 async function loadLeaderboards(page) {
   const target = $('[data-leaderboards]', page);
   if (!target) return;
-  const query = leaderboardPreset ? `?channel=${encodeURIComponent(leaderboardPreset)}` : '';
+  /*
+   * The preset comes from the menu now, not from a picker on this panel.
+   *
+   * `leaderboardPreset` was a page-local variable behind a <select> built
+   * below. It was the fifth place on the site that asked the same
+   * question, and the one easiest to miss because the control was built
+   * in JavaScript rather than sitting in the markup.
+   */
+  const wanted = window.SonoranPreset ? SonoranPreset.current() : leaderboardPreset;
+  const query = wanted ? `?channel=${encodeURIComponent(wanted)}` : '';
   const data = await get(`api/stats/leaderboards${query}`).catch(() => null);
   if (!data) return replace(target, failure(new Error('Cannot load the leaderboards.')));
   if (!data.available) {
@@ -1215,16 +1224,18 @@ async function loadLeaderboards(page) {
   }
   const note = $('[data-leaderboards-note]', page);
   if (note) {
-    // One preset at a time: nodes on different presets cannot hear each
-    // other, so a merged board would rank links that cannot exist.
-    replace(note,
-      data.presets.length > 1
-        ? el('select', {
-            'aria-label': 'Modem preset',
-            onchange: (event) => { leaderboardPreset = event.target.value; loadLeaderboards(page); },
-          }, data.presets.map((preset) => el('option', { value: preset, text: preset, selected: preset === data.preset })))
-        : data.preset,
-      ' one preset at a time');
+    /*
+     * Says which preset these boards are for, and no longer offers to
+     * change it -- the menu does that for the whole site.
+     *
+     * Still said at all, because a leaderboard is a ranking and a reader
+     * has to know what it ranks: nodes on different presets cannot hear
+     * each other, so a merged board would rank links that cannot exist.
+     */
+    replace(note, `${SonoranLabels.presetLabel(data.preset)} only`);
+    if (window.SonoranPreset && Array.isArray(data.presets) && data.presets.length) {
+      SonoranPreset.setAvailable(data.presets);
+    }
   }
   replace(target, data.boards.map((board) => el('div', { class: 'panel leaderboard' },
     el('h3', {}, board.title,
@@ -2034,70 +2045,76 @@ async function mapNodes(path) {
 }
 
 async function linkChannelOptions(page) {
-  const wrap = $('[data-link-channel-wrap]', page);
-  const select = $('[data-link-channel]', page);
   const list = await mapChannels();
   const channels = (list && list.channels) || [];
-  if (!channels.length) {
-    wrap.hidden = true;
-    return null;
-  }
+  if (!channels.length) return null;
+
   /*
-   * A `#map/node/<id>?preset=...` link chooses the preset (#193.6).
+   * Which preset the link layer draws, in order of who gets to say.
    *
-   * This is the trap the issue named, and carrying the preset in the
-   * fragment is worth nothing unless it is applied BEFORE the fetch --
-   * the map draws one preset at a time (AGENTS.md 9.7), so a node on
-   * any other one is simply not drawn and the link lands on empty
-   * ground.
+   * 1. `#map/node/<id>?preset=...` (#193.6). A link naming a preset means
+   *    it, and applying it BEFORE the fetch is the whole point: the map
+   *    draws one preset at a time (AGENTS.md 9.7), so a node on any other
+   *    one is not drawn and the link lands on empty ground. Honoured only
+   *    when this deployment actually carries that channel; otherwise the
+   *    focus step below says the node is not here.
+   * 2. the MENU's global preset, which is the normal case.
+   * 3. whatever came first, so a deployment carrying neither still draws.
    *
-   * Only when the deployment actually has that channel. A link naming
-   * a preset this instance does not carry falls through to the normal
-   * choice, and the focus step below then says the node is not here.
+   * The picker that used to be here is gone. It listed the modem presets
+   * AND the topic channels beside them -- Weather, trivia -- so the link
+   * layer could be pointed at any of them. Those rode on top of a preset
+   * and never named one, so a reader could end up looking at Weather
+   * links while the gaps page showed MediumFast and the graph showed
+   * something else again. One global choice is what Will asked for, and
+   * the trade is real: the topic link layers are no longer reachable
+   * here. Worth restoring as a sub-choice WITHIN the preset if anybody
+   * misses them.
    */
   if (mapFocus && mapFocus.preset
       && channels.some((item) => item.channel === mapFocus.preset)) {
     linkChannel = mapFocus.preset;
+  } else if (window.SonoranPreset) {
+    const wanted = SonoranPreset.current();
+    if (channels.some((item) => item.channel === wanted)) linkChannel = wanted;
   }
   if (!channels.some((item) => item.channel === linkChannel)) {
     linkChannel = channels[0].channel;
   }
-  const wanted = channels.map((item) => `${item.channel}:${item.tier}`).join('|');
-  if (select.dataset.filled !== wanted) {
-    /*
-     * Core first, extra second.
-     *
-     * Core is the mesh proper: the modem presets and the channels this
-     * deployment claims as its own. Extra is everything running beside
-     * it, such as the weather and trivia channels. Without the split
-     * the mesh is buried among them.
-     */
-    const option = (item) =>
-      el('option', {
-        value: item.channel,
-        // Packets, not link reports. The busiest layer on this page is
-        // the traffic one, and mixing the two units in one list makes a
-        // quiet channel look busier than a loud one.
-        text: `${item.label} (${count(item.packet_count || 0)})`,
-      });
-    const tier = (name, items) =>
-      items.length ? el('optgroup', { label: name }, items.map(option)) : null;
-    replace(select, [
-      tier('Core', channels.filter((item) => item.tier === 'core')),
-      tier('Extra', channels.filter((item) => item.tier !== 'core')),
-    ]);
-    select.dataset.filled = wanted;
-  }
-  select.value = linkChannel;
-  wrap.hidden = false;
+
   /*
-   * Held for the watch status line. In fullscreen there is no page head
-   * and no visible picker label, and a viewer must never forget which
-   * mesh they are watching: a node on LongFast cannot hear a node on
-   * MediumFast, so the picture is only true of one preset. AGENTS.md 9.7.
+   * The name the live map's watch bar shows.
+   *
+   * Set here because this is where the channel is settled. Removing the
+   * picker took the assignment with it, and the symptom was quiet: the
+   * bar fell back to "Every preset" on a map drawing exactly one, so the
+   * one thing a viewer must not forget -- which mesh they are watching --
+   * would have been wrong rather than missing.
    */
   const chosen = channels.find((item) => item.channel === linkChannel);
-  mapPresetLabel = (chosen && chosen.label) || linkChannel || '';
+  mapPresetLabel = (chosen && chosen.label) || linkChannel;
+
+  /*
+   * Tell the global control which presets this mesh actually carries.
+   *
+   * Filtered on the SERVER'S classification -- `api/channels.py` sets
+   * `group: "Presets"` and a non-empty `preset` for a channel that names
+   * a modem preset, and leaves `preset` empty for Weather, Traffic,
+   * azmsh and the rest. Those ride on top of a preset without naming one
+   * (AGENTS.md 9.7), so offering them in a preset switch would be a
+   * choice that means nothing.
+   *
+   * The first version filtered against this module's own two-name
+   * fallback, which was circular: it could only ever confirm the guess it
+   * started from, so a deployment running ShortFast would never have
+   * seen it offered.
+   */
+  if (window.SonoranPreset) {
+    const presets = channels
+      .filter((item) => item.group === 'Presets' && item.preset)
+      .map((item) => String(item.preset));
+    if (presets.length) SonoranPreset.setAvailable(presets);
+  }
   return linkChannel;
 }
 
@@ -5816,7 +5833,8 @@ async function chatChannelPage(page, channel) {
 PAGES.chat = async (page) => {
   if (currentChatChannel) return chatChannelPage(page, currentChatChannel);
   chatHead(page, null,
-    'One section for each detected channel, grouped by what it is for. New names land in Custom.');
+    'One section for each detected channel on the preset chosen in the menu, grouped by what it '
+    + 'is for. New names land in Custom.');
   const hours = $('[data-chat-hours]', page).value || '168';
   const body = $('[data-chat-body]', page);
   const data = await get(`api/chat/overview?hours=${hours}`).catch((error) => error);
@@ -5825,8 +5843,14 @@ PAGES.chat = async (page) => {
     return replace(body, empty('No channels have stored messages. Text storage may be off.'));
   }
 
+  const shown = SonoranPreset.channelsFor(data.sections);
+  if (!shown.length) {
+    return replace(body, empty(
+      `No channels on ${SonoranLabels.presetLabel(SonoranPreset.current())} have stored messages.`));
+  }
+
   const groups = new Map();
-  for (const section of data.sections) {
+  for (const section of shown) {
     if (!groups.has(section.group)) groups.set(section.group, []);
     groups.get(section.group).push(section);
   }
@@ -5835,6 +5859,13 @@ PAGES.chat = async (page) => {
       el('h3', { text: `${group} (${sections.length})` }),
       el('div', { class: 'grid two' }, sections.map(channelSection)))));
 };
+
+/*
+ * The rule for which channels belong to the preset in force lives in
+ * `preset.js`, as `SonoranPreset.channelsFor`. It is pure, so it is
+ * tested directly rather than through this page.
+ */
+
 
 /* --- Weekly check-in ------------------------------------------- */
 
@@ -7446,6 +7477,73 @@ async function route() {
  * With "follow the system", a change in the system setting is followed
  * the same way.
  */
+/*
+ * The global preset selector in the menu footer.
+ *
+ * Builds one radio button per preset on offer and re-renders the page in
+ * view when the choice changes. The pages themselves do not subscribe:
+ * they read `SonoranPreset.current()` (most of them through
+ * `SonoranLabels.preferredPreset`) while they draw, so re-drawing is all
+ * that is needed and there is no second copy of the choice to keep in
+ * step.
+ *
+ * A radio group rather than a `<select>`: two options, one word each, and
+ * a select costs a tap to open before the tap that chooses.
+ */
+function wirePresetSwitch() {
+  const holder = $('[data-preset-switch]');
+  if (!holder || !window.SonoranPreset) return;
+  const hint = $('[data-preset-hint]');
+
+  const draw = () => {
+    const current = SonoranPreset.current();
+    replace(holder, SonoranPreset.options().map((name) => el('button', {
+      type: 'button',
+      role: 'radio',
+      class: `preset-choice${name === current ? ' active' : ''}`,
+      'aria-checked': String(name === current),
+      /*
+       * Only the chosen button is reachable by Tab, and the arrow keys
+       * move between them. That is how a radio group behaves, and a row
+       * of buttons that each take a tab stop is the usual way this
+       * control is got wrong.
+       */
+      tabindex: name === current ? '0' : '-1',
+      text: SonoranLabels.presetLabel(name),
+      onclick: () => { if (SonoranPreset.set(name)) draw(); },
+      onkeydown: (event) => {
+        const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+        const step = keys[event.key];
+        if (!step) return;
+        event.preventDefault();
+        const list = SonoranPreset.options();
+        const next = list[(list.indexOf(current) + step + list.length) % list.length];
+        if (SonoranPreset.set(next)) draw();
+        const moved = $(`[data-preset-switch] .preset-choice.active`);
+        if (moved) moved.focus();
+      },
+    })));
+    if (hint) {
+      /*
+       * Says what the choice DOES, in one line, because a preset is not
+       * a filter most readers will have met. "A node on LongFast cannot
+       * hear a node on MediumFast" is the fact underneath it, and the
+       * whole site obeying one preset only makes sense once you know it.
+       */
+      hint.textContent = `Every page shows ${SonoranLabels.presetLabel(current)} only. `
+        + 'Radios on one preset cannot hear the other.';
+    }
+  };
+
+  draw();
+  // A change from anywhere -- another tab's storage, or the available
+  // list narrowing -- redraws the control and the page under it.
+  SonoranPreset.onChange(() => {
+    draw();
+    render(currentPage);
+  });
+}
+
 function wireTheme() {
   const button = $('[data-theme-choice]');
   if (!button) return;
@@ -7500,6 +7598,7 @@ function wireTheme() {
 }
 
 function wire() {
+  wirePresetSwitch();
   wireTheme();
   wireFamilyFilter();
   for (const button of $$('[data-chat-view-choice]')) {
@@ -7526,10 +7625,6 @@ function wire() {
   $('[data-graph-reset]').addEventListener('click', () => {
     graphPinned.clear();
     render('graph');
-  });
-  $('[data-link-channel]').addEventListener('change', (event) => {
-    linkChannel = event.target.value;
-    render('map');
   });
   $('[data-node-apply]').addEventListener('click', () => render('nodes'));
   /* The filter panel. */

@@ -555,19 +555,20 @@
 
   /* ----------------------------------------------------------- draw */
 
+  /*
+   * Tell the global control which presets this assessment holds.
+   *
+   * The page's own picker is gone -- the choice lives in the menu now, so
+   * this page, the coverage map, the graph and the map's link layer can
+   * no longer be on different presets at the same time. What this page
+   * still knows, and the menu does not, is which presets were actually
+   * assessed and how many nodes each holds, so it says.
+   */
   function drawPresetPicker(page, summary) {
-    const picker = $('[data-gaps-preset]', page);
-    if (!picker) return;
     const listed = summary.presets || [];
-    replace(picker, listed.map((item) =>
-      el('option', {
-        value: item.preset,
-        selected: item.preset === summary.preset,
-        text: `${item.label || item.preset} (${item.node_count ?? 0})`,
-      })));
-    /* One preset is not a choice. Two is. */
-    const wrap = $('[data-gaps-preset-wrap]', page);
-    if (wrap) wrap.hidden = listed.length < 2;
+    if (window.SonoranPreset && listed.length) {
+      SonoranPreset.setAvailable(listed.map((item) => item.preset));
+    }
   }
 
   /*
@@ -592,32 +593,46 @@
   }
 
   /*
-   * Keep the address holding the preset being read.
+   * `writeAddress` was here and is gone.
    *
-   * `history.replaceState` and not `location.hash`: writing the hash
-   * fires `hashchange`, the router re-enters the page, and `show` runs
-   * again -- a second fetch for every change of the picker, and a redraw
-   * the reader sees.
+   * It existed because this page owned its preset and had to keep the
+   * choice across a reload. The menu owns it now and keeps it in
+   * `localStorage`, so nothing on this page writes the address any more.
+   *
+   * `presetFromAddress` stays: an inbound `#gaps?channel=X` link is still
+   * honoured, and now moves the whole site rather than this page alone.
    */
-  function writeAddress(preset) {
-    if (!location.hash.startsWith('#gaps')) return;
-    const next = preset ? `#gaps?channel=${encodeURIComponent(preset)}` : '#gaps';
-    if (location.hash === next) return;
-    history.replaceState(null, '', next);
-  }
 
   async function show(page) {
     let summary;
     /*
-     * The address wins whenever it names one.
+     * Where the preset comes from, in order.
      *
-     * Not `if (!state.preset)`, which was the first version: `state` is
-     * closure state that outlives a visit to the page, so opening
-     * somebody's #gaps?channel=X link after having chosen Y earlier in
-     * the same tab would have silently shown Y and ignored the link.
+     * 1. the address, when a link names one. Somebody sharing
+     *    `#gaps?channel=LongFast` means it, and a link that silently
+     *    showed something else would be worse than no link.
+     * 2. otherwise the MENU's global choice, which is the normal case.
+     *
+     * `state.preset` is no longer consulted first. It is closure state
+     * that outlives a visit, so it used to win over both of the above --
+     * which meant opening somebody's link after choosing a preset
+     * yourself showed yours and ignored theirs.
      */
     const named = presetFromAddress();
-    if (named) state.preset = named;
+    /*
+     * A link naming a preset sets the GLOBAL one, rather than overriding
+     * it for this page only.
+     *
+     * Otherwise a shared `#gaps?channel=LongFast` would put this page on
+     * LongFast while the menu still said Medium Fast and every other page
+     * agreed with the menu -- which is the exact disagreement between
+     * pages that the global selector was added to remove. Somebody
+     * opening that link means "show me LongFast", and the honest answer
+     * is to move the whole site with it and let the menu say so.
+     */
+    if (named && window.SonoranPreset) SonoranPreset.set(named);
+    const global = window.SonoranPreset ? SonoranPreset.current() : null;
+    state.preset = named || global || state.preset;
     try {
       summary = await fetchJson(
         state.preset ? `api/gaps?channel=${encodeURIComponent(state.preset)}` : 'api/gaps');
@@ -684,26 +699,13 @@
           drawNodes(page);
         });
       }
-      const picker = $('[data-gaps-preset]', page);
-      if (picker) {
-        picker.addEventListener('change', () => {
-          state.preset = picker.value;
-          state.filter = null;
-          // Before the fetch, so a reader who reloads mid-request still
-          // lands on what they picked.
-          writeAddress(state.preset);
-          show(page);
-        });
-      }
       state.loaded = true;
     }
   }
 
   /*
-   * `presetFromAddress` and `writeAddress` are exposed for the tests.
-   * They carry the bug this page had -- a chosen preset that did not
-   * survive a reload -- and reading them out of the source proves much
-   * less than running them against a fake address bar.
+   * `presetFromAddress` is exposed for the tests: reading it out of the
+   * source proves much less than running it against a fake address bar.
    */
-  window.SonoranGaps = { show, state, presetFromAddress, writeAddress };
+  window.SonoranGaps = { show, state, presetFromAddress };
 }());

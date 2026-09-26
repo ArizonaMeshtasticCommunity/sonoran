@@ -219,30 +219,34 @@ def test_the_router_still_reaches_the_page_with_a_query_on_it() -> None:
     )
 
 
-def test_the_picker_records_the_choice_in_the_address() -> None:
-    """The half the node cases cannot reach.
+def test_an_inbound_link_moves_the_whole_site_not_just_this_page() -> None:
+    """The picker this used to check no longer exists.
 
-    Firing the picker's `change` handler needs a real DOM, so this reads
-    the handler instead. It is asserted because the mutation check found
-    it: deleting `writeAddress` from the handler leaves every behavioural
-    case green — the helpers work and `show` reads the address — while
-    the reported bug comes straight back, because nothing ever puts the
-    choice into the address for `show` to find.
+    It asserted that the gaps page's own preset picker wrote the choice
+    into the address, so it would survive a reload. The picker is gone:
+    the preset is chosen once in the menu and kept in `localStorage`, so
+    nothing on this page writes the address any more.
+
+    What replaced it is worth holding. An inbound `#gaps?channel=X` link
+    is still honoured, and it now sets the GLOBAL preset rather than
+    overriding this page alone -- otherwise a shared link would show
+    LongFast here while the menu said Medium Fast and every other page
+    agreed with the menu, which is the disagreement between pages the
+    global selector exists to remove.
     """
     source = (
         Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static" / "gaps.js"
     ).read_text(encoding="utf-8")
-    # Comments stripped: this file explains the fix in prose that names
-    # `writeAddress`, and matching that would pass on the explanation.
     code = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
     code = "\n".join(
         line
         for line in code.splitlines()
         if (stripped := line.strip()) and not stripped.startswith("//")
     )
-    handler = code[code.index("picker.addEventListener('change'") :]
-    handler = handler[: handler.index("});")]
-    assert "writeAddress" in handler, (
-        "the picker no longer records the chosen preset in the address, so it "
-        "will not survive a reload"
+    assert "presetFromAddress()" in code, "an inbound link is no longer read"
+    assert "SonoranPreset.set(named)" in code, (
+        "an inbound link no longer moves the global preset, so the menu and "
+        "this page would disagree"
     )
+    # And the page still follows the menu when no link names one.
+    assert "SonoranPreset.current()" in code, "the page does not follow the menu"

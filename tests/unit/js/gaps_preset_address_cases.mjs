@@ -55,41 +55,18 @@ eq('other keys are ignored', load('#gaps?filter=bad').api.presetFromAddress(), n
 eq('a preset among other keys is found',
   load('#gaps?filter=bad&channel=ShortSlow').api.presetFromAddress(), 'ShortSlow');
 
-// --- writing the address --------------------------------------------
+// --- the address no longer WRITES ----------------------------------
+//
+// `writeAddress` is gone. The gaps page owned its preset while it had a
+// picker and had to keep the choice across a reload; the menu owns it now
+// and keeps it in localStorage, so nothing here writes the address. The
+// inbound half is what remains, and it does MORE than before: a link
+// naming a preset moves the whole site, so the menu cannot end up
+// disagreeing with the page.
 {
-  const { api, replaced, sandbox } = load('#gaps');
-  api.writeAddress('MediumFast');
-  eq('choosing writes the address', replaced, ['#gaps?channel=MediumFast']);
-  // replaceState, never location.hash: assigning the hash fires
-  // hashchange, the router re-enters the page and show() runs a second
-  // time -- an extra fetch and a visible redraw on every change.
-  eq('and the new address reads back', api.presetFromAddress(), 'MediumFast');
-  eq('the hash was not assigned directly', sandbox.location.hash, '#gaps?channel=MediumFast');
-}
-{
-  const { api, replaced } = load('#gaps?channel=MediumFast');
-  api.writeAddress('MediumFast');
-  eq('an unchanged address is not rewritten', replaced, []);
-}
-{
-  const { api, replaced } = load('#gaps?channel=MediumFast');
-  api.writeAddress(null);
-  eq('clearing goes back to a plain fragment', replaced, ['#gaps']);
-}
-{
-  const { api, replaced } = load('#map');
-  api.writeAddress('MediumFast');
-  eq('it never rewrites another page', replaced, []);
-}
-
-// --- the round trip, which is the whole point -----------------------
-{
-  const first = load('#gaps');
-  first.api.writeAddress('MediumFast');
-  // A reload is a new module against the address the last one left.
-  const second = load(first.sandbox.location.hash);
-  eq('the choice survives a reload', second.api.presetFromAddress(), 'MediumFast');
-  eq('and state is not what carried it', second.api.state.preset, null);
+  const { api } = load('#gaps?channel=MediumFast');
+  eq('nothing writes the address any more', typeof api.writeAddress, 'undefined');
+  eq('but an inbound link is still read', api.presetFromAddress(), 'MediumFast');
 }
 
 // --- what show() actually asks the server for -----------------------

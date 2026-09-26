@@ -2669,3 +2669,147 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-ramp { display: inline-block; width: 8rem; height: .6rem; border-radius: 999px; }
 .rf-where { margin: .4rem 0; padding: .45rem .7rem; border-left: 3px solid var(--accent-2); background: var(--panel-2); border-radius: .3rem; }
 .rf-where.unknown { border-left-color: var(--warn); }
+
+/* ===================================================== the menu footer
+ *
+ * Status, preset, appearance — in the order somebody asks: am I
+ * connected, which mesh am I looking at, and only then is it too bright.
+ *
+ * `margin-top: auto` moves here from `.sidebar .status`, which is what
+ * used to push the status to the bottom. The footer is the bottom now, so
+ * the whole group is pushed instead of its first line.
+ */
+.menu-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: .85rem;
+  padding-top: .9rem;
+  border-top: 1px solid var(--line);
+}
+
+/*
+ * The connection line, as a card rather than a stray sentence.
+ *
+ * It was a bare dot plus muted "Updated 11:11 AM", which read like debug
+ * output. A tinted panel and a tabular clock make it a status: the eye
+ * can find it, and the time no longer shifts width as the digits change.
+ */
+.menu-foot .status {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .8rem;
+  /* Not `--muted`: this is the one line on the page that says whether
+     anything else can be trusted, so it gets body colour. */
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .5rem .65rem;
+  font-variant-numeric: tabular-nums;
+}
+.menu-foot .status .dot {
+  flex: 0 0 auto;
+  width: .5rem; height: .5rem; border-radius: 50%;
+  margin: 0;
+  background: var(--good);
+  /* A ring, so the state is not carried by hue alone -- it survives a
+     colour-blind reader and a bad screen. */
+  box-shadow: 0 0 0 .18rem color-mix(in oklab, var(--good) 25%, transparent);
+}
+.menu-foot .status .dot.stale {
+  background: var(--warn);
+  box-shadow: 0 0 0 .18rem color-mix(in oklab, var(--warn) 25%, transparent);
+}
+.menu-foot .status .dot.down {
+  background: var(--bad);
+  box-shadow: 0 0 0 .18rem color-mix(in oklab, var(--bad) 25%, transparent);
+}
+
+/* One labelled group per control, so the label is not a placeholder. */
+.menu-field { display: flex; flex-direction: column; gap: .35rem; }
+.menu-field-label {
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+}
+.menu-hint {
+  margin: 0;
+  font-size: .72rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/*
+ * The global preset switch.
+ *
+ * Two words side by side, the chosen one filled. A segmented control
+ * rather than a select: both options are one word, and a select costs a
+ * tap to open before the tap that chooses.
+ */
+.preset-switch {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: .25rem;
+  padding: .2rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+}
+.preset-choice {
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 550;
+  padding: .4rem .3rem;
+  border: 1px solid transparent;
+  border-radius: .4rem;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .12s ease, color .12s ease;
+}
+.preset-choice:hover { color: var(--text); }
+.preset-choice.active {
+  background: var(--accent);
+  /* Chosen against the accent rather than inherited: `--text` on the
+     orange accent is the same dark-on-dark problem this change is
+     fixing, one control along. */
+  color: #fff;
+}
+.preset-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/*
+ * Appearance, readable at last (Will: "It's hard to read the dark on
+ * dark").
+ *
+ * It was `color: var(--muted)` on `background: none`, so a grey word sat
+ * on the dark sidebar at roughly 3:1 -- under the 4.5:1 that body text
+ * needs. Body colour on the tinted panel clears it in both themes, and
+ * the control now looks like the button it is rather than a hint.
+ */
+.menu-foot .theme-switch {
+  width: 100%;
+  margin: 0;
+  justify-content: flex-start;
+  gap: .5rem;
+  font-size: .82rem;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .5rem .65rem;
+}
+.menu-foot .theme-switch:hover { border-color: var(--accent); }
+.menu-foot .theme-switch .icon { color: var(--accent); }
+.menu-foot .theme-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

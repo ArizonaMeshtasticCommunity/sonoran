@@ -1496,7 +1496,37 @@ function wirePlanner() {
     });
   }
 
-  const defaults = SonoranPlannerParams.FORM_DEFAULTS;
+  /*
+   * Open on the menu's preset, and stay editable (Will, 2026-09-26).
+   *
+   * The planner is the one page where a preset is NOT a view of what
+   * happened: it is an input to a prediction, and it sets the receiver
+   * sensitivity the model uses. So it is not folded into the global
+   * selector -- somebody modelling a LongFast repeater while browsing
+   * MediumFast is a real thing to want -- but opening on a different
+   * preset from the rest of the site was just a surprise.
+   *
+   * A shared plan link still wins: `applyShare` runs its own fill and
+   * only when the address carries a query, so a link that names a preset
+   * predicts what it said it would. That matters more than this default.
+   *
+   * The menu's name is a WIRE name (`MediumFast`); this form's values are
+   * KEYS (`MEDIUM_FAST`). Matched by normalising both rather than with a
+   * second lookup table, which would be a third list of preset names.
+   */
+  const defaults = { ...SonoranPlannerParams.FORM_DEFAULTS };
+  if (window.SonoranPreset) {
+    const flat = (text) => String(text ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+    const wanted = flat(SonoranPreset.current());
+    const match = SonoranPlannerParams.PRESETS.find((item) => flat(item.key) === wanted);
+    if (match) {
+      defaults.preset = match.key;
+      // The two move together. A form opening on Medium fast with Long
+      // fast's -139 dBm would predict a reach nobody has, which is the
+      // reason DEFAULTS carries both.
+      defaults.sensitivity = match.sensitivity;
+    }
+  }
   fillForm(defaults);
   if (preset) preset.value = defaults.preset;
 

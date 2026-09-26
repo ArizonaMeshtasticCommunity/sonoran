@@ -173,7 +173,17 @@ def test_every_control_has_a_name_that_is_not_a_placeholder() -> None:
     Several selects had no label of any kind, and the three search boxes
     had only a placeholder.
     """
-    text = _client().get("/").text
+    # HTML COMMENTS STRIPPED FIRST.
+    #
+    # This scans raw markup with a regex, so a comment that mentions a
+    # control reads as that control. It happened: a comment explaining
+    # why the preset switch is "a radio group and not a `<select>`" was
+    # reported as an unnamed <select>, and the page was correct.
+    #
+    # Stripped here rather than reworded in the page, because the next
+    # comment to mention an element would fail the same way, and a test
+    # that forbids naming HTML in a comment is a test that shapes prose.
+    text = re.sub(r"<!--.*?-->", "", _client().get("/").text, flags=re.S)
     depth = 0
     for tag in re.findall(r"<(/?)(label|input|select)\b([^>]*)>", text):
         closing, name, rest = tag
