@@ -104,41 +104,39 @@ prediction.
 
 Options, none of them free:
 
-- ~~(a) Keep `desert` as the default~~
+- **(a) DECIDED, 2026-09-26 (revised the same day): `desert` in Simple,
+  choosable in Advanced, and the lookup filed as its own issue — #239.**
 - ~~(b) Derive it from elevation~~
-- **(c) DECIDED, 2026-09-26: ship a climate lookup.**
+- ~~(c) Ship a climate lookup~~ — chosen, then reversed once costed. The
+  costing is kept below because it is the useful part and the next person
+  should not have to redo it.
 
-**What that actually means, because it is the largest single item in this
-brief and it is not a UI change.**
+**What the separate issue has to carry.** A lookup is not a UI change. The
+five codes the engine takes are ITM's: equatorial, continental
+subtropical, maritime subtropical, desert, continental temperate.
+Answering "which of these five, for this coordinate" well enough to
+improve a prediction means:
 
-The five codes the engine takes are ITM's: equatorial, continental
-subtropical, maritime subtropical, desert, continental temperate. A lookup
-has to answer "which of these five, for this coordinate", and be right
-enough that a prediction changes for the better.
-
-The realistic source is the **Köppen-Geiger** classification, which is
-published as a raster and is the standard way this question is answered.
-It does not map one-to-one onto ITM's five codes, so the work is:
-
-1. choose a Köppen dataset and check its licence permits redistribution;
-2. write the Köppen → ITM mapping, and *document each decision* -- this is
-   where the judgement is, and it must be reviewable rather than buried;
-3. decide the resolution. Arizona spans desert (Phoenix, BWh) and
+1. choosing a **Köppen-Geiger** dataset — the standard source, published
+   as a raster — and checking its licence permits redistribution;
+2. writing the Köppen → ITM mapping and documenting each decision, since
+   that is where the judgement is and it must be reviewable;
+3. picking a resolution. Arizona spans desert (Phoenix, BWh) and
    continental temperate (Flagstaff, Dsb) within 200 km, so a coarse grid
    defeats the purpose;
-4. decide what ships. A full-world raster is megabytes. Cropping to the
-   region this mesh covers is smaller and honest, but then a site outside
-   it must fall back rather than answer wrongly;
-5. serve it. Terrain is already served from `src/sonoran/terrain/`, so
-   there is a precedent for shipping geographic data and an obvious place
-   for it.
+4. deciding what ships. A world raster is megabytes; cropping to this
+   region is smaller and honest, but a site outside the crop must then
+   fall back rather than answer wrongly;
+5. serving it. `src/sonoran/terrain/` is the precedent for shipping
+   geographic data and the obvious home.
 
-**Risks.** A lookup that is confidently wrong is worse than a default that
-is openly a default: the reader would have no reason to check it. So the
-climate shown must say where it came from, and a coordinate outside the
-data must say "not known here, using desert" rather than silently
-guessing. **It should be built and tested on its own, before the Planner
-work depends on it** -- Phase D otherwise waits on a dataset decision.
+**The risk that made it its own issue.** A lookup that is confidently
+wrong is worse than a default that is openly a default, because the reader
+has no reason to check it.
+
+**Until then:** Simple uses `desert` and does not hide that it is a
+choice — a beginner in Flagstaff is the case it is wrong for, so Advanced
+stays the answer.
 
 ---
 
@@ -438,9 +436,9 @@ squeezed. The map already has a documented tight-height mode
 Moves to advanced: Frequency, Sensitivity, gain typed by hand, radio
 power typed by hand, cable loss typed by hand, and all of Ground and air.
 
-Simple defaults: MediumFast on **slot 18**; ground and air from the site,
-via the climate lookup decided in §2.4 -- which is its own piece of work
-and must land first, or this item has nothing to read.
+Simple defaults: MediumFast on **slot 18**; ground and air fixed at
+`desert` (§2.4). **This item waits on nothing** -- the climate lookup is a
+separate issue and Phase D proceeds without it.
 
 Advanced: preset, slot and frequency **linked** — changing one updates
 the others.
@@ -542,3 +540,18 @@ Per item, before it is called done:
    tablet and desktop, so a desktop screenshot is not a pass.
 5. **Both themes**, since two of these items are colour changes.
 6. **Keyboard only**, for anything that gained a click target.
+
+**A gap worth knowing before Phase D.** Nothing in this repository catches
+an undefined identifier in the frontend. `node --check` parses and does no
+scope analysis, and the unit tests read source text -- to them a name that
+is merely absent looks the same as a name never used. Removing the live
+map's preset override left one `allNodes` reference behind and the map
+page threw on every render; the **e2e journeys** caught it, and they
+reported 23/23 passing while the console filled with the error, so the
+signal is in the console check rather than the journey results.
+
+Phase D removes a lot of controls, so this will happen again. Options:
+ESLint with `no-undef` (a new dev dependency and CI time on Logan's
+hardware, so Will's call), or accept the e2e as the net and never merge on
+a red console. Recorded because the cheap-looking answer -- "run
+`node --check`" -- does not work.

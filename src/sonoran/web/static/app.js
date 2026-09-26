@@ -2843,7 +2843,21 @@ PAGES.map = async (page) => {
       : null,
   ]);
 
-  mapNodeScope = channel && !allNodes
+  /*
+   * The scope line, which now only ever describes one preset.
+   *
+   * It used to branch on `allNodes`, the "Every preset, any time"
+   * override. Removing that toggle left this reference behind and the map
+   * page threw `allNodes is not defined` on every render -- caught by the
+   * e2e journeys, which reported 23/23 passing while the console filled
+   * with the error. The unit tests could not see it: they read source text
+   * and a name that is merely absent looks the same as a name never used.
+   *
+   * The "every preset" wording is kept for the case where there is no
+   * channel at all, which is a deployment with no preset channels rather
+   * than a reader's choice.
+   */
+  mapNodeScope = channel
     ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
     : `${count(nodes.length)} nodes, every preset`;
 
