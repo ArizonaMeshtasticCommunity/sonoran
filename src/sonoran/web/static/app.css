@@ -2145,6 +2145,12 @@ div.check { cursor: default; }
   background-repeat: no-repeat; background-size: 384px 144px;
 }
 .rf-aprs.relayed { opacity: .55; }
+/* The RF table. The raw frame wraps anywhere: an APRS frame is one long
+   word, and a hex frame is nothing but. */
+.rf-table-panel { margin-top: .75rem; }
+.rf-table-head { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; margin-bottom: .5rem; }
+.rf-table td.wrap { max-width: 24rem; }
+.rf-raw { font-size: .78rem; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; }
 .rf-tip .rf-comment { white-space: normal; overflow-wrap: anywhere; min-width: 12rem; max-width: 22rem; }
 
 /* Vertical rhythm down the coverage page.

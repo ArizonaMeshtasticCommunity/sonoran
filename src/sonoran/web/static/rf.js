@@ -923,6 +923,181 @@
     drawBusy(page);
   }
 
+  /* --- The table ----------------------------------------------------
+
+     Everything on the map, as rows: the decoded fields in words, and
+     beside them the raw frame the decoder gave the agent (`meta.raw`,
+     contract field `raw`). The rows are the ones the map drew, so the
+     table never disagrees with it. Text only, like the tooltips. */
+  const RAW_NOTE = 'Not sent: this source gives the agent decoded data only';
+  const ft = (metres) => (metres == null ? null : Math.round(Number(metres) * 3.28084));
+  const heardAt = (row) => Date.parse(row.t) || 0;
+  const aprsMotion = (row) => {
+    if (row.gs_kn != null && Number(row.gs_kn) > 0) {
+      return `${mph(row.gs_kn)} mph${row.track_deg != null ? ` ${compass(row.track_deg)}` : ''}`;
+    }
+    return '';
+  };
+
+  const TABLES = [
+    {
+      key: 'aircraft', label: 'Aircraft', kinds: ['adsb', 'uat'],
+      columns: [
+        { label: 'ICAO', value: (row) => row.id.toUpperCase() },
+        { label: 'Callsign', value: (row) => (row.meta || {}).callsign || (row.meta || {}).flight || '' },
+        { label: 'Type', value: (row) => CATEGORY_NAME[String((row.meta || {}).category || '').toUpperCase()] || '' },
+        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        { label: 'Speed kn', num: true, value: (row) => (row.gs_kn == null ? null : Math.round(row.gs_kn)) },
+        { label: 'Heading', num: true, value: (row) => (row.track_deg == null ? null : Math.round(row.track_deg)) },
+        { label: 'Squawk', value: (row) => (row.meta || {}).squawk || '' },
+        { label: 'Signal dB', num: true, value: (row) => (row.rssi_db == null ? null : round1(row.rssi_db)) },
+      ],
+    },
+    {
+      key: 'aprs', label: 'APRS', kinds: ['aprs'],
+      columns: [
+        { label: 'Callsign', value: (row) => (row.id.startsWith(';') ? row.id.slice(1) : row.id).toUpperCase() },
+        { label: 'Symbol', value: (row) => symbolName((row.meta || {}).symbol) || (row.meta || {}).symbol || '' },
+        { label: 'Status', value: (row) => (row.meta || {}).message || '' },
+        { label: 'Moving', value: aprsMotion },
+        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        { label: 'Weather', wrap: true, value: (row) => weatherLines(row.meta || {}).join(' · ') },
+        { label: 'Comment', wrap: true, value: (row) => (row.meta || {}).comment || '' },
+        { label: 'How heard', wrap: true, value: (row) => hearingLines(row.meta || {}).join(' · ') },
+        { label: 'Sent with', value: (row) => (row.meta || {}).device || deviceName((row.meta || {}).destination) || '' },
+      ],
+    },
+    {
+      key: 'sonde', label: 'Radiosondes', kinds: ['sonde'],
+      columns: [
+        { label: 'Serial', value: (row) => row.id.toUpperCase() },
+        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        { label: 'Speed kn', num: true, value: (row) => (row.gs_kn == null ? null : Math.round(row.gs_kn)) },
+        { label: 'Heading', num: true, value: (row) => (row.track_deg == null ? null : Math.round(row.track_deg)) },
+      ],
+    },
+    {
+      key: 'ism', label: 'Weather sensors', kinds: ['ism'],
+      columns: [
+        { label: 'Sensor', value: (row) => row.id },
+        { label: 'Readings', wrap: true, value: (row) => weatherLines(row.meta || {}).join(' · ') },
+      ],
+    },
+  ];
+  /* Every table ends with where and when, and the raw frame. */
+  const TAIL_COLUMNS = [
+    { label: 'Latitude', num: true, value: (row) => Number(row.lat).toFixed(4) },
+    { label: 'Longitude', num: true, value: (row) => Number(row.lon).toFixed(4) },
+    { label: 'Heard', value: heardAt, text: (row) => ago(row.t) },
+    { label: 'Station', value: (row) => row.station || '' },
+    { label: 'Raw', raw: true, wrap: true, value: (row) => (row.meta || {}).raw || '' },
+  ];
+  /* A busy sky is thousands of rows. The filter narrows it; the table
+     draws this many and says so. */
+  const TABLE_MAX_ROWS = 500;
+
+  const tableState = { open: false, which: 'aircraft', sort: {}, filter: '' };
+
+  function tableRows(table) {
+    const kinds = new Set(table.kinds);
+    return (state.lastRows || []).filter((row) => kinds.has(row.kind));
+  }
+
+  function cellText(column, row) {
+    if (column.text) return column.text(row);
+    const value = column.value(row);
+    return value == null ? '' : String(value);
+  }
+
+  function drawTable(page) {
+    const panel = $('[data-rf-table]', page);
+    if (!panel) return;
+    panel.hidden = !tableState.open;
+    if (!tableState.open) return;
+    const available = TABLES.filter((table) => tableRows(table).length);
+    if (!available.some((table) => table.key === tableState.which) && available.length) {
+      tableState.which = available[0].key;
+    }
+    const tabs = $('[data-rf-table-tabs]', page);
+    tabs.replaceChildren(...TABLES.map((table) => {
+      const count = tableRows(table).length;
+      const button = el('button', {
+        type: 'button', class: 'toggle', 'aria-pressed': String(table.key === tableState.which),
+        text: `${table.label} (${count.toLocaleString()})`,
+      });
+      button.disabled = !count;
+      button.addEventListener('click', () => { tableState.which = table.key; drawTable(page); });
+      return button;
+    }));
+    const table = TABLES.find((item) => item.key === tableState.which) || TABLES[0];
+    const columns = table.columns.concat(TAIL_COLUMNS);
+    const sort = tableState.sort[table.key] || { index: columns.findIndex((c) => c.label === 'Heard'), order: 'desc' };
+    const needle = tableState.filter.trim().toLowerCase();
+    let rows = tableRows(table);
+    if (needle) {
+      rows = rows.filter((row) => columns.some((column) => cellText(column, row).toLowerCase().includes(needle)));
+    }
+    const key = columns[sort.index];
+    rows = rows.slice().sort((a, b) => {
+      const x = key.value(a);
+      const y = key.value(b);
+      if (x == null || x === '') return 1;
+      if (y == null || y === '') return -1;
+      const order = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+      return sort.order === 'asc' ? order : -order;
+    });
+    const shown = rows.slice(0, TABLE_MAX_ROWS);
+    const head = el('tr', {}, columns.map((column, index) => {
+      const active = index === sort.index;
+      const button = el('button', { type: 'button', class: 'sort-button' },
+        el('span', { text: column.label }),
+        el('span', { class: 'sort-arrow', 'aria-hidden': 'true',
+          text: active ? (sort.order === 'asc' ? '↑' : '↓') : '↕' }));
+      button.addEventListener('click', () => {
+        tableState.sort[table.key] = { index, order: active && sort.order === 'asc' ? 'desc' : 'asc' };
+        drawTable(page);
+      });
+      return el('th', {
+        scope: 'col',
+        class: ['sortable', active ? 'sorted' : '', column.num ? 'num' : ''].join(' ').trim(),
+        'aria-sort': active ? (sort.order === 'asc' ? 'ascending' : 'descending') : 'none',
+      }, button);
+    }));
+    const body = shown.map((row) => el('tr', {}, columns.map((column) => {
+      const text = cellText(column, row);
+      const classes = [column.num ? 'num' : '', column.wrap ? 'wrap' : ''].join(' ').trim() || null;
+      if (column.raw) {
+        return el('td', { class: classes },
+          text ? el('code', { class: 'rf-raw', text }) : el('span', { class: 'muted', title: RAW_NOTE, text: 'not sent' }));
+      }
+      return el('td', { class: classes, text });
+    })));
+    $('[data-rf-table-grid]', page).replaceChildren(
+      el('table', { class: 'rf-table' }, el('thead', {}, head), el('tbody', {}, body)));
+    const total = tableRows(table).length;
+    $('[data-rf-table-note]', page).textContent = !total
+      ? 'Nothing of this kind is on the map right now.'
+      : `${shown.length.toLocaleString()} of ${rows.length.toLocaleString()} rows`
+        + (needle ? ` matching "${tableState.filter.trim()}"` : '')
+        + (rows.length > shown.length ? '; narrow the filter to see the rest.' : '.')
+        + ' The same things the map shows, over the same window.';
+  }
+
+  function bindTable(page) {
+    const button = $('[data-rf-table-toggle]', page);
+    if (!button || button.dataset.bound) return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', () => {
+      tableState.open = !tableState.open;
+      button.setAttribute('aria-pressed', String(tableState.open));
+      drawTable(page);
+    });
+    $('[data-rf-table-filter]', page).addEventListener('input', (event) => {
+      tableState.filter = event.target.value;
+      drawTable(page);
+    });
+  }
+
   async function show(page) {
     const map = ensureMap();
     setTimeout(() => map.invalidateSize(), 0);
@@ -951,6 +1126,9 @@
     drawLegend(page);
     drawStations(stations.body);
     drawThings(latest.body);
+    state.lastRows = latest.body;
+    bindTable(page);
+    drawTable(page);
     drawBand(page, stations.body, false);
     if (!stations.body.length) {
       summary.textContent = 'No RF station has reported yet. A station runs rf-agent beside its SDR.';

@@ -75,6 +75,9 @@ MAX_META_KEYS = 16
 MAX_META_VALUE_CHARS = 256
 # Room for one comment at the limit beside a full set of readings.
 MAX_META_BYTES = 4096
+# The raw frame or line an observation was decoded from. An APRS frame
+# in TNC2 form is at most about 330 characters; the rest is headroom.
+MAX_RAW_CHARS = 1024
 META_KEY = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,31}$")
 # A Meshtastic node ID, as the firmware prints it.
 MESH_NODE = re.compile(r"^![0-9a-f]{8}$")
@@ -115,12 +118,31 @@ class Observation(_Model):
     # How far the sender blurred its own position, in metres. Missing
     # means not blurred.
     precision_m: Annotated[float | None, Field(ge=0, le=500_000)] = None
+    # What the decoder gave the agent, before decoding, for the RF tab's
+    # table: an APRS frame in TNC2 form, an ADS-B frame as hex, a sonde
+    # or rtl_433 JSON line. Missing when the source has none (readsb's
+    # aircraft.json). Longer than the limit is sent as missing, never cut.
+    raw: Annotated[str | None, Field(max_length=MAX_RAW_CHARS)] = None
     meta: dict[str, object] | None = None
 
     @field_validator("id")
     @classmethod
     def _lower(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("raw", mode="before")
+    @classmethod
+    def _whole_raw_or_none(cls, value: object) -> object:
+        """Drop an over-long `raw`, never the observation.
+
+        Raising here would refuse the whole batch -- up to a hundred good
+        points -- for one frame, the trap `_small_meta` documents. And a
+        cut frame would read as the frame that was sent, so it is not
+        shortened either: it is simply not stored.
+        """
+        if isinstance(value, str) and len(value) > MAX_RAW_CHARS:
+            return None
+        return value
 
     @field_validator("via")
     @classmethod

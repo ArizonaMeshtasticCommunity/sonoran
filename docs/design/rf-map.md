@@ -365,6 +365,15 @@ stored `meta`, replacing any keys of that name the agent sent, and the
 RF tab reads them to say "heard through W7MOT-3" or "the sender blurred
 its own position to about 2 km".
 
+**The raw frame.** An observation may carry `raw`: what the decoder gave
+the agent before decoding. For APRS it is the frame in TNC2 form; for
+ADS-B the frame as hex, from Beast; for UAT, sondes and rtl_433 the
+decoder's own JSON line. A source that holds no frame (readsb's
+`aircraft.json`) sends none, and none is made up. Over 1024 characters it
+is dropped, never cut, and never costs the rest of the batch. The ingest
+stores it as `meta.raw`, replacing any key of that name the agent put in
+`meta`, and the RF tab's table shows it beside the decoded fields.
+
 APRS ids:
 
 | Thing | `id` |
