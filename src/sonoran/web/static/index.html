@@ -216,12 +216,19 @@
             open before the tap that chooses. The buttons are built by
             app.js from the presets actually on offer, so a deployment
             running something else is not stuck with ours.
+
+            There was a line of explanation under it -- "Every page shows
+            Medium Fast only. Radios on one preset cannot hear the other."
+            Will asked for it to go. It was there to teach the fact that
+            makes the control make sense, and two labelled buttons under a
+            heading that says Preset do not need teaching; the sentence
+            just made the menu wordy. The fact is still in AGENTS.md 9.7
+            and in `preset.js`, where anybody changing this will meet it.
           -->
           <div class="menu-field">
             <span class="menu-field-label" id="preset-label">Preset</span>
             <div class="preset-switch" role="radiogroup" aria-labelledby="preset-label"
                  data-preset-switch></div>
-            <p class="menu-hint" data-preset-hint></p>
           </div>
 
           <!--
@@ -1270,7 +1277,16 @@
               <a class="linky" data-graph-external target="_blank" rel="noopener">Open mesh-graph</a>
             </div>
           </div>
-          <div class="tabs" data-graph-tabs role="tablist" aria-label="Channels"></div>
+          <!--
+            The channel tab strip was here.
+            
+            It let a reader point the graph at any channel with links,
+            including the topic ones, so the graph could be showing
+            Weather while every other page showed MediumFast. The menu's
+            preset decides now. Removed rather than left empty: a
+            `role="tablist"` holding no tabs is a promise to a screen
+            reader that there is something to choose.
+          -->
           <div class="panel">
             <h3><span data-graph-counts>Loading</span></h3>
             <p class="notice" data-graph-warning hidden></p>

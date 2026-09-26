@@ -1271,7 +1271,9 @@ PAGES.dashboard = async (page) => {
   await Promise.all([loadSummary(page), loadTopTalkers(page)]);
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
-    'api/chat?limit=12',
+    // Filtered like the Chat page: on LongFast this feed was showing
+    // messages from channels a LongFast radio never hears.
+    `api/chat?limit=12${chatFeedChannel()}`,
     'api/stats/portnums',
   ]);
 
@@ -2010,6 +2012,28 @@ let linkChannel = '';
  */
 const CHANNELS_TTL_MS = 600000;
 const channelCache = { at: 0, value: null };
+
+/*
+ * The preset every page filters by, or '' when there is nothing to add.
+ *
+ * One helper for the three pages that gained this -- the firehose, the
+ * dashboard's message feed and the node list -- so they cannot drift into
+ * asking for different things. Returns a plain string because all three
+ * build a query rather than an object.
+ *
+ * Silent by design (Will, 2026-09-26): the menu says which preset is
+ * selected, and a line on each page repeating it is the wordiness he had
+ * just asked to be taken out of the nav.
+ */
+function presetChannel() {
+  return window.SonoranPreset ? SonoranPreset.current() : '';
+}
+
+/** The same, ready to append to a query that already has one parameter. */
+function chatFeedChannel() {
+  const channel = presetChannel();
+  return channel ? `&channel=${encodeURIComponent(channel)}` : '';
+}
 
 async function mapChannels() {
   const now = Date.now();
@@ -3517,36 +3541,37 @@ let graphChannel = '';
 let graphHours = '24';
 
 /**
- * Draw one tab for each channel that has mesh links.
+ * Point the graph at the preset the menu has chosen.
  *
- * The channel list also carries channels that only have traffic, so the
- * map can point its live layer at them. Those have no links and would
- * open an empty graph, so this page leaves them out.
+ * This drew a clickable tab per channel, so the graph was a sixth place
+ * that asked which preset to show -- and its tabs included the topic
+ * channels, which meant a reader could be looking at a Weather graph
+ * while every other page showed MediumFast. The tabs are gone and the
+ * menu decides, the same as the map, coverage, gaps and the rest.
+ *
+ * Channels with no link reports are still excluded. The list carries
+ * channels that only have traffic, so the map can point its live layer at
+ * them; those would open an empty graph.
+ *
+ * `preferredPreset` is what makes this safe rather than just consistent.
+ * It takes the menu's choice where that channel HAS links, and otherwise
+ * falls back to the first channel that has any -- because an empty graph
+ * is worse than the wrong one (#177). A reader whose preset is quiet in
+ * the window still sees a mesh.
  */
 function graphTabs(page, all) {
-  const target = $('[data-graph-tabs]', page);
   const channels = all.filter((item) => item.link_report_count > 0);
-  if (!channels.length) return replace(target);
-  if (!channels.some((item) => item.channel === graphChannel)) {
-    // The deployment's preset where it has links, else the first with
-    // any -- an empty graph is worse than the wrong tab (#177).
-    graphChannel = SonoranLabels.preferredPreset(channels, (item) => item.channel).channel;
+  if (!channels.length) return;
+  const wanted = SonoranLabels.preferredPreset(channels, (item) => item.channel);
+  if (wanted) graphChannel = wanted.channel;
+  // Only the presets, and only those with links, so the menu never offers
+  // a choice that opens an empty graph here.
+  if (window.SonoranPreset) {
+    const presets = channels
+      .filter((item) => item.group === 'Presets' && item.preset)
+      .map((item) => String(item.preset));
+    if (presets.length) SonoranPreset.setAvailable(presets);
   }
-  replace(target, channels.map((item) =>
-    el('button', {
-      type: 'button',
-      role: 'tab',
-      'aria-selected': String(item.channel === graphChannel),
-      onclick: () => {
-        if (graphChannel === item.channel) return;
-        graphChannel = item.channel;
-        render('graph');
-      },
-    },
-      el('span', { text: item.label }),
-      item.group && item.group !== 'Presets'
-        ? el('span', { class: 'group', text: item.group }) : null,
-      el('span', { class: 'n', text: count(item.link_report_count) }))));
 }
 
 /*
@@ -4119,6 +4144,22 @@ function nodeQuery(page, offset = 0) {
   if (active) params.set('active_hours', active);
   if (role) params.set('role', role);
   if (gateway) params.set('gateway', 'true');
+  /*
+   * The menu's preset, set BEFORE the panel loop below so a channel
+   * chosen in the filter panel still overrides it -- the existing rule
+   * that the panel wins, because the panel is the one that shows what it
+   * chose.
+   *
+   * This is the riskiest of the three pages to filter, and worth naming:
+   * it HIDES nodes, and this is where somebody goes to find a specific
+   * one. A node quiet on the selected preset will not be in the list.
+   * The search box and the filter panel are both still there to get past
+   * it, and `nodeFacetQuery` derives from this function, so the counts
+   * beside each filter agree with the rows rather than describing a
+   * larger set.
+   */
+  const channel = presetChannel();
+  if (channel) params.set('channel', channel);
   // The panel wins where both can say the same thing, because it is the
   // one that shows what it chose.
   for (const [key, chosen] of nodeFilters) params.set(key, chosen);
@@ -6033,6 +6074,13 @@ PAGES.firehose = async (page) => {
   const portnum = portnumWire(typed);
   const params = new URLSearchParams({ limit: '150', summary: 'true' });
   if (portnum) params.set('portnum', portnum);
+  /*
+   * One preset, like every other page. The firehose showed all of them,
+   * so a reader on LongFast watched MediumFast traffic scroll past that
+   * their radio cannot hear (AGENTS.md 9.7).
+   */
+  const channel = presetChannel();
+  if (channel) params.set('channel', channel);
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
   if (rows instanceof Error) {
@@ -7493,7 +7541,6 @@ async function route() {
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
-  const hint = $('[data-preset-hint]');
 
   const draw = () => {
     const current = SonoranPreset.current();
@@ -7523,16 +7570,6 @@ function wirePresetSwitch() {
         if (moved) moved.focus();
       },
     })));
-    if (hint) {
-      /*
-       * Says what the choice DOES, in one line, because a preset is not
-       * a filter most readers will have met. "A node on LongFast cannot
-       * hear a node on MediumFast" is the fact underneath it, and the
-       * whole site obeying one preset only makes sense once you know it.
-       */
-      hint.textContent = `Every page shows ${SonoranLabels.presetLabel(current)} only. `
-        + 'Radios on one preset cannot hear the other.';
-    }
   };
 
   draw();

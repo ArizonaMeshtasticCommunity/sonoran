@@ -1478,20 +1478,13 @@ body.watch-mode { overflow: hidden; }
 
 /* Tabs */
 
-.tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .75rem; }
-.tabs button {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: .4rem; padding: .4rem .75rem; color: var(--muted);
-  display: flex; align-items: baseline; gap: .4rem;
-}
-.tabs button:hover { color: var(--text); }
-.tabs button[aria-selected="true"] {
-  border-color: var(--accent); color: var(--accent); background: var(--panel-2); font-weight: 600;
-}
-.tabs button .n { font-size: .75rem; opacity: .75; font-variant-numeric: tabular-nums; }
-.tabs button .group {
-  font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; opacity: .6;
-}
+/*
+ * The `.tabs` rules were here, for the graph's channel tab strip.
+ *
+ * That strip is gone -- the menu's preset decides which channel the graph
+ * draws -- and nothing else on the site used the class. `.watch-tabs` on
+ * the live map is a different class with its own rules.
+ */
 
 /* Charts */
 
@@ -2728,18 +2721,14 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   box-shadow: 0 0 0 .18rem color-mix(in oklab, var(--bad) 25%, transparent);
 }
 
-/* One labelled group per control, so the label is not a placeholder. */
+/* One labelled group per control, so the label is not a placeholder.
+ * `.menu-hint` was here for a line of explanation under the preset
+ * switch; Will asked for the sentence to go, so the rule went with it. */
 .menu-field { display: flex; flex-direction: column; gap: .35rem; }
 .menu-field-label {
   font-size: .68rem;
   text-transform: uppercase;
   letter-spacing: .07em;
-  color: var(--muted);
-}
-.menu-hint {
-  margin: 0;
-  font-size: .72rem;
-  line-height: 1.4;
   color: var(--muted);
 }
 
