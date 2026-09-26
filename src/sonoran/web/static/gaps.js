@@ -94,61 +94,35 @@
    * ends on the unknown count, because that is usually the biggest
    * number on the page and the least likely to be read.
    */
-  function leadSentence(summary) {
-    const counts = summary.signals || {};
-    const bad = (name) => (counts[name] && counts[name].bad) || 0;
-    const label = summary.label || summary.preset;
-    const clauses = [];
-
-    /* One node is not "1 nodes". The headline is the sentence most
-       people will read, so it is worth getting the grammar right. */
-    const say = (n, one, many) => `${n} ${n === 1 ? 'node' : 'nodes'} ${n === 1 ? one : many}`;
-
-    const asymmetric = bad('hears_but_is_not_heard');
-    if (asymmetric) {
-      clauses.push(say(asymmetric,
-        'can hear the mesh and the mesh cannot hear it',
-        'can hear the mesh and the mesh cannot hear them'));
-    }
-    /* A node with the asymmetry also satisfies radio_isolated, so it
-       would otherwise be counted twice in one sentence. */
-    const isolated = bad('radio_isolated') - asymmetric;
-    if (isolated > 0) {
-      clauses.push(say(isolated,
-        'reaches us only through its own internet link',
-        'reach us only through their own internet link'));
-    }
-    const flaky = bad('rf_intermittent');
-    if (flaky) {
-      clauses.push(say(flaky,
-        'gets out over the air in fewer than half the hours it is awake',
-        'get out over the air in fewer than half the hours they are awake'));
-    }
-    const thin = bad('weak_best_link');
-    if (thin) {
-      clauses.push(say(thin,
-        'has little margin on its best measured link',
-        'have little margin on their best measured link'));
-    }
-
-    const unmeasured = summary.not_enough_evidence_count || 0;
-    const tail = unmeasured === 1
-      ? 'For 1 node there is not enough evidence to say anything at all.'
-      : `For ${unmeasured} nodes there is not enough evidence to say anything at all.`;
-    const head = `On ${label} over the last ${summary.window_hours} hours, `;
-    if (!clauses.length) {
-      return `${head}no node shows a fault this can measure. ${tail}`;
-    }
-    const list = clauses.length === 1
-      ? clauses[0]
-      : `${clauses.slice(0, -1).join(', ')}, and ${clauses[clauses.length - 1]}`;
-    return `${head}${list}. ${tail}`;
-  }
+  /*
+   * The headline sentence was here, and is gone (Will, 2026-09-26).
+   *
+   * It read: "On Medium fast over the last 168 hours, 11 nodes get out
+   * over the air in fewer than half the hours they are awake. For 639
+   * nodes there is not enough evidence to say anything at all." Every
+   * clause was measured and the whole was not worth reading -- the
+   * tiles below say the same numbers, and the second sentence made the
+   * page open on what it does NOT know.
+   *
+   * It handled singulars ("1 node", not "1 nodes") and subtracted the
+   * asymmetric count out of `radio_isolated` so a node with both faults
+   * was not counted twice in one sentence. Both are worth knowing if
+   * anything like it is ever written again.
+   */
 
   /* ------------------------------------------------------ stat tiles */
 
-  /* One tile per signal, with `bad` and `unknown` side by side. The
-     unknown number is never hidden: it is the honest half of the count. */
+  /* One tile per signal, carrying the count we FOUND.
+   *
+   * It used to carry `unknown` beside it, on the reasoning that the
+   * count we cannot judge is the honest half. Will asked for it to go
+   * (2026-09-26) and the reasoning was wrong about people rather than
+   * about numbers: a reader scanning a row of tiles reads every figure
+   * as a finding, so "639 cannot tell" beside "11 found" buries the 11.
+   *
+   * The unknowns are still reachable. The table keeps its own view of
+   * them with its own count, which is where somebody actually looking
+   * for them goes, so nothing is hidden -- it is just not shouted. */
   function signalTile(name, label, counts, page) {
     /* Each half opens the nodes behind its number (#62). A tile that
        could not be opened left the reader with a count and no names. */
@@ -172,9 +146,7 @@
     };
     return el('div', { class: 'panel gap-tile' },
       el('div', { class: 'stat' },
-        el('div', { class: 'gap-pair' },
-          half('bad', counts.bad || 0, 'found'),
-          half('unknown', counts.unknown || 0, 'cannot tell')),
+        el('div', { class: 'gap-pair' }, half('bad', counts.bad || 0, 'found')),
         el('span', { class: 'gap-label', text: label || name })));
   }
 
@@ -541,25 +513,35 @@
     }
     setTimeout(() => map.invalidateSize(), 0);
     if (points.length) map.fitBounds(L.latLngBounds(points), { padding: [28, 28], maxZoom: 11 });
-    const note = $('[data-gaps-map-note]');
-    if (note) {
-      const hidden = rows.filter((row) =>
-        row.worst_state !== 'ok' && row.position_confidence !== 'exact').length;
-      note.textContent = hidden
-        ? `${drawn} drawn. ${hidden} left off the map: their position is coarse or missing, ` +
-          'and a marker would claim a place we do not know. They are in the table.'
-        : `${drawn} drawn.`;
-    }
+    /*
+     * Two captions used to be written under the map and are gone
+     * (Will, 2026-09-26). Both stated true things nobody asked:
+     *
+     * - how many markers were drawn, and how many were LEFT OFF because
+     *   their position is coarse or missing. A marker for a coarse
+     *   position would claim a place we do not know, so those nodes are
+     *   in the table and not on the map. That rule still holds -- see
+     *   the `position_confidence !== 'exact'` test above, which is what
+     *   actually enforces it.
+     * - that no line is drawn between nodes, because no signal on this
+     *   page names both ends of one link. Still true, and the reason
+     *   there is no line layer here at all.
+     *
+     * Kept as comments because the next person will wonder about both,
+     * and a caption that answers a question the reader did not have is
+     * a cost paid by every reader to help one.
+     */
   }
 
   /* --------------------------------------------------------- limits */
 
-  function drawLimits(page, summary) {
-    const target = $('[data-gaps-limits]', page);
-    if (!target) return;
-    replace(target, (summary.caveats || []).map((item) =>
-      el('li', { text: item.text || item.key })));
-  }
+  /*
+   * `drawLimits` filled the caveat list inside "How this is measured",
+   * which was removed at Will's request. The caveats themselves are NOT
+   * gone: `/api/gaps` still serves them under `caveats`, so anything
+   * that wants to show them can, and `gaps/signals.py` still decides
+   * what they are.
+   */
 
   /* ---------------------------------------------------------- notice */
 
@@ -658,10 +640,6 @@
       replace($('[data-gaps-counts]', page));
       replace($('[data-gaps-view]', page));
       replace($('[data-gaps-table]', page), empty('Nothing measured yet.'));
-      const lead = $('[data-gaps-lead]', page);
-      if (lead) lead.textContent = '';
-      const window_ = $('[data-gaps-window]', page);
-      if (window_) window_.textContent = '';
       return;
     }
 
@@ -669,25 +647,7 @@
     state.preset = summary.preset;
     drawPresetPicker(page, summary);
 
-    const lead = $('[data-gaps-lead]', page);
-    if (lead) lead.textContent = leadSentence(summary);
-
-    const window_ = $('[data-gaps-window]', page);
-    if (window_) {
-      const coverage = summary.coverage || {};
-      const predicted = coverage.available
-        ? (coverage.is_diagnostic
-            ? 'The published coverage run is a diagnostic, so the predicted signal is not read.'
-            : `Predicted coverage read from run ${coverage.stamp}.`)
-        : 'No coverage run is published, so the predicted signal reads "cannot tell".';
-      window_.textContent =
-        `${summary.assessed_count} nodes assessed against ${summary.gateways_active} ` +
-        `active gateways, over ${summary.window_hours} hours. ${predicted} ` +
-        `Generated ${summary.generated_at}.`;
-    }
-
     drawCounts(page, summary);
-    drawLimits(page, summary);
 
     let listing;
     try {

@@ -172,14 +172,26 @@
 
   /* Every one of these is an assumption, so every one of them is
      printed. A reader who wants a different mast opens the planner. */
-  function radioLine(radio) {
-    if (!radio) return '';
-    return `Every candidate is read as one radio, and all four figures are assumptions: ` +
-      `${radio.tx_power_dbm} dBm of transmit power, a ${radio.antenna_gain_dbi} dBi antenna, ` +
-      `${radio.cable_loss_db} dB of cable loss, on a ${radio.antenna_height_m} m mast, ` +
-      `predicted to ${radio.radius_km} km against a handheld at ${radio.rx_height_m} m. ` +
-      `Nothing here measured a mast that does not exist.`;
-  }
+  /*
+   * `radioLine` rendered the four assumed radio figures into the note
+   * under the heading, and went with it (Will, 2026-09-26). The figures
+   * are NOT assumptions the reader can change: they are SETTINGS, named
+   * `gaps_candidate_tx_power_dbm` (30), `gaps_candidate_height_m` (9)
+   * and `gaps_candidate_radius_km` (25) in `config.py`, reported as
+   * `assumed_radio` by `jobs/gaps_siting.py` and passed through by
+   * `api/routes/gaps.py`, so anything that wants to show them still can.
+   *
+   * The first version of this comment sent the reader to
+   * `gaps/siting.py`, which is the scoring module and does not set them.
+   * A test caught it. A wrong pointer in a comment kept AS documentation
+   * is worse than no comment, because it will be believed.
+   *
+   * Removing the note first left this function and its caller behind,
+   * referencing a `note` variable that had just been deleted -- a
+   * ReferenceError that would have broken the whole siting panel.
+   * `node --check` passed it, because a syntax check does not know what
+   * a name refers to.
+   */
 
   /* -------------------------------------------------------- the table */
 
@@ -410,14 +422,12 @@
     }
   }
 
-  /* ------------------------------------------------------- the limits */
-
-  function drawLimits(page, caveats) {
-    const target = $('[data-siting-limits]', page);
-    if (!target) return;
-    replace(target, (caveats || []).map((item) =>
-      el('li', { text: item.text || item.key })));
-  }
+  /*
+   * `drawLimits` filled the "What a siting suggestion cannot know" list,
+   * which was removed at Will's request. The caveats are still served on
+   * the API under `caveats`, and `gaps/siting.py` still decides them, so
+   * putting the list back is a rendering job and not a rebuild.
+   */
 
   /* ---------------------------------------------------------- drawing */
 
@@ -451,48 +461,45 @@
     /* The limits are drawn first and are drawn whatever happened, so a
        run that produced nothing still says what it could not have
        known. */
-    drawLimits(page, candidates.caveats || areas.caveats || []);
 
-    const lead = $('[data-siting-lead]', page);
-    const note = $('[data-siting-note]', page);
-
+    /*
+     * The lead sentence and the note under it are gone (Will,
+     * 2026-09-26). Between them they carried: how many nodes in how many
+     * places want help, the coverage run they were scored against, how
+     * many times the engine ran against a ceiling of 24 and how long it
+     * took, the four assumed radio figures (30 dBm, a 2.15 dBi antenna,
+     * no cable loss, a 9 m mast, predicted to 25 km against a handheld
+     * at 1.5 m), and the clustering rule -- three places wanting help
+     * within eight kilometres of each other make an area.
+     *
+     * All of it true, none of it readable. The assumptions still hold
+     * and are still the right thing to know before trusting a
+     * suggestion, so they live in `gaps/siting.py` beside the code that
+     * applies them, and are still served on the API for anything that
+     * wants to render them properly.
+     *
+     * The empty case keeps a plain "nothing yet" in the table, which is
+     * all a reader needs: the reason it is empty (no coverage run has
+     * finished) is an operator's problem, not theirs.
+     */
     if (!areas.available) {
-      if (lead) {
-        lead.textContent = areas.reason === 'no_siting_run'
-          ? 'No siting answer has been worked out yet. It runs inside the coverage cycle, ' +
-            'after a coverage run finishes, because it uses the same engine and the same core.'
-          : 'There is no assessment to site against yet.';
-      }
-      if (note) note.textContent = '';
       replace($('[data-siting-table]', page), empty('Nothing to site against yet.'));
-      const heading = $('[data-siting-heading]', page);
-      if (heading) heading.textContent = 'Where a node would help';
       return;
     }
 
-    if (lead) lead.textContent = leadSentence(areas);
-
-    if (note) {
-      const cost = areas.cost || {};
-      const coverage = areas.coverage || {};
-      const against = coverage.available && !coverage.is_diagnostic
-        ? `Scored against coverage run ${coverage.stamp}.`
-        : 'No published coverage run to score against, so nothing is known about what is ' +
-          'already covered.';
-      note.textContent =
-        `${areas.demand_node_count} nodes in ${areas.demand_point_count} places want help. ` +
-        `${against} The engine ran ${cost.predictions || 0} times, ` +
-        `of a ceiling of ${cost.max_predictions || 0}, taking ${cost.engine_seconds || 0} s. ` +
-        `${radioLine(areas.assumed_radio)}`;
-    }
-
-    const heading = $('[data-siting-heading]', page);
-    if (heading) {
-      const confirmed = state.candidates.filter((row) => row.method === METHOD_SPLAT).length;
-      heading.textContent =
-        `Where a node would help: ${state.candidates.length} candidates, ` +
-        `${confirmed} confirmed with the engine`;
-    }
+    /*
+     * The heading used to recite its own counts -- "Where a node would
+     * help: 0 candidates, 0 confirmed with the engine". Will asked for
+     * it to go (2026-09-26), and zero of zero is the worst case of it: a
+     * heading announcing that the thing under it is empty, in a
+     * vocabulary ("confirmed with the engine") that means nothing to
+     * anybody who has not read the siting code.
+     *
+     * The distinction it was drawing is real and is still in the table,
+     * per row: a candidate from the terrain versus one SPLAT has
+     * actually run against (`METHOD_SPLAT`). That belongs beside the row
+     * it describes, not in a heading.
+     */
 
     /* The map is set first, so that `drawTable` can redraw the pins
        to match whatever the table is showing. */
