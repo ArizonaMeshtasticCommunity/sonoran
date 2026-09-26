@@ -316,15 +316,15 @@
               <!--
                 Which kinds of packet the traffic layer draws. The chips
                 are built from SonoranLive.FAMILY_ORDER, so the list here
-                and the shapes on the map cannot disagree. "Other kinds"
+                and the shapes on the map cannot disagree. "Other Types"
                 is always one of them, so a filter can never hide traffic
                 we failed to classify without a chip that says so. It sits
                 in this row, so watch mode moves it into its bar with the
                 rest.
               -->
               <details class="family-filter" data-family-filter>
-                <summary data-family-summary>Packet kinds: all</summary>
-                <div class="family-chips" data-family-chips role="group" aria-label="Packet kinds to draw"></div>
+                <summary data-family-summary>Packet Types: all</summary>
+                <div class="family-chips" data-family-chips role="group" aria-label="Packet Types to draw"></div>
               </details>
               <button type="button" class="toggle" data-show-traces aria-pressed="true">Live traceroutes</button>
               <button type="button" class="toggle" data-show-links aria-pressed="false">Neighbor links</button>
@@ -353,7 +353,17 @@
                 AGENTS.md 9.7 requires that mixing presets is said, so
                 it is said here rather than in a tooltip nobody reaches.
               -->
-              <button type="button" class="toggle" data-map-all-nodes aria-pressed="false">Every preset, any time</button>
+              <!--
+                "Every preset, any time" was here: the override that drew
+                every preset on one map at once. Removed at Will's request,
+                2026-09-26, and it was the last per-page preset control on
+                the site.
+
+                The trade is real and worth recording: there is now no way
+                to see the whole mesh on a single map. The global preset
+                selector decides, one preset at a time, which is what
+                AGENTS.md 9.7 says a map can honestly draw.
+              -->
               <!--
                 Motion off paints each event as a static tapered arc with
                 a chevron instead of a moving particle. It starts from the
@@ -1001,7 +1011,17 @@
                 that nothing has checked. See docs/USB-HARDWARE-TEST.md
                 -- when that comes back clean, this line goes.
               -->
-              <p class="sub">Node plugged in by USB? Use <strong>Connect a node by USB</strong> below &mdash; it reads the config straight off the node, with no export step (Chrome or Edge on a computer). If that does not work for your board, <a class="linky" href="https://cfgtest.azmsh.dev" target="_blank" rel="noopener">cfgtest.azmsh.dev</a> does the same thing and has been used against more hardware.</p>
+              <!--
+                A paragraph here explained the USB button below it and
+                pointed at cfgtest.azmsh.dev as the fallback. Removed at
+                Will's request, 2026-09-26.
+
+                Worth knowing: #115's "Done when" includes removing the
+                cfgtest link from this page, and this paragraph WAS that
+                link. So this partly satisfies an open issue rather than
+                only tidying copy -- said on #115 rather than left for
+                somebody to discover.
+              -->
             </div>
           </div>
 
@@ -1274,7 +1294,8 @@
               <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
               <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show unjudged links</button>
               <button type="button" data-graph-reset>Reset layout</button>
-              <a class="linky" data-graph-external target="_blank" rel="noopener">Open mesh-graph</a>
+              <!-- The "Open mesh-graph" link was here. Removed at Will's
+                   request, 2026-09-26. -->
             </div>
           </div>
           <!--

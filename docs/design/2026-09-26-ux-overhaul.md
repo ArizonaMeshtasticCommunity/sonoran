@@ -50,11 +50,17 @@ If we follow your list exactly, an MQTT-delivered ack and an ack from an
 older node stop being delivery signals and get drawn as reactions people
 chose.
 
-- **(a) Keep `#`, `0` and 🎯 as auto-acks** *(recommended)* — your rule
-  plus the three the upstream engine documents.
-- **(b) Follow your list exactly** — only `1`–`7` and `*`.
-- **(c) Keep them but label them separately** — e.g. a "via MQTT" chip
-  distinct from the hop-count ones.
+- ~~(a) Keep `#`, `0` and 🎯 as auto-acks~~
+- **(b) DECIDED, 2026-09-26: follow the list exactly** — only `1`–`7`
+  and `*`.
+- ~~(c) Keep them but label them separately~~
+
+**The consequence, recorded so it is not later read as a bug.** An ack
+that arrived over MQTT (`#`) and an ack from an older node (`0`, 🎯) will
+now be drawn as reactions a person chose, because nothing in the packet
+distinguishes them. This is a deliberate choice in favour of matching what
+the operators see on their own radios, and the code comment must say so
+and cite this decision -- otherwise the next person will "fix" it back.
 
 ### 2.2 "Auto-acked" without the hedge
 
@@ -82,10 +88,10 @@ already use it for the preset:
 
 A cookie would only be needed if the server had to render units itself.
 
-- **(a) `localStorage`** *(recommended)*.
-- **(b) Cookies** — choose this if you want the setting to survive in a
-  context where `localStorage` is blocked but cookies are not, which is
-  rare and usually the reverse.
+- **(a) DECIDED, 2026-09-26: `localStorage`.** One mechanism for the
+  preset and the settings, nothing on the wire, and the same wrapping
+  `preset.js` already proved against a private window.
+- ~~(b) Cookies~~
 
 ### 2.4 Radio climate from the location — we cannot do this properly
 
@@ -98,14 +104,41 @@ prediction.
 
 Options, none of them free:
 
-- **(a) Keep `desert` as the default for every Arizona site, expose it
-  only in advanced** *(recommended)* — honest, and right for most of the
-  mesh. Flagstaff is the case it is wrong for.
-- **(b) Derive it from elevation** — e.g. above ~1,800 m use continental
-  temperate. Cheap, and a rule we invented; it would need to be labelled
-  as a guess wherever it shows.
-- **(c) Ship a climate lookup** — a real dataset, real work, and probably
-  not worth it for one state.
+- ~~(a) Keep `desert` as the default~~
+- ~~(b) Derive it from elevation~~
+- **(c) DECIDED, 2026-09-26: ship a climate lookup.**
+
+**What that actually means, because it is the largest single item in this
+brief and it is not a UI change.**
+
+The five codes the engine takes are ITM's: equatorial, continental
+subtropical, maritime subtropical, desert, continental temperate. A lookup
+has to answer "which of these five, for this coordinate", and be right
+enough that a prediction changes for the better.
+
+The realistic source is the **Köppen-Geiger** classification, which is
+published as a raster and is the standard way this question is answered.
+It does not map one-to-one onto ITM's five codes, so the work is:
+
+1. choose a Köppen dataset and check its licence permits redistribution;
+2. write the Köppen → ITM mapping, and *document each decision* -- this is
+   where the judgement is, and it must be reviewable rather than buried;
+3. decide the resolution. Arizona spans desert (Phoenix, BWh) and
+   continental temperate (Flagstaff, Dsb) within 200 km, so a coarse grid
+   defeats the purpose;
+4. decide what ships. A full-world raster is megabytes. Cropping to the
+   region this mesh covers is smaller and honest, but then a site outside
+   it must fall back rather than answer wrongly;
+5. serve it. Terrain is already served from `src/sonoran/terrain/`, so
+   there is a precedent for shipping geographic data and an obvious place
+   for it.
+
+**Risks.** A lookup that is confidently wrong is worse than a default that
+is openly a default: the reader would have no reason to check it. So the
+climate shown must say where it came from, and a coordinate outside the
+data must say "not known here, using desert" rather than silently
+guessing. **It should be built and tested on its own, before the Planner
+work depends on it** -- Phase D otherwise waits on a dataset decision.
 
 ---
 
@@ -251,7 +284,7 @@ ranking — and moves into the tooltip.
 caveats are the difference between a leaderboard and a scoreboard, so the
 icon must be obviously interactive, not decorative.
 
-### 4.2 Auto-ack rules
+### 4.2 Auto-ack rules — SHIPPED 2026-09-26
 
 **What.** Auto-ack marks only count on **MediumFast, LongFast, azmsh**.
 In Trivia, 1️⃣–4️⃣ are people answering questions. Label becomes
@@ -273,7 +306,8 @@ MediumFast → a reaction. Whichever of §2.1 Will picks, asserted per mark.
 
 ### 4.3 Copy and padding
 
-- **Config checker:** remove the "Node plugged in by USB?…" paragraph.
+- **SHIPPED 2026-09-26. Config checker:** remove the "Node plugged in by
+  USB?…" paragraph.
   **[found]** `#115`'s "Done when" includes removing the cfgtest link,
   and this paragraph is that link. Removing it here partly satisfies an
   open issue — worth saying on #115 rather than silently.
@@ -282,14 +316,18 @@ MediumFast → a reaction. Whichever of §2.1 Will picks, asserted per mark.
   carries no margin. Same fix, and the same trap — `width: 100%` on the
   children, because `.grid`'s `margin-inline: auto` makes a flex item
   shrink-to-fit (#193.1).
-- **Live map:** "Packet kinds" → "Packet Types", "Other kinds" → "Other
-  Types", "All kinds" → "All Types".
-- **Live map:** remove "Every preset, any time". **[found]** This is the
+- **SHIPPED 2026-09-26. Live map:** "Packet kinds" → "Packet Types",
+  "Other kinds" → "Other Types", "All kinds" → "All Types". Three further
+  sentences said "kinds" about packets and were changed with them.
+- **SHIPPED 2026-09-26. Live map:** remove "Every preset, any time". **[found]** This is the
   override that shows every preset at once; with the global selector it is
   the last per-page preset control on the site, so removing it is
   consistent — but it is also the only way to see the whole mesh on one
   map. Flagging rather than assuming.
-- **Graph:** remove the "Open mesh-graph" link.
+- **SHIPPED 2026-09-26. Graph:** remove the "Open mesh-graph" link. It was
+  the last use of `CONFIG.graphBaseUrl` in the browser; the SETTING stays,
+  because it feeds the CSP and the server builds the node page's link from
+  it.
 - **Chat:** remove the caption. Quoted in the brief as "The newest 100
   messages in the window, newest first."; the actual string is a template,
   `app.js:5853`: ``The newest ${count(messages.length)} messages in the
@@ -400,8 +438,9 @@ squeezed. The map already has a documented tight-height mode
 Moves to advanced: Frequency, Sensitivity, gain typed by hand, radio
 power typed by hand, cable loss typed by hand, and all of Ground and air.
 
-Simple defaults: MediumFast on **slot 18**; ground and air from the site
-(§2.4).
+Simple defaults: MediumFast on **slot 18**; ground and air from the site,
+via the climate lookup decided in §2.4 -- which is its own piece of work
+and must land first, or this item has nothing to read.
 
 Advanced: preset, slot and frequency **linked** — changing one updates
 the others.

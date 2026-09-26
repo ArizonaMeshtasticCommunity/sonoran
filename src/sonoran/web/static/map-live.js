@@ -381,7 +381,7 @@ const SonoranLive = (() => {
     TEXT_MESSAGE_APP: { shape: 'capsule', size: 10, token: 'pkt-text', fallback: '#f6ece2', label: 'Text message' },
     TRACEROUTE_APP: { shape: 'diamond', size: 7, token: 'pkt-trace', fallback: '#b6d94c', label: 'Traceroute' },
     ROUTING_APP: { shape: 'cross', size: 6, token: 'pkt-routing', fallback: '#b59c88', label: 'Routing' },
-    OTHER: { shape: 'tick', size: 3, token: 'pkt-other', fallback: '#7d6857', label: 'Other kinds' },
+    OTHER: { shape: 'tick', size: 3, token: 'pkt-other', fallback: '#7d6857', label: 'Other Types' },
   };
 
   /* The order the legend draws them in: commonest first, bucket last. */
