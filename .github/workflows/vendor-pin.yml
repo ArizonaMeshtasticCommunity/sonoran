@@ -43,12 +43,25 @@ jobs:
             echo "$out"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # 0 = current, 1 = upstream moved (report it), 2 = could not
-          # run. A check that cannot reach upstream is not evidence that
-          # anything is wrong, so it does not fail the run -- it says so
-          # in the summary and stays quiet.
+          # 0 = current, 1 = upstream moved, 2 = could not run.
+          #
+          # All three of 1 and 2 fail. The first version of this exited 0
+          # on 2, reasoning that a check which cannot reach upstream is
+          # not evidence anything is wrong. That was the wrong test: this
+          # job exists to answer "is the vendored copy current", and
+          # "could not check" is not a no, it is **I do not know**. An
+          # unknown reported as success is a monitor that has stopped
+          # working while still looking healthy.
+          #
+          # It was not hypothetical. The first real run, dispatched by
+          # hand on 2026-09-26, printed "cannot read the upstream head"
+          # and reported SUCCESS. GITHUB_TOKEN is scoped to this
+          # repository, so it cannot read the separate private
+          # config-checker repo, and the `insteadOf` rewrite above does
+          # not change that. The steady state was green and blind -- for
+          # a job whose whole purpose is to notice silence.
           if [ "$status" -eq 2 ]; then
-            echo "::warning::the pin check could not run; treating as unknown, not as stale"
-            exit 0
+            echo "::error::the pin check could not run, so whether the vendored copy is current is UNKNOWN. It needs a token that can read the private config-checker repository (GITHUB_TOKEN cannot); set one as a secret and use it above."
+            exit 1
           fi
           exit "$status"
