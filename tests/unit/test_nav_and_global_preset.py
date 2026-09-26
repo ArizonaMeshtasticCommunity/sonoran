@@ -250,3 +250,50 @@ def test_the_chat_subtitle_says_the_same_thing_in_both_places() -> None:
     assert phrase in (STATIC / "app.js").read_text(encoding="utf-8"), (
         "the JavaScript subtitle was not updated"
     )
+
+
+# --- the planner is the deliberate exception ------------------------
+
+
+def test_the_planner_opens_on_the_global_preset() -> None:
+    """Will's call: default from the menu, still editable.
+
+    The planner is the one page where a preset is not a view of what
+    happened -- it is an input to a prediction and sets the receiver
+    sensitivity the model uses. So it keeps its own box, and merely opens
+    on whatever the menu says.
+    """
+    code = _code("planner.js")
+    body = code[code.index("const defaults = {") :]
+    body = body[: body.index("fillForm(defaults);")]
+    assert "SonoranPreset.current()" in body, "the planner ignores the menu"
+    assert "defaults.sensitivity" in body, (
+        "the sensitivity does not move with the preset, so the form would open on "
+        "one preset with another's sensitivity and predict a reach nobody has"
+    )
+
+
+def test_the_planner_still_has_its_own_control() -> None:
+    """Editable is the other half of the decision.
+
+    Modelling a LongFast repeater while browsing MediumFast is a real
+    thing to want, so the box stays.
+    """
+    assert 'data-planner="preset"' in _html(), "the planner lost its preset control"
+
+
+def test_a_shared_plan_link_still_decides_its_own_preset() -> None:
+    """This matters more than the default.
+
+    A shared plan predicts what it said it would. `applyShare` does its
+    own fill and returns early when the address carries no query, so the
+    global default cannot reach into a link.
+    """
+    code = _code("planner.js")
+    share = code[code.index("const read = SonoranPlannerParams.fromShareQuery(search);") :]
+    share = share[: share.index("const said = [];")]
+    assert "filled.preset" in share, "a shared link no longer sets its own preset"
+    assert "SonoranPreset" not in share, (
+        "the global preset reaches into the share path, so a shared plan would "
+        "predict something other than what was shared"
+    )
