@@ -1197,6 +1197,28 @@
               </div>
               <p class="muted antenna-note" data-antenna-note="tx" hidden></p>
 
+              <!--
+                Aiming, shown only for an antenna that has to be aimed.
+                A bearing box on an omni would be a question with no
+                answer, so it stays hidden until a directional antenna
+                is chosen.
+
+                The beamwidth box is not decoration either: the L-Com
+                Yagi's listing states no beamwidth in either plane, so
+                the catalogue carries None and the pattern cannot be
+                drawn without a number from the person. It appears only
+                for such an antenna, pre-filled with nothing.
+              -->
+              <div class="pair antenna-aim" data-antenna-aim="tx" hidden>
+                <label>Pointing which way?
+                  <input data-planner="tx_azimuth" inputmode="numeric" placeholder="0-359" />
+                </label>
+                <label data-antenna-beamwidth="tx" hidden>Beamwidth (degrees)
+                  <input data-planner="tx_beamwidth" inputmode="numeric" placeholder="e.g. 45" />
+                </label>
+              </div>
+              <p class="muted antenna-note" data-antenna-aim-note="tx" hidden></p>
+
               <h3>Receiver</h3>
               <label>Modem preset <select data-planner="preset"></select></label>
               <!--
@@ -1232,6 +1254,7 @@
                 <label>Antenna at the far end <select data-antenna-type="rx"></select></label>
               </div>
               <p class="muted antenna-note" data-antenna-note="rx" hidden></p>
+              <p class="muted antenna-note" data-antenna-aim-note="rx" hidden></p>
               <!--
                 Work the cable loss out instead of asking for it (#112).
                 Nobody knows what to type into a dB box. They do know
@@ -2253,6 +2276,7 @@
       functions, which run long after both files are loaded.
     -->
     <script src="static/planner-params.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/antenna-pattern.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/planner.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The coverage map has its own file for the same reason the

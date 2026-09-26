@@ -2076,6 +2076,33 @@ What it guarantees, and why each one is there:
 - **Cached.** Bounded to 128 answers for an hour, which the upstream's
   usage policy asks for.
 
+## 11A. Planner catalogue endpoints
+
+The coverage planner reads its hardware lists from `/api/radio`. Each
+answer is cached for a day (`Cache-Control: public, max-age=86400`).
+The cables, adapters and boards lists are not described here yet.
+
+### 11A.1 `GET /api/radio/antennas`
+
+Returns `band_low_mhz`, `band_high_mhz` and `antennas`, a list with one
+object for each antenna. Each object holds every field of `Antenna` in
+`sonoran/radio/antennas.py`. These fields matter most to a reader:
+
+| Field | Meaning |
+|---|---|
+| `key` | The stable name of the entry. The planner picker uses it. |
+| `gain_dbi_claimed` | The maker's gain claim, in dBi. It is a claim, not a measurement. Show it as one. |
+| `kind` | One of `stub`, `whip`, `mobile_whip`, `gooseneck`, `fiberglass_omni` and `yagi`. |
+| `directional` | True when the antenna has to be aimed. The planner shows a bearing box for it only. |
+| `horizontal_beamwidth_deg` | The half-power width in azimuth, in degrees, or null when the listing gives none. The planner shapes the map with it. |
+| `vertical_beamwidth_deg` | The half-power width in elevation, or null. |
+| `front_to_back_db` | Null for every entry, because no listing states it. The planner caps the modelled loss behind the antenna at 15 dB for that reason. See `docs/PLANNER.md` 4.3. |
+| `caveat` | A sentence about a doubtful figure in the listing. Show it beside the gain. |
+
+`directional`, `horizontal_beamwidth_deg` and `front_to_back_db` were
+added for the Yagi aiming in the planner. A reader that does not know
+them can ignore them.
+
 ## 12. RF map endpoints
 
 What the community's own receivers hear beyond Meshtastic, aircraft

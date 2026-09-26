@@ -167,6 +167,8 @@ prediction is ever sent to the server.
 | Antenna height | ft or m | 3 m (9.84 ft) | Above the ground, including the mast. |
 | Power | dBm | 30 | 30 dBm is 1 W. Use the figure for your region. |
 | Antenna gain | dBi | 2.15 | A stock rubber antenna. |
+| Pointing which way? | degrees | empty | Directional antennas only. Clockwise from true north. See 4.3. |
+| Beamwidth | degrees | empty | Only when the antenna's listing states none. See 4.3. |
 
 ### Receiver
 
@@ -250,6 +252,79 @@ The default is slot 18 on Medium fast, which is 906.375 MHz. That is the
 azmsh.net metro recommendation. It used to be 906.875 MHz, which is
 LongFast's slot 20 and nothing this mesh runs.
 
+### 4.3 Directional antennas, and which way they point
+
+The engine is omnidirectional. `_splat_create` takes one effective
+radiated power and no azimuth, and this build has no antenna-pattern
+file. A Yagi handed to it unchanged would draw a map that claims the
+antenna is aimed at every point on the map at once.
+
+So the pattern is applied **after** the engine finishes, in
+`static/antenna-pattern.js`. This is exact, not a fudge, and the reason
+is worth writing down: in the ITM model the path loss between two points
+does not depend on the transmitted power. Received level is therefore
+
+    radiated power + gain in that direction - path loss
+
+and the engine's raster is a linear decibel scale (a byte holding
+dBm + 200). Subtracting a per-direction figure from the finished raster
+is the same arithmetic the engine would have done itself if it could
+take a pattern. The run is made with the antenna's **boresight** gain,
+which is what the picker fills into the gain box.
+
+**The shape.** The main lobe uses the parabolic approximation that radio
+planning generally uses, and that 3GPP specifies for sector antennas:
+
+    loss_dB = 12 * (off_axis_deg / beamwidth_deg)^2
+
+It is used because it is pinned to the only figure the product listings
+give. "Beamwidth" means the angle between the half-power points, and at
+half a beamwidth off boresight the formula returns exactly 3 dB — so it
+agrees with the specification by construction rather than by fitting a
+curve to it.
+
+**What is not modelled.** Side lobes and the back lobe. No product page
+read for this catalogue states a front-to-back ratio, so
+`front_to_back_db` is `None` on every entry and the modelled loss is
+capped at **15 dB** (`MAX_MODELLED_REJECTION_DB`). The cap is modest
+deliberately: assuming deep rejection would paint confident emptiness
+behind the antenna, and behind the antenna is where this model knows
+least. **Coverage shown behind a directional antenna is the least
+trustworthy part of the map.**
+
+**A missing beamwidth is not filled in.** The L-Com 6 dBi Yagi's listing
+states no beamwidth in either plane. The catalogue records `None`, the
+planner shows a box to type one, and until it is typed the map stays
+omnidirectional. It does not substitute a plausible number, because a
+plausible number here is indistinguishable from a sourced one once it is
+on the map.
+
+**The bearing box.** It is shown only for an antenna that has to be
+aimed, and it is not marked Advanced, so Simple shows it too. Empty
+means "not aimed", never 0: 0 is due north. A run with a directional
+antenna in the picker and no bearing is refused and asks for one, in
+the same way as an empty picker (#314). Choosing an omni empties both
+aiming boxes, because a hidden bearing must not shape the map. A width
+that the catalogue filled in for one antenna is not kept for the next.
+A share link carries the bearing and the width but not the antenna, so
+a link with a bearing shows both boxes.
+
+**The far end does not get a bearing.** A coverage map answers "who can
+hear this site", so the receiver is every point on the map at once and
+has no single direction it faces. Choosing a directional antenna for the
+far end therefore assumes it is aimed straight at the site — its best
+case — and the page says so in words. Modelling a misaimed receiver
+would need a bearing per cell, which is a different question than this
+page asks.
+
+**Two numbers that are not comparable.** The 12 dBi Yagi claims a
+32-degree vertical beamwidth, wider than the 10 dBi omni's 12 degrees.
+That is not a transcription error. An omni buys gain only by flattening
+its pattern, so for omnis more gain always means a narrower one; a Yagi
+buys gain in azimuth as well, so the same relation does not hold across
+the two kinds. The catalogue's tests enforce the ordering for omnis
+only, for exactly this reason.
+
 ## 5. Reading the result
 
 - The colour runs from the receiver's limit, at the dim end, to 60 dB
@@ -300,7 +375,8 @@ the form and waits.
 
 Then any of the form fields, spelled as they are in
 `DEFAULTS` in `planner-params.js`: `site_name`, `lat`, `lon`,
-`tx_height`, `tx_power`, `tx_gain`, `frequency_mhz`, `preset`,
+`tx_height`, `tx_power`, `tx_gain`, `tx_azimuth`, `tx_beamwidth`,
+`frequency_mhz`, `preset`,
 `sensitivity`, `rx_height`, `rx_gain`, `system_loss`, `radio_climate`,
 `polarization`, `clutter_height`, `radius`, `ground_dielectric`,
 `ground_conductivity`, `atmosphere_bending`, `situation_fraction`,
