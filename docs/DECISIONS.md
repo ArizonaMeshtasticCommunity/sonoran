@@ -1217,6 +1217,17 @@ It does not rebuild `mesh_packet_metrics`, which needs the MQTT message
 size that was never stored. It must run before `packet` retention (30
 days) drops the rows: the oldest affected rows go on about 2026-10-23.
 
+**Run on production, 2026-09-27** after a fresh dump
+(`azmsh-pre252-20260927-054652.dump`): 1,832 recovered (602 telemetry, 479
+NodeInfo, 312 text, 174 neighbor info, 144 position, 121 other), 1,214 left
+`no_key`, 0 handler failures, and a second run recovered 0. The 1,214 were
+checked against the fixed ingest's live rejection rate over the same
+traffic (about 2% against 3%), which is what genuinely foreign channels
+look like, not a second fault. It ran as the **migration role**, not as
+ingest: `azmsh_ingest` holds no SELECT on `packet` by design, and the first
+dry run was refused. The integration test runs as the superuser and could
+not show that; the module docstring now says how to run it.
+
 **The lesson worth keeping.** A strict validator is only as current as the
 schema it validates against. Any future tightening of a decode check needs
 a canary for the newest field upstream has added, not just for the fields
