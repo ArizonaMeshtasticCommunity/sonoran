@@ -1712,6 +1712,13 @@ Response item includes the route, the return route, SNR lists, and the mesh-grap
 Returns one traceroute with full detail, the mesh-graph URL
 (`graph_url`), and `drawing_url`, the recoloured drawing below.
 
+`reply_id` is the row ID of the newest stored reply to this trace, or
+null. A reply is a row of its own: it carries this trace's `packet_id`
+as its `request_id`, and it is sent by the node that was asked to the
+node that asked. It is always null for a reply. The trace page reads it
+to say "no reply was seen" only when none was stored (#288). This field
+is on this endpoint only, not on the list in 9.1.
+
 ### 9.3 `GET /api/traceroutes/{id}/drawing.svg`
 
 Returns mesh-graph's drawing of the trace as `image/svg+xml`,

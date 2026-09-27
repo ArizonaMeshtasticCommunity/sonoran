@@ -606,6 +606,55 @@ def test_a_traceroute_links_to_the_packet_that_carried_it(  # type: ignore[no-un
         assert dead.status_code == 404, "the route origin is the wrong key"
 
 
+def test_a_request_names_its_reply_only_when_one_was_stored(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """The trace page says "no reply was seen" only when that is true (#288).
+
+    A request row never holds a return path: the reply is a row of its
+    own, sent back by the node that was asked. Three requests here:
+
+    - 9801 asked 9802, and 9802 answered. `reply_id` is that reply.
+    - 9801 asked 9803, and nothing came back. `reply_id` is null.
+    - 9801 asked 9804, and a reply from a DIFFERENT node carries the same
+      request ID. Packet IDs are unique only per sender, so that is not
+      a reply to this request, and `reply_id` stays null.
+
+    The reply itself always has a null `reply_id`.
+    """
+    now = datetime.now(UTC)
+    insert = text(
+        "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+        "request_id, route, snr_towards, seen_at) "
+        "VALUES (:f, :t, 'LongFast', :pid, :rid, CAST('[]' AS jsonb), CAST('[]' AS jsonb), :at)"
+    )
+    with migrated_engine.begin() as connection:
+        connection.execute(text("DELETE FROM traceroute WHERE from_node_num IN (9801, 9802, 9805)"))
+        rows = [
+            (9801, 9802, 603001, None),  # answered
+            (9802, 9801, 603002, 603001),  # the answer, sent back by 9802
+            (9801, 9803, 603003, None),  # never answered
+            (9801, 9804, 603004, None),  # answered only by a stranger's reuse
+            (9805, 9801, 603005, 603004),  # 9805 was not asked
+        ]
+        for f, t, pid, rid in rows:
+            connection.execute(insert, {"f": f, "t": t, "pid": pid, "rid": rid, "at": now})
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        listed = {t["packet_id"]: t for t in client.get("/api/traceroutes?limit=500").json()}
+
+        def one(packet_id: int) -> dict[str, object]:
+            response = client.get(f"/api/traceroutes/{listed[packet_id]['id']}")
+            assert response.status_code == 200
+            return response.json()  # type: ignore[no-any-return]
+
+        assert one(603001)["reply_id"] == listed[603002]["id"], "the stored reply is named"
+        assert one(603003)["reply_id"] is None, "nothing came back"
+        assert one(603004)["reply_id"] is None, "a reply from another node is not this reply"
+        assert one(603002)["reply_id"] is None, "a reply has no reply of its own"
+
+
 def _seed_deep_trace(migrated_engine) -> None:  # type: ignore[no-untyped-def]
     """Insert one reply with a long route, behind plenty of newer noise.
 

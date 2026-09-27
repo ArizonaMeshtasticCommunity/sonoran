@@ -2293,6 +2293,24 @@ a.more { text-decoration: none; display: inline-block; }
   background: var(--panel-2); border: 1px solid var(--line); border-radius: .35rem;
   padding: .6rem; overflow-x: auto; font: var(--mono); margin: 0; max-height: 24rem;
 }
+/*
+ * Route, Path there and Path back on one row, or one under another, and
+ * never two across (#288). Two across leaves Path back alone beside an
+ * empty cell, the gap Will reported.
+ *
+ * Measured on the row, not the viewport, for the reason in #287: the
+ * sidebar comes and goes at 60 rem. Below 58.5 rem of row the clamp term
+ * is huge, the floor is the whole row, and there is one column. From
+ * 58.5 rem the floor is a third of the row less the gap, so exactly
+ * three fit: at 1280 px (976 px of row) each panel is about 315 px. A
+ * phone, an iPad either way up and a 1024 px laptop get one column,
+ * where the Route list keeps its labels and values on one line.
+ */
+.grid.trace-top {
+  grid-template-columns: repeat(auto-fit, minmax(
+    min(100%, max(calc(100% / 3 - 1rem), calc((58.5rem - 100%) * 1000))),
+    1fr));
+}
 /* The drawing arrives recoloured, with a transparent page, so it sits on
    the panel like the rest of the site. See `api/trace_drawing.py`. */
 .trace-drawing {

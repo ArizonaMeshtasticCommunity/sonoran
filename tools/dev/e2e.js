@@ -1195,6 +1195,81 @@ async function main() {
     return 'opened one';
   });
 
+  await journey(context, 'a traceroute puts Route, Path there and Path back on top (#288)', async (page) => {
+    /*
+     * Will asked for the three on top and the drawing under them. The
+     * order is read from the page, and so is the shape: three on one
+     * row at 1280 and 1600 px with nothing beside them, one column on a
+     * phone, the drawing below at full width either way.
+     *
+     * Then the Path back panel must still be there when there is no
+     * path back, and say the true thing. The seeded mesh holds replies
+     * only, so the page is fed the same row as a request twice: once
+     * with no reply stored, where it must say no reply was seen, and
+     * once with a reply stored, where it must link to it instead.
+     */
+    const rows = await (await page.request.get(`${BASE}/api/traceroutes?limit=1`)).json();
+    if (!rows.length) return 'no traceroute stored to open';
+    const id = rows[0].id;
+    // The drawing comes from mesh-graph, which a test instance cannot
+    // reach, and it is not what this journey is about. It is answered
+    // the way mesh-graph answers for a trace it holds no drawing of.
+    const noDrawing = () => page.route(/\/drawing\.svg$/, (route) => route.fulfill({ status: 404, body: '' }));
+    await noDrawing();
+    const shape = () => {
+      const body = document.querySelector('[data-trace-body]');
+      const panels = [...body.querySelectorAll('.panel')];
+      if (panels.length < 4) return null;
+      const boxes = panels.map((panel) => panel.getBoundingClientRect());
+      const top = boxes.slice(0, 3);
+      return {
+        heads: panels.map((panel) => panel.querySelector('h3').firstChild.textContent.trim()),
+        columns: new Set(top.map((box) => Math.round(box.left))).size,
+        rowFull: Math.abs(top[0].left - boxes[3].left) <= 1 && Math.abs(top[2].right - boxes[3].right) <= 1,
+        below: boxes[3].top >= Math.max(...top.map((box) => box.bottom)) - 1,
+        back: panels[2].innerText,
+        doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    };
+    const out = [];
+    for (const [width, columns] of [[1600, 3], [1280, 3], [1024, 1], [390, 1]]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${BASE}/?w=${width}#traceroute/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, shape, 15000), `the trace page never drew at ${width} px`);
+      const got = await page.evaluate(shape);
+      must(got.heads.slice(0, 3).join('|') === 'Route|Path there|Path back',
+        `the panels on top are ${got.heads.slice(0, 3).join(', ')} at ${width} px`);
+      must(got.columns === columns, `${got.columns} columns at ${width} px, wanted ${columns}`);
+      must(got.below && got.rowFull, `the drawing is not a full-width panel under the three at ${width} px`);
+      must(got.doc <= 1, `the page scrolls sideways at ${width} px`);
+      out.push(`${width}:${got.columns}`);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    for (const reply of [null, 424242]) {
+      await page.unrouteAll();
+      await noDrawing();
+      await page.route(new RegExp(`/api/traceroutes/${id}$`), async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        Object.assign(body, { is_reply: false, request_id: null, return_hops: [], reply_id: reply });
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(`${BASE}/?r=${reply}#traceroute/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, shape, 15000), 'the trace page never drew as a request');
+      const got = await page.evaluate(shape);
+      must(got.heads[2] === 'Path back', 'a request with no path back lost its Path back panel');
+      if (reply == null) {
+        must(/No reply was seen/.test(got.back), `with no reply stored it says ${JSON.stringify(got.back)}`);
+      } else {
+        must(!/No reply was seen/.test(got.back), 'it says no reply was seen when one was stored');
+        const href = await page.evaluate(() =>
+          document.querySelector('[data-path-back="elsewhere"] a').getAttribute('href'));
+        must(href === `#traceroute/${reply}`, `the reply link goes to ${href}`);
+      }
+    }
+    return `columns ${out.join(' ')}; no reply and stored reply both said truly`;
+  });
+
   await journey(context, 'the firehose draws rows', async (page) => {
     await open(page, 'firehose', 4000);
     const rows = await page.locator('[data-page="firehose"] tbody tr, [data-page="firehose"] li').count();

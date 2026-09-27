@@ -8907,7 +8907,17 @@ PAGES.traceroute = async (page) => {
       text: `${trace.hops.length} hops, ${measured} with a signal reading, `
         + `${stamp(trace.seen_at)}` }));
 
-  replace(body, el('div', { class: 'grid two' },
+  /*
+   * Route, Path there and Path back are the three panels on top, and
+   * the drawing is under them at full width (Will, #288). Path back
+   * used to come after the drawing, so the two paths were a screen
+   * apart, and it was left out when there was none, which changed the
+   * shape of the page from one trace to the next.
+   *
+   * `.trace-top` is one column or three, never two: a two-column row
+   * of three panels leaves Path back alone beside an empty cell.
+   */
+  replace(body, el('div', { class: 'grid trace-top' },
     el('div', { class: 'panel' },
       el('h3', {}, 'Route'),
       el('dl', { class: 'kv' },
@@ -8934,23 +8944,50 @@ PAGES.traceroute = async (page) => {
     el('div', { class: 'panel' },
       el('h3', {}, 'Path there'),
       traceroutePath(trace.hops)),
+    pathBackPanel(trace),
     el('div', { class: 'panel span-2' },
       el('h3', {}, 'mesh-graph drawing'),
-      meshGraphTrace(trace)),
-    trace.return_hops && trace.return_hops.length
-      ? el('div', { class: 'panel' },
-          el('h3', {}, 'Path back',
-            el('span', { class: 'muted',
-              text: trace.return_delivered ? 'delivered' : 'still in flight' })),
-          trace.return_delivered
-            ? null
-            : el('p', { class: 'notice' },
-                'The broker saw this reply while it was still travelling. It had reached '
-                + `${trace.reply_reached} when it was captured. Whether it arrived back at `
-                + `${trace.from_name} is not recorded.`),
-          traceroutePath(trace.return_hops))
-      : null));
+      meshGraphTrace(trace))));
 };
+
+/*
+ * The Path back panel, which is drawn for every trace (#288).
+ *
+ * Will (2026-09-27): when a trace has no reply, keep the panel on top
+ * and have it say no reply was seen. That sentence has to be true, and
+ * a request row never holds a return path even when a reply came: the
+ * reply is a row of its own. So the API looks for it (`reply_id`), and
+ * this says "no reply was seen" only when none was stored. A reply
+ * that carries no return path says that instead, because a reply was
+ * plainly seen.
+ */
+function pathBackPanel(trace) {
+  if (trace.return_hops && trace.return_hops.length) {
+    return el('div', { class: 'panel' },
+      el('h3', {}, 'Path back',
+        el('span', { class: 'muted',
+          text: trace.return_delivered ? 'delivered' : 'still in flight' })),
+      trace.return_delivered
+        ? null
+        : el('p', { class: 'notice' },
+            'The broker saw this reply while it was still travelling. It had reached '
+            + `${trace.reply_reached} when it was captured. Whether it arrived back at `
+            + `${trace.from_name} is not recorded.`),
+      traceroutePath(trace.return_hops));
+  }
+  let why;
+  if (trace.is_reply) {
+    why = empty('This reply carried no return path.');
+  } else if (trace.reply_id != null) {
+    why = el('p', { class: 'muted', 'data-path-back': 'elsewhere' },
+      'The reply is stored as a traceroute of its own. ',
+      el('a', { class: 'linky', href: `#traceroute/${trace.reply_id}`, text: 'Open the reply' }),
+      ' to see the path back.');
+  } else {
+    why = el('p', { class: 'muted', 'data-path-back': 'none' }, 'No reply was seen for this request.');
+  }
+  return el('div', { class: 'panel' }, el('h3', {}, 'Path back'), why);
+}
 
 
 /* Labels and units for the decoded values a packet can carry. */
