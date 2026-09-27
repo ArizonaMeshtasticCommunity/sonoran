@@ -2856,22 +2856,6 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   white-space: normal;
 }
 
-/*
- * The same height in the reader's own units, under a box that asks for
- * metres (§6.5, and `docs/PLANNER.md` 4).
- *
- * The planner's typed boxes are metres and stay metres: the number goes
- * into the propagation model, and confusing the two overstates every
- * antenna by 3.28 times. But the rest of the dashboard reads in feet by
- * default, so a reader who has never seen the label is the one at risk.
- * This echoes what they typed in their own units, read-only, so the box
- * cannot be misread without the page saying so.
- *
- * Hidden entirely for a reader already on metric: there it would repeat
- * the box.
- */
-.planner-unit-hint[hidden] { display: none; }
-.planner-unit-hint { font-size: .76rem; margin: -.3rem 0 .6rem; }
 .planner-slot-note[hidden] { display: none; }
 .planner-slot-note { font-size: .78rem; margin: -.2rem 0 .6rem; }
 .board-note { font-size: .78rem; margin: .3rem 0 .6rem; }

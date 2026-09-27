@@ -1028,10 +1028,9 @@
                 fields of the SAME mode, which is why the antenna gains
                 moved to sit beside the powers.
               -->
-              <label>Antenna height (m) <input data-planner="tx_height" inputmode="decimal" /></label>
-              <!-- Filled by planner.js with the same height in the
-                   reader's own units. See `showHeightHints`. -->
-              <p class="muted planner-unit-hint" data-planner-hint="tx_height" hidden></p>
+              <!-- The unit words are the imperial default; planner.js sets
+                   them from the units setting. See `showUnitBoxes`. -->
+              <label>Antenna height (<span data-planner-unit="height">ft</span>) <input data-planner="tx_height" inputmode="decimal" /></label>
               <div class="pair" data-advanced-only>
                 <label>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
                 <label>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
@@ -1065,8 +1064,7 @@
                 <label>Frequency (MHz) <input data-planner="frequency_mhz" inputmode="decimal" /></label>
               </div>
               <p class="muted planner-slot-note" data-planner-slot-note hidden></p>
-              <label>Height (m) <input data-planner="rx_height" inputmode="decimal" /></label>
-              <p class="muted planner-unit-hint" data-planner-hint="rx_height" hidden></p>
+              <label>Height (<span data-planner-unit="height">ft</span>) <input data-planner="rx_height" inputmode="decimal" /></label>
               <div class="pair" data-advanced-only>
                 <label>Sensitivity (dBm) <input data-planner="sensitivity" inputmode="decimal" /></label>
                 <label>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
@@ -1131,8 +1129,8 @@
                 </label>
               </div>
               <div class="pair" data-advanced-only>
-                <label>Clutter height (m) <input data-planner="clutter_height" inputmode="decimal" /></label>
-                <label>Range (km) <input data-planner="radius" inputmode="decimal" /></label>
+                <label>Clutter height (<span data-planner-unit="height">ft</span>) <input data-planner="clutter_height" inputmode="decimal" /></label>
+                <label>Range (<span data-planner-unit="distance">mi</span>) <input data-planner="radius" inputmode="decimal" /></label>
               </div>
               <details data-advanced-only>
                 <summary class="muted">Model constants</summary>

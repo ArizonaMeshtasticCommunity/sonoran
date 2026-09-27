@@ -506,10 +506,15 @@ Each of these fails silently, which is the trap.
 
 ### 9.15 The engine takes antenna heights in feet
 
-SPLAT! reads heights as feet. The planner form asks for metres, as
-everybody expects, and `planner-params.js` converts. Passing metres
-straight through overstates every antenna by 3.28 times and draws
-coverage that does not exist.
+SPLAT! reads heights as feet. The planner form holds metres, and
+`planner-params.js` converts. Passing metres straight through overstates
+every antenna by 3.28 times and draws coverage that does not exist.
+
+The boxes show the reader's units, which are feet by default (#246).
+That conversion is a second one, at the box only: the form value and the
+share link stay metric. Never read a box's `value` directly; go through
+`boxValue` in `planner.js`, which gives metres and keeps an untouched box
+exact.
 
 ### 9.16 WebAssembly heap views go stale
 

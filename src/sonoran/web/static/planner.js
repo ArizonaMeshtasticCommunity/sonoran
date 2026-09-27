@@ -369,6 +369,37 @@ function field(name) {
   return document.querySelector(`[data-planner="${name}"]`);
 }
 
+/*
+ * What the page last wrote into each unit box, as `{ shown, value }`.
+ *
+ * See `readBox` in `planner-params.js`: while a box still shows what was
+ * written, its value is the one written, so an untouched box is never
+ * converted back and a link survives any number of readers (#246).
+ */
+const boxHeld = {};
+
+/** A unit box's form value (metres, or km for the range), or null. */
+function boxValue(name) {
+  const input = field(name);
+  if (!input) return null;
+  return SonoranPlannerParams.readBox(name, input.value, boxHeld[name], SonoranUnits);
+}
+
+/*
+ * Commit what the reader typed into a unit box.
+ *
+ * Run on `change`, while the setting the text was typed under is still
+ * the current one. The text is kept as typed and the metric value is
+ * held beside it, which is what lets `showUnitBoxes` convert the box
+ * correctly if the setting then changes.
+ */
+function holdTyped(name) {
+  const input = field(name);
+  if (!input || !SonoranPlannerParams.UNIT_BOXES[name]) return;
+  const value = SonoranPlannerParams.fromBox(name, input.value, SonoranUnits);
+  if (value !== null) boxHeld[name] = { shown: input.value, value };
+}
+
 /** Read the form. Returns null and marks the problem when it is not usable. */
 function readForm() {
   const request = {};
@@ -386,8 +417,9 @@ function readForm() {
       request[name] = raw;
       continue;
     }
-    const value = Number(raw);
-    if (raw === '' || Number.isNaN(value)) {
+    // A unit box is read through the reader's units back into metres.
+    const value = SonoranPlannerParams.UNIT_BOXES[name] ? boxValue(name) : Number(raw);
+    if (raw === '' || value === null || Number.isNaN(value)) {
       setNotice(`${name.replace(/_/g, ' ')} needs a number`, 'bad');
       input.focus();
       return null;
@@ -402,7 +434,16 @@ function readForm() {
 function fillForm(values) {
   for (const name of FIELDS) {
     const input = field(name);
-    if (input && values[name] != null) input.value = values[name];
+    if (!input || values[name] == null) continue;
+    if (!SonoranPlannerParams.UNIT_BOXES[name]) {
+      input.value = values[name];
+      continue;
+    }
+    // Values arrive metric. The box shows them in the reader's units and
+    // holds the metric value beside the text it wrote.
+    const shown = SonoranPlannerParams.toBox(name, values[name], SonoranUnits);
+    input.value = shown;
+    boxHeld[name] = { shown, value: values[name] === '' ? null : Number(values[name]) };
   }
 }
 
@@ -436,7 +477,14 @@ function readShareValues() {
   const values = {};
   for (const name of SonoranPlannerParams.SHARE_FIELDS) {
     const input = field(name);
-    if (input) values[name] = input.value;
+    if (!input) continue;
+    if (SonoranPlannerParams.UNIT_BOXES[name]) {
+      // Metric in the link, whatever the box shows. See `UNIT_BOXES`.
+      const value = boxValue(name);
+      values[name] = value === null ? '' : value;
+    } else {
+      values[name] = input.value;
+    }
   }
   return values;
 }
@@ -1331,50 +1379,34 @@ function wirePlannerMode() {
 }
 
 /* ---------------------------------------------------------------- */
-/* The same height, in the reader's units                            */
+/* The boxes in the reader's units                                   */
 
 /*
- * The planner's typed boxes are metres, and they stay metres (§6.5,
- * `docs/PLANNER.md` 4, `SESSION_PLAN.md`).
+ * The unit boxes follow the reader's units setting (#246).
  *
- * The number in these boxes is handed to the propagation model, not
- * printed: `planner-params.js` converts it to the feet the engine takes,
- * and feeding metres straight through overstates every antenna by 3.28
- * times. The rest of the dashboard reads in feet by default, so the risk
- * is a reader who types 20 meaning feet and gets a 20 m mast — a wrong
- * prediction that looks entirely right.
+ * Each label names the unit its box is in, and each box shows its value
+ * in that unit. The form value underneath stays metric: see `UNIT_BOXES`
+ * in `planner-params.js`, which also says why the share link must not
+ * follow the setting.
  *
- * So the label keeps saying metres and this echoes the same height in
- * whatever units the reader has chosen, read-only. It converts nothing on
- * the way in: `SonoranUnits.heightToM` exists for that and is NOT used
- * here, deliberately. Changing the boxes to feet needs the conversion on
- * the way in, the share link kept in metres — `docs/PLANNER.md` 5.1 says
- * the link's heights are metres and a link must mean the same thing to
- * both readers — and a measured prediction proving an equivalent input
- * gives an equivalent answer. None of that is this.
- *
- * Nothing at all is shown to a reader already on metric, where it would
- * only repeat the box.
+ * When the setting changes, each box is written again from the metric
+ * value it holds, so a reader who switches mid-plan keeps the same
+ * antenna rather than the same digits. A box whose text no longer
+ * matches what it holds -- somebody is typing into it, or it holds
+ * something that is not a number -- is left alone, for the reader to
+ * see and finish.
  */
-const HEIGHT_HINTS = ['tx_height', 'rx_height'];
-
-function showHeightHints() {
-  const imperial = window.SonoranUnits ? SonoranUnits.imperial() : false;
-  for (const name of HEIGHT_HINTS) {
-    const hint = document.querySelector(`[data-planner-hint="${name}"]`);
-    const box = field(name);
-    if (!hint || !box) continue;
-    const raw = box.value.trim();
-    // An empty box is not 0 m. `Number('')` is 0, and "0 ft" under an
-    // empty height box states a mast flat on the ground.
-    const metres = raw === '' ? null : Number(raw);
-    if (!imperial || metres === null || !Number.isFinite(metres)) {
-      hint.hidden = true;
-      hint.textContent = '';
-      continue;
-    }
-    hint.hidden = false;
-    hint.textContent = `This box is in metres — that is about ${SonoranUnits.heightFromM(metres)}.`;
+function showUnitBoxes() {
+  for (const unit of document.querySelectorAll('[data-planner-unit]')) {
+    unit.textContent = unit.dataset.plannerUnit === 'height'
+      ? SonoranUnits.heightUnit()
+      : SonoranUnits.distanceUnit();
+  }
+  for (const name of Object.keys(SonoranPlannerParams.UNIT_BOXES)) {
+    const held = boxHeld[name];
+    const input = field(name);
+    if (!held || !input || input.value !== held.shown) continue;
+    fillForm({ [name]: held.value });
   }
 }
 
@@ -1930,14 +1962,13 @@ function wirePlanner() {
   // After `fillForm`, so the menu opens on the slot the default frequency
   // is in rather than on "not on a slot".
   if (preset) fillSlots(preset.value, typedFrequency());
-  showHeightHints();
+  showUnitBoxes();
   /*
-   * The hint follows the units setting, which the settings page can
-   * change while this page is open in another tab. Without this the echo
-   * under a metres box would keep saying feet after a reader switched to
-   * metric -- a stale unit on a page about units.
+   * The boxes follow the units setting, which the settings page can
+   * change while this page is open in another tab. Without this a box
+   * would keep showing feet under a label that says metres.
    */
-  if (window.SonoranSettings) SonoranSettings.onChange(() => showHeightHints());
+  if (window.SonoranSettings) SonoranSettings.onChange(() => showUnitBoxes());
 
   /*
    * The address follows a committed edit, not a keystroke.
@@ -1953,11 +1984,9 @@ function wirePlanner() {
     if (!input) continue;
     input.addEventListener('change', () => {
       state.ranOn = null;
+      // Before the address is written, so the link reads what was typed.
+      holdTyped(name);
       writeAddress();
-      // The two height boxes carry an echo in the reader's own units.
-      // Cheap enough to redo for any committed edit rather than keep a
-      // second list of which fields have one.
-      showHeightHints();
     });
   }
 

@@ -5,8 +5,9 @@
  * with the Meshtastic tables from its `parameters.md`.
  *
  * The one trap here: the engine takes antenna heights in FEET. That is
- * inherited from SPLAT!. The form asks for metres, as everybody expects,
- * so the conversion below must not be skipped. Feeding metres straight
+ * inherited from SPLAT!. The form holds metres, whatever units the boxes
+ * show the reader (see `UNIT_BOXES`), so the conversion below must not be
+ * skipped. Feeding metres straight
  * through overstates every antenna by a factor of 3.28 and draws
  * coverage that does not exist.
  */
@@ -246,6 +247,86 @@ const DEFAULTS = {
  * these units, and so does the share link, so the two cannot drift.
  */
 const FORM_DEFAULTS = { ...DEFAULTS, radius: DEFAULTS.radius / 1000 };
+
+/* ---------------------------------------------------------------- */
+/* The boxes in the reader's units (#246)                            */
+
+/*
+ * The four boxes whose unit follows the reader's units setting.
+ *
+ * THE FORM VALUE STAYS METRIC. Heights are metres and the range is
+ * kilometres, in the form values, in the share link and on the way to
+ * the engine, whatever the setting says. Only the text in the box is in
+ * the reader's units, and it is converted here, at the box and nowhere
+ * else. A link must predict the same thing for two readers, so it
+ * cannot carry a display preference.
+ *
+ * The cable length is not one of these. Cable is sold in feet and the
+ * catalogue's figures are per 100 ft, so that box is feet for everyone.
+ */
+const UNIT_BOXES = {
+  tx_height: 'height',
+  rx_height: 'height',
+  clutter_height: 'height',
+  radius: 'distance',
+};
+
+/*
+ * How many decimals a box shows, and how many a typed value keeps.
+ *
+ * Shown to a hundredth, because a box full of digits reads as a
+ * measurement nobody made. Kept to a millionth -- a micrometre, or a
+ * millimetre of range -- which is far below anything the model can
+ * resolve and is enough for a whole or two-decimal number of feet to
+ * land on one exact metre figure. That is what makes 20 ft typed and
+ * 6.096 m typed the same antenna, and the same prediction.
+ */
+const SHOWN_DECIMALS = 2;
+const KEPT_DECIMALS = 6;
+
+/**
+ * The text a box shows for a form value (metres, or km for the range).
+ *
+ * `units` is `SonoranUnits`, passed in rather than read from `window`, so
+ * nothing else in this file can come to depend on a display setting.
+ */
+function toBox(name, value, units) {
+  const kind = UNIT_BOXES[name];
+  if (value === null || value === undefined || value === '') return '';
+  const number = Number(value);
+  if (!kind || !Number.isFinite(number)) return String(value);
+  // A metric reader sees the form value exactly as it is held, so a
+  // metric box never rounds anything.
+  if (!units.imperial()) return String(number);
+  const factor = kind === 'height' ? units.FEET_PER_METRE : units.MILES_PER_KM;
+  return String(Number((number * factor).toFixed(SHOWN_DECIMALS)));
+}
+
+/** A typed box back into a form value, or null when it is not a number. */
+function fromBox(name, typed, units) {
+  const text = typed === null || typed === undefined ? '' : String(typed).trim();
+  const value = UNIT_BOXES[name] === 'height' ? units.heightToM(text) : units.distanceToKm(text);
+  return value === null ? null : Number(value.toFixed(KEPT_DECIMALS));
+}
+
+/**
+ * What a box holds, as a form value.
+ *
+ * `held` is what the page last wrote into the box: `{ shown, value }`.
+ * While the box still says `shown`, the answer is `value`, untouched.
+ * Only text the reader typed is converted.
+ *
+ * This is the part that keeps a link lossless. A metric link's 6 m reads
+ * as 19.69 ft in an imperial box, and 19.69 ft is 6.0015 m. Converting
+ * the box back would move the antenna by a millimetre and a half and a
+ * link re-shared from it would no longer be the link it was. Keeping the
+ * value next to its text, and using it until the text changes, means an
+ * untouched box is never converted at all.
+ */
+function readBox(name, typed, held, units) {
+  if (held && typed === held.shown) return held.value;
+  return fromBox(name, typed, units);
+}
 
 /* ---------------------------------------------------------------- */
 /* The share link                                                    */
@@ -571,6 +652,10 @@ window.SonoranPlannerParams = {
   MAX_RADIUS_METRES,
   DEFAULTS,
   FORM_DEFAULTS,
+  UNIT_BOXES,
+  toBox,
+  fromBox,
+  readBox,
   SHARE_VERSION,
   SHARE_FIELDS,
   SHARE_BOUNDS,

@@ -174,6 +174,16 @@ eq('an existing theme choice is honoured',
   eq('30 m typed is 30 m', U.heightToM(30), 30);
 }
 
+// --- typed distances, the planner's range box (#246) ----------------
+{
+  const { S, U } = load();
+  eq('10 mi typed comes back as kilometres', U.distanceToKm(10).toFixed(5), '16.09344');
+  eq('an empty box is absent, not 0 km', U.distanceToKm(''), null);
+  eq('text is absent too', U.distanceToKm('far'), null);
+  S.set('units', 'metric');
+  eq('10 km typed is 10 km', U.distanceToKm(10), 10);
+}
+
 // --- temperature ----------------------------------------------------
 {
   const { S, U } = load();
