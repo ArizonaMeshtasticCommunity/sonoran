@@ -130,9 +130,12 @@ def test_a_finger_gets_a_target_it_can_hit() -> None:
 
     Read from the whole media block rather than its first 600
     characters: the citation above is longer than that window was.
+
+    The block is keyed on the pointer as well as the width (#267): an
+    iPad in landscape is wider than 60 rem and touched with a finger.
     """
     css = _read("app.css")
-    start = css.index("@media (max-width: 60rem) {")
+    start = css.index("@media (max-width: 60rem), (pointer: coarse) {")
     narrow = css[start:].split("\n}\n", 1)[0]
     assert "min-height: 2.75rem;" in narrow
     # The rule has to reach the controls and the nav links, not just one

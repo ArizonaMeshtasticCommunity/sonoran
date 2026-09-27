@@ -1445,6 +1445,57 @@ async function main() {
   });
 
   /*
+   * An iPad on its side (#267). 1112 px is wider than every phone
+   * breakpoint, so this is the device that proves touch sizing follows
+   * the pointer and not the width. `hasTouch` makes Chromium match
+   * `(pointer: coarse)`, which the journey checks before it believes
+   * anything else.
+   */
+  const tablet = await browser.newContext({
+    viewport: { width: 1112, height: 834 }, isMobile: true, hasTouch: true,
+  });
+
+  await journey(tablet, 'a tablet gets finger-sized targets at desktop width (#267)', async (page) => {
+    await open(page, 'dashboard', 1500);
+    // The ? buttons arrive with the data, so wait for them rather than
+    // for a fixed time.
+    await waitFor(page, () => document.querySelectorAll('[data-page="dashboard"] .hint-open').length > 0, 20000);
+    const got = await page.evaluate(() => {
+      const tall = (selector) => [...document.querySelectorAll(selector)]
+        .filter((node) => node.getBoundingClientRect().width > 0)
+        .map((node) => Math.round(node.getBoundingClientRect().height));
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        sidebar: getComputedStyle(document.querySelector('.sidebar')).position,
+        nav: tall('#site-nav a'),
+        hints: tall('[data-page="dashboard"] .hint-open'),
+        preset: tall('.preset-choice'),
+      };
+    });
+    must(got.coarse, 'the tablet context does not match (pointer: coarse), so this proves nothing');
+    must(got.sidebar === 'sticky', `the sidebar is ${got.sidebar}, so this is not the desktop layout`);
+    for (const [name, heights] of [['nav link', got.nav], ['? button', got.hints], ['preset choice', got.preset]]) {
+      must(heights.length > 0, `no ${name} on the page to measure`);
+      const low = Math.min(...heights);
+      must(low >= 44, `a ${name} is ${low} px tall on a touch screen, under 44`);
+    }
+    return `${got.nav.length} nav links, ${got.hints.length} ? buttons, ${got.preset.length} preset choices, all 44 px or more`;
+  });
+
+  await journey(context, 'a mouse keeps the desktop sizes (#267)', async (page) => {
+    // The other half: the change must not reach a mouse on a wide screen.
+    await open(page, 'dashboard', 2500);
+    const got = await page.evaluate(() => ({
+      coarse: matchMedia('(pointer: coarse)').matches,
+      nav: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
+    }));
+    must(!got.coarse, 'the desktop context matches (pointer: coarse)');
+    must(got.nav < 44, `a nav link is ${got.nav} px tall with a mouse; the desktop size changed`);
+    return `nav link ${got.nav} px with a mouse`;
+  });
+  await tablet.close();
+
+  /*
    * A phone, walked as a phone.
    *
    * Everything above runs at 1500 px, where the nav is a list of pages

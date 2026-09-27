@@ -2066,7 +2066,19 @@ a.more { text-decoration: none; display: inline-block; }
 .empty { color: var(--muted); font-style: italic; padding: .5rem 0; }
 .loading { color: var(--muted); }
 
-@media (max-width: 60rem) {
+/*
+ * Touch sizing follows the pointer as well as the width (#267).
+ *
+ * These two rules used to live in the 60rem block below alone. An iPad
+ * in landscape is 1112 px wide, so it took the desktop sizes while its
+ * finger is exactly a phone's finger: measured on the seeded database,
+ * 91 targets under 44 px on the dashboard and 106 on chat, against 29
+ * and 55 on a phone. `(pointer: coarse)` is the question that matters
+ * here. The width stays in the query too, so a narrow desktop window
+ * keeps the sizes it always had, and a mouse on a wide screen is
+ * untouched. A touch laptop takes the larger size, which is correct.
+ */
+@media (max-width: 60rem), (pointer: coarse) {
   /*
    * A finger is not a pointer. The base control is about 34 px tall,
    * which clears WCAG 2.2 SC 2.5.8 Target Size (Minimum) at 24x24 CSS
@@ -2082,6 +2094,11 @@ a.more { text-decoration: none; display: inline-block; }
   input, select, button, .sidebar nav a {
     min-height: 2.75rem;
   }
+  input, select, button { padding-block: .55rem; }
+  .sidebar nav a { align-items: center; }
+}
+
+@media (max-width: 60rem) {
   /*
    * The four summary tiles went one to a row on a phone, so eight
    * hundred pixels of counting stood between the nav and the first
@@ -2092,8 +2109,6 @@ a.more { text-decoration: none; display: inline-block; }
   .grid[data-summary] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid[data-summary] .stat { padding: .85rem .9rem; }
   .grid[data-summary] .stat .value { font-size: 1.6rem; }
-  input, select, button { padding-block: .55rem; }
-  .sidebar nav a { align-items: center; }
 
   .shell { flex-direction: column; }
   .sidebar {
