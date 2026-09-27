@@ -1171,3 +1171,112 @@ board reading, correcting its own first framing to get there.
 **Credit where it is due:** this came from a peer session that had the
 scope to look, checked before telling me, and named its own part in
 propagating the stale reading rather than just reporting the fix.
+
+## 2026-09-27 — the release after v2026.09.26
+
+This batch was built with several agents working in parallel, integrated
+into one branch, and verified as a whole: 35/35 e2e journeys with a clean
+console, the full integration suite, the unit suite, ruff, mypy and
+ESLint. The entries below record the decisions a later reader would
+otherwise have to reconstruct.
+
+### Signed packets were decrypted and then thrown away (#252)
+
+From 2026-09-23 22:43 UTC every packet from a node that signs its traffic
+was decrypted correctly and then stored as `no_key`: 2,995 packets from 49
+senders in three days, including all of NGSP's telemetry, which is how a
+user noticed Sonoran three days behind Meshview.
+
+**Cause.** `_valid_data` (from the #157 work) requires the known fields of
+a decrypted `Data` to re-serialise to the exact input bytes. That is the
+only integrity check AES-CTR allows and it cut random false accepts about
+800-fold, and its commit named its own risk: a `Data` field the vendored
+schema does not know makes genuine packets fail. Upstream then added
+exactly that — `Data` field 10, `bytes xeddsa_signature` — and the vendored
+Python protobufs dated from 2026-08-02.
+
+**How it was proven, not inferred.** Ten gateways in four cities began
+uploading `no_key` MediumFast packets within one hour, which no group of
+owners does and a deploy does. Decrypted inside the production ingest
+container with its own keys and code, NGSP's rejected packets opened
+cleanly with the MediumFast key and carried wire fields 1, 2, 9 and 10.
+
+**Decision.** Keep the strict check and bring the schema forward: the
+protobufs are generated from meshtastic/protobufs **v2.8.0** with
+grpcio-tools 1.74.0, so the gencode stays Protobuf Python 6.31.1. A canary
+test asserts `Data` field 10 is `xeddsa_signature`, so regenerating from an
+older source fails before a single packet is lost. The USB-read descriptor
+`meshtastic-serial-proto.js` is generated from the same modules and was
+regenerated with them.
+
+**Recovery.** `python -m sonoran.ingest.recover --since <time> [--apply]`
+re-reads `no_key` rows through the live path (`decrypt_packet` with
+`_valid_data`, `decode_payload`, `store_payload`) and recovers only what
+now validates. Dry run by default, one savepoint per packet, idempotent.
+It does not rebuild `mesh_packet_metrics`, which needs the MQTT message
+size that was never stored. It must run before `packet` retention (30
+days) drops the rows: the oldest affected rows go on about 2026-10-23.
+
+**The lesson worth keeping.** A strict validator is only as current as the
+schema it validates against. Any future tightening of a decode check needs
+a canary for the newest field upstream has added, not just for the fields
+we know.
+
+### cfgtest's USB read never asks the node for its config (#263)
+
+A user's `invalid wire type 7 at offset 174` on firmware 2.8 was not a
+schema problem. cfgtest's `readSerialConfig` writes a text `\r\n`, collects
+whatever the port emits for five seconds, and parses the blob as a config
+FILE — YAML when it contains `:`, then, when js-yaml throws inside the
+same `try`, as a binary `DeviceProfile`. It never sends `want_config_id`,
+so it cannot read any node speaking the protobuf serial API, whatever its
+firmware. Sonoran's own USB path (`serial-read.js`) does send it, and a
+test has Python encode a 2.8-shaped config that Sonoran's descriptor
+decodes. That test passes on the pre-v2.8.0 descriptor too, so it is a
+characterisation, not a regression test, and is documented as such.
+
+This contradicts the reason recorded above for keeping the cfgtest link
+as a fallback ("cfgtest's USB path has been used against real boards").
+That link lives on a held issue and was not changed here; the finding is
+recorded so whoever next picks it up knows.
+
+### The frontend is linted for undefined names, from a derived list (#248)
+
+`node --check` does no scope analysis, and six references to deleted names
+were found in one session before this existed. ESLint `no-undef` now runs
+inside the existing `lint` CI job. The classic scripts share one global
+scope, so `eslint.config.mjs` **derives** the shared names on every run
+from what each script declares — top-level functions, `const`/`let`/
+`class`, destructuring, and `window.X =` at any depth. A hand-kept list was
+rejected because it keeps a deleted name and waves every stale caller
+through, which is the exact bug the gate exists for. Proven both ways:
+re-adding the #243 router line that assigned the deleted `chatLimit`
+fails by name, and renaming `el` in app.js fails every file that calls it.
+
+### A backup that failed for days while reporting healthy (#244)
+
+One `rf_spectrum` chunk had TOAST corruption, which aborted every dump.
+The container's own healthcheck did go `unhealthy` — that detection works
+— but nothing alerts on container health, so nobody saw it. 1,074 of 1,085
+rows were salvaged row by row and the chunk was replaced in a single
+guarded transaction. **Still open:** routing `unhealthy` to a person, which
+is a decision about where alerts go, not code.
+
+Two instrument mistakes on the way, recorded because both would have
+closed the issue with the fault still present: a corruption scan that
+aliased the table as `t` while the table has a column named `t`, and so
+hashed timestamps and detoasted nothing; and reading `docker compose ps`
+with only `{{.State}}`, which prints `running` and omits Health.
+
+### Released and deployed from a branch, while CI is frozen
+
+Self-hosted CI runs on a community member's hardware and was frozen after
+the September budget was spent. The owner asked for this batch to be
+released and deployed. Everything that costs no CI was done: the branch
+was pushed (a branch push starts no workflow — `ci.yml` runs on pushes to
+`main` and on pull requests), deployed by bundle, and tagged as a release
+(a tag starts no workflow). **Merging to `main` would start one CI run, so
+it is held until the freeze lifts.** Until then `main` is behind what is
+deployed, and anyone deploying from `main` would roll the site back — the
+branch and tag names are in the release notes and in the handoff so that
+cannot happen by accident.
