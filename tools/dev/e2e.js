@@ -1720,6 +1720,68 @@ async function main() {
     return `panels opened and measured at ${out.join(' ')}`;
   });
 
+  await journey(phone, 'a phone reads the node lists as cards (#272)', async (page) => {
+    /*
+     * At 390 px the nodes table hid 61% of its width, Role and Last heard
+     * among it. Below 40rem each row is a card. Measured per card, with
+     * letter-spacing widened for the CI runner's fonts: nothing scrolls
+     * sideways, and the Role and Last heard of the row are on the screen.
+     * Then the same page at 768 px must still be a table.
+     */
+    const out = [];
+    const cards = async (name, wrap, roleCell, heardCell) => {
+      await open(page, name, 1500);
+      await page.locator(`${wrap} tbody tr`).first()
+        .waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+      await page.addStyleTag({ content: `${wrap} { letter-spacing: .05em; }` });
+      await page.waitForTimeout(200);
+      return page.evaluate(({ wrap: selector, roleCell: role, heardCell: heard }) => {
+        const box = document.querySelector(selector);
+        const rows = box ? [...box.querySelectorAll('tbody tr')] : [];
+        const view = document.documentElement.clientWidth;
+        const onScreen = (cell) => {
+          if (!cell) return false;
+          const rect = cell.getBoundingClientRect();
+          return rect.width > 0 && rect.left >= -1 && rect.right <= view + 1;
+        };
+        const first = rows[0];
+        return {
+          rows: rows.length,
+          scroll: box ? box.scrollWidth : 0,
+          client: box ? box.clientWidth : 0,
+          display: first ? getComputedStyle(first).display : null,
+          role: first ? onScreen(first.children[role - 1]) : false,
+          heard: first ? onScreen(first.children[heard - 1]) : false,
+          heardText: first ? first.children[heard - 1].textContent : '',
+          height: first ? Math.round(first.getBoundingClientRect().height) : 0,
+          sortable: box ? box.querySelectorAll('thead .sort-button').length : 0,
+        };
+      }, { wrap, roleCell, heardCell });
+    };
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 664 });
+      for (const [name, wrap, role, heard] of [
+        ['nodes', '[data-node-table]', 4, 6],
+        ['dashboard', '[data-recent-nodes]', 2, 3],
+      ]) {
+        const size = await cards(name, wrap, role, heard);
+        must(size.rows > 0, `${name}: no node rows at ${width} px`);
+        must(size.display === 'flex', `${name}: a row is ${size.display} at ${width} px, not a card`);
+        must(size.scroll <= size.client + 1,
+          `${name} scrolls sideways at ${width} px: ${size.scroll}/${size.client}`);
+        must(size.role, `${name}: Role is off the screen at ${width} px`);
+        must(size.heard && /ago/.test(size.heardText),
+          `${name}: Last heard is off the screen or not in its cell at ${width} px (${size.heardText})`);
+        if (name === 'nodes') must(size.sortable >= 6, `the phone can sort by only ${size.sortable} columns`);
+        out.push(`${name}@${width} ${size.scroll}/${size.client} ${size.height}px`);
+      }
+    }
+    await page.setViewportSize({ width: 768, height: 1024 });
+    const wide = await cards('nodes', '[data-node-table]', 4, 6);
+    must(wide.display === 'table-row', `at 768 px the nodes list is not a table: ${wide.display}`);
+    return out.join(', ');
+  });
+
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
     /*
      * Every Identity and Device field carries the same hint button as a
