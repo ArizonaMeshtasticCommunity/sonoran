@@ -2925,7 +2925,7 @@ async function main() {
     await page.waitForTimeout(250);
     seen.push(...await measure(['.menu-settings-link']));
     await open(page, 'map', 4000);
-    seen.push(...await measure(['#map .leaflet-control-zoom-in', '#map .leaflet-control-zoom-out',
+    seen.push(...await measure(['#live-map .leaflet-control-zoom-in', '#live-map .leaflet-control-zoom-out',
       '.map-key summary', '.watch-control button']));
     /*
      * The popup close button exists only while a popup is open, and a
@@ -2938,7 +2938,7 @@ async function main() {
       probe.className = 'leaflet-popup-close-button';
       probe.href = '#close';
       probe.textContent = '×';
-      document.querySelector('#map').append(probe);
+      document.querySelector('#live-map').append(probe);
       const box = probe.getBoundingClientRect();
       probe.remove();
       return [{ selector: 'popup close', width: Math.round(box.width), height: Math.round(box.height) }];
