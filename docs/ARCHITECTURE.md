@@ -367,6 +367,9 @@ channel, Data message metadata, and receive time.
 - `dependencies.py` gives database session access to route handlers.
 - `channels.py` groups channel names into families for the UI.
 - `names.py` resolves node display names from the database.
+- `window.py` turns the statistics query (`hours`, or `since` and
+  `until`) into one window. It is the only place that does, so the
+  widgets on the Statistics page cannot disagree about a range (#294).
 - `traces.py` turns one stored traceroute row into a path. It is the
   only place that decides what a row proves. `graph.py`, `map.py`, and
   `traceroutes.py` all read rows through it, so that the pages cannot
@@ -440,8 +443,8 @@ general proxy for the tile source.
 
 - Job: the user interface.
 - Static HTML, CSS, and JavaScript files. There is no build step.
-- Files: `index.html`, `app.css`, `app.js`, `map-live.js`,
-  `map-watch.js`, `planner.js`, `planner-params.js`,
+- Files: `index.html`, `app.css`, `app.js`, `map-defaults.js`,
+  `node-sheet.js`, `map-live.js`, `map-watch.js`, `planner.js`, `planner-params.js`,
   `planner.worker.js`, `config-check.js`, `meshtastic-static.js`,
   `gaps.js`, `siting.js`,
   `protobuf-runtime.js`, and `vendor/`.
@@ -449,6 +452,24 @@ general proxy for the tile source.
   This keeps the site working without third-party availability.
 - Libraries: Leaflet for the map, ECharts for the charts and the mesh
   graph. Both are in `web/static/vendor`.
+- ECharts and the config checker's scripts are not loaded by every
+  page (#277). They sit inside `<template data-lazy-scripts>` in
+  `index.html`, and `loadScripts` in `app.js` adds them when a page
+  needs them: `render` loads ECharts before a page in `CHART_PAGES`, and
+  `PAGES.config` loads the checker. A page that starts drawing a chart
+  must be added to `CHART_PAGES`.
+- `map-defaults.js` loads straight after Leaflet and sets what every
+  map shares. On a touch screen (`pointer: coarse`) every map draws on
+  a canvas with a 20 px hit tolerance, and a tap goes to the nearest
+  dot, not to the dot drawn last (#266). Under
+  `prefers-reduced-motion: reduce` no map animates its zoom or fades,
+  and `chart()` in `app.js` turns off ECharts animation (#284).
+- `node-sheet.js` shows a node's map summary on a phone (below 40rem)
+  in a sheet at the foot of the screen, not in a Leaflet bubble (#281).
+  `SonoranSheet.bind(marker, build, key)` replaces `bindPopup` on the
+  live map and on coverage: a mouse still gets the bubble. The sheet is
+  non-modal, has a peek and a half height, a 44 px close, and Back
+  closes it.
 - The pages call the JSON API. All node names come from the API.
   The browser does no name lookup and no join.
 - The API serves `index.html` and replaces `__SONORAN_CONFIG__` with the

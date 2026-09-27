@@ -72,7 +72,9 @@ Filters:
   on the wrong hour whenever its own clock was wrong, and a band built
   from one of each would be measured against two clocks. A node never
   heard at all matches neither, the same way it matches no `active_hours`.
-- `before`, `limit`, `offset` — pagination.
+- `before` — only nodes last heard before this time.
+- `limit`, `offset`, `cursor` — paging. Default limit 100. Maximum 500.
+  See "Paging" below.
 
 - `gaps` — `bad`, `ok` or `unknown`, from the gaps assessment. **Requires
   `gaps_preset`**: a node can need help on one modem preset and be fine
@@ -93,6 +95,23 @@ is what the column shows. Nulls sort last in both directions: a node
 with no role is not the smallest role. Every order is made total with
 the node number, so a node cannot arrive on two pages or on none.
 
+Paging:
+
+- `cursor` — the rows after the last row of a previous page, in the
+  same order. Every non-empty answer carries the cursor for its last
+  row in the `X-Next-Cursor` header. A short page is the end. The
+  cursor is opaque. It carries the `sort` and `order` it was made
+  under, and under any other it returns 422, so a later page cannot
+  come back in a different order. A cursor that cannot be read, or
+  whose value has the wrong type for its sort, returns 422.
+
+Use `cursor`, not `offset`, to page (#250). `last_heard` changes all the
+time. A node heard between two offset pages moves in the order, and
+every row behind it moves by one: a row is then shown twice, or it is
+never served at all. The second case cannot be seen by the caller. A
+cursor names the last row by its sort value and its node number, so a
+node that moves cannot shift the next page. `offset` still works.
+
 ### 3.1.1 `GET /api/nodes/facets`
 
 Returns the values each filter could take and how many nodes sit behind
@@ -107,11 +126,6 @@ they are asking is "if I picked this instead, how many would I have".
 Groups: `hw`, `role`, `channel`, `position`, `gateway`, `licensed`, and
 `gaps` — the last carrying a preset with each state, because that state
 has no meaning without one.
-
-**Paging is by offset and the list is alive.** A node heard between two
-requests can shift the boundary, so a row may be seen twice or missed
-across pages. A keyset cursor would fix it and is more machinery than a
-few thousand rows deserve; this is written down rather than hidden.
 
 Response item:
 
@@ -236,7 +250,7 @@ Query parameters: `hours` — default 24, at most 720.
 Response: `window_hours`, `position`, `position_known`, `hears`,
 `heard_by`, `longest_segment`, `furthest_heard_by`, `furthest_heard`,
 `furthest_heard_by_reason`, `furthest_heard_reason`,
-`coarse_excluded`, `traces_read`, `trace_limit_reached`, `hop_depth`.
+`coarse_excluded`, `traces_read`, `hop_depth`.
 
 - `position` — true when the node's own position is exact.
   `position_known` — true when it has a usable position at all, exact or
@@ -270,8 +284,17 @@ gaps page uses. A pair with a coarse or missing position has no
 one is rounded has `approx_distance_km` instead, with
 `distance_error_km`: the sum of the two ends' precision deviations from
 the firmware table, which bounds how far the rounding can move the
-distance. The two are never both set on one row. At most the newest 2000 traceroutes
-are read, and `trace_limit_reached` says when that cap was hit.
+distance. The two are never both set on one row.
+
+Every traceroute in the window that names the node is read, as an end
+or as a hop either way (#290). There is no row limit: a limit decides
+what evidence exists (AGENTS.md 9.19), and the newest 2000 used to be
+about a tenth of the busiest node's 30 days. `traces_read` is how many
+were read. `trace_limit_reached` is gone with the limit. The answer is
+held for `STATS_CACHE_SECONDS` for each node and window.
+
+The panel takes no `channel`, so a node on two presets has both in one
+list (AGENTS.md 9.7).
 
 ### 3.4 `GET /api/nodes/{node_id}/heard-by`
 
@@ -930,7 +953,12 @@ Query parameters:
   precision, battery and voltage, temperature and humidity, a neighbor
   count, or a traceroute request or reply. It is null for a kind that
   stores nothing to show (node info, routing), and for a text message
-  while text storage is off. The firehose asks for it.
+  while text storage is off. The firehose asks for it. With it comes
+  `summary_parts`: the same line as a list, where each part is text or a
+  measurement `{"value": 21.5, "unit": "°C"}`. The units are SI (`°C`,
+  `hPa`, `m`), and the browser writes each measurement in the reader's
+  units. `summary` is the parts joined in SI, for a reader that does not
+  convert (#291).
 
 Response item:
 
@@ -1059,7 +1087,14 @@ Returns every detected channel with its recent messages. The chat page
 draws one section per channel, below the heading of its group.
 
 Each section has `channel`, `label`, `group`, `preset`, `tier`,
-`count`, `last_seen`, and `messages`.
+`count`, `reactions`, `last_seen`, and `messages`.
+
+`count` is the number of messages in the window, without tapbacks. It
+is the same set that `GET /api/chat` pages through, so the chat page
+can load every message the count promises (#297). `reactions` is the
+number of tapbacks in the window. A channel that holds only tapbacks
+keeps its section, with a `count` of 0. `last_seen` is the newest row
+of either kind.
 
 Groups are drawn in this order:
 
@@ -1482,6 +1517,39 @@ Response: `a`, `b`, `window_hours`, `report_count`, `best_snr`,
 
 ## 8. Statistics endpoints
 
+### 8.00 The window every statistics widget reads (#294)
+
+The Statistics page has one range control, and every widget on it reads
+the same window. `sonoran/api/window.py` is the one place that turns the
+query into a window. These endpoints take it: `/api/stats`, `/top`,
+`/leaderboards`, `/hardware`, `/daily`, `/activity` and `/broadcast`.
+
+Query parameters, one form or the other:
+
+- `hours` — 1 to 720. A rolling window that ends now.
+- `since`, and optionally `until` — a fixed window. A value with no time
+  zone is local time in `DISPLAY_TIMEZONE`, so `since=2026-09-01` is
+  midnight in Arizona, 07:00 UTC. `until` is exclusive and never later
+  than now. Without `until` the window ends now.
+
+The answer is 422 when both forms are given, when `until` has no
+`since`, when the window does not start before it ends and before now,
+or when it is longer than 720 hours (30 days). 720 hours is the default
+packet retention: a longer window over `packet` reads ground that is
+already deleted.
+
+A fixed window can still start before the oldest packet kept. The
+answers that are objects then carry, with `window_hours`:
+
+- `window_start`, `window_end` — the window in UTC.
+- `retained_from` — now minus `RETENTION_DAYS_PACKET`. Where it is later
+  than `window_start`, the widget counted from there, and the page says
+  so on the widget.
+
+Each endpoint keeps its old default when no window is given, so an
+older caller gets the answer it always got. Each windowed answer is held
+for `STATS_CACHE_SECONDS` in a cache with a bounded number of keys.
+
 ### 8.0 Three of these read the whole table, and are held
 
 `/api/stats`, `/api/stats/hardware` and `/api/stats/portnums` are the
@@ -1548,15 +1616,41 @@ figures stay exact and the readers share them.
 
 ### 8.1 `GET /api/stats`
 
-Returns the dashboard summary: node counts, packet counts, gateway counts, messages per hour.
+Returns the dashboard summary: `node_count`, `packet_count`,
+`observation_count` (uploads) and `gateway_count`.
 
-Held for `STATS_CACHE_SECONDS`. See 8.0.
+Query parameters:
+
+- `hours` — optional, 1 to 720. Count `packet_count` and
+  `observation_count` over the last `hours` of receive time
+  (`packet.first_seen_at`, `packet_seen.seen_at`), bounded at both ends,
+  so a row dated in the future does not count (AGENTS.md 9.4).
+  `node_count` and `gateway_count` stay totals of every node ever seen
+  and every node ever flagged a gateway, with or without `hours` (#292).
+- `since`, `until` — a fixed window instead of `hours`. See 8.00. The
+  Statistics page sends its range this way or as `hours`.
+
+With a window the response also carries the window fields of 8.00, and:
+
+- `window_hours` — the window counted.
+- `previous` — `packet_count` and `observation_count` for the window of
+  the same length just before. It is null when that window starts
+  before `RETENTION_DAYS_PACKET`: those rows are gone, and a comparison
+  with them would show a rise that did not happen.
+
+Without a window the answer is unchanged: every row the database holds.
+The dashboard asks for `hours=24`.
+
+Held for `STATS_CACHE_SECONDS`, one answer for each window, in a cache
+with a bounded number of keys. See 8.0.
 
 ### 8.2 `GET /api/stats/top`
 
 Returns top talkers by unique packet count.
 
-Query parameters: `hours` (default 24), `limit` (default 20).
+Query parameters: the window (8.00, default 24 hours), `limit` (default
+20). The window is bounded at both ends: it had a lower bound only, so a
+packet row dated in the future counted in every window (AGENTS.md 9.4).
 
 Item: `node_id`, `display_name`, `packet_count`, `air_util_tx`.
 `air_util_tx` is the node's own average share of air time spent
@@ -1570,13 +1664,24 @@ Returns leaderboards that reward what helps the mesh (#60). None of them
 counts packets.
 
 Query parameters: `channel` — the preset. Without it, the assessed
-preset with the most nodes.
+preset with the most nodes. A window (8.00) moves `longest_link` to it.
+Without one, that board reads its own 72 hours.
+
+`reachable` and `direct_gateways` do not follow the window. They are
+read from the gaps assessment, which the gaps job writes for one window,
+`GAPS_WINDOW_HOURS`. Each board's `window_hours` says which window it
+holds, and `longest_link` carries `follows_window`, so the page can say
+which boards follow its range.
 
 Response: `available`, `preset`, `presets`, `assessed`, `boards`.
 
 Each board: `key`, `title`, `measure`, `window_hours`, `cannot_know`,
 `rows`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
 a link row also carries `other_id` and `other_name`.
+`unit` is SI (`km` for a link) or a word (`%`, `gateways`). The API does
+not convert. The page writes `value` and `unit` through
+`SonoranUnits.measure`, which gives miles or kilometres from the reader's
+setting (#291).
 
 - `reachable` — the share of the hours a node was awake in which
   something on the air heard it. At least 24 hours awake. Read from the
@@ -1592,6 +1697,11 @@ a link row also carries `other_id` and `other_name`.
 ### 8.3 `GET /api/stats/hardware`
 
 Returns node counts grouped by hardware model.
+
+Without a window, every node ever seen. With one (8.00), only the nodes
+that sent a packet inside it. The packet is the evidence, not
+`node.last_heard`: that holds only the latest time, so a node heard in a
+past range and again since would drop out of that range.
 
 ### 8.4 `GET /api/stats/portnums`
 
@@ -1625,7 +1735,25 @@ groups, so they are not usable as a packet-type filter.
 
 Returns rows from `daily_snapshot`, newest first.
 
-Query parameters: `days` (default 30).
+Query parameters: `days` (default 30). It is a row limit, not a date
+filter.
+
+These are whole-table counts the jobs service takes once a UTC day, so
+`packet_count` is "packets still kept", not packets sent that day. The
+Statistics page no longer draws them. See 8.5.1.
+
+### 8.5.1 `GET /api/stats/daily`
+
+Returns what the mesh did on each local day of the window (#294).
+
+Query parameters: the window (8.00, default 720 hours).
+
+Response: the window fields, `timezone`, and `days`. Each day has `day`
+(`YYYY-MM-DD` in `DISPLAY_TIMEZONE`), `packet_count` (packets first
+seen), `observation_count` (uploads) and `node_count` (distinct nodes
+that sent a packet). A day with no traffic is a zero. A day older than
+`retained_from` is left out, because its rows are gone and a zero would
+say the mesh was quiet.
 
 ### 8.6 `GET /api/stats/activity`
 
@@ -1633,12 +1761,16 @@ Returns packet counts for each hour, split by packet family. This is the
 "what is the mesh actually doing" chart. Node info and position usually
 dominate.
 
-Query parameter: `hours` (default 24, maximum 720).
+Query parameters: the window (8.00, default 24 hours).
 
-Response: `window_hours`, `hours` (the hour each column stands for), and
-`families`. Each family has `name`, `total`, and `counts`, one value for
-each hour and zero where nothing was sent. The busiest family is first,
-so a stacked chart reads from the bottom.
+Response: the window fields, `bucket`, `hours` (the start of each
+column), and `families`. Each family has `name`, `total`, and `counts`,
+one value for each column and zero where nothing was sent. The busiest
+family is first, so a stacked chart reads from the bottom.
+
+`bucket` is `hour` up to 72 hours and `day` above that. A 30 day chart
+by hour has 720 columns. A day is a local day in `DISPLAY_TIMEZONE`, and
+its column starts at local midnight.
 
 The time is when this process received the packet, never a time the
 packet carries. See AGENTS.md 9.4.
@@ -1648,9 +1780,10 @@ packet carries. See AGENTS.md 9.4.
 Returns how often each node sends, against the firmware defaults, with
 what the device telemetry says about its health.
 
-Query parameters: `hours` (default 24), `limit` (default 40).
+Query parameters: the window (8.00, default 24 hours), `limit`
+(default 40).
 
-Response: `window_hours`, `intervals` (the defaults used),
+Response: the window fields, `intervals` (the defaults used),
 `notable_ratio`, `brownout_band`, `node_count`, `notable_count`,
 `power_loop_count`, and `nodes`.
 
@@ -1711,6 +1844,13 @@ Response item includes the route, the return route, SNR lists, and the mesh-grap
 
 Returns one traceroute with full detail, the mesh-graph URL
 (`graph_url`), and `drawing_url`, the recoloured drawing below.
+
+`reply_id` is the row ID of the newest stored reply to this trace, or
+null. A reply is a row of its own: it carries this trace's `packet_id`
+as its `request_id`, and it is sent by the node that was asked to the
+node that asked. It is always null for a reply. The trace page reads it
+to say "no reply was seen" only when none was stored (#288). This field
+is on this endpoint only, not on the list in 9.1.
 
 ### 9.3 `GET /api/traceroutes/{id}/drawing.svg`
 

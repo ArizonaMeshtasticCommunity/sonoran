@@ -96,15 +96,36 @@ happens, and refuses when no tile of the run is held at all.
 
 ## 4. Parameters
 
-Antenna heights are entered in **metres**. The engine takes feet, and
-`planner-params.js` converts. Feeding metres straight through would
-overstate every antenna by 3.28 times.
+The antenna heights, the clutter height and the range are entered in
+the reader's units: feet and miles by default, metres and kilometres
+when the units setting says metric. Each label names the unit its box is
+in, and the label and the box change together when the setting changes.
 
-The site has a units setting and most of it reads in feet, so each of
-these boxes prints the same height in the reader's own units underneath
-it, read-only. The box itself stays metres: the number goes into the
-model, and the share link carries it in metres so that a link means one
-thing whoever opens it.
+Only the box follows the setting. Inside the page the form holds metres
+and kilometres, the share link carries them (5.1), and the engine takes
+feet converted from those metres. `planner-params.js` converts in both
+places. Feeding metres straight through to the engine would overstate
+every antenna by 3.28 times.
+
+The conversion happens at the box and nowhere else (`UNIT_BOXES`,
+`toBox`, `fromBox` and `readBox` in `planner-params.js`):
+
+- A box shows its metric value in the reader's units, to a hundredth.
+- A value the reader types is converted to metres, kept to a millionth.
+  That is enough for 20 ft typed and 6.096 m typed to be the same
+  number, and so the same prediction.
+- A box the reader has not touched is never converted back. The page
+  holds the metric value beside the text it wrote and uses that value
+  until the text changes. 6 m shows as 19.69 ft, and 19.69 ft is
+  6.0015 m, so reading the display back would move the antenna and
+  change the link.
+
+`tests/unit/test_planner_units_follow_the_setting.py` runs the engine on
+the same antenna typed both ways and on a link opened in each unit
+system, and asserts the same map (#246).
+
+The cable length is feet for every reader. Cable is sold in feet and the
+catalogue's figures are per 100 ft.
 
 ### Simple and Advanced
 
@@ -143,7 +164,7 @@ prediction is ever sent to the server.
 |---|---|---|---|
 | Site name | text | empty | A label only. |
 | Latitude, Longitude | degrees | none | Click the map, or click a node. |
-| Antenna height | m | 3 | Above the ground, including the mast. |
+| Antenna height | ft or m | 3 m (9.84 ft) | Above the ground, including the mast. |
 | Power | dBm | 30 | 30 dBm is 1 W. Use the figure for your region. |
 | Antenna gain | dBi | 2.15 | A stock rubber antenna. |
 
@@ -155,7 +176,7 @@ prediction is ever sent to the server.
 | Frequency slot | choice | 18 | `lora.channel_num` on the radio. Counts from 1. |
 | Frequency | MHz | 906.375 | Slot 18 at 250 kHz. Follows the slot. |
 | Sensitivity | dBm | -134 | Edit it down in town. See 4.1. |
-| Height | m | 1 | A handheld radio. |
+| Height | ft or m | 1 m (3.28 ft) | A handheld radio. |
 | Antenna gain | dBi | 2.15 | |
 | Cable loss | dB | 2 | Applied at both ends. |
 
@@ -165,8 +186,8 @@ prediction is ever sent to the server.
 |---|---|---|---|
 | Radio climate | choice | Desert | Right for Arizona. |
 | Polarization | choice | Vertical | Meshtastic is vertical. |
-| Clutter height | m | 0 | Average height of trees and buildings. |
-| Range | km | 30 | The largest the engine plots is 150. |
+| Clutter height | ft or m | 0 | Average height of trees and buildings. |
+| Range | mi or km | 30 km (18.64 mi) | The largest the engine plots is 150 km. |
 | Ground dielectric | | 15 | Leave it. |
 | Ground conductivity | S/m | 0.005 | Leave it. |
 | Atmosphere bending | N-units | 301 | Leave it. |
@@ -285,11 +306,12 @@ Then any of the form fields, spelled as they are in
 `ground_conductivity`, `atmosphere_bending`, `situation_fraction`,
 `time_fraction`.
 
-Units are the form's, not the engine's. `radius` is in kilometres, as
-the Range field asks for it, and the heights are in metres. **They are
-metres whatever the reader's units setting says**, and the form asks for
-metres for the same reason: a link that changed meaning with the setting
-of whoever opened it would predict two different things.
+Units are the form's, not the engine's. `radius` is in kilometres and
+the heights are in metres. **They are metric whatever the reader's units
+setting says**, and whatever units the boxes show: a link that changed
+meaning with the setting of whoever opened it would predict two
+different things. A reader in feet who types 20 writes `tx_height=6.096`,
+and a metric reader who opens that link sees 6.096 m. See 4.
 
 The **frequency slot is not in the link**. It is the frequency and the
 preset's bandwidth said another way, so a link could carry two numbers

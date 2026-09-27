@@ -148,10 +148,50 @@ def test_the_awkward_channels_survive(migrated_engine, timescale_url) -> None:  
     )
 
     assert "OnlyEmoji" in named, "a channel of pure tapbacks lost its section"
-    assert named["OnlyEmoji"]["count"] >= 1
+    # No messages to count, since #297: the count is what the channel
+    # page can load. The tapback is still there, as a reaction.
+    assert named["OnlyEmoji"]["count"] == 0
+    assert named["OnlyEmoji"]["reactions"] >= 1
     assert named["OnlyEmoji"]["messages"] == [], (
         "tapbacks are not messages of their own and must not appear as any"
     )
+
+
+def test_the_count_is_what_the_channel_page_can_load(migrated_engine, timescale_url) -> None:  # type: ignore[no-untyped-def]
+    """The overview count leaves tapbacks out, as `/api/chat` does (#297).
+
+    MediumFast said "Open all 1,252 messages" over a channel page that
+    ends at 663: the count read every row and the page lists none of the
+    reactions. So the count is compared with what paging `/api/chat`
+    actually reaches over the same window, not with a number worked out
+    here.
+    """
+    _seed_channels(migrated_engine, 2)
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for minute in range(3):
+            connection.execute(
+                text(
+                    "INSERT INTO text_message (from_node_num, to_node_num, channel, body, "
+                    "emoji, seen_at) VALUES (9001, 4294967295, 'Channel0', :body, "
+                    "true, :seen)"
+                ),
+                {"body": "\U0001f44d", "seen": now - timedelta(minutes=minute, seconds=30)},
+            )
+    since = (now - timedelta(hours=168)).isoformat()
+    with _client(timescale_url) as client:
+        body = _overview(client)
+        listed = client.get("/api/chat", params={"channel": "Channel0", "since": since})
+        everything = client.get(
+            "/api/chat", params={"channel": "Channel0", "since": since, "reactions": "true"}
+        )
+    assert listed.status_code == 200 and everything.status_code == 200
+    section = next(s for s in body["sections"] if s["channel"] == "Channel0")
+    assert section["count"] == len(listed.json()) == 3, (
+        f"the overview says {section['count']} messages and the channel page lists "
+        f"{len(listed.json())}; the tapbacks are being counted as messages"
+    )
+    assert section["reactions"] == len(everything.json()) - len(listed.json()) == 3
 
 
 def test_messages_stay_newest_first_within_a_channel(migrated_engine, timescale_url) -> None:  # type: ignore[no-untyped-def]

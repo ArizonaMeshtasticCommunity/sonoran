@@ -180,20 +180,48 @@ async def traceroute_by_packet(
     return _item(trace, request.app.state.settings.mesh_graph_base_url, names)
 
 
+async def _reply_to(session: AsyncSession, trace: Traceroute) -> int | None:
+    """Return the row ID of the newest stored reply to one request.
+
+    A reply is a row of its own. It carries the request's packet ID in
+    `request_id`, and it travels the other way: the node that was asked
+    sends it to the node that asked. All three must match, because a
+    packet ID is only unique for the node that sent it (AGENTS.md 9.1).
+
+    The trace page says "no reply was seen" only when this is None, so
+    that sentence is a fact about the database and not a guess from the
+    request row, which never holds a return path of its own (#288).
+    """
+    if is_reply(trace) or trace.packet_id is None:
+        return None
+    return await session.scalar(
+        select(Traceroute.id)
+        .where(
+            Traceroute.request_id == trace.packet_id,
+            Traceroute.from_node_num == trace.to_node_num,
+            Traceroute.to_node_num == trace.from_node_num,
+        )
+        .order_by(Traceroute.seen_at.desc())
+        .limit(1)
+    )
+
+
 @router.get("/{trace_id}")
 async def get_traceroute(
     trace_id: int,
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    """Return one traceroute."""
+    """Return one traceroute, and for a request the reply to it if one was stored."""
     trace = await session.scalar(
         select(Traceroute).where(Traceroute.id == trace_id).order_by(Traceroute.seen_at.desc())
     )
     if trace is None:
         raise HTTPException(status_code=404, detail="traceroute not found")
     names = await resolve_names(session, _node_nums(trace))
-    return _item(trace, request.app.state.settings.mesh_graph_base_url, names)
+    item = _item(trace, request.app.state.settings.mesh_graph_base_url, names)
+    item["reply_id"] = await _reply_to(session, trace)
+    return item
 
 
 @router.get("/{trace_id}/drawing.svg")

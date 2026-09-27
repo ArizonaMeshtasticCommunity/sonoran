@@ -114,7 +114,13 @@
       return `${value} ${value === 1 ? 'gateway' : 'gateways'}`;
     }
     if (unit === 'dbm') return `${Math.round(value)} dBm`;
-    if (unit === 'm') return `${Math.round(value)} m`;
+    if (unit === 'm') {
+      // The reader's units where the formatter is loaded. The node test
+      // harness loads this file alone, and keeps the metres.
+      return window.SonoranUnits
+        ? window.SonoranUnits.distanceFromM(value)
+        : `${Math.round(value)} m`;
+    }
     return null;
   }
 

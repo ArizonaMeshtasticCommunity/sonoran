@@ -59,6 +59,7 @@ const errors = [];
  * failure still counts as an error.
  */
 const IGNORE = /404|favicon|tile|No terrain is held for this area/i;
+const DRAWING = /\/api\/traceroutes\/\d+\/drawing\.svg$/;
 
 /*
  * A console error is only ours if it came from our own origin.
@@ -140,7 +141,15 @@ async function journey(context, name, body) {
     // A console error carries the offending URL in its location, which
     // the text does not.
     const where = (message.location() || {}).url || '';
-    if (!isOurs(where)) {
+    /*
+     * The trace drawing is mesh-graph's picture, proxied by our API
+     * (#51), so a failure there is mesh-graph's answer on our origin:
+     * 502 when it cannot be reached, which is every test instance, and
+     * 404 when it holds no drawing. It counts as somebody else's host.
+     * It went unseen until #289, because the picture was lazy-loaded
+     * while hidden and Chromium never asked for it at all.
+     */
+    if (!isOurs(where) || DRAWING.test(where)) {
       elsewhere.push(`${name}: ${message.text()} [${where || 'unknown host'}]`);
       return;
     }
@@ -184,10 +193,10 @@ const open = async (page, hash, settle = 3500) => {
  * `Runtime.callFunctionOn` and is not subject to the policy, which is
  * why every journey in this file uses it.
  */
-async function waitFor(page, condition, timeout = 240000, step = 500) {
+async function waitFor(page, condition, timeout = 240000, step = 500, arg = undefined) {
   const until = Date.now() + timeout;
   for (;;) {
-    if (await page.evaluate(condition)) return true;
+    if (await page.evaluate(condition, arg)) return true;
     if (Date.now() >= until) return false;
     await page.waitForTimeout(step);
   }
@@ -216,6 +225,22 @@ const PLANNER_SETTLED = () => {
  * `start` runs the prediction. A shared link starts one by itself, and
  * then there is nothing to click.
  */
+/*
+ * The first value a page function returns that is not null, from ONE
+ * call. `waitFor` then a second `evaluate` is two reads, and a page that
+ * re-renders between them hands the second one nothing: "Cannot
+ * destructure property 'value' of null" on the CI runner.
+ */
+async function valueOf(page, read, timeout = 15000, step = 300) {
+  const until = Date.now() + timeout;
+  for (;;) {
+    const got = await page.evaluate(read);
+    if (got != null) return got;
+    if (Date.now() >= until) return null;
+    await page.waitForTimeout(step);
+  }
+}
+
 async function predict(page, start, timeout = 240000) {
   if (start) await start();
   if (!(await waitFor(page, PLANNER_SETTLED, timeout))) {
@@ -232,6 +257,20 @@ async function predict(page, start, timeout = 240000) {
   // the time this reads it, and a hidden element has no innerText.
   const said = (await page.locator('[data-planner-notice]').textContent().catch(() => '')) || '';
   return { ran: false, why: said.trim().slice(0, 90) || 'the planner refused and said nothing' };
+}
+
+/*
+ * Set the reader's units on this page, and so on every page of its context.
+ *
+ * The planner's height and range boxes follow the setting (#246), and the
+ * journeys share one browser context: "the units setting reaches the
+ * pages" switches it to metric through the real control and it stays
+ * switched. A journey that types feet says so here rather than inheriting
+ * whatever an earlier journey left. The planner rewrites its boxes when
+ * the setting changes, so this works after the form is filled too.
+ */
+async function setUnits(page, units) {
+  await page.evaluate((value) => window.SonoranSettings.set('units', value), units);
 }
 
 /*
@@ -431,6 +470,56 @@ async function main() {
     return `${busiest.id}, heard by ${busiest.heard}: ${fits}; wider letters ${wide.scroll}/${wide.client}`;
   });
 
+  await journey(context, 'the node summary is never three narrow columns (#287)', async (page) => {
+    /*
+     * At 834 px, an iPad in portrait, the four summary panels fell into
+     * three columns and the Identity panel was a third of the screen:
+     * "(CLIENT_BASE" and ")" on two lines, Last heard on three. The
+     * same row width comes back at 1112 px, where the sidebar is shown.
+     * So the column count is read at both, and at the widths either
+     * side, and three is a failure wherever it appears.
+     *
+     * The node is a CLIENT_BASE when the instance has one, because that
+     * is the longest role label the review found breaking.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=200`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    const node = nodes.find((row) => row.role === 'CLIENT_BASE') || nodes[0];
+    const measure = () => {
+      const row = document.querySelector('[data-node-body] .summary-row');
+      if (!row || !row.children.length) return null;
+      const lefts = new Set([...row.children].map((child) => Math.round(child.getBoundingClientRect().left)));
+      const identity = row.children[0];
+      const lines = [...identity.querySelectorAll('dd')].map((dd) =>
+        Math.round(dd.getBoundingClientRect().height / (parseFloat(getComputedStyle(dd).lineHeight) || 20)));
+      return {
+        columns: lefts.size,
+        share: identity.getBoundingClientRect().width / row.getBoundingClientRect().width,
+        worst: Math.max(...lines),
+      };
+    };
+    await page.setViewportSize({ width: 834, height: 1112 });
+    await page.goto(`${BASE}/#node/${encodeURIComponent(node.node_id)}`, { waitUntil: 'load' });
+    must(await waitFor(page, measure, 15000), 'the summary row never drew');
+    const out = [];
+    for (const width of [834, 900, 1024, 1112, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 1112 });
+      await page.waitForTimeout(400);
+      const size = await page.evaluate(measure);
+      must(size.columns !== 3, `the summary row is three columns at ${width} px`);
+      out.push(`${width}:${size.columns}`);
+    }
+    // At the iPad width, with the wider letters of the CI runner's
+    // fonts, no identity value may take more than two lines.
+    await page.setViewportSize({ width: 834, height: 1112 });
+    await page.addStyleTag({ content: '[data-node-body] * { letter-spacing: .05em !important; }' });
+    await page.waitForTimeout(400);
+    const ipad = await page.evaluate(measure);
+    must(ipad.worst <= 2, `an identity value takes ${ipad.worst} lines at 834 px`);
+    return `${node.role || 'no role'}: columns ${out.join(' ')}; identity ${Math.round(ipad.share * 100)}% wide, `
+      + `longest value ${ipad.worst} line(s) at 834 px`;
+  });
+
   await journey(context, 'a furthest-node tile shows a distance or says why not', async (page) => {
     /*
      * #257. Every node shows a distance -- with a range when a position
@@ -462,6 +551,9 @@ async function main() {
       // Written out in full: `page.evaluate` sends the function's text,
       // so it cannot close over a helper defined out here.
       const read = () => {
+        // Not while a render is running: its half-drawn page, or the
+        // previous node's, is not this node's answer.
+        if (loading) return null;
         const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
           .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
         return found ? {
@@ -469,8 +561,9 @@ async function main() {
           detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
         } : null;
       };
-      must(await waitFor(page, read, 15000), `${id}: the furthest tile never drew`);
-      const { value, detail } = await page.evaluate(read);
+      const got = await valueOf(page, read);
+      must(got, `${id}: the furthest tile never drew`);
+      const { value, detail } = got;
       must(value !== '-' && value !== '', `${id} (${kind}): the tile is a bare "${value}"`);
       if (kind === 'exact') {
         must(/^\d[\d.,]*\s?(ft|mi|m|km)$/.test(value), `${id}: an exact distance reads "${value}"`);
@@ -482,6 +575,46 @@ async function main() {
         must(detail.length > 40, `${id} (${kind}): no sentence says why: "${detail}"`);
       }
       seen.push(`${kind}=${value}`);
+    }
+    /*
+     * An estimate with a wide range is still an estimate (#257).
+     *
+     * The open question was whether to hide one whose range is more than
+     * half its distance, and Will (2026-09-27) said keep it. The seeded
+     * mesh may hold no such pair, so the tile is fed two: 5 km ± 4.6,
+     * and 3 km ± 3.2, whose range passes the distance itself. Both must
+     * still print a figure with its range, never "Not known".
+     */
+    const someone = kinds.get('estimate');
+    for (const [estimate, error, word] of [[5, 4.6, 'about'], [3, 3.2, 'under']]) {
+      await page.unrouteAll();
+      await page.route(/\/api\/nodes\/[^/]+\/routes\?/, async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.furthest_heard_by = {
+          ...(body.furthest_heard_by || { node_id: '!00000001', display_name: 'Wide range' }),
+          distance_km: null, approx_distance_km: estimate, distance_error_km: error,
+        };
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(`${BASE}/?wide=${estimate}#node/${encodeURIComponent(someone)}`, { waitUntil: 'load' });
+      const read = () => {
+        // Not while a render is running: its half-drawn page, or the
+        // previous node's, is not this node's answer.
+        if (loading) return null;
+        const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
+          .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
+        return found ? {
+          value: found.querySelector('.value').textContent.trim(),
+          detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
+        } : null;
+      };
+      const got = await valueOf(page, read);
+      must(got, `${estimate} ± ${error} km: the furthest tile never drew`);
+      const { value, detail } = got;
+      must(value.startsWith(`${word} `), `${estimate} ± ${error} km reads "${value}", wanted "${word} ..."`);
+      must(/±|rounded by up to/.test(detail), `${estimate} ± ${error} km lost its range: "${detail}"`);
+      seen.push(`${estimate}±${error}=${value}`);
     }
     return seen.join('; ');
   });
@@ -572,6 +705,56 @@ async function main() {
     return `${busiest.id}: ${before} -> ${after} rows by scrolling, ${paged.length} page(s) by cursor with the sort; "${status}"`;
   });
 
+  await journey(context, 'the nodes list scrolls on by cursor (#250)', async (page) => {
+    /*
+     * The seed holds one page of nodes, so a second page cannot happen
+     * against it. This serves 250 nodes built from a real row, and pages
+     * them the way the server does: a `cursor` that names the last row,
+     * returned in `X-Next-Cursor`. The claims are about the page: every
+     * later request carries the cursor and the sort, none carries an
+     * offset, and the list reaches the end with no node twice. The
+     * server's half is `tests/integration/test_node_cursor.py`.
+     */
+    const template = (await (await page.request.get(`${BASE}/api/nodes?limit=1`)).json())[0];
+    must(template, 'the instance has no node to copy');
+    const TOTAL = 250;
+    const nodes = Array.from({ length: TOTAL }, (_, index) => ({
+      ...template,
+      node_num: 0x0e2e0000 + index,
+      node_id: `!0e2e${String(index).padStart(4, '0')}`,
+      long_name: `Cursor ${index}`,
+      short_name: `C${index}`,
+    }));
+    const asked = [];
+    await page.route(/\/api\/nodes\?/, (route, request) => {
+      const url = new URL(request.url());
+      asked.push(url.search);
+      const limit = Number(url.searchParams.get('limit') || 100);
+      const cursor = url.searchParams.get('cursor');
+      const start = cursor == null ? 0 : Number(cursor) + 1;
+      const rows = nodes.slice(start, start + limit);
+      const headers = { 'X-Total-Count': String(TOTAL) };
+      if (rows.length) headers['X-Next-Cursor'] = String(start + rows.length - 1);
+      return route.fulfill({ contentType: 'application/json', headers, body: JSON.stringify(rows) });
+    });
+    await open(page, 'nodes');
+    const count = () => page.locator('[data-page="nodes"] tbody tr').count();
+    for (let tries = 0; tries < 20 && (await count()) < TOTAL; tries += 1) {
+      await page.locator('[data-node-more]').scrollIntoViewIfNeeded().catch(() => {});
+      await page.waitForTimeout(500);
+    }
+    const shown = await count();
+    const later = asked.slice(1);
+    must(later.length > 0, `only one page was asked for (${shown} rows)`);
+    must(later.every((query) => /[?&]cursor=/.test(query)), `a later page had no cursor: ${later.join(' ')}`);
+    must(!asked.some((query) => /[?&]offset=/.test(query)), `a page was asked for by offset: ${asked.join(' ')}`);
+    must(asked.every((query) => /[?&]sort=last_heard\b/.test(query)), 'a page lost the sort');
+    must(shown === TOTAL, `the list stopped at ${shown} of ${TOTAL}`);
+    const ids = await page.$$eval('[data-page="nodes"] tbody tr code', (cells) => cells.map((cell) => cell.textContent));
+    must(new Set(ids).size === ids.length, 'a node appears twice after paging');
+    return `${shown} rows over ${asked.length} pages, every later page by cursor`;
+  });
+
   await journey(context, 'the nodes search narrows the list', async (page) => {
     await open(page, 'nodes');
     const count = () => page.locator('[data-page="nodes"] tbody tr').count();
@@ -648,6 +831,87 @@ async function main() {
     const sorted = [...after].sort((a, b) => a.localeCompare(b));
     must(after.join() === sorted.join(), `not in order: ${after.join(', ')}`);
     return `${total(nowSaying)} nodes, reordered by role (aria-sort=${announced})`;
+  });
+
+  await journey(context, 'Apply in the node filters leaves focus on the Filters button (#251)', async (page) => {
+    /*
+     * Hiding the panel took the focus out of Apply and left it on the
+     * document body, so the next Tab started from the top of the page.
+     * Walked with the keyboard only, and read from `activeElement`
+     * after the list has reloaded, not by eye.
+     */
+    await open(page, 'nodes');
+    const toggle = page.locator('[data-page="nodes"] [data-node-filter-open]');
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    must((await toggle.getAttribute('aria-expanded')) === 'true', 'Enter did not open the panel');
+    await page.locator('[data-node-filter-apply]').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2500);
+    const focus = await page.evaluate(() => {
+      const active = document.activeElement;
+      return {
+        onToggle: active === document.querySelector('[data-node-filter-open]'),
+        tag: active ? active.tagName : null,
+        hidden: document.querySelector('[data-node-filters]').hidden,
+      };
+    });
+    must(focus.hidden, 'Apply did not close the panel');
+    must(focus.onToggle, `after Apply the focus is on <${String(focus.tag).toLowerCase()}>, not the Filters button`);
+    return 'Apply closes the panel and focus stays on Filters';
+  });
+
+  await journey(context, 'the Filters badge counts only what the reader changed (#301)', async (page) => {
+    /*
+     * A first visit showed "2" with every group at "Any": the badge
+     * counted the toolbar's default 24 hours and the sidebar's preset.
+     * Will (2026-09-27): count what the reader changed, toolbar or panel,
+     * and never the preset. What is SENT must not change.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/nodes\?/.test(request.url())) asked.push(request.url());
+    });
+    await open(page, 'nodes');
+    await page.locator('[data-page="nodes"] tbody tr').first().waitFor({ timeout: 15000 });
+    const toggle = page.locator('[data-page="nodes"] [data-node-filter-open]');
+    const badge = page.locator('[data-page="nodes"] [data-node-filter-count]');
+    const state = async () => ({
+      hidden: await badge.isHidden(),
+      text: (await badge.textContent()).trim(),
+      name: await toggle.getAttribute('aria-label'),
+    });
+    const first = await state();
+    must(first.hidden && first.name === 'Filters',
+      `a first visit shows a badge: "${first.text}", named "${first.name}"`);
+    must(asked.length && /[?&]active_hours=24\b/.test(asked[0]) && /[?&]channel=/.test(asked[0]),
+      `the first request lost its window or preset: ${asked[0]}`);
+
+    // One panel choice, applied, is one.
+    await toggle.click();
+    const none = page.locator('[data-node-filters] .filter-option', { hasText: 'None reported' }).first();
+    await none.waitFor({ timeout: 15000 });
+    await none.click();
+    await page.locator('[data-node-filter-apply]').click();
+    await page.waitForTimeout(2500);
+    const one = await state();
+    must(!one.hidden && one.text === '1', `one panel choice shows "${one.text}"`);
+    must(await page.locator('[data-node-chips] .chip-drop').count() === 1, 'no chip for the one choice');
+
+    // Clear all takes it away.
+    await toggle.click();
+    await page.waitForTimeout(400);
+    await page.locator('[data-node-filter-clear]').click();
+    await page.waitForTimeout(2500);
+    must((await state()).hidden, 'Clear all left the badge up');
+
+    // A toolbar control away from its default counts too.
+    await page.locator('[data-page="nodes"] [data-node-active]').selectOption('');
+    await page.waitForTimeout(2500);
+    const toolbar = await state();
+    must(!toolbar.hidden && toolbar.text === '1', `"Any time" in the toolbar shows "${toolbar.text}"`);
+    return 'no badge on a first visit, 1 for a panel choice, none after Clear all, 1 for the toolbar';
   });
 
   await journey(context, 'the units setting reaches the pages', async (page) => {
@@ -803,12 +1067,24 @@ async function main() {
      * be linked to -- somebody sharing "what was said last night" would
      * send a link that opened on the default week.
      */
-    await open(page, 'chat');
-    const before = await page.locator('[data-chat-body] .panel').count();
+    /*
+     * Since #295 the range lives on a channel page only, so this finds a
+     * channel from the overview and changes the range there.
+     */
+    await open(page, 'chat', 500);
+    const link = () => {
+      const found = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return found ? decodeURIComponent(found.getAttribute('href').replace('#chat/', '')) : null;
+    };
+    must(await waitFor(page, link, 15000), 'the overview drew no channel to open');
+    const channel = await page.evaluate(link);
+    await open(page, `chat/${encodeURIComponent(channel)}/table`);
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/chat\?/.test(request.url())) asked.push(new URL(request.url()).searchParams.get('since'));
+    });
     await page.click('[data-chat-quick="24"]');
-    await page.waitForTimeout(3500);
-    const after = await page.locator('[data-chat-body] .panel').count();
-    must(after > 0, 'no channel sections after changing the range');
+    await page.waitForTimeout(3000);
     const hash = await page.evaluate(() => window.location.hash);
     must(/[?&]from=/.test(hash), `the range did not reach the address: ${hash}`);
     /*
@@ -817,7 +1093,62 @@ async function main() {
      * while somebody watched it, and live would stop appending.
      */
     must(!/[?&]to=/.test(hash), `a quick range should stay open-ended: ${hash}`);
-    return `${before} sections over the default week, ${after} over 24 h`;
+    const since = asked.map((value) => new Date(value).getTime()).filter(Number.isFinite);
+    const day = Date.now() - 24 * 3600000;
+    must(since.some((when) => Math.abs(when - day) < 120000),
+      `the channel was not asked for again over the last 24 h: ${asked.join(', ')}`);
+    return `${channel} asked again from ${new Date(Math.min(...since)).toISOString()}`;
+  });
+
+  await journey(context, 'the chat overview has no range, a channel page has one', async (page) => {
+    /*
+     * #295. Will: the overview "is just supposed to be a quick way to see
+     * the recent messages and chats"; the channel pages keep the range.
+     * An old overview link with a range in it must show the same fixed
+     * window, and say that window in words.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/chat\/overview\?/.test(request.url())) asked.push(new URL(request.url()).search);
+    });
+    const shown = () => {
+      const range = document.querySelector('[data-page="chat"] [data-chat-range]');
+      const quick = document.querySelector('[data-page="chat"] [data-chat-quick="24"]');
+      return {
+        range: Boolean(range && range.offsetParent),
+        quick: Boolean(quick && quick.offsetParent),
+        sub: (document.querySelector('[data-chat-sub]') || {}).textContent || '',
+        hash: window.location.hash,
+      };
+    };
+    const seen = [];
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 800 });
+      // A real load each time: from `#chat` to `#chat?from=` is only a
+      // change of fragment, which does not load the page again.
+      await page.goto('about:blank');
+      await open(page, 'chat?from=2026-09-01T00:00:00Z', 500);
+      // Drawn, so no request is still in flight when the page is left.
+      must(await waitFor(page, () => Boolean(document.querySelector(
+        '[data-page="chat"] [data-chat-body] .panel, [data-page="chat"] [data-chat-body] .empty')), 15000),
+      `the overview never drew at ${width}px`);
+      const overview = await page.evaluate(shown);
+      must(!overview.range && !overview.quick, `the range shows on the overview at ${width}px`);
+      must(/last 7 days/.test(overview.sub), `the overview does not say its window: "${overview.sub}"`);
+      must(overview.hash === '#chat', `the old range stayed in the address: ${overview.hash}`);
+      seen.push(`${width}px hidden`);
+    }
+    must(asked.length && asked.every((query) => /[?&]hours=168(&|$)/.test(query)),
+      `the overview asked for another window: ${asked.join(', ')}`);
+    const channel = await page.evaluate(() => {
+      const link = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return link ? link.getAttribute('href') : null;
+    });
+    must(channel, 'the overview drew no channel to open');
+    await open(page, channel.slice(1), 3000);
+    const on = await page.evaluate(shown);
+    must(on.range && on.quick, 'the channel page lost its range control');
+    return `${seen.join(', ')}; hours=168 on ${asked.length} request(s); ${channel} shows the range`;
   });
 
   await journey(context, 'the chat reads bottom-up and pages upward', async (page) => {
@@ -892,6 +1223,201 @@ async function main() {
     return `${opened.rows} -> ${after.rows} rows, the anchored row drifted ${drift}px`;
   });
 
+  await journey(context, 'the dashboard shows five latest messages and a way to all of them', async (page) => {
+    /*
+     * #296. The list was a `.feed`, so none of the message styling
+     * reached it: the name was a bordered button, the channel ran into
+     * the time, the time was underlined in the browser's own blue, and
+     * a message that was one bell character drew as an empty line.
+     *
+     * The answer is extended rather than replaced, so the rows are real
+     * ones; the first is given a bell for a body, the second a reply, and
+     * the third a DM marker, because those are what must still draw.
+     */
+    const asked = [];
+    await page.route(/\/api\/chat\?limit=/, async (route, request) => {
+      asked.push(new URL(request.url()).searchParams.get('limit'));
+      const response = await route.fetch();
+      const rows = await response.json();
+      if (Array.isArray(rows) && rows.length >= 3) {
+        rows[0] = { ...rows[0], body: '\u0007' };
+        rows[1] = { ...rows[1], reply_to: { from_name: 'Quoted', body: 'the earlier message', packet_id: null } };
+        rows[2] = { ...rows[2], to_node: '!0e2e0002' };
+      }
+      await route.fulfill({ response, json: rows });
+    });
+    const seen = [];
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('about:blank');
+      await open(page, 'dashboard', 500);
+      const drawn = () => document.querySelectorAll('[data-recent-chat] > li').length > 0;
+      must(await waitFor(page, drawn, 15000), `no message drew on the dashboard at ${width}px`);
+      const m = await page.evaluate(() => {
+        const list = document.querySelector('[data-recent-chat]');
+        const rows = [...list.querySelectorAll(':scope > li')];
+        const name = list.querySelector('.who .name');
+        const when = list.querySelector('.who .when');
+        const nameStyle = getComputedStyle(name);
+        const whenStyle = getComputedStyle(when);
+        const first = rows[0].querySelector('.body');
+        return {
+          rows: rows.length,
+          list: list.className,
+          nameBorder: nameStyle.borderTopWidth,
+          nameBg: nameStyle.backgroundColor,
+          underline: whenStyle.textDecorationLine,
+          whenRight: when.getBoundingClientRect().right,
+          whoRight: when.parentElement.getBoundingClientRect().right,
+          channels: list.querySelectorAll('.channel-label').length,
+          bellHeight: first ? first.getBoundingClientRect().height : -1,
+          reply: list.querySelectorAll('.reply-quote').length,
+          dm: list.querySelectorAll('li.dm').length,
+          more: (document.querySelector('[data-page="dashboard"] a.more[href="#chat"]') || {}).textContent || '',
+          scroll: document.documentElement.scrollWidth,
+          client: document.documentElement.clientWidth,
+        };
+      });
+      must(m.rows <= 5, `the dashboard drew ${m.rows} messages, not at most 5`);
+      must(/\bmessages\b/.test(m.list), `the list is not .messages: "${m.list}"`);
+      must(m.nameBorder === '0px', `the sender name still has a ${m.nameBorder} border`);
+      must(m.underline === 'none', `the time is underlined before any hover: ${m.underline}`);
+      must(Math.abs(m.whenRight - m.whoRight) <= 1, 'the time is not on the right of its line');
+      must(m.channels === 0, `the channel is repeated on ${m.channels} rows`);
+      must(m.bellHeight === 0, `a body of one bell character drew ${m.bellHeight}px tall`);
+      must(m.reply >= 1 && m.dm >= 1, `a reply (${m.reply}) or a DM (${m.dm}) no longer draws`);
+      must(m.more.trim() === 'View all messages', 'there is no View all messages link');
+      must(m.scroll <= m.client + 1, `the dashboard scrolls sideways at ${width}px: ${m.scroll}/${m.client}`);
+      seen.push(`${width}px ${m.rows} rows`);
+    }
+    must(asked.every((limit) => limit === '5'), `the dashboard asked for ${asked.join(', ')} messages`);
+    // By keyboard: the link takes focus and Enter opens the chat overview.
+    await page.focus('[data-page="dashboard"] a.more[href="#chat"]');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(800);
+    const hash = await page.evaluate(() => window.location.hash);
+    must(hash === '#chat', `Enter on View all messages went to ${hash}`);
+    return `${seen.join(', ')}; limit=5; Enter opens #chat`;
+  });
+
+  await journey(context, 'chat times are a real tap target and say the date when old', async (page) => {
+    /*
+     * #269, from the phone review: the time links measured 41 x 19 px,
+     * twenty of them to a page, and the exact time was only in a `title`,
+     * which a phone never shows. The hit area must be 44 px each way
+     * without moving the text, and a message older than a day must show
+     * its date and time on the line itself.
+     *
+     * The channel is served here, so there is a message three days old to
+     * look at whatever the seed's clock says.
+     */
+    const CHANNEL = 'E2ETimes';
+    const now = Date.now();
+    const row = (index, ageMs) => ({
+      packet_id: 910000 + index, from_node: '!0e2e0003', from_node_id: '!0e2e0003', from_name: 'Times test',
+      to_node: '^all', channel: CHANNEL, body: `message ${index}`, seen_at: new Date(now - ageMs).toISOString(),
+      reply_id: null, emoji: false, reply_to: null, reactions: [], metrics: null,
+    });
+    const rows = [row(1, 5 * 60000), row(0, 3 * 86400000)];
+    await page.route(/\/api\/chat\?/, async (route, request) => {
+      const query = new URL(request.url()).searchParams;
+      if (query.get('channel') !== CHANNEL) return route.continue();
+      return route.fulfill({ json: query.get('before') ? [] : rows });
+    });
+    const measure = () => [...document.querySelectorAll('.page.active .messages .who a.when')].map((link) => {
+      const box = link.getBoundingClientRect();
+      return { w: Math.round(box.width), h: Math.round(box.height), text: link.textContent, title: link.title };
+    });
+    const seen = [];
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('about:blank');
+      await open(page, `chat/${CHANNEL}`, 500);
+      must(await waitFor(page, () => document.querySelectorAll('[data-chat-scroll] a.when').length === 2, 15000),
+        `the served messages never drew at ${width}px`);
+      const times = await page.evaluate(measure);
+      for (const time of times) {
+        must(time.w >= 44 && time.h >= 44, `a time link is ${time.w} x ${time.h} px at ${width}px`);
+      }
+      const [old, fresh] = times;
+      must(!/ago$/.test(old.text) && /\d/.test(old.text) && old.title.startsWith(old.text),
+        `a three-day-old message says "${old.text}", not its date and time`);
+      must(/ago$/.test(fresh.text), `a five-minute-old message says "${fresh.text}"`);
+      seen.push(`${width}px ${times.map((t) => `${t.w}x${t.h}`).join(' ')} "${old.text}"`);
+    }
+    // The dashboard's feed uses the same line.
+    await page.goto('about:blank');
+    await open(page, 'dashboard', 500);
+    must(await waitFor(page, () => document.querySelectorAll('[data-recent-chat] a.when').length > 0, 15000),
+      'no time link drew on the dashboard');
+    const dash = await page.evaluate(measure);
+    must(dash.every((time) => time.w >= 44 && time.h >= 44),
+      `a dashboard time link is under 44 px: ${dash.map((t) => `${t.w}x${t.h}`).join(' ')}`);
+    return `${seen.join('; ')}; dashboard ${dash.length} at >= 44x44`;
+  });
+
+  await journey(context, 'the chat table pages on as you scroll', async (page) => {
+    /*
+     * #297. The table view stopped at 100 rows: only the reading view
+     * paged. Will decided there is no "Load older" button, so the table
+     * must load its next page as the reader scrolls to its foot.
+     *
+     * The seed holds a few dozen messages a channel, less than one page,
+     * so the channel here is served by the journey: 250 messages a minute
+     * apart, answered the way `/api/chat` answers (newest first, `before`
+     * exclusive, `limit`). Each `seen_at` carries microseconds, so the
+     * cursor can be checked to be the row's own string and not one
+     * rounded through a Date.
+     */
+    const CHANNEL = 'E2EPaging';
+    const TOTAL = 250;
+    const now = Date.now();
+    const iso = (ms, micro) => new Date(ms).toISOString().replace(/\.(\d{3})Z$/, `.$1${micro}+00:00`);
+    const all = Array.from({ length: TOTAL }, (_, index) => ({
+      packet_id: 900000 + index,
+      from_node: '!0e2e0001', from_node_id: '!0e2e0001', from_name: 'Paging test',
+      to_node: '^all', channel: CHANNEL, body: `message ${index}`,
+      seen_at: iso(now - (TOTAL - index) * 60000, String(index % 1000).padStart(3, '0')),
+      reply_id: null, emoji: false, reply_to: null, reactions: [], metrics: null,
+    })).reverse();
+    const cursors = [];
+    await page.route(/\/api\/chat\?/, async (route, request) => {
+      const query = new URL(request.url()).searchParams;
+      if (query.get('channel') !== CHANNEL) return route.continue();
+      const before = query.get('before');
+      if (before) cursors.push(before);
+      const since = query.get('since') ? new Date(query.get('since')).getTime() : null;
+      const limit = Number(query.get('limit') || 100);
+      const rows = all
+        .filter((row) => !before || row.seen_at < before)
+        .filter((row) => since == null || new Date(row.seen_at).getTime() >= since)
+        .slice(0, limit);
+      return route.fulfill({ json: rows });
+    });
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await open(page, `chat/${CHANNEL}/table`, 3000);
+    const count = () => document.querySelectorAll('[data-page="chat"] [data-chat-body] tbody tr').length;
+    const opened = await page.evaluate(count);
+    must(opened === 100, `the table opened with ${opened} rows, not one page of 100`);
+    for (let step = 0; step < 6 && (await page.evaluate(count)) < TOTAL; step += 1) {
+      await page.mouse.wheel(0, 20000);
+      await page.waitForTimeout(700);
+    }
+    const reached = await page.evaluate(count);
+    must(reached === TOTAL, `scrolling the table reached ${reached} of ${TOTAL} rows`);
+    const badge = await page.locator('[data-chat-count]').innerText();
+    must(/250 messages/.test(badge), `the count should say every message is loaded: "${badge}"`);
+    must(cursors.length >= 2 && cursors.every((cursor) => all.some((row) => row.seen_at === cursor)),
+      `a cursor was not a row's own timestamp: ${cursors.join(', ')}`);
+
+    // Switching to the reading view keeps what was loaded.
+    await page.click('[data-chat-view-choice="chat"]');
+    await page.waitForTimeout(1500);
+    const kept = await page.evaluate(() => document.querySelectorAll('[data-chat-scroll] .messages li').length);
+    must(kept === TOTAL, `switching to the chat view kept ${kept} of ${TOTAL} rows`);
+    return `100 -> ${reached} rows in the table by scrolling, ${kept} kept on switching view`;
+  });
+
   await journey(context, 'coverage switches preset', async (page) => {
     await open(page, 'coverage', 5000);
     /*
@@ -909,21 +1435,122 @@ async function main() {
       const answer = await fetch(`${base.replace(/\/$/, '')}/api/coverage`);
       return answer.ok ? (await answer.json()).available === true : false;
     });
-    const select = page.locator('[data-coverage-preset]');
-    const options = await select.locator('option').count();
+    /*
+     * The page's own preset picker (`[data-coverage-preset]`) is gone: the
+     * preset is the menu's, for every page (AGENTS.md 9.7). This used to
+     * select the removed element, which only passed because a preview has
+     * no published run (#299). It now drives the menu's switch, and the
+     * layer drop-down that replaced the three pills.
+     */
+    const layer = page.locator('[data-coverage-layers]');
     if (!published) {
-      must(options === 0, `no run is published, yet ${options} presets were offered`);
+      must(!(await layer.isVisible()), 'no run is published, yet a layer is offered');
       const said = await page.locator('[data-page="coverage"]').innerText();
       must(said.trim().length > 40, 'no run, and the page said nothing about it');
       return 'no run published; the page says so';
     }
-    must(options > 0, 'a run is published but no preset was offered');
-    if (options > 1) {
-      await select.selectOption(await select.locator('option').nth(1).getAttribute('value'));
+    const presets = page.locator('[data-preset-switch] [role="radio"]');
+    const count = await presets.count();
+    must(count > 0, 'a run is published but the menu offers no preset');
+    const layers = await layer.locator('option').count();
+    must(layers >= 2, `a run is published but the layer drop-down holds ${layers} options`);
+    const second = await layer.locator('option').nth(1).getAttribute('value');
+    await layer.selectOption(second);
+    await page.waitForTimeout(800);
+    const title = (await page.locator('[data-coverage-legend-title]').textContent()).trim();
+    const chosen = (await layer.locator('option:checked').textContent()).trim();
+    must(title === chosen, `the legend says "${title}" after choosing "${chosen}"`);
+    if (count === 2) {
+      // Switch, then back: the choice is global and outlives this page.
+      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
       await page.waitForTimeout(4000);
+      must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away on a preset switch');
+      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
+      await page.waitForTimeout(1000);
     }
     must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away');
-    return `${options} presets`;
+    return `${count} presets in the menu, ${layers} layers, legend follows the layer`;
+  });
+
+  await journey(context, 'page heads keep their controls on the title row (#299)', async (page) => {
+    /*
+     * Coverage and Graph dropped their controls under the title at laptop
+     * widths; Graph broke them into two ragged rows as well. Measured with
+     * the CI slack (letter-spacing .05em, as the Who hears it journey does),
+     * because the runner's fonts are wider than a Mac's.
+     */
+    const bad = [];
+    let coverageGap = null;
+    await open(page, 'graph', 1500);
+    await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+    for (const width of [1280, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const name of ['graph', 'coverage', 'nodes', 'firehose', 'planner']) {
+        // A hash change routes in the same document, so the spacing stays.
+        await page.evaluate((hash) => { location.hash = hash; }, name);
+        await page.waitForTimeout(2500);
+        const got = await page.evaluate(() => {
+          const head = document.querySelector('.page.active .page-head');
+          const title = head.querySelector('h2').getBoundingClientRect();
+          const controls = head.querySelector('.controls').getBoundingClientRect();
+          const map = document.querySelector('.page.active #coverage-map');
+          return {
+            below: controls.height > 0 && controls.top >= title.bottom,
+            rows: Math.round(controls.height),
+            /*
+             * Less the "no coverage map has been made yet" notice. It is
+             * there only on an instance with no published run, like a
+             * fresh test database, and it is a sentence, not a row of
+             * controls. With letters as wide as CI's fonts it wraps to two
+             * lines, and counting it failed this at 92 px.
+             */
+            map: map ? Math.round(map.getBoundingClientRect().top - head.getBoundingClientRect().top
+              - [...document.querySelectorAll('.page.active .notice')]
+                .filter((node) => node.getBoundingClientRect().height > 0
+                  && node.getBoundingClientRect().bottom <= map.getBoundingClientRect().top + 1)
+                .reduce((sum, node) => {
+                  const style = getComputedStyle(node);
+                  return sum + node.getBoundingClientRect().height
+                    + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+                }, 0)) : null,
+          };
+        });
+        if (got.below) bad.push(`${name} at ${width}: controls under the title`);
+        if (got.rows > 60) bad.push(`${name} at ${width}: controls in ${got.rows} px, more than one row`);
+        if (name === 'coverage' && width === 1440) coverageGap = got.map;
+      }
+    }
+    await page.setViewportSize({ width: 1500, height: 1050 });
+    must(bad.length === 0, bad.join('; '));
+    // With a run published the map starts right under the head (was 205).
+    if (coverageGap != null) must(coverageGap <= 90, `the coverage map starts ${coverageGap} px below the head`);
+    return `5 pages at 1280 and 1440 px, one row each${coverageGap != null ? `; coverage map ${coverageGap} px below the head` : ''}`;
+  });
+
+  await journey(context, 'the graph Options button counts what changed (#299)', async (page) => {
+    await open(page, 'graph', 3000);
+    const button = page.locator('[data-page="graph"] [data-options-open]');
+    const panel = page.locator('#graph-options');
+    must(await panel.isHidden(), 'the options panel starts open');
+    must((await button.getAttribute('aria-label')) === 'Options', `starts as "${await button.getAttribute('aria-label')}"`);
+    await button.click();
+    must((await button.getAttribute('aria-expanded')) === 'true', 'the button did not say it opened');
+    must(await panel.isVisible(), 'the panel did not open');
+    await page.locator('[data-graph-unconfirmed]').click();
+    await page.waitForTimeout(300);
+    must((await button.getAttribute('aria-label')) === 'Options, 1 changed',
+      `one toggle changed, the button says "${await button.getAttribute('aria-label')}"`);
+    await page.locator('[data-graph-layout]').selectOption('free');
+    await page.waitForTimeout(300);
+    const two = (await page.locator('[data-page="graph"] [data-options-count]').textContent()).trim();
+    must(two === '2', `two options changed, the badge says "${two}"`);
+    await page.locator('[data-graph-unconfirmed]').click();
+    await page.locator('[data-graph-layout]').selectOption('spread');
+    await page.waitForTimeout(300);
+    must(await page.locator('[data-page="graph"] [data-options-count]').isHidden(), 'back to the start, the badge stayed');
+    await button.click();
+    must(await panel.isHidden(), 'a second press did not close the panel');
+    return 'opens, counts 1 then 2, clears, closes';
   });
 
   await journey(context, 'the embed snippet can be got at', async (page) => {
@@ -1063,6 +1690,8 @@ async function main() {
     // Every DOM reading below waits past that fade first.
     const FADE_MS = 600;
     must(await page.evaluate(BUBBLE), 'opening a node did not show its bubble');
+    // A mouse gets the bubble, never the phone's sheet (#281).
+    must(await page.evaluate(() => !window.SonoranSheet.current()), 'a desktop opened the phone sheet');
 
     // One refresh from the Live timer itself, unprompted: wait for the
     // map's traffic request that only the timer's `render('map')` sends.
@@ -1082,6 +1711,12 @@ async function main() {
     edits.move = picked.moved;
     for (let refresh = 0; refresh < 3; refresh += 1) {
       await page.evaluate(async () => {
+        // `render` returns at once while another render is running, and
+        // the timer's own poll can still be running here on a slow
+        // server. "A node that moved stayed where it was" failed two
+        // runs in five on a loaded machine without this wait, and none
+        // in three with it.
+        while (loading) await new Promise((done) => setTimeout(done, 100));
         nodeCache.at = 0;
         await render('map');
       });
@@ -1121,6 +1756,7 @@ async function main() {
     // A node that really went away takes its open bubble with it.
     edits.drop = picked.open;
     await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
       nodeCache.at = 0;
       await render('map');
     });
@@ -1135,6 +1771,76 @@ async function main() {
       + `zoom radius ${radii.before} -> ${radii.after}; gone node closed its bubble`;
   });
 
+  await journey(context, 'a mouse keeps the exact dot target (#266)', async (page) => {
+    // The control for the phone journey: the wider target is for touch.
+    await open(page, 'map', 3000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 20000), 'the map drew no nodes');
+    const got = await page.evaluate(() => {
+      const { map, nodes } = window.SonoranMap;
+      const layer = nodes.getLayers()[0];
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        tolerance: layer ? map.getRenderer(layer).options.tolerance || 0 : null,
+      };
+    });
+    must(!got.coarse, 'this context reports a coarse pointer, so it cannot be the control');
+    must(got.tolerance === 0, `a mouse gets a canvas tolerance of ${got.tolerance}`);
+    return 'fine pointer, tolerance 0';
+  });
+
+  await journey(context, 'chart and checker libraries load only where used (#277)', async (page) => {
+    /*
+     * ECharts and the config checker's libraries sit in <template>s and
+     * are fetched by the first page that needs them. Nodes needs neither
+     * and must fetch neither. Every page that draws a chart is then
+     * opened COLD, each in a fresh load, because a page reached by a
+     * hash change would find the library the last page loaded.
+     */
+    const fetched = [];
+    page.on('request', (request) => fetched.push(new URL(request.url()).pathname));
+    const heavy = /echarts\.min\.js|protobuf\.min\.js|js-yaml\.min\.js|config-check\.js/;
+    await open(page, 'nodes', 3000);
+    const early = fetched.filter((path) => heavy.test(path));
+    must(early.length === 0, `the nodes page fetched ${early.join(', ')}`);
+    must(!(await page.evaluate(() => Boolean(window.echarts))), 'echarts is defined on the nodes page');
+
+    const drew = [];
+    for (const name of ['dashboard', 'stats', 'graph']) {
+      await page.goto('about:blank');
+      await open(page, name, 500);
+      const drawn = (want) => [...document.querySelectorAll(`[data-page="${want}"] canvas`)]
+        .some((canvas) => canvas.width > 0);
+      let ok = false;
+      for (let tries = 0; tries < 60 && !ok; tries += 1) {
+        ok = await page.evaluate(drawn, name);
+        if (!ok) await page.waitForTimeout(500);
+      }
+      must(ok, `a cold load of #${name} drew no chart`);
+      drew.push(name);
+      // Let the page's other requests land before leaving it, or the
+      // navigation aborts them and each one is counted as an error.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    }
+    // The node page draws its charts once its panels arrive.
+    const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
+    must(nodes.length > 0, 'no node to open');
+    await page.goto('about:blank');
+    await open(page, `node/${encodeURIComponent(nodes[0].node_id)}`, 500);
+    must(await waitFor(page, () => [...document.querySelectorAll('[data-page="node"] canvas')]
+      .some((canvas) => canvas.width > 0), 30000), `a cold load of node ${nodes[0].node_id} drew no chart`);
+    drew.push('node');
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+    await page.goto('about:blank');
+    await open(page, 'config', 500);
+    must(await waitFor(page, () => Boolean(window.SonoranConfigCheck && window.jsyaml && window.protobuf), 30000),
+      'the config page did not load its checker and libraries');
+    must(await waitFor(page, () => document.querySelector('[data-page="config"]').innerText.trim().length > 0, 10000),
+      'the config page is empty');
+    return `nodes fetched neither; cold charts on ${drew.join(', ')}; config loaded its checker`;
+  });
+
   await journey(context, 'a traceroute opens', async (page) => {
     await open(page, 'traceroutes', 4000);
     const link = page.locator('[data-page="traceroutes"] .linky').first();
@@ -1143,6 +1849,161 @@ async function main() {
     await page.waitForTimeout(3000);
     must(/#traceroute|#packet|#node|#link/.test(page.url()), `did not navigate (${page.url()})`);
     return 'opened one';
+  });
+
+  await journey(context, 'a traceroute puts Route, Path there and Path back on top (#288)', async (page) => {
+    /*
+     * Will asked for the three on top and the drawing under them. The
+     * order is read from the page, and so is the shape: three on one
+     * row at 1280 and 1600 px with nothing beside them, one column on a
+     * phone, the drawing below at full width either way.
+     *
+     * Then the Path back panel must still be there when there is no
+     * path back, and say the true thing. The seeded mesh holds replies
+     * only, so the page is fed the same row as a request twice: once
+     * with no reply stored, where it must say no reply was seen, and
+     * once with a reply stored, where it must link to it instead.
+     */
+    const rows = await (await page.request.get(`${BASE}/api/traceroutes?limit=1`)).json();
+    if (!rows.length) return 'no traceroute stored to open';
+    const id = rows[0].id;
+    // The drawing comes from mesh-graph, which a test instance cannot
+    // reach, and it is not what this journey is about. It is answered
+    // the way mesh-graph answers for a trace it holds no drawing of.
+    const noDrawing = () => page.route(/\/drawing\.svg$/, (route) => route.fulfill({ status: 404, body: '' }));
+    await noDrawing();
+    const shape = () => {
+      const body = document.querySelector('[data-trace-body]');
+      const panels = [...body.querySelectorAll('.panel')];
+      if (panels.length < 4) return null;
+      const boxes = panels.map((panel) => panel.getBoundingClientRect());
+      const top = boxes.slice(0, 3);
+      return {
+        heads: panels.map((panel) => panel.querySelector('h3').firstChild.textContent.trim()),
+        columns: new Set(top.map((box) => Math.round(box.left))).size,
+        rowFull: Math.abs(top[0].left - boxes[3].left) <= 1 && Math.abs(top[2].right - boxes[3].right) <= 1,
+        below: boxes[3].top >= Math.max(...top.map((box) => box.bottom)) - 1,
+        back: panels[2].innerText,
+        doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    };
+    const out = [];
+    for (const [width, columns] of [[1600, 3], [1280, 3], [1024, 1], [390, 1]]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${BASE}/?w=${width}#traceroute/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, shape, 15000), `the trace page never drew at ${width} px`);
+      const got = await page.evaluate(shape);
+      must(got.heads.slice(0, 3).join('|') === 'Route|Path there|Path back',
+        `the panels on top are ${got.heads.slice(0, 3).join(', ')} at ${width} px`);
+      must(got.columns === columns, `${got.columns} columns at ${width} px, wanted ${columns}`);
+      must(got.below && got.rowFull, `the drawing is not a full-width panel under the three at ${width} px`);
+      must(got.doc <= 1, `the page scrolls sideways at ${width} px`);
+      out.push(`${width}:${got.columns}`);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    for (const reply of [null, 424242]) {
+      await page.unrouteAll();
+      await noDrawing();
+      await page.route(new RegExp(`/api/traceroutes/${id}$`), async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        Object.assign(body, { is_reply: false, request_id: null, return_hops: [], reply_id: reply });
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(`${BASE}/?r=${reply}#traceroute/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, shape, 15000), 'the trace page never drew as a request');
+      const got = await page.evaluate(shape);
+      must(got.heads[2] === 'Path back', 'a request with no path back lost its Path back panel');
+      if (reply == null) {
+        must(/No reply was seen/.test(got.back), `with no reply stored it says ${JSON.stringify(got.back)}`);
+      } else {
+        must(!/No reply was seen/.test(got.back), 'it says no reply was seen when one was stored');
+        const href = await page.evaluate(() =>
+          document.querySelector('[data-path-back="elsewhere"] a').getAttribute('href'));
+        must(href === `#traceroute/${reply}`, `the reply link goes to ${href}`);
+      }
+    }
+    return `columns ${out.join(' ')}; no reply and stored reply both said truly`;
+  });
+
+  await journey(context, 'the mesh-graph button sits at the top right of the drawing (#289)', async (page) => {
+    /*
+     * The link was a line of text above the drawing. It is now a link
+     * drawn as a button in the drawing's heading, on the trace page and
+     * on the packet page alike. Claims: it is an `<a>` to `graph_url`
+     * that opens a new tab; it is at the heading's right edge on a wide
+     * screen and 44 px tall on a phone; it stays when mesh-graph has no
+     * drawing (Will, 2026-09-27); and a trace with no URL has no button.
+     */
+    const rows = await (await page.request.get(`${BASE}/api/traceroutes?limit=1`)).json();
+    if (!rows.length) return 'no traceroute stored to open';
+    const trace = rows[0];
+    // mesh-graph holds no drawing of it, as far as this page can tell.
+    await page.route(/\/drawing\.svg$/, (route) => route.fulfill({ status: 404, body: '' }));
+    const button = () => {
+      const panel = document.querySelector('[data-mesh-graph-panel]');
+      if (!panel || !panel.querySelector('.trace-drawing, p')) return null;
+      const a = panel.querySelector('h3 a.button-link');
+      const head = panel.querySelector('h3').getBoundingClientRect();
+      const box = a && a.getBoundingClientRect();
+      return {
+        found: Boolean(a),
+        tag: a && a.tagName, href: a && a.getAttribute('href'), target: a && a.target, rel: a && a.rel,
+        right: box && Math.round(head.right - box.right),
+        top: box && Math.round(box.top - head.top),
+        height: box && Math.round(box.height),
+        text: panel.innerText,
+        doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    };
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${BASE}/?b=1#traceroute/${trace.id}`, { waitUntil: 'load' });
+    must(await waitFor(page, button, 15000), 'the drawing panel never drew');
+    // The picture fails after the panel is drawn, so wait for its answer.
+    await waitFor(page, () => /holds no drawing/.test(
+      document.querySelector('[data-mesh-graph-panel]').innerText), 10000);
+    const wide = await page.evaluate(button);
+    must(wide.found && wide.tag === 'A', 'the drawing panel has no mesh-graph link in its heading');
+    must(wide.href === trace.graph_url, `it goes to ${wide.href}, not ${trace.graph_url}`);
+    must(wide.target === '_blank' && /noopener/.test(wide.rel), `target=${wide.target} rel=${wide.rel}`);
+    must(Math.abs(wide.right) <= 1 && wide.top <= 4, `it is ${wide.right} px from the right, ${wide.top} px down`);
+    must(/holds no drawing/.test(wide.text), 'the page did not say mesh-graph has no drawing');
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.waitForTimeout(400);
+    const narrow = await page.evaluate(button);
+    must(narrow.height >= 44, `it is ${narrow.height} px tall on a phone`);
+    must(narrow.doc <= 1, 'the page scrolls sideways at 390 px');
+
+    // The packet page draws the same panel. The seeded mesh stores no
+    // packet row for its traceroutes, so a real traceroute packet is
+    // opened and its lookup answered with the trace above.
+    const packets = await (await page.request.get(
+      `${BASE}/api/packets?portnum=TRACEROUTE_APP&limit=1`)).json();
+    let onPacket = 'no traceroute packet stored';
+    if (packets.length) {
+      await page.route(/\/api\/traceroutes\/by-packet\//, (route) => route.fulfill({ json: trace }));
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const [from, id] = [packets[0].from_node, packets[0].packet_key.split(':')[1]];
+      await page.goto(`${BASE}/?b=2#packet/${from}/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, button, 15000), 'the packet page drew no mesh-graph panel');
+      const packet = await page.evaluate(button);
+      must(packet.found && packet.href === trace.graph_url, 'the packet page has no matching button');
+      onPacket = 'same on the packet page';
+    }
+
+    // No URL, no button, and the sentence that says why.
+    await page.route(new RegExp(`/api/traceroutes/${trace.id}$`), async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), graph_url: null } });
+    });
+    await page.goto(`${BASE}/?b=3#traceroute/${trace.id}`, { waitUntil: 'load' });
+    must(await waitFor(page, button, 15000), 'the drawing panel never drew without a URL');
+    const none = await page.evaluate(button);
+    must(!none.found, 'a trace with no URL still has a button');
+    must(/cannot be linked/.test(none.text), 'a trace with no URL does not say why');
+    return `top right at 1280 (${wide.right} px), ${narrow.height} px tall at 390, `
+      + `kept with no drawing, ${onPacket}, gone with no URL`;
   });
 
   await journey(context, 'the firehose draws rows', async (page) => {
@@ -1210,6 +2071,211 @@ async function main() {
     return `${count} charts`;
   });
 
+  await journey(context, 'statistics and the firehose follow the units setting (#291)', async (page) => {
+    /*
+     * Will: "The statistics page isn't showing the distances and metrics
+     * in what is set in the settings. Seems stuck in km."
+     *
+     * The link board is the one that was stuck, and the seeded mesh has
+     * no two-way link long enough to rank, so its rows are supplied here
+     * with the API's own shape: a value and `"unit": "km"`. The firehose
+     * line is supplied the same way, with a temperature and a pressure,
+     * because its server-built prose said "21.5 C" in every mode.
+     */
+    /*
+     * Each handler tolerates the page closing under it. The firehose
+     * refreshes on its own, so a request can still be in flight when the
+     * journey ends, and an unhandled rejection there stops the whole run.
+     */
+    const patch = (edit) => async (route) => {
+      try {
+        const response = await route.fetch();
+        const body = await response.json();
+        edit(body);
+        await route.fulfill({ response, json: body });
+      } catch {
+        await route.abort().catch(() => {});
+      }
+    };
+    await page.route(/\/api\/stats\/leaderboards(\?|$)/, patch((body) => {
+      for (const board of body.boards || []) {
+        if (board.key !== 'longest_link') continue;
+        board.rows = [{
+          node_id: '!0a51d002', display_name: 'Link End A',
+          other_id: '!0a51b007', other_name: 'Link End B',
+          value: 25, unit: 'km', detail: '9.0 dB, 3 and 4 reports each way',
+        }];
+      }
+    }));
+    await page.route(/\/api\/packets\?.*summary=true/, patch((body) => {
+      if (!body.length) return;
+      body[0].summary = '21.5 °C, humidity 40 %, 1013.2 hPa';
+      body[0].summary_parts = [
+        { value: 21.5, unit: '°C' }, ', ', 'humidity 40 %', ', ', { value: 1013.2, unit: 'hPa' },
+      ];
+    }));
+    const linkValue = async () => {
+      await waitFor(page, () => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+        .some((h) => /Longest reliable link/.test(h.textContent)), 20000);
+      return page.evaluate(() => {
+        const board = [...document.querySelectorAll('[data-page="stats"] .leaderboard')]
+          .find((panel) => /Longest reliable link/.test(panel.querySelector('h3').textContent));
+        const value = board && board.querySelector('.board .value');
+        return value ? value.textContent : null;
+      });
+    };
+    const firstSummary = async () => {
+      await waitFor(page, () => !!document.querySelector('[data-page="firehose"] .summary'), 20000);
+      return page.evaluate(() => document.querySelector('[data-page="firehose"] .summary').textContent);
+    };
+
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    const imperialLink = await linkValue();
+    must(imperialLink === '15.5 mi', `the link board read ${imperialLink} in imperial, not 15.5 mi`);
+
+    /*
+     * The same page, switched in place. The page must redraw on its own.
+     *
+     * Only once the first draw has finished: `render` ignores a call that
+     * arrives while a page is still loading, so a switch made mid-load is
+     * not redrawn. That is a separate fault from the one this journey is
+     * for, and it is noted in the #291 report.
+     */
+    await waitFor(page, () => !loading, 60000);
+    await page.evaluate(() => {
+      window.SonoranSettings.set('units', 'metric');
+      window.SonoranSettings.set('temperature', 'celsius');
+    });
+    await waitFor(page, () => {
+      const value = document.querySelector('[data-page="stats"] .leaderboard .board .value');
+      return [...document.querySelectorAll('[data-page="stats"] .leaderboard .board .value')]
+        .some((node) => /km$/.test(node.textContent)) || !value;
+    }, 10000);
+    const metricLink = await linkValue();
+    must(metricLink === '25.0 km', `the link board read ${metricLink} in metric, not 25.0 km`);
+
+    await page.goto(`${BASE}/#firehose`, { waitUntil: 'load' });
+    const metricLine = await firstSummary();
+    must(metricLine === '21.5 °C, humidity 40 %, 1013.2 hPa', `the firehose line read "${metricLine}" in metric`);
+    await waitFor(page, () => !loading, 60000);
+    await page.evaluate(() => {
+      window.SonoranSettings.set('units', 'imperial');
+      window.SonoranSettings.set('temperature', 'fahrenheit');
+    });
+    await waitFor(page, () => {
+      const line = document.querySelector('[data-page="firehose"] .summary');
+      return !!line && /inHg/.test(line.textContent);
+    }, 20000);
+    const imperialLine = await firstSummary();
+    must(imperialLine === '70.7 °F, humidity 40 %, 29.92 inHg', `the firehose line read "${imperialLine}" in imperial`);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    return `${imperialLink} / ${metricLink}; "${imperialLine}"`;
+  });
+
+  await journey(context, 'the statistics range reaches every widget (#294)', async (page) => {
+    /*
+     * Will: "all the stats, widgets, etc should adjust to them. Default is
+     * last 30 days rolling." So this checks the requests every widget
+     * makes, not only the chips: a chip that changes while its widget still
+     * asks for 24 hours is the failure this journey is for.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (/\/api\/stats(\/(top|leaderboards|daily|hardware|activity|broadcast))?\?/.test(url)) asked.push(url);
+    });
+    const WIDGETS = ['stats?', 'top?', 'leaderboards?', 'daily?', 'hardware?', 'activity?', 'broadcast?'];
+    const everyWidgetAsked = (needle) => WIDGETS.filter((path) =>
+      !asked.some((url) => url.includes(`/api/${path === 'stats?' ? '' : 'stats/'}${path}`) && url.includes(needle)));
+    const settled = () => waitFor(page, () => !loading, 60000);
+    const chips = () => page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] [data-range-chip]')]
+      .map((chip) => chip.textContent));
+    const pressed = () => page.evaluate(() => [...document.querySelectorAll('[data-stats-quick][aria-pressed="true"]')]
+      .map((button) => button.dataset.statsQuick));
+
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    await settled();
+    must(JSON.stringify(await pressed()) === '["30d"]', `the default is not 30 d: ${await pressed()}`);
+    let missing = everyWidgetAsked('hours=720');
+    must(!missing.length, `these widgets did not ask for 30 days: ${missing.join(', ')}`);
+    const defaultChips = await chips();
+    must(defaultChips.length >= 5 && defaultChips.every((text) => text.startsWith('last 30 d')),
+      `a widget does not name the range: ${defaultChips.join(' | ')}`);
+
+    // A quick range: every widget again, the address, and no history entry.
+    const depth = await page.evaluate(() => history.length);
+    asked.length = 0;
+    await page.click('[data-stats-quick="7d"]');
+    await settled();
+    must(page.url().endsWith('#stats?range=7d'), `the address is ${page.url()}`);
+    must(await page.evaluate(() => history.length) === depth, 'the range added a history entry');
+    missing = everyWidgetAsked('hours=168');
+    must(!missing.length, `these widgets did not follow 7 d: ${missing.join(', ')}`);
+    must((await chips()).every((text) => text.startsWith('last 7 d')), 'a chip still names another range');
+
+    /*
+     * The gaps-backed boards cannot follow the range, and say so. The link
+     * board does follow it.
+     */
+    const boards = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+      .map((h) => [h.dataset.label, (h.querySelector('span.muted') || {}).textContent || '']));
+    if (boards.length) {
+      const link = boards.find(([title]) => /Longest reliable link/.test(title));
+      must(link && link[1] === 'last 7 d', `the link board chip reads ${link && link[1]}`);
+      const fixed = boards.filter(([title]) => !/Longest reliable link/.test(title));
+      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
+        `a gaps board does not say it keeps its own window: ${JSON.stringify(fixed)}`);
+    }
+
+    // A reload keeps it.
+    await page.reload({ waitUntil: 'load' });
+    await settled();
+    must(JSON.stringify(await pressed()) === '["7d"]', 'a reload lost the range');
+
+    // 24 h draws its charts, by hour.
+    await page.goto(`${BASE}/#stats?range=24h`, { waitUntil: 'load' });
+    await settled();
+    const drawn = await waitFor(page, () => [...document.querySelectorAll('[data-page="stats"] canvas')]
+      .filter((canvas) => canvas.width > 0 && canvas.height > 0).length > 0, 30000);
+    must(drawn, 'no chart was drawn at 24 h');
+    const title = await page.evaluate(() => document.querySelector('[data-activity-title]').textContent);
+    must(/by hour$/.test(title), `at 24 h the activity chart says "${title}"`);
+
+    /*
+     * A custom range that starts before what is kept: every packet widget
+     * says where it really counts from. 26 days, so the API accepts it.
+     */
+    const day = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
+    asked.length = 0;
+    await page.goto(`${BASE}/#stats?from=${day(40)}&to=${day(15)}`, { waitUntil: 'load' });
+    await settled();
+    missing = everyWidgetAsked(`since=${day(40)}`);
+    must(!missing.length, `these widgets did not follow the dates: ${missing.join(', ')}`);
+    const capped = await chips();
+    must(capped.every((text) => /counted from/.test(text)),
+      `a widget does not say retention cuts the range short: ${capped.join(' | ')}`);
+    const packetTile = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .stat')]
+      .map((tile) => tile.innerText).find((text) => /PACKETS|Packets/.test(text)) || '');
+    must(/counted from/.test(packetTile), `the packets tile compares a part with a whole: ${packetTile}`);
+
+    // Longer than retention is refused beside the boxes, and nothing moves.
+    const before = page.url();
+    await page.evaluate(() => {
+      const range = document.querySelector('[data-stats-range]');
+      range.classList.add('show-custom');
+    });
+    await page.fill('[data-stats-from]', day(45));
+    await page.fill('[data-stats-to]', day(1));
+    await page.dispatchEvent('[data-stats-to]', 'change');
+    const refusal = await page.evaluate(() => {
+      const note = document.querySelector('[data-stats-range-note]');
+      return note.hidden ? '' : note.textContent;
+    });
+    must(/at most 30 days/.test(refusal), `a 45 day range was not refused in words: "${refusal}"`);
+    must(page.url() === before, 'a refused range still changed the address');
+    return `${WIDGETS.length} widgets follow 30 d, 7 d, 24 h and a custom range; capped ranges say so`;
+  });
+
   await journey(context, 'the planner offers its control', async (page) => {
     await open(page, 'planner', 5000);
     must((await page.locator('[data-planner-run]').count()) > 0, 'no run control');
@@ -1258,13 +2324,15 @@ async function main() {
     // a different layout and not what #108 describes.
     must(before.position === 'sticky', `the sidebar is ${before.position} at this width`);
 
-    // Phoenix, in the middle of the served region, and 10 km rather than
-    // the default 30: the run is the slow part of this journey and a
-    // short one still fills the summary and the table.
+    // Phoenix, in the middle of the served region, and 6 mi (about 10 km)
+    // rather than the default 30 km: the run is the slow part of this
+    // journey and a short one still fills the summary and the table. The
+    // range box is in miles here because this browser has the default,
+    // imperial, units setting (#246).
     await advanced(page);
     await page.fill('[data-planner="lat"]', '33.45');
     await page.fill('[data-planner="lon"]', '-112.07');
-    await page.fill('[data-planner="radius"]', '10');
+    await page.fill('[data-planner="radius"]', '6');
     const started = Date.now();
     const run = await predict(page);
     const took = Math.round((Date.now() - started) / 1000);
@@ -1311,18 +2379,22 @@ async function main() {
      * far and says it went no further.
      */
     await open(page, 'planner', 5000);
+    await setUnits(page, 'imperial');
     await advanced(page);
     await page.fill('[data-planner="site_name"]', 'Shaw Butte');
     await page.fill('[data-planner="lat"]', '33.5905');
     await page.fill('[data-planner="lon"]', '-112.0865');
-    await page.fill('[data-planner="tx_height"]', '6');
+    // Feet and miles, which is what this browser's default units setting
+    // shows. The link carries metres whatever the box shows (#246).
+    await page.fill('[data-planner="tx_height"]', '20');
     await page.selectOption('[data-planner="preset"]', 'LONG_FAST');
-    await page.fill('[data-planner="radius"]', '10');
+    await page.fill('[data-planner="radius"]', '6');
     await page.locator('[data-planner="radius"]').blur();
     await page.waitForTimeout(500);
 
     const query = new URLSearchParams(page.url().split('?')[1] || '');
-    must(query.get('tx_height') === '6', `the address did not follow the form: ${page.url()}`);
+    must(query.get('tx_height') === '6.096', `the address did not follow the form: ${page.url()}`);
+    must(query.get('radius') === '9.656064', `6 mi went into the link as ${query.get('radius')} km`);
     // Only what moved. A link that writes all 21 fields is four times
     // as long and nobody reads it. Measured: 478 characters against 142.
     must(!query.has('tx_power'), `an untouched field was written: ${[...query.keys()].join(',')}`);
@@ -1366,7 +2438,7 @@ async function main() {
 
     // The settings travel whether or not there is terrain to predict over.
     must(back.site_name === 'Shaw Butte' && back.lat === '33.5905', `the site came back as ${back.lat}`);
-    must(back.tx_height === '6' && back.preset === 'LONG_FAST', 'the settings did not come back');
+    must(back.tx_height === '20' && back.preset === 'LONG_FAST', 'the settings did not come back');
     must(back.sensitivity === '-139', `the sensitivity came back as ${back.sensitivity}`);
     must(back.tx_power === '30', `an unshared field did not take its default: ${back.tx_power}`);
     if (!run.ran) return `${link.length} characters, settings restored; no prediction here (${run.why})`;
@@ -1376,6 +2448,80 @@ async function main() {
     must(sameCount && sameCount[0] === reached[0],
       `the same link reached ${sameCount && sameCount[0]} where the original reached ${reached[0]}`);
     return `${link.length} characters, reached ${reached[0]} in both`;
+  });
+
+  await journey(context, 'a planner link made in feet predicts the same in metres', async (page) => {
+    /*
+     * #246. The boxes read in the reader's units and the link carries
+     * metres, so a link made by an imperial reader and opened by a metric
+     * one must put the same antenna into the model. The arithmetic and a
+     * real engine run are in `test_planner_units_follow_the_setting.py`;
+     * this is the page doing it: the labels, the boxes, and, where there
+     * is terrain, the prediction itself.
+     */
+    await open(page, 'planner', 5000);
+    await setUnits(page, 'imperial');
+    await advanced(page);
+    const labels = () => page.evaluate(() => [...document.querySelectorAll('[data-planner-unit]')]
+      .map((unit) => unit.textContent).join(','));
+    must(await labels() === 'ft,ft,ft,mi', `the imperial labels read ${await labels()}`);
+    await page.fill('[data-planner="lat"]', '33.5905');
+    await page.fill('[data-planner="lon"]', '-112.0865');
+    await page.fill('[data-planner="tx_height"]', '20');
+    await page.fill('[data-planner="rx_height"]', '5');
+    await page.fill('[data-planner="radius"]', '6');
+    await page.locator('[data-planner="radius"]').blur();
+    await page.waitForTimeout(500);
+    const link = page.url();
+    const query = new URLSearchParams(link.split('?')[1] || '');
+    must(query.get('tx_height') === '6.096' && query.get('rx_height') === '1.524',
+      `the heights went into the link as ${query.get('tx_height')} and ${query.get('rx_height')}`);
+
+    // Switched to metric on this same page, the boxes keep the antenna.
+    await setUnits(page, 'metric');
+    const switched = await page.evaluate(() => ({
+      tx: document.querySelector('[data-planner="tx_height"]').value,
+      radius: document.querySelector('[data-planner="radius"]').value,
+    }));
+    must(await labels() === 'm,m,m,km', `the metric labels read ${await labels()}`);
+    must(switched.tx === '6.096' && switched.radius === '9.656064',
+      `switching units moved the boxes to ${switched.tx} m and ${switched.radius} km`);
+    await setUnits(page, 'imperial');
+    const restored = await page.evaluate(() => document.querySelector('[data-planner="tx_height"]').value);
+    must(restored === '20', `switching back to imperial shows ${restored} ft, not the 20 typed`);
+
+    const run = await predict(page, () => page.click('[data-planner-run]'));
+    const reached = run.ran
+      ? (await page.locator('[data-planner-summary]').innerText()).match(/(\d+) of (\d+)/)
+      : null;
+
+    // A clean browser whose reader chose metric.
+    const clean = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
+    await clean.addInitScript(() => {
+      window.localStorage.setItem('sonoran.settings', JSON.stringify({ units: 'metric' }));
+    });
+    const opened = await clean.newPage();
+    await opened.goto(page.url(), { waitUntil: 'load' });
+    const again = await predict(opened, null);
+    const back = await opened.evaluate(() => ({
+      tx: document.querySelector('[data-planner="tx_height"]').value,
+      rx: document.querySelector('[data-planner="rx_height"]').value,
+      radius: document.querySelector('[data-planner="radius"]').value,
+      units: [...document.querySelectorAll('[data-planner-unit]')].map((unit) => unit.textContent).join(','),
+    }));
+    const sameCount = again.ran
+      ? (await opened.locator('[data-planner-summary]').innerText()).match(/(\d+) of (\d+)/)
+      : null;
+    await opened.close();
+    await clean.close();
+
+    must(back.units === 'm,m,m,km', `the metric reader's labels read ${back.units}`);
+    must(back.tx === '6.096' && back.rx === '1.524' && back.radius === '9.656064',
+      `the metric reader got ${back.tx} m, ${back.rx} m and ${back.radius} km`);
+    if (!run.ran) return `20 ft -> 6.096 m both ways; no prediction here (${run.why})`;
+    must(sameCount && sameCount[0] === reached[0],
+      `metric reached ${sameCount && sameCount[0]} where imperial reached ${reached[0]}`);
+    return `20 ft -> 6.096 m, reached ${reached[0]} in both unit systems`;
   });
 
   await journey(context, 'a hand-typed planner link cannot break the page', async (page) => {
@@ -1399,6 +2545,7 @@ async function main() {
       return Boolean(line && !line.hidden && line.textContent.trim().length > 0);
     }, 30000);
     must(reported, 'the page said nothing at all about the link it was opened with');
+    await setUnits(page, 'imperial');
     const held = await page.evaluate(() => ({
       radius: document.querySelector('[data-planner="radius"]').value,
       tx_height: document.querySelector('[data-planner="tx_height"]').value,
@@ -1406,8 +2553,9 @@ async function main() {
       situation: document.querySelector('[data-planner="situation_fraction"]').value,
       said: document.querySelector('[data-planner-shared]').textContent.trim(),
     }));
-    must(held.radius === '150', `the range is ${held.radius} km, past the engine's 150`);
-    must(held.tx_height === '3', `"abc" became ${held.tx_height} rather than the default`);
+    // In miles and feet, which this browser reads: 150 km and 3 m.
+    must(held.radius === '93.21', `the range is ${held.radius} mi, past the engine's 150 km`);
+    must(held.tx_height === '9.84', `"abc" became ${held.tx_height} ft rather than the default 3 m`);
     must(held.preset === 'MEDIUM_FAST', `an unknown preset became ${held.preset}`);
     must(held.situation === '1', `the situation fraction is ${held.situation}`);
     must(/version 9/.test(held.said), `nothing said the version was unknown: ${held.said}`);
@@ -1443,6 +2591,176 @@ async function main() {
     must(box.status.length > 10, `the status said ${JSON.stringify(box.status)}`);
     return `secure context ${box.secure}: ${JSON.stringify(box.status.slice(0, 48))}`;
   });
+
+  /*
+   * The sidebar collapsed to icons (#300), in a context of its own: the
+   * choice is kept in localStorage, and a collapsed sidebar must not leak
+   * into the journeys that share `context`.
+   */
+  const railed = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(railed, 'the desktop sidebar collapses to icons and back (#300)', async (page) => {
+    await open(page, 'dashboard', 1500);
+    const button = page.locator('[data-sidebar-collapse]');
+    const state = () => page.evaluate(() => {
+      const b = document.querySelector('[data-sidebar-collapse]');
+      const canvas = document.querySelector('.page.active .chart canvas');
+      return {
+        width: Math.round(document.querySelector('.sidebar').getBoundingClientRect().width),
+        expanded: b.getAttribute('aria-expanded'),
+        name: b.getAttribute('aria-label'),
+        canvas: canvas ? Math.round(canvas.getBoundingClientRect().width) : 0,
+        host: canvas ? Math.round(canvas.closest('.chart').getBoundingClientRect().width) : 0,
+      };
+    });
+    must(await button.isVisible(), 'no collapse button on a wide screen');
+    await waitFor(page, () => !!document.querySelector('.page.active .chart canvas'), 20000);
+    const wide = await state();
+    must(wide.width >= 200, `a new visitor starts at ${wide.width} px, not expanded`);
+    must(wide.expanded === 'true' && /collapse/i.test(wide.name),
+      `expanded, the button says expanded=${wide.expanded} and "${wide.name}"`);
+
+    await button.click();
+    await page.waitForTimeout(800);
+    const rail = await state();
+    must(rail.width <= 80, `collapsed, the sidebar is still ${rail.width} px wide`);
+    must(rail.expanded === 'false' && /expand/i.test(rail.name),
+      `collapsed, the button says expanded=${rail.expanded} and "${rail.name}"`);
+    // The chart follows the new width without a window resize.
+    must(rail.canvas > wide.canvas + 40, `the chart stayed ${rail.canvas} px (was ${wide.canvas}) after the collapse`);
+    must(Math.abs(rail.canvas - rail.host) <= 2, `the chart is ${rail.canvas} px in a ${rail.host} px box`);
+
+    // Every link keeps its name, and the current page still says so.
+    for (const name of ['Dashboard', 'Nodes', 'Statistics', 'Settings']) {
+      must(await page.getByRole('link', { name, exact: true }).isVisible(), `no visible link named ${name} in the rail`);
+    }
+    must((await page.getByRole('link', { name: 'Dashboard', exact: true }).getAttribute('aria-current')) === 'page',
+      'the current page lost aria-current in the rail');
+    const presets = page.getByRole('radio');
+    must((await presets.count()) >= 1 && await presets.first().isVisible(), 'the preset is not in the rail');
+
+    // A label on hover, and on keyboard focus, beside the rail.
+    const label = (nav) => page.evaluate((key) => {
+      const box = document.querySelector(`#site-nav a[data-nav="${key}"] .nav-label`).getBoundingClientRect();
+      return { x: Math.round(box.x), width: Math.round(box.width) };
+    }, nav);
+    await page.hover('#site-nav a[data-nav="nodes"]');
+    await page.waitForTimeout(150);
+    const hovered = await label('nodes');
+    must(hovered.width > 20 && hovered.x >= rail.width, `hovering Nodes shows no label beside the rail (${JSON.stringify(hovered)})`);
+    await page.mouse.move(900, 500);
+    await button.focus();
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(150);
+    const focused = await label('dashboard');
+    must(focused.width > 20 && focused.x >= rail.width, `Tab to Dashboard shows no label (${JSON.stringify(focused)})`);
+
+    /*
+     * A new page load, not a hash change: going from #dashboard to
+     * #planner in the same page is the same document, and would find the
+     * attribute still standing rather than read the stored choice back.
+     * A second tab in this context shares the storage and is a real load.
+     */
+    const fresh = await page.context().newPage();
+    // The planner's sticky column stays flush in this state too (#108).
+    await fresh.goto(`${BASE}/#planner`, { waitUntil: 'load' });
+    await fresh.waitForTimeout(2000);
+    await fresh.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await fresh.waitForTimeout(400);
+    const flush = await fresh.evaluate(() => {
+      const box = document.querySelector('.sidebar').getBoundingClientRect();
+      return { top: box.top, gap: window.innerHeight - box.bottom, width: box.width };
+    });
+    await fresh.close();
+    must(flush.width <= 80, 'the collapse did not survive a new page load');
+    must(flush.top <= 1 && flush.gap <= 1, `the collapsed sidebar left a gap: ${JSON.stringify(flush)}`);
+
+    // Set before the script runs: with app.js served empty, only the boot
+    // script in index.html can have collapsed it, so there is no flash.
+    const bare = await page.context().newPage();
+    await bare.route(/\/static\/app\.js/, (route) => route.fulfill({ contentType: 'application/javascript', body: '' }));
+    await bare.goto(`${BASE}/#dashboard`, { waitUntil: 'load' });
+    const early = Math.round(await bare.evaluate(() => document.querySelector('.sidebar').getBoundingClientRect().width));
+    await bare.close();
+    must(early <= 80, `on a new load, before app.js, the sidebar is ${early} px: it would flash wide`);
+
+    // A second press expands it.
+    await button.click();
+    await page.waitForTimeout(300);
+    const back = await state();
+    must(back.width >= 200 && back.expanded === 'true', `a second press left it at ${back.width} px`);
+    return `${wide.width} -> ${rail.width} px, chart ${wide.canvas} -> ${rail.canvas} px, kept on reload, labels on hover and focus`;
+  });
+  await railed.close();
+
+  /*
+   * Storage refused: the page works and starts expanded. A getter that
+   * throws is what Safari's private mode and a blocked site look like.
+   */
+  const nostore = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await nostore.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', { get() { throw new Error('storage refused'); } });
+  });
+  await journey(nostore, 'the sidebar collapse works with storage refused (#300)', async (page) => {
+    await open(page, 'dashboard', 2000);
+    const width = () => page.evaluate(() => Math.round(document.querySelector('.sidebar').getBoundingClientRect().width));
+    must(await width() >= 200, 'with storage refused the sidebar did not start expanded');
+    await page.locator('[data-sidebar-collapse]').click();
+    await page.waitForTimeout(300);
+    must(await width() <= 80, 'with storage refused the button did nothing');
+    return 'starts expanded, and collapses for the visit';
+  });
+  await nostore.close();
+
+  /*
+   * An iPad on its side (#267). 1112 px is wider than every phone
+   * breakpoint, so this is the device that proves touch sizing follows
+   * the pointer and not the width. `hasTouch` makes Chromium match
+   * `(pointer: coarse)`, which the journey checks before it believes
+   * anything else.
+   */
+  const tablet = await browser.newContext({
+    viewport: { width: 1112, height: 834 }, isMobile: true, hasTouch: true,
+  });
+
+  await journey(tablet, 'a tablet gets finger-sized targets at desktop width (#267)', async (page) => {
+    await open(page, 'dashboard', 1500);
+    // The ? buttons arrive with the data, so wait for them rather than
+    // for a fixed time.
+    await waitFor(page, () => document.querySelectorAll('[data-page="dashboard"] .hint-open').length > 0, 20000);
+    const got = await page.evaluate(() => {
+      const tall = (selector) => [...document.querySelectorAll(selector)]
+        .filter((node) => node.getBoundingClientRect().width > 0)
+        .map((node) => Math.round(node.getBoundingClientRect().height));
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        sidebar: getComputedStyle(document.querySelector('.sidebar')).position,
+        nav: tall('#site-nav a'),
+        hints: tall('[data-page="dashboard"] .hint-open'),
+        preset: tall('.preset-choice'),
+      };
+    });
+    must(got.coarse, 'the tablet context does not match (pointer: coarse), so this proves nothing');
+    must(got.sidebar === 'sticky', `the sidebar is ${got.sidebar}, so this is not the desktop layout`);
+    for (const [name, heights] of [['nav link', got.nav], ['? button', got.hints], ['preset choice', got.preset]]) {
+      must(heights.length > 0, `no ${name} on the page to measure`);
+      const low = Math.min(...heights);
+      must(low >= 44, `a ${name} is ${low} px tall on a touch screen, under 44`);
+    }
+    return `${got.nav.length} nav links, ${got.hints.length} ? buttons, ${got.preset.length} preset choices, all 44 px or more`;
+  });
+
+  await journey(context, 'a mouse keeps the desktop sizes (#267)', async (page) => {
+    // The other half: the change must not reach a mouse on a wide screen.
+    await open(page, 'dashboard', 2500);
+    const got = await page.evaluate(() => ({
+      coarse: matchMedia('(pointer: coarse)').matches,
+      nav: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
+    }));
+    must(!got.coarse, 'the desktop context matches (pointer: coarse)');
+    must(got.nav < 44, `a nav link is ${got.nav} px tall with a mouse; the desktop size changed`);
+    return `nav link ${got.nav} px with a mouse`;
+  });
+  await tablet.close();
 
   /*
    * A phone, walked as a phone.
@@ -1531,6 +2849,132 @@ async function main() {
     return `${links} links + settings in the footer, menu closes on choosing`;
   });
 
+  await journey(phone, 'the phone bar stays on the screen while scrolling (#271)', async (page) => {
+    /*
+     * The menu button and the live state were both gone after 1,200 px.
+     * The dashboard is the page scrolled here because it is long on every
+     * instance, seeded or live.
+     */
+    await open(page, 'dashboard', 1500);
+    // Wait for the page to be long enough, rather than for a fixed time:
+    // on a loaded runner the feeds arrive late and the page is short.
+    await waitFor(page, () => document.documentElement.scrollHeight > window.innerHeight + 1300, 30000);
+    await page.evaluate(() => window.scrollTo(0, 1200));
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const bar = document.querySelector('.sidebar').getBoundingClientRect();
+      const button = document.querySelector('[data-nav-toggle]').getBoundingClientRect();
+      const status = document.querySelector('[data-status-bar]');
+      return {
+        scrollY: Math.round(window.scrollY),
+        top: Math.round(bar.top),
+        height: Math.round(bar.height),
+        button: [Math.round(button.top), Math.round(button.bottom)],
+        status: status.getBoundingClientRect().width > 0 ? status.textContent.trim() : '',
+        opaque: getComputedStyle(document.querySelector('.sidebar')).backgroundColor,
+      };
+    });
+    must(got.scrollY >= 600, `the dashboard only scrolled to ${got.scrollY}, so this proves nothing`);
+    must(got.top === 0, `the bar is at ${got.top} px after scrolling ${got.scrollY}, not stuck at the top`);
+    must(got.height <= 72, `the bar is ${got.height} px tall; it must stay one compact row`);
+    must(got.button[0] >= 0 && got.button[1] <= got.height, 'the menu button is not inside the bar');
+    must(got.status.length > 0, 'the live state is not shown in the bar');
+    must(!/rgba\(.*, 0\)|transparent/.test(got.opaque), `the bar is see-through: ${got.opaque}`);
+
+    // Open, the menu is taller than the screen. A sticky box never
+    // scrolls its own foot into view, so the bar must scroll inside.
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(250);
+    await page.locator('.menu-settings-link').scrollIntoViewIfNeeded();
+    const settings = await page.locator('.menu-settings-link').boundingBox();
+    const height = page.viewportSize().height;
+    must(settings && settings.y >= 0 && settings.y + settings.height <= height + 1,
+      `with the menu open, Settings cannot be brought on screen (${settings && Math.round(settings.y)} of ${height})`);
+    return `stuck at 0 after ${got.scrollY} px, ${got.height} px tall, shows "${got.status}"`;
+  });
+
+  /*
+   * The drawer on a full iPhone 14 screen (#279). The `phone` context is
+   * 664 px tall, which is that phone with Safari's bars showing; fourteen
+   * 44 px links cannot leave room for the footer there, and the drawer
+   * scrolls inside itself (#271). At 844 nothing should need a scroll.
+   */
+  const tall = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  });
+  await journey(tall, 'the drawer shows the preset and Settings without a scroll (#279)', async (page) => {
+    await open(page, 'dashboard', 2500);
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const bottom = (selector) => {
+        const box = document.querySelector(selector).getBoundingClientRect();
+        return box.height ? Math.round(box.bottom) : null;
+      };
+      return {
+        scrolled: document.querySelector('.sidebar').scrollTop + window.scrollY,
+        preset: bottom('.preset-switch'),
+        settings: bottom('.menu-settings-link'),
+        link: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
+        height: window.innerHeight,
+      };
+    });
+    must(got.scrolled === 0, `the drawer opened scrolled by ${got.scrolled} px`);
+    must(got.link >= 44, `a nav link is ${got.link} px, under 44; the rows were tightened too far`);
+    must(got.preset && got.preset <= got.height, `the preset switch ends at ${got.preset}, under the ${got.height} px screen`);
+    must(got.settings && got.settings <= got.height, `Settings ends at ${got.settings}, under the ${got.height} px screen`);
+    return `preset ends at ${got.preset}, Settings at ${got.settings} of ${got.height}`;
+  });
+  await tall.close();
+
+  await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
+    /*
+     * Each of these has a size of its own, so the general 44 px rule for
+     * buttons (#267) never reached it. Measured one by one, on the page
+     * where it lives, because a missing control would otherwise pass as
+     * "nothing too small".
+     */
+    const measure = (selectors) => page.evaluate((list) => list.map((selector) => {
+      const node = [...document.querySelectorAll(selector)]
+        .find((item) => item.getBoundingClientRect().width > 0);
+      if (!node) return { selector, missing: true };
+      const box = node.getBoundingClientRect();
+      return { selector, width: Math.round(box.width), height: Math.round(box.height) };
+    }), selectors);
+    const seen = [];
+    await open(page, 'dashboard', 1500);
+    await waitFor(page, () => document.querySelector('.chart-expand') && document.querySelector('.reaction > summary'), 20000);
+    seen.push(...await measure(['[data-nav-toggle]', '.page.active .chart-expand', '.page.active .reaction > summary']));
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(250);
+    seen.push(...await measure(['.menu-settings-link']));
+    await open(page, 'map', 4000);
+    seen.push(...await measure(['#live-map .leaflet-control-zoom-in', '#live-map .leaflet-control-zoom-out',
+      '.map-key summary', '.watch-control button']));
+    /*
+     * The popup close button exists only while a popup is open, and a
+     * dot is a few pixels on a canvas. The rule is what is under test, so
+     * a close button is put inside the live map's own container and
+     * measured there.
+     */
+    seen.push(...await page.evaluate(() => {
+      const probe = document.createElement('a');
+      probe.className = 'leaflet-popup-close-button';
+      probe.href = '#close';
+      probe.textContent = '×';
+      document.querySelector('#live-map').append(probe);
+      const box = probe.getBoundingClientRect();
+      probe.remove();
+      return [{ selector: 'popup close', width: Math.round(box.width), height: Math.round(box.height) }];
+    }));
+    const missing = seen.filter((item) => item.missing).map((item) => item.selector);
+    must(missing.length === 0, `not on the page to measure: ${missing.join(', ')}`);
+    const small = seen.filter((item) => item.width < 44 || item.height < 44)
+      .map((item) => `${item.selector} ${item.width}x${item.height}`);
+    must(small.length === 0, `under 44 px on a touch screen: ${small.join(', ')}`);
+    return `${seen.length} controls, all 44 px or more`;
+  });
+
   await journey(phone, 'a phone can read what a column means', async (page) => {
     /*
      * The same journey as before #99, walked over the control that
@@ -1540,13 +2984,22 @@ async function main() {
      * exact wire value, and neither is on the screen until it is asked
      * for. A `title` tooltip could pass neither check on a touch
      * screen.
+     *
+     * Since #273 a phone reads the firehose as cards, and Uploads is one
+     * of the three columns a card leaves to the packet page, so its
+     * heading is not on a phone's screen. The sentence checked here is
+     * "What it said", which a card does show; the Uploads sentence is
+     * the same code on the same kind of heading.
      */
     await open(page, 'firehose', 4500);
+    // The fixed pause alone lost to a slow first query on a loaded
+    // machine, one run in two here: wait for the headings' controls.
+    await waitFor(page, () => document.querySelectorAll('[data-page="firehose"] .hint-open').length > 0, 30000);
     const table = page.locator('[data-page="firehose"] .table-wrap').first();
     const buttons = table.locator('.hint-open');
     must((await buttons.count()) > 0, 'no column carries a hint control');
-    const uploads = table.locator('th[data-label="Uploads"] .hint-open');
-    must((await uploads.count()) > 0, 'the Uploads column has no hint control');
+    const uploads = table.locator('th[data-label="What it said"] .hint-open');
+    must((await uploads.count()) > 0, 'the What it said column has no hint control');
     must((await uploads.getAttribute('aria-expanded')) === 'false', 'the hint starts open');
     const panel = page.locator(`#${await uploads.getAttribute('aria-controls')}`);
     must(!(await panel.isVisible()), 'the sentence is on the screen before it is asked for');
@@ -1555,8 +3008,8 @@ async function main() {
     await page.waitForTimeout(250);
     must((await uploads.getAttribute('aria-expanded')) === 'true', 'tapping did not open it');
     must(await panel.isVisible(), 'the panel did not appear');
-    must(/uploaded this packet to MQTT/.test(await panel.innerText()),
-      'the Uploads sentence is not in the panel');
+    must(/A short line from the decoded packet/.test(await panel.innerText()),
+      'the What it said sentence is not in the panel');
     // It must fit the screen, which is what `.table-wrap` would have
     // taken away from a panel drawn inside the table.
     const box = await panel.boundingBox();
@@ -1578,6 +3031,329 @@ async function main() {
     await page.waitForTimeout(250);
     must((await type.getAttribute('aria-expanded')) === 'false', 'Escape did not close it');
     return `${await buttons.count()} columns explained, hints and exact values both reachable`;
+  });
+
+  await journey(context, 'a hint panel wraps its sentence at every width (#298)', async (page) => {
+    /*
+     * The journey above checks that the panel BOX is on the screen and
+     * that `innerText` holds the sentence. Both passed while the
+     * sentence ran on one line inside a 350 px panel and scrolled
+     * sideways out of sight: `innerText` includes overflowed text. So
+     * this opens every hint on the four pages that carry column hints
+     * and asks the panel itself whether it scrolls.
+     *
+     * `letter-spacing` is widened as the "Who hears it" journey does, so
+     * the wider Linux fonts of the CI runner are covered too.
+     */
+    const out = [];
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      let opened = 0;
+      for (const name of ['nodes', 'firehose', 'dashboard', 'stats']) {
+        await open(page, name, 1500);
+        // The firehose draws its table only once rows arrive.
+        await page.locator(`[data-page="${name}"] .hint-open`).first()
+          .waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
+        await page.addStyleTag({ content: '.hint-pop { letter-spacing: .05em !important; }' });
+        const buttons = page.locator(`[data-page="${name}"] .hint-open`);
+        const total = await buttons.count();
+        must(total > 0, `${name} has no hint control at ${width} px`);
+        for (let index = 0; index < total; index += 1) {
+          const button = buttons.nth(index);
+          if (!(await button.isVisible())) continue;
+          await button.click();
+          await page.waitForTimeout(120);
+          const size = await page.evaluate((id) => {
+            const panel = document.getElementById(id);
+            const box = panel.getBoundingClientRect();
+            return {
+              label: panel.querySelector('.hint-name')?.textContent || id,
+              scroll: panel.scrollWidth,
+              client: panel.clientWidth,
+              wrap: getComputedStyle(panel).whiteSpace,
+              left: box.left,
+              right: box.right,
+              page: document.documentElement.scrollWidth,
+              view: document.documentElement.clientWidth,
+            };
+          }, await button.getAttribute('aria-controls'));
+          must(size.scroll <= size.client + 1,
+            `${name} ${size.label} scrolls sideways at ${width} px: ${size.scroll}/${size.client}`);
+          must(size.wrap === 'normal', `${name} ${size.label}: white-space is ${size.wrap}`);
+          must(size.left >= -1 && size.right <= size.view + 1,
+            `${name} ${size.label} runs off the screen at ${width} px`);
+          must(size.page <= size.view + 1,
+            `${name} ${size.label} widens the page at ${width} px: ${size.page}/${size.view}`);
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(60);
+          opened += 1;
+        }
+      }
+      out.push(`${width}:${opened}`);
+    }
+    return `panels opened and measured at ${out.join(' ')}`;
+  });
+
+  await journey(phone, 'a phone reads the node lists as cards (#272)', async (page) => {
+    /*
+     * At 390 px the nodes table hid 61% of its width, Role and Last heard
+     * among it. Below 40rem each row is a card. Measured per card, with
+     * letter-spacing widened for the CI runner's fonts: nothing scrolls
+     * sideways, and the Role and Last heard of the row are on the screen.
+     * Then the same page at 768 px must still be a table.
+     */
+    const out = [];
+    const cards = async (name, wrap, roleCell, heardCell) => {
+      await open(page, name, 1500);
+      await page.locator(`${wrap} tbody tr`).first()
+        .waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+      await page.addStyleTag({ content: `${wrap} { letter-spacing: .05em; }` });
+      await page.waitForTimeout(200);
+      return page.evaluate(({ wrap: selector, roleCell: role, heardCell: heard }) => {
+        const box = document.querySelector(selector);
+        const rows = box ? [...box.querySelectorAll('tbody tr')] : [];
+        const view = document.documentElement.clientWidth;
+        const onScreen = (cell) => {
+          if (!cell) return false;
+          const rect = cell.getBoundingClientRect();
+          return rect.width > 0 && rect.left >= -1 && rect.right <= view + 1;
+        };
+        const first = rows[0];
+        return {
+          rows: rows.length,
+          scroll: box ? box.scrollWidth : 0,
+          client: box ? box.clientWidth : 0,
+          display: first ? getComputedStyle(first).display : null,
+          role: first ? onScreen(first.children[role - 1]) : false,
+          heard: first ? onScreen(first.children[heard - 1]) : false,
+          heardText: first ? first.children[heard - 1].textContent : '',
+          height: first ? Math.round(first.getBoundingClientRect().height) : 0,
+          sortable: box ? box.querySelectorAll('thead .sort-button').length : 0,
+        };
+      }, { wrap, roleCell, heardCell });
+    };
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 664 });
+      for (const [name, wrap, role, heard] of [
+        ['nodes', '[data-node-table]', 4, 6],
+        ['dashboard', '[data-recent-nodes]', 2, 3],
+      ]) {
+        const size = await cards(name, wrap, role, heard);
+        must(size.rows > 0, `${name}: no node rows at ${width} px`);
+        must(size.display === 'flex', `${name}: a row is ${size.display} at ${width} px, not a card`);
+        must(size.scroll <= size.client + 1,
+          `${name} scrolls sideways at ${width} px: ${size.scroll}/${size.client}`);
+        must(size.role, `${name}: Role is off the screen at ${width} px`);
+        must(size.heard && /ago/.test(size.heardText),
+          `${name}: Last heard is off the screen or not in its cell at ${width} px (${size.heardText})`);
+        if (name === 'nodes') must(size.sortable >= 6, `the phone can sort by only ${size.sortable} columns`);
+        out.push(`${name}@${width} ${size.scroll}/${size.client} ${size.height}px`);
+      }
+    }
+    await page.setViewportSize({ width: 768, height: 1024 });
+    const wide = await cards('nodes', '[data-node-table]', 4, 6);
+    must(wide.display === 'table-row', `at 768 px the nodes list is not a table: ${wide.display}`);
+    return out.join(', ');
+  });
+
+  await journey(phone, 'a phone can tap what used to be a title (#276)', async (page) => {
+    /*
+     * A touch screen never shows a `title`. Four kinds of meaning lived
+     * only there: the gateway tag, the send-rate tags and uptime notes on
+     * Statistics, the node page's health dots, and the exact time of a
+     * message. Each is now a button that opens a panel. For each kind:
+     * the value carries no `title`, a tap opens the panel with the
+     * sentence in it, the panel fits the screen, and Escape shuts it.
+     */
+    const done = [];
+    const tapAndRead = async (button, pattern, label) => {
+      must((await button.getAttribute('title')) === null, `${label} still carries a title`);
+      await button.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {
+        throw new Error(`${label} cannot be scrolled into view, so it cannot be tapped`);
+      });
+      await button.tap();
+      await page.waitForTimeout(250);
+      must((await button.getAttribute('aria-expanded')) === 'true', `tapping ${label} did not open it`);
+      const panel = page.locator(`#${await button.getAttribute('aria-controls')}`);
+      must(await panel.isVisible(), `${label}: the panel did not appear`);
+      const text = await panel.innerText();
+      must(pattern.test(text), `${label}: the panel says ${JSON.stringify(text.slice(0, 80))}`);
+      const box = await panel.boundingBox();
+      const width = page.viewportSize().width;
+      must(box.x >= -1 && box.x + box.width <= width + 1, `${label}: the panel runs off the screen`);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
+      must(!(await panel.isVisible()), `${label}: Escape did not close it`);
+      done.push(label);
+      return text;
+    };
+
+    /*
+     * A message whose packet is known links to the packet page, which
+     * prints the exact time. One with no packet has only the time, and
+     * the seed has none of those, so the feed is served with the packet
+     * taken off each message.
+     */
+    await page.route(/\/api\/chat\?/, async (route) => {
+      try {
+        const response = await route.fetch();
+        const rows = await response.json();
+        const bare = Array.isArray(rows) ? rows.map((row) => ({ ...row, packet_id: null })) : rows;
+        await route.fulfill({ response, json: bare });
+      } catch {
+        // The page closed with a live refresh in flight.
+      }
+    });
+    try {
+      await open(page, 'dashboard', 3500);
+      const when = page.locator('[data-recent-chat] button.when').first();
+      await when.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+      must(await when.count(), 'no message time to tap on the dashboard feed');
+      await tapAndRead(when, /\d:\d\d/, 'a message time');
+    } finally {
+      // The dashboard refreshes itself, so a request can still be on its
+      // way through the route when the next page opens.
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+
+    await open(page, 'nodes', 3500);
+    const gateway = page.locator('[data-page="nodes"] tbody .tip-open.gateway').first();
+    await gateway.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await gateway.count(), 'no gateway tag on the nodes list');
+    await tapAndRead(gateway, /uploads packets it hears to MQTT/, 'the gateway tag');
+
+    await open(page, 'stats', 4500);
+    const rate = page.locator('[data-page="stats"] [data-broadcast-table] .tip-open.tag').first();
+    await rate.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await rate.count(), 'no send-rate tag on Statistics');
+    await tapAndRead(rate, /The default is every/, 'a send-rate tag');
+    const uptime = page.locator('[data-page="stats"] [data-broadcast-table] .tip-open:not(.tag)').first();
+    if (await uptime.count()) await tapAndRead(uptime, /running since it last restarted/, 'an uptime note');
+
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(3500);
+    const dots = page.locator('[data-page="node"] .tip-open.health-dots');
+    await dots.first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await dots.count() === 1, 'the health dots are not one button');
+    const dotCount = await dots.locator('.health-dot').count();
+    const listed = await tapAndRead(dots, /: /, 'the health dots');
+    const lines = listed.split('\n').filter((line) => /: /.test(line)).length;
+    must(lines === dotCount, `${dotCount} dots but ${lines} checks named`);
+
+    return done.join(', ');
+  });
+
+  await journey(phone, 'a wide comparison table keeps its first column on a phone (#274)', async (page) => {
+    /*
+     * The traceroutes table had 57% of its width off to the side at
+     * 390 px, and the stats "Nodes worth a look" table 45%. Two claims
+     * each: the columns a phone can do without are not drawn, and the
+     * first column is still where it was after the rest has scrolled
+     * all the way to the end. Then the same page at desktop width must
+     * draw every column again, so a rule that hid them everywhere
+     * fails too.
+     */
+    const measure = (spec) => {
+      const wrap = document.querySelector(spec.wrap);
+      const table = wrap && wrap.querySelector('table');
+      const first = table && table.querySelector('tbody td');
+      if (!first) return null;
+      wrap.scrollLeft = wrap.scrollWidth;
+      const held = Math.round(first.getBoundingClientRect().left - wrap.getBoundingClientRect().left);
+      const scrolled = wrap.scrollLeft;
+      wrap.scrollLeft = 0;
+      return {
+        shown: [...table.querySelectorAll('thead th')]
+          .filter((th) => th.getBoundingClientRect().width > 0).map((th) => th.dataset.label),
+        held, scrolled, scroll: table.scrollWidth, client: wrap.clientWidth,
+      };
+    };
+    const specs = [
+      { hash: 'traceroutes', wrap: '[data-traceroute-table]', first: 'Time', low: ['Hops', 'Signal measured'] },
+      { hash: 'stats', wrap: '[data-broadcast-table]', first: 'Node', low: ['Packets'] },
+    ];
+    const out = [];
+    for (const spec of specs) {
+      await page.setViewportSize({ width: 390, height: 664 });
+      await page.goto(`${BASE}/?${spec.hash}#${spec.hash}`, { waitUntil: 'load' });
+      if (!(await waitFor(page, measure, 15000, 500, spec))) {
+        out.push(`${spec.hash}: no rows on this instance`);
+        continue;
+      }
+      const phoneSize = await page.evaluate(measure, spec);
+      must(phoneSize.shown[0] === spec.first, `${spec.hash}: the first column is ${phoneSize.shown[0]}`);
+      for (const label of spec.low) {
+        must(!phoneSize.shown.includes(label), `${spec.hash}: ${label} is still drawn at 390 px`);
+      }
+      // Only a table that really scrolled can show the column held.
+      if (phoneSize.scrolled > 0) {
+        must(Math.abs(phoneSize.held) <= 1,
+          `${spec.hash}: the ${spec.first} column moved ${phoneSize.held} px when the table scrolled ${phoneSize.scrolled} px`);
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.waitForTimeout(400);
+      const wide = await page.evaluate(measure, spec);
+      for (const label of spec.low) {
+        must(wide.shown.includes(label), `${spec.hash}: ${label} is gone at 1440 px as well`);
+      }
+      out.push(`${spec.hash} ${phoneSize.scroll}/${phoneSize.client}, held ${phoneSize.held} after ${phoneSize.scrolled} px`);
+    }
+    return out.join('; ');
+  });
+
+  await journey(phone, 'a phone jumps to a node page section and keeps the chips (#286)', async (page) => {
+    /*
+     * The packet timeline was past y = 3760 on an iPhone 14 with no way
+     * to reach it but to scroll. Each chip must land its panel just
+     * under the row, with the row still on screen at the top, and give
+     * the panel the focus. The row must not widen the page, and a
+     * desktop must not draw it.
+     */
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    must(nodes.length, 'no node to open');
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    const drawn = () => Boolean(document.querySelector('[data-jump="timeline"] table, [data-jump="timeline"] .empty'));
+    await waitFor(page, drawn, 15000);
+    const out = [];
+    for (const key of ['timeline', 'links', 'identity']) {
+      await page.locator(`.node-jump [data-jump-to="${key}"]`).tap();
+      await page.waitForTimeout(1200);
+      const at = await page.evaluate((name) => {
+        const panel = document.querySelector(`[data-jump="${name}"]`);
+        const bar = document.querySelector('.node-jump').getBoundingClientRect();
+        // The chips stick under the site's sticky phone bar (#271), and
+        // must be what a finger touches there, not the bar over them.
+        const site = document.querySelector('.sidebar').getBoundingClientRect();
+        // The chip just tapped: the row scrolls sideways to keep it in
+        // view, so the first chip can be off the screen's left edge.
+        const chip = document.querySelector(`.node-jump [data-jump-to="${name}"]`).getBoundingClientRect();
+        const hit = document.elementFromPoint(chip.left + chip.width / 2, chip.top + chip.height / 2);
+        return {
+          panel: Math.round(panel.getBoundingClientRect().top),
+          barTop: Math.round(bar.top),
+          siteBottom: Math.round(site.bottom),
+          chipOnTop: !!hit && !!hit.closest('.node-jump'),
+          barBottom: Math.round(bar.bottom),
+          focused: document.activeElement === panel,
+          scrollY: Math.round(window.scrollY),
+          doc: [document.documentElement.scrollWidth, document.documentElement.clientWidth],
+        };
+      }, key);
+      must(Math.abs(at.barTop - at.siteBottom) <= 1,
+        `the chips are not just under the top bar after ${key}: top ${at.barTop}, bar ends ${at.siteBottom}`);
+      must(at.chipOnTop, `something covers the chips after ${key}`);
+      must(at.panel >= at.barBottom - 1 && at.panel <= at.barBottom + 40,
+        `${key} landed at ${at.panel} px, and the chips end at ${at.barBottom}`);
+      must(at.focused, `${key} did not take the focus`);
+      must(at.doc[0] <= at.doc[1] + 1, `the page scrolls sideways: ${at.doc.join('/')}`);
+      out.push(`${key} at ${at.panel} (y ${at.scrollY})`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(300);
+    const wide = await page.evaluate(() => document.querySelector('.node-jump').getBoundingClientRect().height);
+    must(wide === 0, 'the section chips are drawn on a desktop');
+    return out.join(', ');
   });
 
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
@@ -1644,6 +3420,354 @@ async function main() {
     return 'every control is 16 px or larger';
   });
 
+  await journey(phone, 'a finger can hit a map dot (#266)', async (page) => {
+    /*
+     * A dot was 5 to 13 px across and the canvas counted only the dot.
+     * Two test dots are put on the live map 16 px apart, well away from
+     * the real ones, so the result does not depend on the seed. Each
+     * tap is a real touch through `page.touchscreen`, and a hit is read
+     * off the marker's own `click` event, which is what opens a node.
+     */
+    await open(page, 'map', 3000);
+    // The first draw fits the view to the nodes. Measuring before it
+    // lands would put the taps where the test dots used to be.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 20000), 'the map drew no nodes');
+    await page.waitForTimeout(500);
+    const at = await page.evaluate(() => {
+      const { map, nodes } = window.SonoranMap;
+      // No live refresh in the middle of the taps.
+      document.querySelector('[data-page="map"] [data-live]').setAttribute('aria-pressed', 'false');
+      map.setZoom(6, { animate: false });
+      map.getContainer().scrollIntoView({ block: 'start' });
+      const box = map.getContainer().getBoundingClientRect();
+      // A spot in the map's upper left, away from Arizona's dots.
+      const middle = L.point(box.width * 0.25, Math.min(box.height, window.innerHeight - box.top) * 0.3);
+      window.__e2eHits = [];
+      const make = (name, dx) => {
+        const marker = L.circleMarker(map.containerPointToLatLng(middle.add([dx, 0])), { radius: 2.5 });
+        marker.on('click', () => window.__e2eHits.push(name));
+        marker.addTo(nodes);
+        return name;
+      };
+      make('left', 0);
+      make('right', 16);
+      return {
+        x: box.left + middle.x,
+        y: box.top + middle.y,
+        tolerance: map.getRenderer(nodes.getLayers()[0]).options.tolerance,
+      };
+    });
+    must(at.tolerance >= 19.5, `the canvas tolerance is ${at.tolerance}, so a 2.5 px dot is a ${2 * (2.5 + at.tolerance)} px target`);
+    await page.waitForTimeout(300);
+    const tap = async (dx, dy) => {
+      await page.evaluate(() => { window.__e2eHits = []; });
+      await page.touchscreen.tap(at.x + dx, at.y + dy);
+      // Well past the double-tap window, so no two taps read as one.
+      await page.waitForTimeout(800);
+      return page.evaluate(() => window.__e2eHits.slice());
+    };
+    // 18 px above the left dot: outside the dot, inside the target.
+    const near = await tap(0, -18);
+    must(near.join() === 'left', `a tap 18 px from a dot hit ${JSON.stringify(near)}`);
+    // Square on the right dot, whose neighbour's target also reaches.
+    const onRight = await tap(16, 0);
+    must(onRight.join() === 'right', `a tap on the right dot hit ${JSON.stringify(onRight)}, not the dot under the finger`);
+    const onLeft = await tap(0, 0);
+    must(onLeft.join() === 'left', `a tap on the left dot hit ${JSON.stringify(onLeft)}`);
+    // The negative control, in the same page: far outside any target.
+    const far = await tap(0, -40);
+    must(far.length === 0, `a tap 40 px from any dot still hit ${JSON.stringify(far)}`);
+    return `tolerance ${at.tolerance} px, a 2.5 px dot is a ${2 * (2.5 + at.tolerance)} px target; `
+      + 'nearest dot wins a shared tap; 40 px away hits nothing';
+  });
+
+  await journey(phone, 'the firehose says how many packets arrived above you (#280)', async (page) => {
+    /*
+     * New packets are put in through a route, so the count is known
+     * without writing to a shared database. `render('firehose')` is the
+     * call the Live timer makes; Live is switched off so no timer poll
+     * lands in the middle.
+     */
+    let extra = 0;
+    await page.route(/\/api\/packets\?/, async (route) => {
+      const response = await route.fetch();
+      const rows = await response.json();
+      if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+      const made = [];
+      for (let n = extra; n > 0; n -= 1) {
+        const [node] = rows[0].packet_key.split(':');
+        made.push({ ...rows[0], packet_key: `${node}:${990000000 + n}`, first_seen_at: new Date().toISOString() });
+      }
+      return route.fulfill({ response, json: [...made, ...rows].slice(0, rows.length) });
+    });
+    await open(page, 'firehose', 1000);
+    must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
+      'the firehose drew too few rows to scroll');
+    await page.evaluate(() => document.querySelector('[data-page="firehose"] [data-live]').setAttribute('aria-pressed', 'false'));
+    /*
+     * `render` does nothing while another render is loading, and the page
+     * opened with Live on: on a cold first load a timer render could still
+     * be running when Live was switched off. The forced poll then did
+     * nothing and that render's packets were counted instead -- "7 new"
+     * for 4, or the reader's row moved 59 px. Wait it out, both sides.
+     */
+    const idle = () => waitFor(page, () => !loading, 20000);
+    const poll = async () => {
+      await idle();
+      await page.evaluate(async () => { await render('firehose'); });
+      await idle();
+    };
+    const pill = () => page.evaluate(() => {
+      const one = document.querySelector('[data-page="firehose"] .new-pill');
+      if (!one || one.hidden) return null;
+      const box = one.getBoundingClientRect();
+      // Under the sticky phone bar (#271), and the thing a finger at its
+      // centre would actually touch: it was once drawn behind the bar.
+      const bar = document.querySelector('.sidebar').getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return {
+        text: one.textContent, top: Math.round(box.top), height: Math.round(box.height),
+        barBottom: Math.round(bar.bottom), tappable: !!hit && one.contains(hit),
+      };
+    });
+
+    // The control: at the top, new packets are in plain sight.
+    extra = 2;
+    await poll();
+    must((await pill()) === null, 'the pill showed for a reader already at the newest packets');
+
+    // Two screens down.
+    await page.evaluate(() => window.scrollTo(0, window.innerHeight * 2.5));
+    await page.waitForTimeout(300);
+    const y0 = await page.evaluate(() => window.scrollY);
+    const row0 = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-firehose-table] tbody tr')];
+      const seen = rows.find((row) => row.getBoundingClientRect().top > 0);
+      return { key: seen.dataset.rowKey, top: Math.round(seen.getBoundingClientRect().top) };
+    });
+    extra = 5;
+    await poll();
+    let shown = await pill();
+    must(shown && /^3 new/.test(shown.text), `after 3 new packets the pill says ${JSON.stringify(shown)}`);
+    must(shown.top >= shown.barBottom && shown.top < shown.barBottom + 40 && shown.height >= 44,
+      `the pill is not just under the top bar: ${JSON.stringify(shown)}`);
+    must(shown.tappable, `something covers the pill: ${JSON.stringify(shown)}`);
+    const held = await page.evaluate((key) => Math.round(
+      document.querySelector(`[data-firehose-table] tbody tr[data-row-key="${key}"]`).getBoundingClientRect().top), row0.key);
+    must(Math.abs(held - row0.top) <= 2, `the row being read moved from ${row0.top} to ${held} px`);
+    extra = 6;
+    await poll();
+    shown = await pill();
+    must(shown && /^4 new/.test(shown.text), `after one more the pill says ${JSON.stringify(shown)}`);
+
+    await page.click('[data-page="firehose"] .new-pill');
+    await page.waitForTimeout(1200);
+    const after = await page.evaluate(() => {
+      const top = document.querySelector('[data-firehose-table] tbody tr').getBoundingClientRect().top;
+      return { y: window.scrollY, first: Math.round(top), inView: top >= -1 && top < window.innerHeight };
+    });
+    must(after.y < y0 && after.inView, `the pill did not go back to the newest: ${JSON.stringify(after)}`);
+    must((await pill()) === null, 'the pill stayed after going back to the top');
+    return `pill "4 new" at y ${shown.top}, reader's row held to ${Math.abs(held - row0.top)} px, tap went back`;
+  });
+
+  await journey(phone, 'a node opens in a sheet on a phone, and survives live refreshes (#281)', async (page) => {
+    /*
+     * Below 40rem a tap on a node opens its summary in a sheet at the
+     * foot of the screen instead of a bubble. The node list goes through
+     * a route, as in the bubble journey, so a node can vanish without
+     * writing to a shared database.
+     */
+    const edits = { drop: null };
+    await page.route(/\/api\/map\/nodes(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      let rows = await response.json();
+      if (edits.drop) rows = rows.filter((row) => row.node_id !== edits.drop);
+      return route.fulfill({ response, json: rows });
+    });
+    await open(page, 'map', 3000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size >= 2, 20000), 'the map drew fewer than two nodes');
+    // No timer poll in the middle; the refreshes below are forced.
+    await page.evaluate(() => document.querySelector('[data-page="map"] [data-live]').setAttribute('aria-pressed', 'false'));
+    const at = await page.evaluate(() => {
+      const { map, marks } = window.SonoranMap;
+      const [id, entry] = [...marks.entries()][0];
+      map.setView(entry.marker.getLatLng(), 12, { animate: false });
+      map.getContainer().scrollIntoView({ block: 'start' });
+      const point = map.latLngToContainerPoint(entry.marker.getLatLng());
+      const box = map.getContainer().getBoundingClientRect();
+      return { id, x: box.left + point.x, y: box.top + point.y, name: entry.row.display_name || id };
+    });
+    await page.waitForTimeout(300);
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    const SHEET = () => {
+      const sheet = document.querySelector('.node-sheet');
+      if (!sheet || sheet.hidden) return null;
+      const close = sheet.querySelector('.node-sheet-close').getBoundingClientRect();
+      const box = sheet.getBoundingClientRect();
+      return {
+        node: window.SonoranSheet.current(),
+        text: sheet.textContent,
+        height: Math.round(box.height),
+        top: Math.round(box.top),
+        close: [Math.round(close.width), Math.round(close.height)],
+        state: sheet.dataset.state,
+        bubble: Boolean(document.querySelector('[data-page="map"] .leaflet-popup')),
+      };
+    };
+    let sheet = await page.evaluate(SHEET);
+    must(sheet, 'a tap on a node opened no sheet');
+    must(sheet.node === at.id && sheet.text.includes(at.name), `the sheet shows ${sheet.node}, the tap was on ${at.id}`);
+    must(!sheet.bubble, 'a bubble opened on the map as well as the sheet');
+    must(/Open node detail/.test(sheet.text), 'the sheet has no way to the node page');
+    must(sheet.close[0] >= 44 && sheet.close[1] >= 44, `the close button is ${sheet.close.join(' x ')}`);
+    const viewport = page.viewportSize();
+    must(sheet.height <= viewport.height / 2 + 1, `the sheet is ${sheet.height} px of a ${viewport.height} px screen`);
+    const peek = sheet.height;
+
+    // Non-modal: the map above the sheet is still the map, and still pans.
+    const free = await page.evaluate((top) => {
+      const { map } = window.SonoranMap;
+      const box = map.getContainer().getBoundingClientRect();
+      const y = Math.max(box.top + 20, Math.min(top - 40, box.bottom - 20));
+      const hit = document.elementFromPoint(box.left + box.width / 2, y);
+      return { onMap: Boolean(hit && map.getContainer().contains(hit)), dragging: map.dragging.enabled() };
+    }, sheet.top);
+    must(free.onMap && free.dragging, `the sheet blocks the map: ${JSON.stringify(free)}`);
+
+    // Two live refreshes through the call the timer makes.
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      await page.evaluate(async () => {
+        while (loading) await new Promise((done) => setTimeout(done, 100));
+        nodeCache.at = 0;
+        await render('map');
+      });
+    }
+    sheet = await page.evaluate(SHEET);
+    must(sheet && sheet.node === at.id, 'the sheet closed when the map refreshed');
+
+    // The grabber opens it to half height when there is more to show.
+    const more = await page.evaluate(() => !document.querySelector('.node-sheet-grab').hidden);
+    if (more) {
+      await page.click('.node-sheet-grab');
+      const half = await page.evaluate(SHEET);
+      must(half.state === 'half' && half.height > peek, `the grabber did not open it further (${peek} -> ${half.height})`);
+    }
+
+    // Back takes the sheet away and leaves the reader on the map.
+    await page.goBack();
+    await page.waitForTimeout(500);
+    must((await page.evaluate(SHEET)) === null, 'Back did not close the sheet');
+    must(/#map$/.test(page.url()), `Back left the map: ${page.url()}`);
+
+    // The close button, and a node that goes away takes its sheet with it.
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    must(await page.evaluate(SHEET), 'a second tap opened no sheet');
+    await page.click('.node-sheet-close');
+    await page.waitForTimeout(300);
+    must((await page.evaluate(SHEET)) === null, 'the close button did not close the sheet');
+    must(await page.evaluate(() => !(history.state && history.state.sonoranSheet)), 'closing left its history entry behind');
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    edits.drop = at.id;
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
+      nodeCache.at = 0;
+      await render('map');
+    });
+    must((await page.evaluate(SHEET)) === null, 'the sheet of a node that went away is still open');
+    return `sheet ${peek} px high, close ${sheet.close.join('x')}, map free above it; `
+      + `held through 2 refreshes${more ? ', grabber opens it further' : ''}; Back, close and a gone node all close it`;
+  });
+
+  await journey(phone, 'the map page opens at its top (#270)', async (page) => {
+    /*
+     * The map's box was `<div id="map">`, and `#map` is also the page's
+     * address, so the browser scrolled to the box on every load: 277 px
+     * at 390 px in WebKit, with the Live control and the other six map
+     * controls above the top of the screen. `about:blank` between widths
+     * so each `goto` is a real load and not a same-document hash change,
+     * which does not scroll to a fragment the same way.
+     */
+    const out = [];
+    for (const width of TABLE_WIDTHS) {
+      // Let the last load's requests land first, or leaving aborts them
+      // and each one is counted as an error.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await page.goto('about:blank');
+      await page.setViewportSize({ width, height: 800 });
+      await open(page, 'map', 2500);
+      const got = await page.evaluate(() => ({
+        y: Math.round(window.scrollY),
+        live: Math.round(document.querySelector('[data-page="map"] [data-live]').getBoundingClientRect().top),
+      }));
+      must(got.y === 0, `at ${width} px the map page scrolled itself ${got.y} px on load`);
+      must(got.live >= 0, `at ${width} px the Live control starts ${-got.live} px above the screen`);
+      out.push(`${width}:${got.y}`);
+    }
+    return `scrollY after load ${out.join(' ')}`;
+  });
+
+  await journey(phone, 'the summary tiles are one compact block on a phone (#278)', async (page) => {
+    /*
+     * The four numbers took 292 px, 35% of the first screen, in the mobile
+     * review, and 415 px on the dashboard once each tile carried a delta.
+     * The ask was a strip about 120 px tall. Measured with the CI runner's
+     * wider fonts imitated (letter-spacing .05em), at this phone's 390 px
+     * and at 320 px, on both pages that carry the tiles.
+     */
+    const measure = async () => page.evaluate(() => {
+      const grid = document.querySelector('.page.active [data-summary]');
+      const tiles = [...grid.children];
+      const box = grid.getBoundingClientRect();
+      const over = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+      const spill = tiles.some((tile) => tile.scrollWidth > tile.clientWidth + 1);
+      return { height: Math.round(box.height), tiles: tiles.length, over, spill };
+    });
+    const found = [];
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 664 });
+      for (const name of ['dashboard', 'stats']) {
+        await open(page, name, 1500);
+        await waitFor(page, () => !loading, 60000);
+        await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+        await page.waitForTimeout(200);
+        const got = await measure();
+        must(got.tiles === 4, `${name} at ${width} px drew ${got.tiles} tiles`);
+        must(got.over <= 0, `${name} at ${width} px scrolls sideways by ${got.over} px`);
+        must(!got.spill, `a tile's text spills out of it on ${name} at ${width} px`);
+        // About 120 px was the ask at 390; it measures 126 px, and 139 px
+        // with the wider letters, which wrap one label. The limits leave
+        // room for a runner whose fonts are wider still, and are still
+        // well under the 415 px this replaced. 320 px wraps the longer
+        // labels to a second line, so it is allowed more.
+        const limit = width === 390 ? 160 : 185;
+        must(got.height <= limit, `${name} at ${width} px: the tiles are ${got.height} px tall, over ${limit}`);
+        found.push(`${name} ${width}px ${got.height}px`);
+      }
+    }
+    /*
+     * The words after the change are off the screen, not out of the page:
+     * a screen reader still hears "on the day before".
+     */
+    await page.setViewportSize({ width: 390, height: 664 });
+    await open(page, 'dashboard', 1500);
+    await waitFor(page, () => !loading, 60000);
+    const words = await page.evaluate(() => {
+      const rest = document.querySelector('[data-summary] .delta-rest');
+      return rest ? { text: rest.textContent, shown: rest.getBoundingClientRect().width > 1 } : null;
+    });
+    if (words) {
+      must(/before/.test(words.text), `the delta lost its words: "${words.text}"`);
+      must(!words.shown, 'the delta words still take room on a phone');
+    }
+    return found.join(', ');
+  });
+
   await phone.close();
 
   /*
@@ -1701,6 +3825,94 @@ async function main() {
   }
 
   /*
+   * #284: charts and map zooms move on a canvas and a transform, where
+   * the CSS reduced-motion rule does not reach. Read in a context that
+   * asks for less motion, and in one that does not, as the control.
+   */
+  for (const motion of ['reduce', 'no-preference']) {
+    const moving = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: motion });
+    await journey(moving, `charts and map zoom follow reduced motion (${motion}) (#284)`, async (page) => {
+      const want = motion === 'reduce';
+      await open(page, 'stats', 1000);
+      must(await waitFor(page, () => document.querySelectorAll('[data-page="stats"] canvas').length > 0, 30000),
+        'statistics drew no chart');
+      // `charts` inside the page is app.js's own map of instances.
+      const animations = await page.evaluate(() => [...charts.values()]
+        .filter((one) => !one.isDisposed())
+        .map((one) => one.getOption().animation));
+      must(animations.length > 0, 'no chart instance to read');
+      // ECharts' own default reads back as 'auto', which animates.
+      must(animations.every((on) => (on === false) === want),
+        `chart animation ${JSON.stringify(animations)}, expected ${want ? 'false' : 'on'}`);
+      // Let the page's requests land before leaving, or they abort as errors.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await page.goto('about:blank');
+      await open(page, 'map', 2500);
+      const map = await page.evaluate(() => {
+        const { options } = window.SonoranMap.map;
+        return { zoom: options.zoomAnimation, fade: options.fadeAnimation, marker: options.markerZoomAnimation };
+      });
+      must(map.zoom === !want && map.fade === !want && map.marker === !want,
+        `map animation ${JSON.stringify(map)}, expected ${!want}`);
+      return `${animations.length} charts animation ${JSON.stringify(animations[0])}; map zoom/fade/marker ${!want}`;
+    });
+    await moving.close();
+  }
+
+  await journey(context, 'more contrast reaches the page (#285)', async (page) => {
+    /*
+     * Playwright 1.49 has no `contrast` option, so the media feature is
+     * set through the DevTools protocol. The same page is read before
+     * and after, so the "before" is the control.
+     */
+    await open(page, 'nodes', 3000);
+    await waitFor(page, () => Boolean(document.querySelector('[data-page="nodes"] th')), 20000);
+    const read = () => page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      const th = document.querySelector('[data-page="nodes"] th');
+      return {
+        more: matchMedia('(prefers-contrast: more)').matches,
+        muted: root.getPropertyValue('--muted').trim(),
+        text: getComputedStyle(document.body).color,
+        th: th ? getComputedStyle(th).color : null,
+      };
+    });
+    const before = await read();
+    must(!before.more && before.th && before.th !== before.text, `the control is not ordinary: ${JSON.stringify(before)}`);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-contrast', value: 'more' }] });
+    const after = await read();
+    must(after.more, 'the browser did not take prefers-contrast: more');
+    must(after.muted !== before.muted, `--muted stayed ${after.muted}`);
+    must(after.th === after.text, `a table heading is ${after.th}, the body text is ${after.text}`);
+    await cdp.send('Emulation.setEmulatedMedia', { features: [] });
+
+    // Forced colours: a legend swatch keeps the colour it stands for.
+    // The nodes page's requests land first, or leaving aborts them.
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await page.goto('about:blank');
+    await page.emulateMedia({ forcedColors: 'active' });
+    await open(page, 'map', 3000);
+    await waitFor(page, () => Boolean(document.querySelector('[data-map-legend] .legend-key .swatch')), 20000);
+    const swatch = await page.evaluate(() => {
+      const one = document.querySelector('[data-map-legend] .legend-key .swatch');
+      if (!one) return null;
+      const probe = document.createElement('i');
+      // The probe opts out as well, or its own colour is forced.
+      probe.style.forcedColorAdjust = 'none';
+      probe.style.color = one.style.background;
+      document.body.append(probe);
+      const meant = getComputedStyle(probe).color;
+      probe.remove();
+      return { forced: matchMedia('(forced-colors: active)').matches, meant, drawn: getComputedStyle(one).backgroundColor };
+    });
+    must(swatch, 'the map legend drew no swatch');
+    must(swatch.forced, 'the browser did not take forced-colors: active');
+    must(swatch.drawn === swatch.meant, `under forced colours a swatch drew ${swatch.drawn}, it stands for ${swatch.meant}`);
+    return `--muted ${before.muted} -> ${after.muted}; th takes the text colour; forced swatch ${swatch.drawn}`;
+  });
+
+  /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
    * 400 percent zoom the criterion is derived from.
@@ -1746,6 +3958,73 @@ async function main() {
       `opening the date range scrolls the page sideways: ${measured.scrollWidth}/${measured.clientWidth}`,
     );
     return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
+  });
+
+  await journey(narrow, 'page-head controls fold behind a button on a phone (#275)', async (page) => {
+    /*
+     * On an iPhone SE the RF head was the whole first screen and the
+     * Graph head three quarters of it. Below 40rem the folded controls
+     * live in the page's Options or Filters panel; Live and one primary
+     * control stay. Measured as where the head ENDS on a 568 px screen,
+     * which includes the 62 px sticky bar above it.
+     */
+    await page.setViewportSize({ width: 320, height: 568 });
+    const facts = [];
+    for (const [name, most] of [['graph', 0.35], ['rf', 0.45], ['chat', 0.5], ['gaps', 0.35]]) {
+      await open(page, name, 2500);
+      /*
+       * With letters as wide as CI's Linux fonts draw them. On a Mac the
+       * Graph row had 8 px to spare; on the runner Options no longer fit
+       * beside the search box, the row wrapped, and the head ended at 37%.
+       * 0.12em is the spacing that reproduces that here.
+       */
+      await page.addStyleTag({ content: '.page-head * { letter-spacing: .12em !important; }' });
+      await page.waitForTimeout(200);
+      const got = await page.evaluate(() => {
+        const head = document.querySelector('.page.active .page-head');
+        const shown = [...head.querySelectorAll('.controls > *')]
+          .filter((node) => node.getBoundingClientRect().width > 0).length;
+        return { bottom: head.getBoundingClientRect().bottom, height: window.innerHeight, shown };
+      });
+      const share = got.bottom / got.height;
+      must(share <= most, `${name}: the head ends at ${Math.round(share * 100)}% of the first screen`);
+      facts.push(`${name} ${Math.round(share * 100)}%`);
+    }
+
+    // RF: the folded Window counts on the Filters button, and it goes
+    // home to the head when the screen widens.
+    await open(page, 'rf', 2500);
+    const filters = page.locator('[data-page="rf"] [data-options-open]');
+    must(await filters.isVisible(), 'RF shows no Filters button on a phone');
+    must(await page.locator('#rf-options [data-rf-minutes]').count() === 1, 'the RF window is not in the Filters panel');
+    await filters.click();
+    await page.locator('[data-rf-minutes]').selectOption('15');
+    await page.waitForTimeout(300);
+    must((await filters.getAttribute('aria-label')) === 'Filters, 1 changed',
+      `after changing the window the button says "${await filters.getAttribute('aria-label')}"`);
+    await page.locator('[data-rf-minutes]').selectOption('5');
+    // The description is one line, and the whole of it is a tap away.
+    const hint = page.locator('[data-page="rf"] [data-sub-fold] > .hint-open');
+    must(await hint.isVisible(), 'the RF description has no ? on a phone');
+    await hint.tap();
+    await page.waitForTimeout(250);
+    const said = await page.locator(`#${await hint.getAttribute('aria-controls')}`).innerText();
+    must(/rf-agent beside an SDR/.test(said), 'the ? does not hold the whole description');
+    await page.keyboard.press('Escape');
+
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.waitForTimeout(300);
+    const home = await page.evaluate(() => ({
+      inHead: !!document.querySelector('[data-page="rf"] .page-head .controls [data-rf-minutes]'),
+      button: document.querySelector('[data-page="rf"] [data-options-open]').getBoundingClientRect().width,
+      panel: document.querySelector('#rf-options').hidden,
+      hint: document.querySelector('[data-page="rf"] [data-sub-fold] > .hint-open').getBoundingClientRect().width,
+    }));
+    await page.setViewportSize({ width: 320, height: 640 });
+    must(home.inHead, 'widened, the RF window did not go back to the head');
+    must(home.button === 0 && home.panel, 'widened, the Filters button or its panel is still there');
+    must(home.hint === 0, 'widened, the description still has its phone ?');
+    return `${facts.join(', ')}; Filters counts and folds back`;
   });
 
   await journey(narrow, 'the mesh-graph link is a link drawn as a button (#258)', async (page) => {
@@ -1801,6 +4080,60 @@ async function main() {
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
     return 'all 14 pages, no sideways document scroll';
+  });
+  await journey(narrow, 'the firehose reads as cards on a phone (#273)', async (page) => {
+    /*
+     * Eight columns hid 64% of the firehose sideways on a phone. Below
+     * 40rem each packet is two lines: time, from, to; then type and what
+     * it said. Measured with letter-spacing added, because the CI
+     * runner's fonts are wider than a Mac's.
+     */
+    await open(page, 'firehose', 3000);
+    must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 0, 20000),
+      'the firehose drew no rows');
+    await page.addStyleTag({ content: '[data-firehose-table] * { letter-spacing: .05em !important; }' });
+    const out = [];
+    for (const width of [320, 390, ...TABLE_WIDTHS.slice(1)]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(400);
+      const got = await page.evaluate(() => {
+        const wrap = document.querySelector('[data-firehose-table]');
+        const rows = [...wrap.querySelectorAll('tbody tr')];
+        const box = wrap.getBoundingClientRect();
+        const bad = [];
+        for (const row of rows) {
+          const cell = (n) => row.children[n].getBoundingClientRect();
+          const [time, from, type, what] = [cell(0), cell(1), cell(3), cell(4)];
+          for (const [name, r] of [['time', time], ['from', from], ['type', type], ['what', what]]) {
+            if (!r.width || r.right > box.right + 1 || r.left < box.left - 1) bad.push(name);
+          }
+          if (!(type.top >= time.bottom - 1)) bad.push('one line');
+        }
+        const heads = [...wrap.querySelectorAll('thead th')];
+        return {
+          scroll: wrap.scrollWidth,
+          client: wrap.clientWidth,
+          head: document.querySelector('[data-firehose-table] thead').getBoundingClientRect().height,
+          // The headings a reader can see, and whether each fits the panel.
+          shown: heads.filter((th) => th.getBoundingClientRect().width > 0).map((th) => th.dataset.label),
+          headsFit: heads.every((th) => th.getBoundingClientRect().right <= box.right + 1),
+          rows: rows.length,
+          bad: [...new Set(bad)],
+        };
+      });
+      if (width <= 640) {
+        must(got.scroll <= got.client + 1, `at ${width} px the firehose scrolls sideways: ${got.scroll} in ${got.client}`);
+        must(got.bad.length === 0, `at ${width} px a card is wrong: ${got.bad.join(', ')}`);
+        // The headings stay, as one line of words that carries the hints.
+        must(got.shown.join() === 'Time,From,To,Type,What it said',
+          `at ${width} px the headings shown are ${got.shown.join(', ')}`);
+        must(got.headsFit, `at ${width} px a heading runs out of the panel`);
+      } else {
+        must(got.head > 10, `at ${width} px the firehose is not a table any more`);
+      }
+      out.push(`${width}:${got.scroll}/${got.client}`);
+    }
+    return `cards to 640 px, a table above; ${out.join(' ')}`;
   });
   await narrow.close();
 

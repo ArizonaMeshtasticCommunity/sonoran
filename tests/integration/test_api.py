@@ -606,6 +606,55 @@ def test_a_traceroute_links_to_the_packet_that_carried_it(  # type: ignore[no-un
         assert dead.status_code == 404, "the route origin is the wrong key"
 
 
+def test_a_request_names_its_reply_only_when_one_was_stored(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """The trace page says "no reply was seen" only when that is true (#288).
+
+    A request row never holds a return path: the reply is a row of its
+    own, sent back by the node that was asked. Three requests here:
+
+    - 9801 asked 9802, and 9802 answered. `reply_id` is that reply.
+    - 9801 asked 9803, and nothing came back. `reply_id` is null.
+    - 9801 asked 9804, and a reply from a DIFFERENT node carries the same
+      request ID. Packet IDs are unique only per sender, so that is not
+      a reply to this request, and `reply_id` stays null.
+
+    The reply itself always has a null `reply_id`.
+    """
+    now = datetime.now(UTC)
+    insert = text(
+        "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+        "request_id, route, snr_towards, seen_at) "
+        "VALUES (:f, :t, 'LongFast', :pid, :rid, CAST('[]' AS jsonb), CAST('[]' AS jsonb), :at)"
+    )
+    with migrated_engine.begin() as connection:
+        connection.execute(text("DELETE FROM traceroute WHERE from_node_num IN (9801, 9802, 9805)"))
+        rows = [
+            (9801, 9802, 603001, None),  # answered
+            (9802, 9801, 603002, 603001),  # the answer, sent back by 9802
+            (9801, 9803, 603003, None),  # never answered
+            (9801, 9804, 603004, None),  # answered only by a stranger's reuse
+            (9805, 9801, 603005, 603004),  # 9805 was not asked
+        ]
+        for f, t, pid, rid in rows:
+            connection.execute(insert, {"f": f, "t": t, "pid": pid, "rid": rid, "at": now})
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        listed = {t["packet_id"]: t for t in client.get("/api/traceroutes?limit=500").json()}
+
+        def one(packet_id: int) -> dict[str, object]:
+            response = client.get(f"/api/traceroutes/{listed[packet_id]['id']}")
+            assert response.status_code == 200
+            return response.json()  # type: ignore[no-any-return]
+
+        assert one(603001)["reply_id"] == listed[603002]["id"], "the stored reply is named"
+        assert one(603003)["reply_id"] is None, "nothing came back"
+        assert one(603004)["reply_id"] is None, "a reply from another node is not this reply"
+        assert one(603002)["reply_id"] is None, "a reply has no reply of its own"
+
+
 def _seed_deep_trace(migrated_engine) -> None:  # type: ignore[no-untyped-def]
     """Insert one reply with a long route, behind plenty of newer noise.
 
@@ -2127,7 +2176,7 @@ def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-unt
     now = datetime.now(UTC)
     sender = 7901
     with migrated_engine.begin() as connection:
-        for packet_id, portnum in ((790001, 3), (790002, 67), (790003, 4)):
+        for packet_id, portnum in ((790001, 3), (790002, 67), (790003, 4), (790004, 67)):
             connection.execute(
                 text(
                     "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
@@ -2149,6 +2198,14 @@ def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-unt
             ),
             {"s": sender, "now": now},
         )
+        connection.execute(
+            text(
+                "INSERT INTO environment_metrics (node_num, packet_id, temperature, "
+                "relative_humidity, barometric_pressure, time) "
+                "VALUES (:s, 790004, 21.5, 40, 1012.8, :now)"
+            ),
+            {"s": sender, "now": now},
+        )
 
     app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
     with TestClient(app) as client:
@@ -2160,6 +2217,24 @@ def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-unt
     assert by_id["790001"].startswith("33.4484, -112.0740, within about")
     assert by_id["790002"] == "on power, 4.20 V"
     assert by_id["790003"] is None, "node info stores nothing to show"
+
+    # A measurement is a number and its SI unit, for the browser to write
+    # in the reader's units (#291). The line used to say "21.5 C" to
+    # everybody, with no degree sign.
+    parts = {row["packet_key"].split(":")[1]: row["summary_parts"] for row in rich}
+    assert parts["790004"] == [
+        {"value": 21.5, "unit": "°C"},
+        ", ",
+        "humidity 40 %",
+        ", ",
+        {"value": 1012.8, "unit": "hPa"},
+    ]
+    assert by_id["790004"] == "21.5 °C, humidity 40 %, 1012.8 hPa"
+    position = parts["790001"]
+    assert position[0] == "33.4484, -112.0740"
+    assert position[1] == ", within about "
+    assert position[2]["unit"] == "m" and position[2]["value"] > 0
+    assert parts["790003"] is None
 
 
 def _seed_four_kinds_of_port_zero(migrated_engine) -> int:  # type: ignore[no-untyped-def]
@@ -2255,3 +2330,55 @@ def test_port_zero_is_no_longer_one_bucket_called_unknown_app(  # type: ignore[n
     assert activity["packet_count"] == 5
     assert sum(row["count"] for row in activity["by_portnum"]) == 5
     assert len(activity["by_portnum"]) == 5, activity["by_portnum"]
+
+
+def test_the_route_widgets_read_every_traceroute_in_the_window(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """No row limit decides what the node page's links are (#290).
+
+    The panel read the newest 2000 traceroutes that named the node and
+    said so under the tiles. At the 30 day default that was about a
+    tenth of the busiest node's evidence. Here 2100 recent requests reach
+    9901 from 9902, and one older one reaches it from 9903, twenty days
+    back. All of it must be counted, and the older link must be there.
+    """
+    now = datetime.now(UTC)
+    try:
+        with migrated_engine.begin() as connection:
+            connection.execute(text("DELETE FROM traceroute WHERE to_node_num = 9901"))
+            # One hop each, from the asker straight to 9901, with a
+            # reading for it: a request the broker saw arrive.
+            connection.execute(
+                text(
+                    "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                    "route, snr_towards, seen_at) "
+                    "SELECT 9902, 9901, 'LongFast', 990000 + g, CAST('[]' AS jsonb), "
+                    "CAST('[20]' AS jsonb), :now - make_interval(secs => g) "
+                    "FROM generate_series(1, 2100) AS g"
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                    "route, snr_towards, seen_at) "
+                    "VALUES (9903, 9901, 'LongFast', 993000, CAST('[]' AS jsonb), "
+                    "CAST('[12]' AS jsonb), :old)"
+                ),
+                {"old": now - timedelta(days=20)},
+            )
+
+        app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+        with TestClient(app) as client:
+            body = client.get("/api/nodes/!000026ad/routes?hours=720").json()
+    finally:
+        with migrated_engine.begin() as connection:
+            connection.execute(text("DELETE FROM traceroute WHERE to_node_num = 9901"))
+
+    hears = {row["node_id"]: row for row in body["hears"]}
+    assert body["traces_read"] == 2101, "every traceroute in the window is read"
+    assert "trace_limit_reached" not in body, "there is no limit left to report"
+    assert hears["!000026ae"]["count"] == 2100, "each report is counted, not the newest 2000"
+    assert "!000026af" in hears, "a link seen only twenty days ago is still a link"
+    assert hears["!000026af"]["count"] == 1

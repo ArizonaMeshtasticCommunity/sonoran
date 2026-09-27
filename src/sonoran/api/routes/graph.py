@@ -26,6 +26,7 @@ from sonoran.api.names import BROADCAST_NODE_NUM, format_node_id, name_of, resol
 from sonoran.api.traces import (
     SNR_SCALE,
     UNKNOWN_SNR,
+    TraceRow,
     evidenced_hops,
     forward_path,
     is_reply,
@@ -338,16 +339,21 @@ def _merge(edges: EdgeMap, edge: Edge) -> None:
     known.time = max(known.time, edge.time)
 
 
-async def _neighbor_edges(session: AsyncSession, since: datetime, channel: str | None) -> EdgeMap:
+async def _neighbor_edges(
+    session: AsyncSession, since: datetime, channel: str | None, until: datetime | None = None
+) -> EdgeMap:
     """Return the links that recent neighbor reports show on one channel.
 
     A node names the neighbours it hears, so the packet each report
     measures travelled from the neighbour to the node that reports it.
+    `until` ends the window before now, for the Statistics range (#294).
     """
     # The whole window, not a page of it. See `mesh_graph` for why.
     statement = select(NeighborMetrics).where(
         NeighborMetrics.time >= since, channel_filter(NeighborMetrics.channel, channel)
     )
+    if until is not None:
+        statement = statement.where(NeighborMetrics.time < until)
     rows = (await session.scalars(statement)).all()
     edges: EdgeMap = {}
     for row in rows:
@@ -366,7 +372,7 @@ async def _neighbor_edges(session: AsyncSession, since: datetime, channel: str |
     return edges
 
 
-def _trace_links(row: Traceroute) -> list[tuple[int, int, float | None, int, int]]:
+def _trace_links(row: TraceRow) -> list[tuple[int, int, float | None, int, int]]:
     """Return the links one traceroute proves.
 
     Each item holds the two ends, the reading, the position of the hop,
@@ -398,16 +404,21 @@ def _trace_links(row: Traceroute) -> list[tuple[int, int, float | None, int, int
     return links
 
 
-async def _traceroute_edges(session: AsyncSession, since: datetime, channel: str | None) -> EdgeMap:
+async def _traceroute_edges(
+    session: AsyncSession, since: datetime, channel: str | None, until: datetime | None = None
+) -> EdgeMap:
     """Return the links that recent traceroutes show.
 
     There is one link between each pair of hops that follow each other,
-    for as far along the path as the report reached.
+    for as far along the path as the report reached. `until` ends the
+    window before now, for the Statistics range (#294).
     """
     # The whole window, not a page of it. See `mesh_graph` for why.
     statement = select(Traceroute).where(
         Traceroute.seen_at >= since, channel_filter(Traceroute.channel, channel)
     )
+    if until is not None:
+        statement = statement.where(Traceroute.seen_at < until)
     rows = (await session.scalars(statement)).all()
     edges: EdgeMap = {}
     for row in rows:

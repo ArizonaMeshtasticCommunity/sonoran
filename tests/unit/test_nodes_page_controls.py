@@ -15,6 +15,8 @@ working, or removing the button reads as a regression.
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -125,3 +127,43 @@ def test_enter_still_runs_the_search() -> None:
     assert "'keydown'" in body, "Enter is no longer handled in the search box"
     assert "Enter" in body
     assert "NODE_SEARCH_PAUSE_MS" in app, "the box no longer debounces, so it fires per keystroke"
+
+
+# --- what the badge counts (#301) --------------------------------------
+
+CASES = ROOT / "tests" / "unit" / "js" / "nodes_filter_count_cases.mjs"
+
+
+def _run_cases(app_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    node = shutil.which("node")
+    assert node, "node is not on PATH, so the badge count went unchecked"
+    app = STATIC / "app.js"
+    original = app.read_text(encoding="utf-8")
+    if app_text is not None:
+        app.write_text(app_text, encoding="utf-8")
+    try:
+        return subprocess.run(
+            [node, str(CASES)], capture_output=True, text=True, timeout=60, cwd=ROOT
+        )
+    finally:
+        app.write_text(original, encoding="utf-8")
+
+
+def test_the_badge_counts_only_what_the_reader_changed() -> None:
+    """Will (2026-09-27): a first visit shows no badge. The toolbar counts
+    when it differs from its default, and the preset never counts."""
+    done = _run_cases()
+    assert done.returncode == 0, done.stdout + done.stderr
+    body = _app()[_app().index("function describeNodeList") :]
+    assert "nodeFilterCount(toolbar, defaults, nodeFilters)" in body[: body.index("\n}")]
+
+
+def test_a_count_of_the_whole_query_would_be_caught() -> None:
+    """The control: count every toolbar value, default or not, which is
+    the old behaviour, and the cases must fail."""
+    source = (STATIC / "app.js").read_text(encoding="utf-8")
+    broken = source.replace("if (value !== defaults[key]) changed.add(key);", "changed.add(key);")
+    assert broken != source, "the default test has moved; this control checks nothing"
+    done = _run_cases(broken)
+    assert done.returncode != 0, "the cases pass when the defaults are counted"
+    assert "first visit" in done.stderr, done.stderr

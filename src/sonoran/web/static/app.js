@@ -214,10 +214,12 @@ const CELSIUS = (value) => (
 const WEATHER_LABELS = {
   temperature: ['Temperature', (v) => CELSIUS(v)],
   relative_humidity: ['Humidity', (v) => `${round(v, 0)} %`],
-  barometric_pressure: ['Pressure', (v) => `${round(v, 1)} hPa`],
-  wind_speed: ['Wind speed', (v) => `${round(v, 1)} m/s`],
+  // Inches of mercury, miles per hour and inches of rain when the reader
+  // chose imperial (Will, #291). The sensors report hPa, m/s and mm.
+  barometric_pressure: ['Pressure', (v) => SonoranUnits.pressureFromHpa(v)],
+  wind_speed: ['Wind speed', (v) => SonoranUnits.speedFromMs(v)],
   wind_direction: ['Wind direction', (v) => `${round(v, 0)} deg`],
-  rainfall: ['Rainfall', (v) => `${round(v, 1)} mm`],
+  rainfall: ['Rainfall', (v) => SonoranUnits.lengthFromMm(v)],
   lux: ['Light', (v) => `${round(v, 0)} lx`],
   uv_lux: ['UV', (v) => `${round(v, 0)} lx`],
   iaq: ['Air quality index', (v) => `${round(v, 0)}`],
@@ -417,8 +419,18 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
    * Reflow excepts, so it is the one place extra width costs a reader
    * the most.
    */
+  /*
+   * Two more column options, for a table that compares rows and is too
+   * wide for a phone (mobile review item 9, #274).
+   *
+   * `stick` keeps the column in place while the rest scrolls under it,
+   * so a reader who scrolls sideways still knows which row they read.
+   * `low` marks a column a phone can do without: below 40rem it is not
+   * drawn, and the reader gets it from wherever the row leads.
+   */
+  const place = (column) => [column.stick ? 'stick' : '', column.low ? 'low' : ''];
   const head = el('tr', {}, columns.map((column) => {
-    const classes = [column.num ? 'num' : ''];
+    const classes = [column.num ? 'num' : '', ...place(column)];
     /*
      * A column may also carry `sort`: the name the server knows the
      * column by. The heading then becomes a button that asks the
@@ -470,7 +482,8 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
     };
     return el('tr', href ? { class: 'row-link', onclick: open } : {}, columns.map((column) => {
       const value = column.cell(row);
-      return el('td', { class: [column.num ? 'num' : '', column.wrap ? 'wrap' : ''].join(' ').trim() || null },
+      const classes = [column.num ? 'num' : '', column.wrap ? 'wrap' : '', ...place(column)];
+      return el('td', { class: classes.filter(Boolean).join(' ') || null },
         value && value.nodeType ? value : el('span', { text: value == null ? '-' : String(value) }));
     }));
   });
@@ -527,7 +540,8 @@ function statTile(label, value, delta, hint) {
         'data-label': label,
         text: label,
       }),
-      delta ? el('span', { class: 'delta', text: delta }) : null));
+      // Text, or a node when part of the line folds away on a phone.
+      delta ? el('span', { class: 'delta' }, delta) : null));
 }
 
 /** Render an SNR value with its quality colour. */
@@ -573,9 +587,22 @@ function shortUrl(raw) {
   }
 }
 
+/*
+ * Control characters a radio can send and a page cannot draw (#296).
+ *
+ * A live message was the single byte "\x07", a bell, and it drew as an
+ * empty line under its sender. The C0 controls and DEL are taken out;
+ * a newline and a tab are kept, because they are text. The pattern is
+ * inside the function so the tests that lift `messageBody` out of this
+ * file get it too.
+ */
 function messageBody(text) {
   const node = el('span', { class: 'body' });
-  for (const chunk of String(text ?? '').split(URL_IN_TEXT)) {
+  // eslint-disable-next-line no-control-regex
+  const clean = String(text ?? '').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '');
+  // Nothing left to draw is no line at all, not an empty one.
+  if (!clean.trim()) node.hidden = true;
+  for (const chunk of clean.split(URL_IN_TEXT)) {
     if (!chunk) continue;
     // A stateless test. `URL_IN_TEXT` is global, and `.test()` on a
     // global regex advances `lastIndex`, so using it here would give a
@@ -718,6 +745,19 @@ function replyQuote(parent) {
  */
 const QUIET_CHANNELS = new Set(['Traffic', 'Weather']);
 
+/*
+ * A message's time as the line shows it (#269).
+ *
+ * The exact time was only in a `title`, which a phone never shows. "3d
+ * ago" is no use to somebody who wants to know which evening it was, so
+ * a message older than a day shows its date and time instead. A newer
+ * one keeps "5m ago", which is exact enough to read, and the packet it
+ * opens gives the clock time.
+ */
+function messageWhen(value) {
+  return ageHours(value) >= 24 ? stamp(value) : `${ago(value)} ago`;
+}
+
 function messageItem(message, options = {}) {
   const direct = message.to_node && message.to_node !== '^all';
   const quiet = QUIET_CHANNELS.has(message.channel);
@@ -745,16 +785,98 @@ function messageItem(message, options = {}) {
       options.badge || null,
       options.showChannel && message.channel
         ? el('span', { class: 'channel-label', text: message.channel }) : null,
+      /*
+       * The exact time behind "1h ago" was a `title`, which a phone never
+       * shows (#276). A tap now opens it. A time that links to its packet
+       * keeps the link: the packet page prints the exact time.
+       */
       message.packet_id == null
-        ? el('time', { class: 'when', datetime: message.seen_at || '',
-            title: stamp(message.seen_at), text: `${ago(message.seen_at)} ago` })
+        ? tapTip('when', el('time', { datetime: message.seen_at || '', text: messageWhen(message.seen_at) }),
+          'Received', [stamp(message.seen_at)])
         : el('a', {
-            class: 'when', title: `Open packet ${message.packet_id}`,
+            class: 'when', title: `${stamp(message.seen_at)}. Open packet ${message.packet_id}`,
             href: `#packet/${encodeURIComponent(message.from_node)}/${message.packet_id}`,
-            text: `${ago(message.seen_at)} ago`,
+            text: messageWhen(message.seen_at),
           })),
     messageBody(message.body),
     reactionChips(message.reactions, message.channel));
+}
+
+/*
+ * Load a set of scripts the page holds back until it needs them (#277).
+ *
+ * ECharts was a third of every page's download (327 kB of 885 kB
+ * gzipped), and every script was synchronous, so Nodes and Chat, which
+ * draw no chart, waited for it before they showed a row. The config
+ * checker's libraries were the same on every page but one.
+ *
+ * index.html keeps each set inside `<template data-lazy-scripts="…">`.
+ * A script inside a template never runs, and the server still writes
+ * the asset version into its address. This copies each one into the
+ * page: classic scripts first, with `async = false` so they run in
+ * their written order while they download together, then any module
+ * after the last of them, because a module reads their globals. The
+ * integrity hash and `crossorigin` are copied as well.
+ *
+ * One promise per set, so a second caller waits on the same load. A
+ * failed load is forgotten, so the next visit tries again.
+ */
+const lazyScripts = new Map();
+
+function loadScript(from) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    for (const name of ['type', 'integrity', 'crossorigin']) {
+      if (from.hasAttribute(name)) script.setAttribute(name, from.getAttribute(name));
+    }
+    script.async = false;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`Could not load ${from.getAttribute('src')}`));
+    script.src = from.getAttribute('src');
+    document.body.append(script);
+  });
+}
+
+/*
+ * The router runs at the end of app.js, and the config template comes
+ * after app.js in the page, so on a reload of `#config` it has not been
+ * parsed yet. Found by the e2e: the set came back empty, resolved at
+ * once, and the page waited for a checker that was never fetched.
+ */
+const pageParsed = () => (document.readyState === 'loading'
+  ? new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+  : Promise.resolve());
+
+function loadScripts(name) {
+  if (lazyScripts.has(name)) return lazyScripts.get(name);
+  const loading = pageParsed()
+    .then(() => {
+      const template = document.querySelector(`template[data-lazy-scripts="${name}"]`);
+      if (!template) throw new Error(`No scripts are held back as "${name}"`);
+      const all = [...template.content.querySelectorAll('script[src]')];
+      const modules = all.filter((script) => script.type === 'module');
+      const classic = all.filter((script) => script.type !== 'module');
+      return Promise.all(classic.map(loadScript)).then(() => Promise.all(modules.map(loadScript)));
+    })
+    .catch((error) => {
+      lazyScripts.delete(name);
+      throw error;
+    });
+  lazyScripts.set(name, loading);
+  return loading;
+}
+
+/*
+ * The pages that draw an ECharts chart. `render` loads the library
+ * before it draws one of them. A page that starts drawing charts must
+ * be added here, or it throws "echarts is not defined" on a cold load;
+ * the e2e opens each of these cold and asserts a chart was drawn.
+ */
+const CHART_PAGES = new Set(['dashboard', 'graph', 'node', 'stats', 'planner', 'rf']);
+
+/** Resolves once `echarts` exists. Already there costs nothing. */
+function chartsReady() {
+  return window.echarts ? Promise.resolve() : loadScripts('charts');
 }
 
 /* ECharts instances are kept so a redraw does not leak canvases. */
@@ -857,8 +979,18 @@ function widenGraphRoam(instance) {
   return true;
 }
 
+/*
+ * `chart` turns off ECharts' entry and update animation when the reader
+ * asks for less motion (#284). The CSS already honours
+ * `prefers-reduced-motion`, but a chart animates on its canvas, where no
+ * CSS reaches. It is set in `chart` rather than only in CHART_BASE so
+ * that every chart gets it, the ones that build their option without
+ * CHART_BASE included. The stored option carries it too, so a
+ * full-screen redraw stays still.
+ */
 function chart(target, option) {
   if (!target) return null;
+  if (REDUCED_MOTION.matches) option = { ...option, animation: false };
   // The box collapses while it holds a sentence instead of a chart, and
   // ECharts measures the box when it starts, so the height comes back
   // before the instance is made. See `chartEmpty`.
@@ -1244,15 +1376,76 @@ function fitChartExpand(target) {
 
 /* ---------------------------------------------------------------- 4 */
 
-/** Shared summary tiles used by the dashboard and the statistics page. */
-async function loadSummary(page) {
+/*
+ * A count against the same count in the window before, for a tile's
+ * delta line (#292): "▲ 4% on the day before".
+ *
+ * Null when there is nothing honest to compare with. The API sends no
+ * `previous` when the window before is older than the packets it keeps,
+ * and a comparison with deleted rows would show a rise that never
+ * happened.
+ */
+function changeOn(current, previous, before) {
+  if (current == null || previous == null) return null;
+  if (previous === 0) return current ? `none on ${before}` : `same as ${before}`;
+  const change = ((current - previous) / previous) * 100;
+  if (Math.abs(change) < 0.5) return `same as ${before}`;
+  return `${change > 0 ? '▲' : '▼'} ${Math.round(Math.abs(change))}% on ${before}`;
+}
+
+/*
+ * "▲ 4% on the day before" as two parts, so a phone can show "▲ 4%"
+ * beside the figure and fold the words away (#278). The words stay in
+ * the page for a screen reader, and the tile's hint says them too.
+ */
+function compactDelta(text) {
+  const found = text && /^(.*?)( (?:on|as) .*)$/.exec(text);
+  return found ? [found[1], el('span', { class: 'delta-rest', text: found[2] })] : text;
+}
+
+/**
+ * Shared summary tiles used by the dashboard and the statistics page.
+ *
+ * With `hours`, Packets and Uploads count that rolling window and compare
+ * with the window before it. Nodes and Gateways stay totals of every node
+ * ever seen, whatever the window (Will, #292), and keep the line against
+ * yesterday's snapshot, which is a total too.
+ *
+ * The Statistics page passes its own range instead (#294): `query` is the
+ * window in the API's words and `span` is what the labels call it.
+ */
+async function loadSummary(page, { hours = null, query = null, span = null } = {}) {
   const target = $('[data-summary]', page);
   if (!target) return;
-  const [stats, snapshots] = await getAll(['api/stats', 'api/stats/snapshots/daily?days=2']);
+  const asked = query || (hours ? `hours=${hours}` : null);
+  const [stats, snapshots] = await getAll([
+    asked ? `api/stats?${asked}` : 'api/stats',
+    'api/stats/snapshots/daily?days=2',
+  ]);
   if (!stats) return replace(target, failure(new Error('Statistics are not available.')));
   const yesterday = snapshots && snapshots[1];
-  const delta = (key) =>
+  const snapshotDelta = (key) =>
     yesterday && yesterday[key] != null ? `${count(yesterday[key])} yesterday` : null;
+  const windowed = stats.window_hours != null;
+  const named = span || (windowed ? windowName(Math.round(stats.window_hours)) : '');
+  const before = stats.window_hours === 24
+    ? 'the day before'
+    : `the previous ${windowName(Math.round(stats.window_hours || 0))}`;
+  // A window that starts before the oldest packet kept counts from there,
+  // and the tile says so rather than comparing a part with a whole.
+  const cap = retentionCap(stats);
+  const delta = (key) => {
+    if (!windowed) return snapshotDelta(key);
+    if (key === 'node_count' || key === 'gateway_count') return snapshotDelta(key);
+    if (cap) return cap;
+    return compactDelta(changeOn(stats[key], stats.previous ? stats.previous[key] : null, before));
+  };
+  // Said in the hint too, because a phone shows only "▲ 4%" (#278).
+  const compared = windowed && !cap ? ` The line under the figure compares with ${before}.` : '';
+  // "(24 h)" on the two that follow the window, "(all time)" on the two
+  // that do not, so one row of tiles does not mix two meanings unlabelled.
+  const label = (name, rolling) => (windowed ? `${name} (${rolling ? named : 'all time'})` : name);
+  const within = windowed ? ` in ${span ? span : `the last ${named}`}` : '';
   /*
    * "Observations" was the endpoint's word for `packet_seen`, printed
    * at the reader. A `packet_seen` row is one MQTT upload, and saying
@@ -1263,23 +1456,50 @@ async function loadSummary(page) {
    * dashboard has one word for it. No count changes.
    */
   replace(target,
-    statTile('Nodes', count(stats.node_count), delta('node_count'),
-      'How many nodes this database holds.'),
-    statTile('Packets', count(stats.packet_count), delta('packet_count'),
-      'Packets stored. The same packet uploaded by several gateways is counted once.'),
-    statTile('Uploads', count(stats.observation_count), delta('observation_count'),
-      'One for each time a gateway uploaded a packet to MQTT. One packet is often '
+    statTile(label('Nodes', false), count(stats.node_count), delta('node_count'),
+      'How many nodes this database holds: every node it has ever heard.'),
+    statTile(label('Packets', true), count(stats.packet_count), delta('packet_count'),
+      `Packets stored${within}. The same packet uploaded by several gateways is counted once.${compared}`),
+    statTile(label('Uploads', true), count(stats.observation_count), delta('observation_count'),
+      `One for each time a gateway uploaded a packet to MQTT${within}. One packet is often `
       + 'uploaded by several gateways, and by the same gateway more than once, so this '
-      + 'is larger than the packet count and is not a count of gateways.'),
-    statTile('Gateways', count(stats.gateway_count), delta('gateway_count'),
-      'Nodes that upload what they hear to MQTT. They are the only observers this '
-      + 'database has.'));
+      + `is larger than the packet count and is not a count of gateways.${compared}`),
+    statTile(label('Gateways', false), count(stats.gateway_count), delta('gateway_count'),
+      'Nodes that upload what they hear to MQTT, counting every one ever seen. They are '
+      + 'the only observers this database has.'));
 }
 
-async function loadTopTalkers(page) {
+/** A window in hours as the page names it: "24 h", "7 d". */
+function windowName(hours) {
+  return hours % 24 === 0 && hours > 24 ? `${hours / 24} d` : `${hours} h`;
+}
+
+/*
+ * "Counted from 28 Aug": what a widget says when the range starts before
+ * the oldest packet the database keeps (#294).
+ *
+ * Null when the whole range is kept. An hour of slack, because a rolling
+ * 30 day window and the 30 day retention are computed a few microseconds
+ * apart and would otherwise always look capped.
+ */
+function retentionCap(meta) {
+  if (!meta || !meta.window_start || !meta.retained_from) return null;
+  const start = new Date(meta.window_start).getTime();
+  const kept = new Date(meta.retained_from).getTime();
+  if (!(kept - start > 3600000)) return null;
+  return `counted from ${DATE.format(new Date(kept))}: older packets are not kept`;
+}
+
+/*
+ * The window the dashboard's headline tiles count (Will, #292: "the 4
+ * main stats on the dashboard should show the rolling last 24 hours").
+ */
+const DASHBOARD_SUMMARY_HOURS = 24;
+
+async function loadTopTalkers(page, { query = 'hours=24' } = {}) {
   const target = $('[data-top-talkers]', page);
   if (!target) return;
-  const rows = await get('api/stats/top?hours=24&limit=15').catch(() => null);
+  const rows = await get(`api/stats/top?${query}&limit=15`).catch(() => null);
   if (!rows) return replace(target, failure(new Error('Cannot load the busiest nodes.')));
   replace(target, table([
     { label: 'Node', cell: (row) => nodeChip(row) },
@@ -1302,7 +1522,7 @@ async function loadTopTalkers(page) {
  */
 let leaderboardPreset = '';
 
-async function loadLeaderboards(page) {
+async function loadLeaderboards(page, { query = '', span = '' } = {}) {
   const target = $('[data-leaderboards]', page);
   if (!target) return;
   /*
@@ -1314,8 +1534,8 @@ async function loadLeaderboards(page) {
    * in JavaScript rather than sitting in the markup.
    */
   const wanted = window.SonoranPreset ? SonoranPreset.current() : leaderboardPreset;
-  const query = wanted ? `?channel=${encodeURIComponent(wanted)}` : '';
-  const data = await get(`api/stats/leaderboards${query}`).catch(() => null);
+  const params = [wanted ? `channel=${encodeURIComponent(wanted)}` : '', query].filter(Boolean).join('&');
+  const data = await get(`api/stats/leaderboards${params ? `?${params}` : ''}`).catch(() => null);
   if (!data) return replace(target, failure(new Error('Cannot load the leaderboards.')));
   if (!data.available) {
     return replace(target, empty('No gap assessment has been written yet, so there is nothing to rank.'));
@@ -1356,15 +1576,31 @@ async function loadLeaderboards(page) {
    * leaderboard and a scoreboard: a ranking that does not say what it
    * cannot see invites somebody to read it as a judgement.
    */
+  /*
+   * The window chip says whether a board follows the page's range (#294).
+   *
+   * The link board does. The two boards read from the gaps assessment keep
+   * the gaps job's own window, because that job writes one file for one
+   * window -- so their chip says their window and that the range does not
+   * reach them, rather than letting a reader take them for the range.
+   */
+  const boardWindow = (board) => {
+    if (board.follows_window && span) return span;
+    if (!board.window_hours) return null;
+    const own = `last ${windowName(Math.round(board.window_hours))}`;
+    return span ? `${own}, not the page range` : own;
+  };
   replace(target, data.boards.map((board) => el('div', { class: 'panel leaderboard' },
     el('h3', { 'data-hint': board.cannot_know || null, 'data-label': board.title }, board.title,
-      board.window_hours ? el('span', { class: 'muted', text: `last ${board.window_hours} h` }) : null),
+      boardWindow(board) ? el('span', { class: 'muted', text: boardWindow(board) }) : null),
     el('p', { class: 'muted', text: board.measure }),
     board.rows.length
       ? el('ol', { class: 'board' }, board.rows.map((row) => el('li', {},
           el('span', { class: 'who' }, nodeChip(row),
             row.other_id ? [' to ', nodeChip({ node_id: row.other_id, display_name: row.other_name })] : null),
-          el('span', { class: 'value', text: `${count(row.value)} ${row.unit}` }),
+          // Through the formatter: the API sends the link board in km,
+          // and printing that as it came is the bug Will saw (#291).
+          el('span', { class: 'value', text: SonoranUnits.measure(row.value, row.unit) }),
           el('span', { class: 'muted detail', text: row.detail }))))
       /*
        * "Nothing qualifies" is a measurement. "Not assessed" is an
@@ -1404,13 +1640,20 @@ const PAGES = {};
  */
 const PORTNUM_CHART_HOURS = 24;
 
+/*
+ * How many messages the dashboard shows (#296). Will: "only show the 5
+ * latest messages and add a view all messages button". It asked for 12,
+ * and the panel stood 979 px tall beside a short chart.
+ */
+const DASHBOARD_MESSAGES = 5;
+
 PAGES.dashboard = async (page) => {
-  await Promise.all([loadSummary(page), loadTopTalkers(page)]);
+  await Promise.all([loadSummary(page, { hours: DASHBOARD_SUMMARY_HOURS }), loadTopTalkers(page)]);
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
     // messages from channels a LongFast radio never hears.
-    `api/chat?limit=12${chatFeedChannel()}`,
+    `api/chat?limit=${DASHBOARD_MESSAGES}${chatFeedChannel()}`,
     /*
      * The same 24 hours and the same preset the chart's own heading and
      * the firehose it links into use (§7.1).
@@ -1434,9 +1677,16 @@ PAGES.dashboard = async (page) => {
       ], nodes, 'No nodes heard yet.')
     : failure(new Error('Cannot load nodes.')));
 
+  /*
+   * No channel on each row (#296). The request is filtered to the preset's
+   * channel, so the label said the same word five times; it is said once,
+   * in the heading.
+   */
+  const feedChannel = $('[data-recent-chat-channel]', page);
+  if (feedChannel) feedChannel.textContent = presetChannel() ? SonoranLabels.presetLabel(presetChannel()) : '';
   replace($('[data-recent-chat]', page), messages
     ? (messages.length
-        ? messages.map((message) => messageItem(message, { showChannel: true }))
+        ? messages.map((message) => messageItem(message))
         : [empty('No messages stored.')])
     : [failure(new Error('Cannot load messages.'))]);
 
@@ -1506,12 +1756,13 @@ PAGES.dashboard = async (page) => {
          * `tooltipLines` returns an element and puts every value in as
          * text, so markup is shown rather than run. The formatter this
          * replaced interpolated into markup with an arrow's implicit
-         * return, which `test_tooltip_escaping` did not catch because its
-         * pattern looks for a `return` keyword.
+         * return. `test_tooltip_escaping` now reads every path out of a
+         * tooltip formatter, the fallback here included, and each one
+         * must be `tooltipLines(...)`.
          */
         formatter: (item) => {
           const band = bands[item.dataIndex];
-          if (!band) return String(item.name);
+          if (!band) return tooltipLines(item.name);
           return tooltipLines(
             `${band.label} (${band.wire})`,
             `${count(band.count)} packets`,
@@ -1848,8 +2099,14 @@ function ensureMap() {
    * zoom, which on a wide short box left Arizona filling under a third
    * of the width -- the same complaint the integer `mapZoom` produced.
    * A quarter step costs nothing and lets the fit land where it means.
+   *
+   * The box is `#live-map`, not `#map` (#270). `#map` is also the page's
+   * address, and a browser that loads an address with a fragment scrolls
+   * to the element whose id is that fragment. So every visit to the map
+   * page scrolled the page down to the map box: 235 px on an iPhone,
+   * with every map control above the top of the screen.
    */
-  const map = L.map('map', { preferCanvas: true, worldCopyJump: true, zoomSnap: 0.25 });
+  const map = L.map('live-map', { preferCanvas: true, worldCopyJump: true, zoomSnap: 0.25 });
   const home = homeBounds();
   if (home) {
     // The deployment's own statement of what it is about, fitted to
@@ -1970,14 +2227,17 @@ function drawMapNodes(rows) {
       continue;
     }
     const entry = { marker: L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom)), row };
-    entry.marker.bindPopup(() => mapNodePopup(entry.row));
+    // A bubble for a mouse, a sheet at the foot of a phone (#281).
+    SonoranSheet.bind(entry.marker, () => mapNodePopup(entry.row), row.node_id);
     entry.marker.addTo(mapState.nodes);
     marks.set(row.node_id, entry);
   }
   for (const [nodeId, entry] of marks) {
     if (seen.has(nodeId)) continue;
     // `removeLayer` fires `remove`, which closes this marker's popup.
+    // The phone's sheet is outside the map, so it is told separately.
     mapState.nodes.removeLayer(entry.marker);
+    SonoranSheet.closeIf(nodeId);
     marks.delete(nodeId);
   }
   return bounds;
@@ -3944,6 +4204,8 @@ const configReady = new Promise((resolve) => {
 });
 
 PAGES.config = async (page) => {
+  // The checker and its libraries are fetched on the first visit (#277).
+  await loadScripts('config');
   await configReady;
   await window.SonoranConfigCheck.show(page);
 };
@@ -4456,8 +4718,12 @@ PAGES.graph = async (page) => {
 const NODE_PAGE = 100;
 let nodeSort = { key: 'last_heard', order: 'desc' };
 /* How far into the server's ordering we have read. Advanced by the rows
- * the SERVER served, never by the rows we kept -- see `mergeNodePage`. */
+ * the SERVER served, never by the rows we kept -- see `mergeNodePage`.
+ * Sent only when the server gave no cursor. */
 let nodeOffset = 0;
+/* Where the next page starts: the server's `X-Next-Cursor` for the last
+ * row it served (#250). Null before the first page. */
+let nodeCursor = null;
 let nodeTotal = 0;
 let nodeRows = [];
 /*
@@ -4492,20 +4758,21 @@ let nodeScrollWatch = null;
  * advancing by the kept count would re-request the rows just dropped:
  * a list that pages forever and never reaches its end.
  *
- * **A duplicate is dropped rather than drawn.** The plan (§6.2) asks for
- * keyset pagination on a stable sort key to prevent this, and the API
- * offers `limit`/`offset` only — so the risk it names is real and is
- * answered here instead. If a node's `last_heard` changes between two
- * requests the server's ordering shifts under us, and a row that moved
- * back a page arrives twice. Dropping it by `node_id` keeps the list
- * from showing one node twice. The other half of that shift — a row
- * that moved FORWARD a page, and is therefore never seen — cannot be
- * detected from here, and this comment says so rather than implying the
- * problem is solved. Nothing on this page refreshes on a timer, so the
- * window for either is one reader's own scrolling rather than a
- * 15-second poll.
+ * **The next page starts from the cursor, not the offset (#250).** The
+ * plan (§6.2) asked for keyset pagination, and `/api/nodes` now answers
+ * each page with `X-Next-Cursor`, which names the last row it served.
+ * With an offset, a node whose `last_heard` changed between two requests
+ * shifted every row behind it, and in a "quiet first" order the row at
+ * the page boundary was never served at all — a gap nothing here could
+ * detect. A cursor cannot shift. The offset is still counted, and sent
+ * only when an answer came back with no cursor (an older server, or a
+ * proxy that dropped the header), so the list still reaches its end.
+ *
+ * **A duplicate is still dropped rather than drawn.** The cursor makes a
+ * repeat impossible in principle; this makes it harmless on the offset
+ * path, and costs one Set.
  */
-function mergeNodePage(held, incoming, { offset, pageSize }) {
+function mergeNodePage(held, incoming, { offset, pageSize, cursor = null }) {
   const served = Array.isArray(incoming) ? incoming : [];
   const seen = new Set((held || []).map((row) => row.node_id));
   const added = [];
@@ -4517,6 +4784,7 @@ function mergeNodePage(held, incoming, { offset, pageSize }) {
   return {
     rows: (held || []).concat(added),
     offset: offset + served.length,
+    cursor: cursor || null,
     // A short page means the server had nothing more to give. An exactly
     // full page does NOT mean there is more, so the next request can
     // still come back empty — which is this same test, one page later.
@@ -4547,13 +4815,16 @@ function nodeProgressWords(shown, total, exhausted) {
   return `Showing ${count(shown)} of ${count(total)}`;
 }
 
-function nodeQuery(page, offset = 0) {
+function nodeQuery(page, { offset = 0, cursor = null } = {}) {
   const params = new URLSearchParams({
     limit: String(NODE_PAGE),
-    offset: String(offset),
     sort: nodeSort.key,
     order: nodeSort.order,
   });
+  // The cursor when there is one (#250). The server refuses it under any
+  // other sort, which is why the sort still goes with every page.
+  if (cursor) params.set('cursor', cursor);
+  else if (offset) params.set('offset', String(offset));
   const value = (selector) => {
     const node = $(selector, page);
     return node ? node.value : '';
@@ -4593,6 +4864,24 @@ function nodeFacetQuery(page) {
   const params = new URLSearchParams(nodeQuery(page).split('?')[1]);
   for (const key of ['limit', 'offset', 'sort', 'order']) params.delete(key);
   return `api/nodes/facets?${params}`;
+}
+
+/** One page of the list, with the total and the cursor its headers carry.
+ *
+ * `getList` with one more header. An absent total stays null, never 0,
+ * and an absent cursor stays null, which sends the next page back to
+ * the offset. */
+async function getNodePage(path) {
+  const response = await fetch(api(path));
+  if (!response.ok) throw requestFailed(path, response.status);
+  const rows = await response.json();
+  const header = response.headers.get('X-Total-Count');
+  const total = header == null ? null : Number(header);
+  return {
+    rows,
+    total: Number.isFinite(total) ? total : null,
+    cursor: response.headers.get('X-Next-Cursor'),
+  };
 }
 
 /* Everything the filter panel can narrow on.
@@ -4962,11 +5251,51 @@ function drawNodeChips(page) {
 
 let nodeFacets = null;
 
-/** How many filters are narrowing the list, for the summary line. */
-function nodeFilterCount(page) {
-  const query = new URLSearchParams(nodeQuery(page).split('?')[1]);
-  for (const key of ['limit', 'offset', 'sort', 'order']) query.delete(key);
-  return [...query.keys()].length;
+/** How many filters the reader has changed, for the badge on Filters.
+ *
+ * It counted every key of the list query, so a first visit showed "2"
+ * with nothing chosen: the toolbar's default "Last 24 h", and the preset
+ * channel from the sidebar (#301). Will (2026-09-27): count only what the
+ * reader changed. A toolbar control counts when it differs from its
+ * default, a panel filter counts when it is set, and the preset never
+ * counts, because the sidebar is where the preset shows.
+ *
+ * Counted by query key, so a filter that both the toolbar and the panel
+ * can set ("Heard within", role, gateway) counts once. `gaps_preset`
+ * travels with `gaps` and is not a second filter.
+ *
+ * Pure, so the cases in `tests/unit/js` run it rather than read it.
+ */
+function nodeFilterCount(toolbar, defaults, panel) {
+  const changed = new Set();
+  for (const [key, value] of Object.entries(toolbar)) {
+    if (value !== defaults[key]) changed.add(key);
+  }
+  for (const key of panel.keys()) {
+    if (key !== 'gaps_preset') changed.add(key);
+  }
+  return changed.size;
+}
+
+/** The toolbar as `nodeFilterCount` reads it: what it holds now, and what
+ * it held when the page loaded. The default comes from the markup (the
+ * `selected` option), so it cannot drift from `index.html`. */
+function nodeToolbar(page) {
+  const active = $('[data-node-active]', page);
+  const role = $('[data-node-role]', page);
+  const first = (select) => {
+    const chosen = select ? [...select.options].find((option) => option.defaultSelected) : null;
+    return chosen ? chosen.value : (select && select.options[0] ? select.options[0].value : '');
+  };
+  return {
+    toolbar: {
+      q: $('[data-node-search]', page).value.trim(),
+      active_hours: active ? active.value : '',
+      role: role ? role.value : '',
+      gateway: $('[data-node-gateway]', page).getAttribute('aria-pressed') === 'true',
+    },
+    defaults: { q: '', active_hours: first(active), role: first(role), gateway: false },
+  };
 }
 
 /*
@@ -4995,13 +5324,16 @@ async function loadNodes(page, { reset = false } = {}) {
   const target = $('[data-node-table]', page);
   if (reset) {
     nodeOffset = 0;
+    // A cursor belongs to the order and filters it was made under.
+    nodeCursor = null;
     nodeRows = [];
     nodeExhausted = false;
     replace(target, el('p', { class: 'loading', text: 'Loading' }));
   }
   nodeLoadingMore = true;
   drawNodeMore(page);
-  const answer = await getList(nodeQuery(page, nodeOffset)).catch((error) => error);
+  const answer = await getNodePage(nodeQuery(page, { offset: nodeOffset, cursor: nodeCursor }))
+    .catch((error) => error);
   /*
    * A newer request has started, so this answer is stale.
    *
@@ -5027,10 +5359,12 @@ async function loadNodes(page, { reset = false } = {}) {
   const merged = mergeNodePage(reset ? [] : nodeRows, answer.rows, {
     offset: nodeOffset,
     pageSize: NODE_PAGE,
+    cursor: answer.cursor,
   });
   const appended = reset ? null : merged.added;
   nodeRows = merged.rows;
   nodeOffset = merged.offset;
+  nodeCursor = merged.cursor;
   nodeExhausted = merged.exhausted;
   nodeTotal = answer.total;
 
@@ -5133,12 +5467,10 @@ function nodeColumns(onSort) {
       hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is. '
         + 'Sorting this column orders by how exactly the position is known.',
       cell: (row) => el('span', {},
+        // A tap opens what the tag means; a `title` was hover only (#276).
         row.is_mqtt_gateway
-          ? el('span', {
-              class: 'tag gateway',
-              title: 'This node uploads packets it hears to MQTT. It is not a device role.',
-              text: 'gateway',
-            })
+          ? tapTip('tag gateway', 'gateway', 'Gateway',
+            ['This node uploads packets it hears to MQTT. It is not a device role.'])
           : null,
         row.has_position ? el('span', { class: 'tag', text: 'position' }) : null),
     }),
@@ -5284,7 +5616,8 @@ function rearmNodeScroll() {
  * of 2,372 nodes said "300 nodes match" and meant "here are 300".
  */
 function describeNodeList(page) {
-  const filters = nodeFilterCount(page);
+  const { toolbar, defaults } = nodeToolbar(page);
+  const filters = nodeFilterCount(toolbar, defaults, nodeFilters);
   /*
    * No longer says how it is sorted or how many filters are on (Will,
    * 2026-09-26). The column heading already carries the sort -- it is
@@ -6098,7 +6431,7 @@ function healthChecks(gaps, detail) {
   const position = {
     exact: ['ok', 'Shares its position.'],
     coarse: ['ok', deviation
-      ? `Shares its position, rounded to about ${count(Math.round(deviation))} m.`
+      ? `Shares its position, rounded to about ${SonoranUnits.distanceFromM(deviation)}.`
       : 'Shares its position at reduced precision.'],
     none: ['unknown', 'Shares no position. That is optional on this mesh.'],
   }[confidence] || ['unknown', 'Shares no position. That is optional on this mesh.'];
@@ -6379,12 +6712,21 @@ function healthPanel(gaps, detail, evidencePanel) {
     cannotTell.length ? `${count(cannotTell.length)} can't tell yet` : null,
   ].filter(Boolean).join(' · ');
 
-  const dots = el('p', { class: 'health-dots', role: 'img', 'aria-label': sentence },
-    ...judged.map((check) => el('span', {
-      class: `health-dot state-${check.state}`,
-      'aria-hidden': 'true',
-      title: `${check.name}: ${(HEALTH_STATES[check.state] || HEALTH_STATES.unknown).word}`,
-    })));
+  /*
+   * Which check each dot is used to be in a `title` on the dot, which a
+   * phone never shows (#276). The row is now one button, and a tap opens
+   * the list of checks in the order of the dots. The accessible name is
+   * still the sentence, with what the button does after it.
+   */
+  const dotWords = (check) => `${check.name}: ${(HEALTH_STATES[check.state] || HEALTH_STATES.unknown).word}`;
+  const dots = el('p', { class: 'health-dots-row' },
+    tapTip('health-dots',
+      judged.map((check) => el('span', {
+        class: `health-dot state-${check.state}`, 'aria-hidden': 'true',
+      })),
+      'Each dot, in order',
+      judged.map(dotWords),
+      { 'aria-label': `${sentence}. Show each check.` }));
 
   const full = el('div', { class: 'health-full', hidden: true },
     ...HEALTH_GROUPS.map((group) => {
@@ -6673,6 +7015,13 @@ const km = (value) => (
  * itself, the estimate says nothing about where in that range the node
  * is, and the only true statement is an upper bound: "under 50 mi".
  *
+ * A wide range is still shown. The issue asked whether an estimate whose
+ * range is more than half its distance ("about 5 km ± 4.6") says too
+ * little to print, and Will (2026-09-27) said keep it: it stays marked
+ * "about" with its range, so it claims no more than it knows, and a
+ * range is more use to the reader than "Not known". Do not add a cut-off
+ * here. The e2e journey on the furthest-node tile holds this.
+ *
  * Returns `{ value, bar }`, both in the reader's units. Never called with
  * a missing number: `Number(null)` is 0, and a missing estimate printed
  * as "about 0 ft" would claim two nodes stand on the same spot.
@@ -6876,8 +7225,10 @@ function routesPanel(routes) {
     el('p', { class: 'muted' },
       'A rounded position can be kilometres out, so a distance from one is marked "about" with the range the rounding allows. '
       + 'The longest route segment needs an exact position at both ends, and rounded pairs are left out of it'
-      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')
-      + (routes.trace_limit_reached ? ` Only the newest ${count(routes.traces_read)} traceroutes were read.` : '')),
+      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')),
+    // "Only the newest 2,000 traceroutes were read" was here. Every
+    // traceroute in the window is read now, so there is no cut to own
+    // up to (#290).
     el('div', { class: 'grid two' },
       el('div', { class: 'route-list' },
         el('h4', { text: `Who hears it (${count(routes.heard_by.length)})` }),
@@ -6942,9 +7293,9 @@ function packetRowKey(row) {
  * infinite scroll gets wrong quietly live here, and pure code can be run
  * in a test rather than read.
  *
- * **Cursor, not offset, so there is no offset to advance.** The nodes
- * list pages by offset, and its comment is honest that a row which moves
- * forward a page is never seen. Packets arrive all the time -- a busy
+ * **Cursor, not offset, so there is no offset to advance.** With an
+ * offset, a row which moves forward a page is never seen (the nodes list
+ * paged that way until #250). Packets arrive all the time -- a busy
  * gateway uploads several a minute -- so that is the ordinary case here,
  * not the rare one. The server answers each page with `X-Next-Before`,
  * which names the last row served; the next page starts after THAT row,
@@ -7191,6 +7542,51 @@ async function drawTimeline(target, nodeId, pageHours, types) {
   }
 }
 
+/*
+ * A row of section chips that stays at the top of a phone screen (#286).
+ *
+ * The node page is 13 panels in one column on a phone, 7.1 screens on an
+ * iPhone 14, with the packet timeline past y = 3760 and no way to reach
+ * it but to scroll. The chips are the mobile review's item 21.
+ *
+ * Buttons, not `#` links. The address is this dashboard's router, and a
+ * link to `#node-timeline` would leave the node page for one that does
+ * not exist. Each chip finds its panel when pressed, by `data-jump`,
+ * because Health and Links and routes are swapped for their finished
+ * panels after the first draw. The panel then takes the focus, so a
+ * screen reader goes where the eye went.
+ *
+ * CSS draws the row below 40rem only. A wider screen shows two columns
+ * and the page is short enough to scan.
+ */
+const NODE_JUMPS = [
+  ['identity', 'Identity'], ['health', 'Health'], ['activity', 'Activity'],
+  ['map', 'Map'], ['links', 'Links'], ['timeline', 'Timeline'],
+];
+
+function nodeJumpBar(body) {
+  return el('nav', { class: 'node-jump', 'aria-label': 'Sections of this page' },
+    NODE_JUMPS.map(([key, label]) => el('button', {
+      type: 'button',
+      class: 'chip',
+      'data-jump-to': key,
+      text: label,
+      onclick: () => {
+        const target = $(`[data-jump="${key}"]`, body);
+        if (!target) return;
+        target.setAttribute('tabindex', '-1');
+        target.scrollIntoView({ behavior: REDUCED_MOTION.matches ? 'auto' : 'smooth', block: 'start' });
+        target.focus({ preventScroll: true });
+      },
+    })));
+}
+
+/** Mark a node page panel as the place one of the section chips goes. */
+function jumpTarget(key, panel) {
+  panel.setAttribute('data-jump', key);
+  return panel;
+}
+
 async function loadNodeDetail(nodeId) {
   const page = $('[data-page="node"]');
   const hours = $('[data-node-hours]', page).value || '720';
@@ -7230,12 +7626,13 @@ async function loadNodeDetail(nodeId) {
    * came for — below the fold on a busy node. Both are capped at five
    * rows now and say how many more there are.
    */
-  const health = el('div', { class: 'panel' }, el('p', { class: 'loading', text: 'Loading health checks' }));
-  const routes = el('div', { class: 'panel span-2' },
-    el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' }));
+  const health = jumpTarget('health',
+    el('div', { class: 'panel' }, el('p', { class: 'loading', text: 'Loading health checks' })));
+  const routes = jumpTarget('links', el('div', { class: 'panel span-2' },
+    el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' })));
   const history = el('div', { class: 'grid two span-2 history-grid' });
-  const packets = el('div', { class: 'panel span-2 timeline' },
-    el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' }));
+  const packets = jumpTarget('timeline', el('div', { class: 'panel span-2 timeline' },
+    el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' })));
 
   /*
    * The four short panels get a row of their own (#102).
@@ -7264,9 +7661,9 @@ async function loadNodeDetail(nodeId) {
    * the two separated by Activity and Weather.
    */
   const summary = el('div', { class: 'grid summary-row' },
-    identityPanel(node),
+    jumpTarget('identity', identityPanel(node)),
     el('div', { class: 'summary-stack' }, devicePanel(detail), health),
-    activityPanel(detail),
+    jumpTarget('activity', activityPanel(detail)),
     weatherPanel(detail));
 
   /*
@@ -7288,7 +7685,7 @@ async function loadNodeDetail(nodeId) {
    * line on the first screen, which is what the issue asked for.
    */
   // `health` is inside `summary` now, so it is not passed again here.
-  replace(body, summary, nodeMapPanel(detail), el('div', { class: 'grid two' },
+  replace(body, summary, jumpTarget('map', nodeMapPanel(detail)), el('div', { class: 'grid two' },
     routes,
     history,
     messagesPanel(detail),
@@ -7296,6 +7693,8 @@ async function loadNodeDetail(nodeId) {
     heardByPanel(detail.heard_by),
     signalPanel,
     packets));
+  // The chips go first, above the summary, and stick from there (#286).
+  body.prepend(nodeJumpBar(body));
 
   const id = encodeURIComponent(nodeId);
   const [gaps, historyData, routesData] = await getAll([
@@ -7305,8 +7704,8 @@ async function loadNodeDetail(nodeId) {
   ]);
   // The page may have moved on to another node while these loaded.
   if (currentNodeId !== nodeId) return;
-  health.replaceWith(healthPanel(gaps, detail, issuesPanel(gaps)));
-  routes.replaceWith(routesPanel(routesData));
+  health.replaceWith(jumpTarget('health', healthPanel(gaps, detail, issuesPanel(gaps))));
+  routes.replaceWith(jumpTarget('links', routesPanel(routesData)));
   drawNodeHistory(history, historyData);
   const types = (detail.activity.by_portnum || []).map((row) => row.portnum);
   await Promise.all([
@@ -7384,6 +7783,9 @@ const CHAT_NEAR_TOP = 240;
  */
 const CHAT_AT_BOTTOM = 48;
 const CHAT_DEFAULT_HOURS = 168;
+/* The overview's one window (#295), and the same window in words. */
+const CHAT_OVERVIEW_HOURS = 168;
+const CHAT_OVERVIEW_WINDOW = '7 days';
 
 let currentChatChannel = null;
 let chatView = 'chat';
@@ -7396,6 +7798,12 @@ let chatBusy = false;
 /* Which channel and range `chatRows` holds, so a changed channel or range
    starts again rather than mixing two conversations together. */
 let chatRowsKey = null;
+/* The range `chatRows` was first filled over. Paging older reads its
+   `from`, so the default week does not creep forward between pages. */
+let chatRowsRange = null;
+/* The observer at the foot of the table view (#297). One at a time: a
+   new draw disconnects the last one. */
+let chatTableWatch = null;
 
 /** A Date from an address parameter, or null for anything unusable. */
 function chatDate(raw) {
@@ -7490,18 +7898,51 @@ async function chatFetch(channel, { since, before, limit = CHAT_PAGE }) {
   const params = new URLSearchParams({
     channel, limit: String(limit), metrics: 'true',
   });
-  if (since) params.set('since', since.toISOString());
-  if (before) params.set('before', before.toISOString());
+  /*
+   * A cursor may be the row's own `seen_at` string, sent as the API wrote
+   * it. The column holds microseconds and a Date holds milliseconds, so a
+   * cursor rounded through `new Date` could skip a second row stamped in
+   * the same millisecond (#297).
+   */
+  const instant = (when) => (typeof when === 'string' ? when : when.toISOString());
+  if (since) params.set('since', instant(since));
+  if (before) params.set('before', instant(before));
   return get(`api/chat?${params}`);
 }
 
-/** The key `chatRows` was filled for. A change means start again. */
-function chatKey(channel, range) {
+/**
+ * The key `chatRows` was filled for. A change means start again.
+ *
+ * Built from the range the ADDRESS names, not the range in force. With no
+ * range in the address the range in force is "the last week, from now",
+ * and its start moves every millisecond, so a key made from it never
+ * matched twice: switching to the table, or pressing Live, threw away
+ * every page the reader had scrolled in (#297). The default range is the
+ * token `default` instead, which stays put.
+ */
+function chatKey(channel, addressRange) {
+  if (!addressRange) return `${channel || ''}|default`;
   return [
     channel || '',
-    range.from ? range.from.toISOString() : '',
-    range.to ? range.to.toISOString() : '',
+    addressRange.from ? addressRange.from.toISOString() : '',
+    addressRange.to ? addressRange.to.toISOString() : '',
   ].join('|');
+}
+
+/**
+ * Put the newest page on top of the rows held.
+ *
+ * Pure, so it is run in a test rather than read. A page that comes back
+ * FULL may have more behind it than it holds, and the rows between it and
+ * what is held would be a hole nobody could see. So a full page replaces
+ * what is held, and the reader pages older from there as on a first visit.
+ */
+function chatMergeNewer(held, incoming, pageSize) {
+  const served = Array.isArray(incoming) ? incoming : [];
+  if (served.length >= pageSize) return { rows: served, restarted: true };
+  const seen = new Set((held || []).map(chatRowKey));
+  const fresh = served.filter((row) => !seen.has(chatRowKey(row)));
+  return { rows: [...fresh, ...(held || [])], restarted: false };
 }
 
 
@@ -7609,7 +8050,17 @@ function chatHead(page, channel, sub) {
   const subtitle = $('[data-chat-sub]', page);
   subtitle.textContent = sub || '';
   subtitle.hidden = !sub;
+  // Setting the text took the phone fold's two halves away (#275).
+  foldSub(subtitle);
   $('[data-chat-back]', page).hidden = !channel;
+  /*
+   * The range is for a channel page only (#295). Will: the overview "is
+   * just supposed to be a quick way to see the recent messages and
+   * chats". Hidden, not removed, because the channel pages use the same
+   * markup.
+   */
+  const range = $('[data-chat-range]', page);
+  if (range) range.hidden = !channel;
   const views = $('[data-chat-view]', page);
   views.hidden = !channel;
   for (const button of $$('[data-chat-view-choice]', views)) {
@@ -7625,9 +8076,10 @@ function chatHead(page, channel, sub) {
       tally.textContent = chatOldestReached
         ? `${count(chatRows.length)} message${chatRows.length === 1 ? '' : 's'}`
         : `${count(chatRows.length)} shown`;
+      // The table is newest first, so its older rows are further DOWN.
       tally.title = chatOldestReached
         ? 'Every message in the range is loaded.'
-        : 'Older messages are still to load. Scroll up for more.';
+        : `Older messages are still to load. Scroll ${chatView === 'table' ? 'down' : 'up'} for more.`;
     }
   }
 }
@@ -7683,16 +8135,19 @@ function chatDrawRows(scroller) {
  */
 async function chatLoadOlder(page) {
   if (chatBusy || chatOldestReached || !currentChatChannel) return;
-  const scroller = $('[data-chat-scroll]', page);
-  if (!scroller) return;
+  // The table view pages too (#297). It is newest first, so the older
+  // rows go on at the BOTTOM and nothing above the reader moves.
+  const table = chatView === 'table';
+  const scroller = table ? null : $('[data-chat-scroll]', page);
+  if (!table && !scroller) return;
   const oldest = chatRows.length ? chatRows[chatRows.length - 1] : null;
   if (!oldest) return;
-  const range = chatRange();
+  const range = chatRowsRange || chatRange();
   chatBusy = true;
   try {
     const older = await chatFetch(currentChatChannel, {
       since: range.from,
-      before: new Date(oldest.seen_at),
+      before: oldest.seen_at,
     });
     if (!Array.isArray(older) || !older.length) {
       chatOldestReached = true;
@@ -7709,6 +8164,11 @@ async function chatLoadOlder(page) {
       else chatRows = [...chatRows, ...fresh];
       if (older.length < CHAT_PAGE) chatOldestReached = true;
     }
+    if (table) {
+      chatDrawTable(page);
+      chatHead(page, currentChatChannel, '');
+      return;
+    }
     const before = scroller.scrollHeight;
     const top = scroller.scrollTop;
     chatDrawRows(scroller);
@@ -7716,9 +8176,62 @@ async function chatLoadOlder(page) {
     chatHead(page, currentChatChannel, '');
   } catch (error) {
     if (window.console) window.console.warn('could not load older messages', error);
+    /*
+     * The table's observer fires on a CHANGE of intersection. After a
+     * failure the foot is still in view, so nothing would ever change and
+     * nothing would ask again. The next scroll, wheel or touch the reader
+     * makes re-arms it, which is the retry (#297).
+     */
+    if (table) {
+      const again = () => {
+        for (const type of ['scroll', 'wheel', 'touchmove']) window.removeEventListener(type, again);
+        chatWatchTableFoot(page);
+      };
+      for (const type of ['scroll', 'wheel', 'touchmove']) {
+        window.addEventListener(type, again, { passive: true });
+      }
+    }
   } finally {
     chatBusy = false;
   }
+}
+
+/*
+ * The table view and the line at its foot (#297).
+ *
+ * The table stopped at 100 rows: the reading view paged on as the reader
+ * scrolled, and the table had nothing that asked for more. Will decided
+ * there is no "Load older" button in either view, so the table loads the
+ * next page when its foot comes near the bottom of the screen, as the
+ * nodes list does.
+ */
+function chatDrawTable(page) {
+  const body = $('[data-chat-body]', page);
+  if (!body) return;
+  replace(body, el('div', { class: 'panel' },
+    chatRows.length
+      ? [
+          chatTable(chatRows),
+          chatOldestReached
+            ? el('p', { class: 'chat-edge muted', text: 'The start of this range.' })
+            : el('p', { class: 'chat-edge muted', 'data-chat-older': '', text: 'Scroll down for older messages…' }),
+        ]
+      : empty('No messages on this channel in this range.')));
+  chatWatchTableFoot(page);
+}
+
+/** Watch the table's foot, and ask for older rows when it nears the screen. */
+function chatWatchTableFoot(page) {
+  if (chatTableWatch) chatTableWatch.disconnect();
+  chatTableWatch = null;
+  const foot = $('[data-chat-body] [data-chat-older]', page);
+  if (!foot || typeof IntersectionObserver !== 'function') return;
+  chatTableWatch = new IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) return;
+    if (currentPage !== 'chat' || chatView !== 'table') return;
+    chatLoadOlder(page);
+  }, { rootMargin: '400px 0px' });
+  chatTableWatch.observe(foot);
 }
 
 /*
@@ -7779,17 +8292,28 @@ async function chatAppendNew() {
 }
 
 async function chatChannelPage(page, channel) {
-  const range = chatRange();
-  const key = chatKey(channel, range);
+  const key = chatKey(channel, chatRangeFromAddress());
   const body = $('[data-chat-body]', page);
   chatDrawRange(page);
+  if (chatTableWatch) chatTableWatch.disconnect();
+  chatTableWatch = null;
+
+  // Where the reader is in the reading view, if it is already drawn, so a
+  // redraw of the same rows (Live pressed, the view switched back) puts
+  // them back there rather than at the newest message.
+  const held = $('[data-chat-scroll]', page);
+  const place = key === chatRowsKey && held && held.isConnected
+    ? { top: held.scrollTop, atBottom: chatAtBottom(held) }
+    : null;
 
   // A different channel or range is a different conversation.
   if (key !== chatRowsKey) {
     chatRows = [];
     chatOldestReached = false;
     chatRowsKey = key;
+    chatRowsRange = chatRange();
   }
+  const range = chatRowsRange;
 
   if (!chatRows.length) {
     const first = await chatFetch(channel, { since: range.from, before: range.to })
@@ -7797,15 +8321,26 @@ async function chatChannelPage(page, channel) {
     if (first instanceof Error) return replace(body, failure(first));
     chatRows = Array.isArray(first) ? first : [];
     if (chatRows.length < CHAT_PAGE) chatOldestReached = true;
+  } else if (!chatRangeIsHistory(range)) {
+    /*
+     * The rows are kept across a redraw now (#297), so what arrived since
+     * they were loaded has to be asked for. The table view's live tick
+     * lands here, and before this it re-fetched the newest page each time.
+     */
+    const newer = await chatFetch(channel, { since: chatRows[0].seen_at, before: null })
+      .catch(() => null);
+    if (newer) {
+      const merged = chatMergeNewer(chatRows, newer, CHAT_PAGE);
+      chatRows = merged.rows;
+      if (merged.restarted) chatOldestReached = false;
+    }
   }
 
   if (chatView === 'table') {
     page.classList.remove('chat-full');
     chatHead(page, channel, '');
-    return replace(body, el('div', { class: 'panel' },
-      chatRows.length
-        ? chatTable(chatRows)
-        : empty('No messages on this channel in this range.')));
+    chatDrawTable(page);
+    return undefined;
   }
 
   /*
@@ -7825,11 +8360,25 @@ async function chatChannelPage(page, channel) {
   const scroller = el('div', { class: 'chat-scroll', 'data-chat-scroll': '', tabindex: '0' });
   replace(body, scroller);
   chatDrawRows(scroller);
-  // Opens at the newest message, like every other chat.
-  scroller.scrollTop = scroller.scrollHeight;
+  // Opens at the newest message, like every other chat -- unless the
+  // reader was part-way up these same rows, in which case they stay there.
+  // New rows only ever go on at the bottom, so the old offset still
+  // points at the same message.
+  scroller.scrollTop = place && !place.atBottom ? place.top : scroller.scrollHeight;
   scroller.addEventListener('scroll', () => {
     if (scroller.scrollTop <= CHAT_NEAR_TOP) chatLoadOlder(page);
   }, { passive: true });
+  /*
+   * A retry needs an event. After a failed load at the very top, a
+   * further upward wheel or drag moves nothing, so `scroll` never fires
+   * again and the page is stuck (#297). `wheel` and `touchmove` fire
+   * whether or not anything moved.
+   */
+  const nudge = () => {
+    if (scroller.scrollTop <= CHAT_NEAR_TOP) chatLoadOlder(page);
+  };
+  scroller.addEventListener('wheel', nudge, { passive: true });
+  scroller.addEventListener('touchmove', nudge, { passive: true });
   return undefined;
 }
 
@@ -7837,29 +8386,29 @@ PAGES.chat = async (page) => {
   if (currentChatChannel) return chatChannelPage(page, currentChatChannel);
   // The overview is an ordinary scrolling page, not the pinned chat.
   page.classList.remove('chat-full');
-  chatHead(page, null,
-    'One section for each detected channel on the preset chosen in the menu, grouped by what it '
-    + 'is for. New names land in Custom.');
   /*
-   * The overview counts a WINDOW, not a range.
+   * The overview has a fixed window and no range control (#295).
    *
-   * `/api/chat/overview` takes `hours` and nothing else, and widening it
-   * to a pair of instants is a change to a shared endpoint for the sake of
-   * a list of channel names. The span of the chosen range is used instead,
-   * rounded up to the hour and clamped to what the endpoint accepts, so
-   * the channel list covers at least what the reader asked for.
+   * It used to turn the chosen range into a span of hours, because
+   * `/api/chat/overview` takes `hours` and nothing else. So an end date
+   * did nothing, and a range set here was lost as soon as a channel was
+   * opened. Will asked for the overview to be a quick look at recent
+   * messages, and for the channel pages to keep the range. The window is
+   * said in words, because no control on the page says it any more.
    *
-   * Rounded UP deliberately: a list that showed slightly less than the
-   * range would hide a channel whose only message sits near the edge.
+   * An old link such as `#chat?from=…` shows the same page as `#chat`.
+   * The query is taken out of the address, so the link does not look as
+   * if it holds a range. `replaceState`, so the router does not run again.
    */
-  const range = chatRange();
-  const end = range.to ? range.to.getTime() : Date.now();
-  const start = range.from ? range.from.getTime() : end - CHAT_DEFAULT_HOURS * 3600000;
-  const spanHours = Math.ceil(Math.max(1, (end - start) / 3600000));
-  const hours = String(Math.min(8760, spanHours));
-  chatDrawRange(page);
+  if (window.location.hash.startsWith('#chat?')) window.history.replaceState(null, '', '#chat');
+  chatHead(page, null,
+    `Messages from the last ${CHAT_OVERVIEW_WINDOW}. One section for each detected channel `
+    + 'on the preset chosen in the menu, grouped by what it is for. New names land in Custom.');
   const body = $('[data-chat-body]', page);
-  const data = await get(`api/chat/overview?hours=${hours}`).catch((error) => error);
+  const data = await get(`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}`).catch((error) => error);
+  // A channel was opened while this loaded. Drawing the overview now
+  // would put it over the channel page that is already there.
+  if (currentChatChannel) return undefined;
   if (data instanceof Error) return replace(body, failure(data));
   if (!data.sections.length) {
     return replace(body, empty('No channels have stored messages. Text storage may be off.'));
@@ -8231,6 +8780,21 @@ function redrawLiveTable(target, rows, keyOf, build) {
  */
 const firehoseFilter = { type: '', hours: '' };
 
+/*
+ * The "What it said" line, in the reader's units.
+ *
+ * The server sends `summary_parts`: text, and measurements as a number
+ * with an SI unit. It used to send prose only, so a temperature read
+ * "21.5 C" in every mode (#291). `summary` is the same line in SI and is
+ * used only when the parts are missing.
+ */
+function summaryText(row) {
+  if (!Array.isArray(row.summary_parts)) return row.summary;
+  return row.summary_parts
+    .map((part) => (typeof part === 'string' ? part : SonoranUnits.measure(part.value, part.unit)))
+    .join('');
+}
+
 /** The address of the firehose, filtered. */
 function firehoseHref(type, hours) {
   const params = new URLSearchParams();
@@ -8279,6 +8843,84 @@ async function fillFirehoseTypes(page) {
   replace(list, [...rows]
     .sort((a, b) => b.count - a.count)
     .map((row) => el('option', { value: portnumLabel(row.name || row.portnum) })));
+}
+
+/*
+ * "3 new ↑": what arrived above a reader who has scrolled down (#280).
+ *
+ * The firehose is newest first and refreshes every 15 s. A reader two
+ * screens down keeps their place, because the browser anchors the
+ * scroll when rows are put in above them (see `redrawLiveTable`), and so
+ * they cannot see that anything arrived. The pill counts the packets put
+ * in above them since they scrolled away, and a tap goes back to the
+ * newest.
+ *
+ * It counts only what a poll ADDED to a page already drawn. A first draw,
+ * a new filter and a return to the page all change the address, and a
+ * change of address starts the count again, so a filter never reads as
+ * 150 new packets.
+ *
+ * Pull to refresh was considered and is not recommended by the review
+ * (§4.5): the page already refreshes itself.
+ */
+const firehoseNew = { count: 0, pill: null, address: null };
+
+/** True when the newest row is above the top of the screen. */
+function firehoseAway(target) {
+  const first = target && target.querySelector('tbody tr');
+  return Boolean(first) && first.getBoundingClientRect().bottom < 0;
+}
+
+function drawFirehosePill() {
+  const pill = firehoseNew.pill;
+  if (!pill) return;
+  pill.hidden = firehoseNew.count === 0;
+  const n = count(firehoseNew.count);
+  pill.textContent = `${n} new ↑`;
+  pill.setAttribute('aria-label', `${n} new packet${firehoseNew.count === 1 ? '' : 's'}. Go to the newest.`);
+}
+
+function resetFirehosePill() {
+  firehoseNew.count = 0;
+  drawFirehosePill();
+}
+
+/*
+ * The pill sits in a sticky holder of no height, so showing it moves no
+ * row: a pill that pushed the table down would move the very row the
+ * reader was reading.
+ */
+function firehosePill(target) {
+  if (firehoseNew.pill && firehoseNew.pill.isConnected) return firehoseNew.pill;
+  const pill = el('button', { type: 'button', class: 'new-pill', hidden: true });
+  pill.addEventListener('click', () => {
+    resetFirehosePill();
+    const behavior = REDUCED_MOTION.matches ? 'auto' : 'smooth';
+    target.scrollIntoView({ block: 'start', behavior });
+  });
+  target.before(el('div', { class: 'new-pill-anchor' }, pill));
+  firehoseNew.pill = pill;
+  window.addEventListener('scroll', () => {
+    if (firehoseNew.count && !firehoseAway(target)) resetFirehosePill();
+  }, { passive: true });
+  window.addEventListener('hashchange', () => {
+    firehoseNew.address = null;
+    resetFirehosePill();
+  });
+  return pill;
+}
+
+/** Count what the poll put in above the reader, from the keys before it. */
+function countFirehoseNew(target, before, rows) {
+  firehosePill(target);
+  // The first draw at an address is the page, not news. The rows left
+  // from another filter or another visit are not the ones it replaces.
+  const address = location.hash;
+  const moved = address !== firehoseNew.address;
+  firehoseNew.address = address;
+  if (moved || !before.size || !firehoseAway(target)) return resetFirehosePill();
+  firehoseNew.count += rows.filter((row) => !before.has(String(row.packet_key))).length;
+  drawFirehosePill();
 }
 
 PAGES.firehose = async (page) => {
@@ -8361,7 +9003,18 @@ PAGES.firehose = async (page) => {
    */
   const packetHref = (row) =>
     `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
-  redrawLiveTable(target, rows, (row) => row.packet_key, () => table([
+  /*
+   * The key carries the reader's units as well as the packet. A kept row
+   * keeps its old text, so without this a change of units on the settings
+   * page left every row already on screen in the old units (#291).
+   */
+  const units = `${SonoranUnits.imperial() ? 'i' : 'm'}${SonoranUnits.fahrenheit() ? 'f' : 'c'}`;
+  // The rows on screen before this poll, for the "N new" pill (#280), by
+  // packet alone: with the units in the key, every row would count as new
+  // after a change of units.
+  const before = new Set(Array.from(target.querySelectorAll('tbody tr'),
+    (row) => String(row.dataset.rowKey || '').split('|')[0]));
+  redrawLiveTable(target, rows, (row) => `${row.packet_key}|${units}`, () => table([
     /*
      * Time first, and it IS the link (Will, 2026-09-26).
      *
@@ -8394,7 +9047,7 @@ PAGES.firehose = async (page) => {
       wrap: true,
       hint: 'A short line from the decoded packet. Node info and routing packets store nothing to show, and neither does a text message while text storage is off.',
       cell: (row) => (row.summary
-        ? el('span', { class: 'summary', text: row.summary })
+        ? el('span', { class: 'summary', text: summaryText(row) })
         : el('span', { class: 'muted', text: '-' })),
     },
     { label: 'Channel', cell: (row) => row.channel || '-' },
@@ -8423,6 +9076,7 @@ PAGES.firehose = async (page) => {
       cell: (row) => count(row.seen_count),
     },
   ], rows, nothing, { rowHref: packetHref }));
+  countFirehoseNew(target, before, rows);
 };
 
 /* --- Traceroutes ------------------------------------------------ */
@@ -8431,9 +9085,16 @@ PAGES.traceroutes = async (page) => {
   const target = $('[data-traceroute-table]', page);
   const rows = await get('api/traceroutes?limit=100').catch((error) => error);
   if (rows instanceof Error) return replace(target, failure(rows));
+  /*
+   * On a phone 57% of this table was off to the side (#274). The Time
+   * column stays put while the rest scrolls, because it is the link to
+   * the trace. Hops and Signal measured are not drawn below 40rem: both
+   * are on the trace page, one tap away, with each hop spelled out.
+   */
   replace(target, table([
     {
       label: 'Time',
+      stick: true,
       cell: (row) => el('a', {
         class: 'linky', href: `#traceroute/${row.id}`, text: stamp(row.seen_at),
       }),
@@ -8441,10 +9102,11 @@ PAGES.traceroutes = async (page) => {
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => nodeChip({ node_id: row.to_node, display_name: row.to_name }) },
     { label: 'Path', wrap: true, cell: (row) => (row.route_names || []).join(' \u2192 ') || 'direct' },
-    { label: 'Hops', num: true, cell: (row) => (row.hops || []).length },
+    { label: 'Hops', num: true, low: true, cell: (row) => (row.hops || []).length },
     {
       label: 'Signal measured',
       num: true,
+      low: true,
       hint: 'How many hops came back with a signal reading. The firmware reports no reading for a hop it could not measure, and often sends fewer readings than hops.',
       cell: (row) =>
         `${(row.hops || []).filter((hop) => hop.snr != null).length} of ${(row.hops || []).length}`,
@@ -8515,22 +9177,23 @@ function drawBroadcastTable(page, data) {
     } else if (h.restarted) {
       parts.push(el('span', { class: 'tag', text: 'restarted' }));
     }
+    /*
+     * The meaning of each of these was a `title`, which a phone never
+     * shows (#276). Each value is now the button that opens it.
+     */
     if (h.battery_level != null) {
       const mains = h.battery_level > 100;
-      parts.push(el('span', {
-        class: h.brownout_risk ? 'tag bad' : 'tag',
-        title: mains
+      parts.push(tapTip(h.brownout_risk ? 'tag bad' : 'tag',
+        mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
+        mains ? 'On mains' : 'Battery',
+        [mains
           ? 'The node reports a battery level above 100%, which the firmware uses for mains power.'
-          : 'Battery level the node last reported.',
-        text: mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
-      }));
+          : 'Battery level the node last reported.']));
     }
     if (h.uptime_seconds != null) {
-      parts.push(el('span', {
-        class: 'muted',
-        title: 'How long the node says it has been running since it last restarted.',
-        text: `up ${everySeconds(h.uptime_seconds)}`,
-      }));
+      parts.push(el('span', { class: 'muted' },
+        tapTip('', `up ${everySeconds(h.uptime_seconds)}`, 'Uptime',
+          ['How long the node says it has been running since it last restarted.'])));
     }
     return el('span', { class: 'tags' }, parts.length ? parts : el('span', { text: 'ok' }));
   };
@@ -8540,17 +9203,23 @@ function drawBroadcastTable(page, data) {
       Object.entries(row.families)
         .sort((a, b) => b[1].ratio - a[1].ratio)
         .slice(0, 3)
-        .map(([name, rate]) => el('span', {
-          class: rate.notable ? 'tag bad' : rate.faster_than_default ? 'tag' : 'tag muted',
-          title: `every ${everySeconds(rate.interval_seconds)}, ` +
-                 `default ${everySeconds(rate.default_seconds)}`,
-          text: `${portnumLabel(name)} ${rate.ratio}x`,
-        })));
+        // "2.5x" says how much faster, and only the panel says what
+        // that is in time (#276): the `title` was hover only.
+        .map(([name, rate]) => tapTip(
+          rate.notable ? 'tag bad' : rate.faster_than_default ? 'tag' : 'tag muted',
+          `${portnumLabel(name)} ${rate.ratio}x`,
+          portnumLabel(name),
+          [`Sends every ${everySeconds(rate.interval_seconds)}. `
+            + `The default is every ${everySeconds(rate.default_seconds)}.`])));
 
+  // As on the traceroutes page (#274): the node stays put while the
+  // rest scrolls, and the raw packet count gives way on a phone. The
+  // rates beside it are the point of the table, and they already carry
+  // what the count would say.
   replace(target, table(
     [
-      { label: 'Node', cell: (row) => nodeChip(row) },
-      { label: 'Packets', num: true, cell: (row) => count(row.packet_count) },
+      { label: 'Node', stick: true, cell: (row) => nodeChip(row) },
+      { label: 'Packets', num: true, low: true, cell: (row) => count(row.packet_count) },
       { label: 'Send rate against default', cell: rates },
       { label: 'Health', cell: health },
     ],
@@ -8559,20 +9228,29 @@ function drawBroadcastTable(page, data) {
   ));
 }
 
-/** Draw what the mesh sends each hour, stacked by packet family. */
-function drawActivityChart(page, data) {
+/**
+ * Draw what the mesh sends each hour, or each day for a long range,
+ * stacked by packet family.
+ */
+function drawActivityChart(page, data, span = null) {
   const note = $('[data-activity-note]', page);
   const target = $('[data-activity-chart]', page);
+  const title = $('[data-activity-title]', page);
+  const words = span || (data ? `the last ${windowName(Math.round(data.window_hours))}` : '');
   if (!data || !data.families) {
     note.textContent = '';
     return chartEmpty(target, 'Cannot load what the mesh is sending.');
   }
+  // Above three days the API answers by local day: 720 hourly columns
+  // are too many to read (#294).
+  const byDay = data.bucket === 'day';
+  if (title) title.textContent = `What the mesh is sending, by ${byDay ? 'day' : 'hour'}`;
   if (!data.families.length) {
     note.textContent = '';
-    return chartEmpty(target, `No packet was stored in the last ${data.window_hours} h.`);
+    return chartEmpty(target, `No packet was stored in ${words}.`);
   }
   const total = data.families.reduce((sum, family) => sum + family.total, 0);
-  note.textContent = `${count(total)} packets over ${data.window_hours} h`;
+  note.textContent = `${count(total)} packets`;
 
   // Only the families worth a band. The rest become one "other" band, so
   // the legend stays readable.
@@ -8598,7 +9276,11 @@ function drawActivityChart(page, data) {
       textStyle: { color: PALETTE.muted },
       top: 0,
     },
-    xAxis: { type: 'category', data: data.hours.map((hour) => clock(hour)), ...AXIS },
+    xAxis: {
+      type: 'category',
+      data: data.hours.map((moment) => (byDay ? DATE.format(new Date(moment)) : clock(moment))),
+      ...AXIS,
+    },
     yAxis: { type: 'value', ...AXIS },
     series: bands.map((band, index) => ({
       name: portnumLabel(band.name),
@@ -8613,47 +9295,194 @@ function drawActivityChart(page, data) {
   });
 }
 
-PAGES.stats = async (page) => {
-  await Promise.all([loadSummary(page), loadTopTalkers(page), loadLeaderboards(page)]);
-  const [daily, hardware, activity, broadcast] = await getAll([
-    'api/stats/snapshots/daily?days=30',
-    'api/stats/hardware',
-    'api/stats/activity?hours=24',
-    'api/stats/broadcast?hours=24&limit=40',
-  ]);
-  drawActivityChart(page, activity);
-  drawBroadcastTable(page, broadcast);
+/*
+ * The Statistics range (#294).
+ *
+ * Will: "the stats page needs the ability to set the date range with some
+ * common quick click buttons at the top right of the page and all the
+ * stats, widgets, etc should adjust to them. Default is last 30 days
+ * rolling." He also asked for a from/to range.
+ *
+ * The range lives in the address, as the chat range does: `#stats`,
+ * `#stats?range=7d`, or `#stats?from=2026-09-01&to=2026-09-10`. The
+ * router reads it, and a change writes it back with `replaceState`, so a
+ * reload or a shared link keeps it and the Back button is not flooded.
+ *
+ * The largest quick range is 30 days because that is how long packets are
+ * kept (RETENTION_DAYS_PACKET). A longer button would draw every
+ * packet-based widget over deleted ground and call it quiet.
+ */
+const STATS_RANGES = { '24h': 24, '7d': 168, '30d': 720 };
+const STATS_DEFAULT_RANGE = '30d';
+// The API's cap, in days: a custom range longer than this is refused.
+const STATS_MAX_DAYS = 30;
+let statsRange = { key: STATS_DEFAULT_RANGE, from: null, to: null };
 
-  const dailyChart = $('[data-daily-chart]', page);
-  if (!daily) {
-    chartEmpty(dailyChart, 'Cannot load the daily history.');
-  } else if (!daily.length) {
-    // The jobs service writes `daily_snapshot`. No row means nobody has
-    // written one yet, which is not the same as thirty quiet days.
-    chartEmpty(dailyChart, 'No daily snapshot has been written yet. The jobs service writes one each day.');
-  } else {
-    const rows = [...daily].reverse();
-    chart(dailyChart, {
-      ...CHART_BASE,
-      legend: { textStyle: { color: PALETTE.muted }, top: 0 },
-      xAxis: { type: 'category', data: rows.map((row) => row.day), ...AXIS },
-      // Node counts are far smaller than packet counts. Give each its own axis.
-      yAxis: [
-        { type: 'value', name: 'Packets', ...AXIS },
-        { type: 'value', name: 'Nodes', ...AXIS, splitLine: { show: false } },
-      ],
-      series: [
-        { name: 'Packets', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 0, data: rows.map((row) => row.packet_count), itemStyle: { color: PALETTE.accent } },
-        { name: 'Nodes', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 1, data: rows.map((row) => row.node_count), itemStyle: { color: PALETTE.good } },
-      ],
-    });
+// A calendar date as the page writes it. The dates in the address are the
+// mesh's local days already, so they are formatted as UTC, which leaves
+// them where they are.
+const CALENDAR_DAY = new Intl.DateTimeFormat(undefined, {
+  month: 'short', day: 'numeric', timeZone: 'UTC',
+});
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A `YYYY-MM-DD`, or null for anything that is not a real date. */
+function calendarDay(value) {
+  if (!value || !ISO_DAY.test(value)) return null;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value ? value : null;
+}
+
+/** The day after a `YYYY-MM-DD`. */
+function nextCalendarDay(value) {
+  return new Date(Date.parse(`${value}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+}
+
+/** Read the range from the address. Anything unknown is the default. */
+function statsRangeFromAddress(hash = location.hash) {
+  const query = new URLSearchParams(hash.split('?')[1] || '');
+  const from = calendarDay(query.get('from'));
+  if (from) {
+    const to = calendarDay(query.get('to'));
+    return { key: 'custom', from, to: to && to >= from ? to : null };
   }
+  const key = query.get('range');
+  return { key: Object.hasOwn(STATS_RANGES, key || '') ? key : STATS_DEFAULT_RANGE, from: null, to: null };
+}
+
+/** The range in the API's words. */
+function statsRangeQuery(range = statsRange) {
+  if (range.key !== 'custom') return `hours=${STATS_RANGES[range.key]}`;
+  // `to` is the last day shown, so the window ends at the next midnight.
+  // The API reads a date with no zone as the mesh's local midnight.
+  const until = range.to ? `&until=${nextCalendarDay(range.to)}` : '';
+  return `since=${range.from}${until}`;
+}
+
+/** The range in the page's words: "last 30 d", "1 Sep to 10 Sep". */
+function statsRangeWords(range = statsRange) {
+  if (range.key !== 'custom') return `last ${windowName(STATS_RANGES[range.key])}`;
+  const from = CALENDAR_DAY.format(new Date(`${range.from}T00:00:00Z`));
+  if (!range.to) return `${from} to now`;
+  if (range.to === range.from) return from;
+  return `${from} to ${CALENDAR_DAY.format(new Date(`${range.to}T00:00:00Z`))}`;
+}
+
+/** The address for a range, written without adding a history entry. */
+function statsWriteRange(range) {
+  statsRange = range;
+  const hash = range.key === 'custom'
+    ? `#stats?from=${range.from}${range.to ? `&to=${range.to}` : ''}`
+    : (range.key === STATS_DEFAULT_RANGE ? '#stats' : `#stats?range=${range.key}`);
+  history.replaceState(null, '', hash);
+}
+
+/*
+ * Why a typed range was not used, or null when it can be.
+ *
+ * Checked here as well as by the API, so the reader is told in words next
+ * to the boxes rather than finding every widget on the page failed.
+ */
+function statsRangeRefusal(from, to) {
+  if (!from) return 'Choose a start date.';
+  const today = new Date().toISOString().slice(0, 10);
+  if (from > today) return 'The start date is in the future.';
+  if (to && to < from) return 'The end date is before the start date.';
+  const last = to || today;
+  const days = Math.round((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+  if (days > STATS_MAX_DAYS) {
+    return `A range can be at most ${STATS_MAX_DAYS} days, the time packets are kept.`;
+  }
+  return null;
+}
+
+/** Show the range in force on the control. */
+function statsDrawControl(page) {
+  for (const button of $$('[data-stats-quick]', page)) {
+    button.setAttribute('aria-pressed', String(button.dataset.statsQuick === statsRange.key));
+  }
+  const from = $('[data-stats-from]', page);
+  const to = $('[data-stats-to]', page);
+  // Not while the reader is typing in one, which would move their caret.
+  if (from && document.activeElement !== from) from.value = statsRange.from || '';
+  if (to && document.activeElement !== to) to.value = statsRange.to || '';
+  const range = $('[data-stats-range]', page);
+  if (range && statsRange.key === 'custom') range.classList.add('show-custom');
+}
+
+/*
+ * The range on every widget that follows it, and where retention cuts it
+ * short, that too (#294: "where a table's retention caps the range, say
+ * so on the widget rather than pretending").
+ *
+ * Every widget with a chip is built from `packet`, so one cap covers them
+ * all. The leaderboards write their own chips.
+ */
+function statsDrawChips(page, meta) {
+  const cap = retentionCap(meta);
+  const text = cap ? `${statsRangeWords()} · ${cap}` : statsRangeWords();
+  for (const chip of $$('[data-range-chip]', page)) chip.textContent = text;
+}
+
+/** Draw each local day's packets and the nodes heard that day. */
+function drawDailyChart(page, daily) {
+  const dailyChart = $('[data-daily-chart]', page);
+  if (!daily || !Array.isArray(daily.days)) {
+    return chartEmpty(dailyChart, 'Cannot load the daily history.');
+  }
+  if (!daily.days.length) {
+    // Every day in the range is older than what is kept.
+    return chartEmpty(dailyChart, 'No day in this range is still kept. Packets are kept for 30 days.');
+  }
+  chart(dailyChart, {
+    ...CHART_BASE,
+    legend: { textStyle: { color: PALETTE.muted }, top: 0 },
+    xAxis: {
+      type: 'category',
+      data: daily.days.map((row) => CALENDAR_DAY.format(new Date(`${row.day}T00:00:00Z`))),
+      ...AXIS,
+    },
+    // Node counts are far smaller than packet counts. Give each its own axis.
+    yAxis: [
+      { type: 'value', name: 'Packets', ...AXIS },
+      { type: 'value', name: 'Nodes', ...AXIS, splitLine: { show: false } },
+    ],
+    series: [
+      { name: 'Packets', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 0, data: daily.days.map((row) => row.packet_count), itemStyle: { color: PALETTE.accent } },
+      { name: 'Nodes heard', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 1, data: daily.days.map((row) => row.node_count), itemStyle: { color: PALETTE.good } },
+    ],
+  });
+}
+
+PAGES.stats = async (page) => {
+  statsDrawControl(page);
+  const query = statsRangeQuery();
+  const span = statsRangeWords();
+  const summarySpan = statsRange.key === 'custom' ? span : windowName(STATS_RANGES[statsRange.key]);
+  await Promise.all([
+    loadSummary(page, { query, span: summarySpan }),
+    loadTopTalkers(page, { query }),
+    loadLeaderboards(page, { query, span }),
+  ]);
+  const [daily, hardware, activity, broadcast] = await getAll([
+    // Traffic on each local day, from `packet`. It was the jobs service's
+    // daily snapshot, which is the whole-table total held at a UTC
+    // midnight -- "packets still kept", not what the mesh did that day.
+    `api/stats/daily?${query}`,
+    `api/stats/hardware?${query}`,
+    `api/stats/activity?${query}`,
+    `api/stats/broadcast?${query}&limit=40`,
+  ]);
+  statsDrawChips(page, daily || activity || broadcast);
+  drawActivityChart(page, activity, span);
+  drawBroadcastTable(page, broadcast);
+  drawDailyChart(page, daily);
 
   const hardwareChart = $('[data-hardware-chart]', page);
   if (!hardware) {
     chartEmpty(hardwareChart, 'Cannot load the hardware mix.');
   } else if (!hardware.length) {
-    chartEmpty(hardwareChart, 'No node has reported its board model.');
+    chartEmpty(hardwareChart, `No node that reported its board model was heard in ${span}.`);
   } else {
     const top = hardware.slice(0, 12).reverse();
     // Every bar carries its name (#72). ECharts drops every other label
@@ -8742,14 +9571,40 @@ function traceroutePath(hops) {
  * CSS filter over its picture would invert its colours too. The link
  * still opens mesh-graph itself.
  */
-function meshGraphTrace(trace) {
+/*
+ * The whole panel, heading included, so the traceroute page and the
+ * packet page draw the same thing (Will, 2026-09-27: the packet page gets
+ * the same button). `extra` is the grid class the caller needs.
+ *
+ * "Open in mesh-graph" is a link drawn as a button at the top right of
+ * the drawing (#289), the `a.button-link` of the node page (#258). It
+ * stays an `<a>`, so middle-click and "Open in new tab" still work. It
+ * sits in the heading and not over the picture: the picture is hidden
+ * until it loads and replaced by a sentence when mesh-graph has none,
+ * and the button stays in both cases (Will, 2026-09-27). With no URL
+ * there is no button, only the sentence that says why.
+ */
+function meshGraphTrace(trace, extra = '') {
   const url = trace && trace.graph_url;
-  if (!url) return empty('This traceroute has no packet ID, so it cannot be linked.');
+  const panel = (...body) => el('div', { class: `panel ${extra}`.trim(), 'data-mesh-graph-panel': '' },
+    el('h3', {}, el('span', { text: 'mesh-graph drawing' }),
+      url
+        ? el('a', { class: 'button-link', href: url, target: '_blank', rel: 'noopener' },
+            icon('#i-external'), el('span', { text: 'Open in mesh-graph' }),
+            el('span', { class: 'sr-only', text: ' (opens in a new tab)' }))
+        : null),
+    ...body);
+  if (!url) return panel(empty('This traceroute has no packet ID, so it cannot be linked.'));
   const drawing = el('img', {
     src: trace.drawing_url ? api(trace.drawing_url) : url,
     alt: '',
     class: 'trace-drawing',
-    loading: 'lazy',
+    /*
+     * Not `loading: 'lazy'`. The picture is `display: none` until it
+     * loads, and Chromium never fetches a lazy image that has no box:
+     * measured, the request was not made at all, so neither the drawing
+     * nor the "holds no drawing" sentence ever appeared (#289).
+     */
     onload: (event) => { event.target.style.display = 'block'; },
     onerror: (event) => {
       event.target.replaceWith(el('p', {
@@ -8758,11 +9613,7 @@ function meshGraphTrace(trace) {
       }));
     },
   });
-  return el('div', {},
-    el('p', { style: 'margin:0 0 .5rem' },
-      el('a', { class: 'linky', href: url, target: '_blank', rel: 'noopener',
-        text: 'Open this trace in mesh-graph' })),
-    drawing);
+  return panel(drawing);
 }
 
 
@@ -8836,7 +9687,17 @@ PAGES.traceroute = async (page) => {
       text: `${trace.hops.length} hops, ${measured} with a signal reading, `
         + `${stamp(trace.seen_at)}` }));
 
-  replace(body, el('div', { class: 'grid two' },
+  /*
+   * Route, Path there and Path back are the three panels on top, and
+   * the drawing is under them at full width (Will, #288). Path back
+   * used to come after the drawing, so the two paths were a screen
+   * apart, and it was left out when there was none, which changed the
+   * shape of the page from one trace to the next.
+   *
+   * `.trace-top` is one column or three, never two: a two-column row
+   * of three panels leaves Path back alone beside an empty cell.
+   */
+  replace(body, el('div', { class: 'grid trace-top' },
     el('div', { class: 'panel' },
       el('h3', {}, 'Route'),
       el('dl', { class: 'kv' },
@@ -8863,23 +9724,48 @@ PAGES.traceroute = async (page) => {
     el('div', { class: 'panel' },
       el('h3', {}, 'Path there'),
       traceroutePath(trace.hops)),
-    el('div', { class: 'panel span-2' },
-      el('h3', {}, 'mesh-graph drawing'),
-      meshGraphTrace(trace)),
-    trace.return_hops && trace.return_hops.length
-      ? el('div', { class: 'panel' },
-          el('h3', {}, 'Path back',
-            el('span', { class: 'muted',
-              text: trace.return_delivered ? 'delivered' : 'still in flight' })),
-          trace.return_delivered
-            ? null
-            : el('p', { class: 'notice' },
-                'The broker saw this reply while it was still travelling. It had reached '
-                + `${trace.reply_reached} when it was captured. Whether it arrived back at `
-                + `${trace.from_name} is not recorded.`),
-          traceroutePath(trace.return_hops))
-      : null));
+    pathBackPanel(trace),
+    meshGraphTrace(trace, 'span-2')));
 };
+
+/*
+ * The Path back panel, which is drawn for every trace (#288).
+ *
+ * Will (2026-09-27): when a trace has no reply, keep the panel on top
+ * and have it say no reply was seen. That sentence has to be true, and
+ * a request row never holds a return path even when a reply came: the
+ * reply is a row of its own. So the API looks for it (`reply_id`), and
+ * this says "no reply was seen" only when none was stored. A reply
+ * that carries no return path says that instead, because a reply was
+ * plainly seen.
+ */
+function pathBackPanel(trace) {
+  if (trace.return_hops && trace.return_hops.length) {
+    return el('div', { class: 'panel' },
+      el('h3', {}, 'Path back',
+        el('span', { class: 'muted',
+          text: trace.return_delivered ? 'delivered' : 'still in flight' })),
+      trace.return_delivered
+        ? null
+        : el('p', { class: 'notice' },
+            'The broker saw this reply while it was still travelling. It had reached '
+            + `${trace.reply_reached} when it was captured. Whether it arrived back at `
+            + `${trace.from_name} is not recorded.`),
+      traceroutePath(trace.return_hops));
+  }
+  let why;
+  if (trace.is_reply) {
+    why = empty('This reply carried no return path.');
+  } else if (trace.reply_id != null) {
+    why = el('p', { class: 'muted', 'data-path-back': 'elsewhere' },
+      'The reply is stored as a traceroute of its own. ',
+      el('a', { class: 'linky', href: `#traceroute/${trace.reply_id}`, text: 'Open the reply' }),
+      ' to see the path back.');
+  } else {
+    why = el('p', { class: 'muted', 'data-path-back': 'none' }, 'No reply was seen for this request.');
+  }
+  return el('div', { class: 'panel' }, el('h3', {}, 'Path back'), why);
+}
 
 
 /* Labels and units for the decoded values a packet can carry. */
@@ -8889,7 +9775,7 @@ const DECODED_LABELS = {
   latitude: ['Latitude', (v) => round(v, 5)],
   longitude: ['Longitude', (v) => round(v, 5)],
   altitude: ['Altitude', (v) => SonoranUnits.heightFromM(v)],
-  ground_speed: ['Ground speed', (v) => `${v} m/s`],
+  ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromMs(v)],
   ground_track: ['Ground track', (v) => `${round(v, 0)} deg`],
   sats_in_view: ['Satellites', (v) => String(v)],
   precision_bits: ['Precision bits', (v) => String(v)],
@@ -9127,7 +10013,7 @@ function positionValues(row) {
       ? 'full'
       : `about ${SonoranUnits.distanceFromM(doubt)} `
         + `(${row.precision_bits} bits). The node chose to send a rounded position.`],
-    row.ground_speed == null ? null : ['Ground speed', `${row.ground_speed} m/s`],
+    row.ground_speed == null ? null : ['Ground speed', SonoranUnits.speedFromMs(row.ground_speed)],
     row.sats_in_view == null ? null : ['Satellites', String(row.sats_in_view)],
   ].filter(Boolean);
   return el('dl', { class: 'kv' }, entries.flatMap(([label, value]) =>
@@ -9360,9 +10246,7 @@ PAGES.packet = async (page) => {
           el('h3', {}, 'Path this packet took',
             el('a', { class: 'linky', href: `#traceroute/${trace.id}`, text: 'full page' })),
           traceroutePath(trace.hops)),
-        el('div', { class: 'panel' },
-          el('h3', {}, 'mesh-graph drawing'),
-          meshGraphTrace(trace)));
+        meshGraphTrace(trace));
     }
   }
 };
@@ -9407,6 +10291,13 @@ async function setStatus(state, message) {
   const dot = $('[data-status] .dot');
   dot.className = `dot ${state}`;
   $('[data-status-text]').textContent = message;
+  // The copy in the sticky phone bar (#271), so the state stays on the
+  // screen while the menu is closed and the page is scrolled.
+  const bar = $('[data-status-bar]');
+  if (bar) {
+    $('.dot', bar).className = `dot ${state}`;
+    $('[data-status-bar-text]', bar).textContent = message;
+  }
   // The visible copy is inside the menu, which is `hidden` when a phone
   // closes it; this one is `.sr-only`, always in the tree, and is the
   // only thing that announces (#175).
@@ -9626,6 +10517,17 @@ function fitHint(host, noun, label, hint, exact) {
     'aria-expanded': 'false',
     'aria-controls': id,
   }, el('span', { class: 'hint-mark', 'aria-hidden': 'true', text: 'i' }));
+  wireHint(button, panel);
+  host.append(button, panel);
+}
+
+/**
+ * Make `button` open and close `panel`, the way every hint does.
+ *
+ * Shared by `fitHint` and `tapTip`, so the popover path and the fallback
+ * path cannot drift between the two.
+ */
+function wireHint(button, panel) {
   /*
    * The browser drives it where it can. `popovertarget` toggles the
    * panel, closes it on Escape and on a tap outside, and — the part a
@@ -9634,7 +10536,7 @@ function fitHint(host, noun, label, hint, exact) {
    * it in the same gesture.
    */
   if (POPOVER) {
-    button.setAttribute('popovertarget', id);
+    button.setAttribute('popovertarget', panel.id);
     /*
      * An auto popover closes any other one as it opens, so nothing here
      * has to track which panel is up. `toggle` is the first moment the
@@ -9656,7 +10558,38 @@ function fitHint(host, noun, label, hint, exact) {
       placeHint(button, panel);
     });
   }
-  host.append(button, panel);
+}
+
+/**
+ * A short value whose meaning used to live only in a `title` (#276).
+ *
+ * A touch screen never shows a `title`, so the meaning of a gateway tag,
+ * a send-rate tag, an uptime note or a health dot could not be read on a
+ * phone at all (mobile review, section 2.7). Here the value itself is
+ * the button, and a tap, a click or Enter opens the same panel as a
+ * column hint. It closes the same way: Escape, a tap outside, or a
+ * second press.
+ *
+ * Returns the button and its panel side by side, in a fragment. The panel
+ * stays next to its button in the document for a screen reader, as a
+ * column hint's does. Spans, not paragraphs, because a tag sits inside
+ * phrasing content such as a table cell's span.
+ */
+function tapTip(className, content, label, lines, extra = {}) {
+  const id = `hint-${++hintSeq}`;
+  const panel = el('span', { class: 'hint-pop', id, hidden: !POPOVER },
+    el('span', { class: 'hint-name', text: label }),
+    ...lines.filter(Boolean).map((line) => el('span', { class: 'hint-line', text: line })));
+  if (POPOVER) panel.setAttribute('popover', 'auto');
+  const button = el('button', {
+    type: 'button', class: `tip-open ${className}`.trim(),
+    'aria-expanded': 'false', 'aria-controls': id, ...extra,
+  }, content);
+  wireHint(button, panel);
+  // A fragment, so it drops into `el()` wherever one element would.
+  const pair = document.createDocumentFragment();
+  pair.append(button, panel);
+  return pair;
 }
 
 /**
@@ -9774,12 +10707,34 @@ function drawPresetScope(name) {
   note.textContent = applies ? '' : 'Not used on this page.';
 }
 
+/*
+ * A navigation that arrived while another page was still drawing.
+ *
+ * `render` drops a call while one is in flight, which is right for the
+ * live tick and wrong for the router. Opening a channel while the chat
+ * overview was still loading was dropped, and the reader was left on
+ * "Loading" under a channel address (#295, seen at about one load in
+ * two when the overview took 3.8 s). The router's call is kept here and
+ * run when the drawing in flight ends.
+ */
+let pendingRender = null;
+
+/** Draw a page the router opened, after any draw still in flight. */
+async function navigateRender(name) {
+  if (loading) {
+    pendingRender = name;
+    return;
+  }
+  await render(name);
+}
+
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
   drawPresetScope(name);
   loading = true;
   try {
+    if (CHART_PAGES.has(name)) await chartsReady();
     await PAGES[name](page);
     setStatus('', `Updated ${clock(new Date())}`);
   } catch (error) {
@@ -9789,6 +10744,17 @@ async function render(name) {
     loading = false;
     markScrollableTables(page);
     revealHints(page);
+    // A render can restore a control from the address, or rewrite a
+    // head's sentence, without an event (#299, #275). Both are
+    // idempotent, and here they also run after a render that was
+    // deferred while another was loading.
+    drawOptionCounts();
+    foldSubs();
+  }
+  if (pendingRender) {
+    const next = pendingRender;
+    pendingRender = null;
+    if (next === currentPage) await render(next);
   }
 }
 
@@ -9863,6 +10829,9 @@ async function route() {
     // put `since=Invalid Date` in the query and take a 422.
     firehoseFilter.hours = Number.isFinite(hours) && hours > 0 ? String(hours) : '';
   }
+  // `#stats?range=7d` or `#stats?from=...&to=...` (#294). Read here, like
+  // the firehose filter, so an absent range is the default again.
+  if (known === 'stats') statsRange = statsRangeFromAddress();
   if (known === 'chat') {
     const channel = decodeURIComponent(parts[1] || '') || null;
     /*
@@ -9873,6 +10842,14 @@ async function route() {
      * line that was here referenced two constants that no longer exist,
      * and `node --check` does not notice that.
      */
+    /*
+     * Arriving from anywhere else starts from the newest page. The key
+     * is stable now (#297), so rows loaded on an earlier visit would
+     * otherwise be shown with a gap where the time away should be.
+     * Switching between Chat and Table stays on the channel and keeps
+     * what was loaded.
+     */
+    if (currentPage !== 'chat' || currentChatChannel !== channel) chatRowsKey = null;
     currentChatChannel = channel;
     chatView = parts[2] === 'table' ? 'table' : 'chat';
   }
@@ -9933,7 +10910,7 @@ async function route() {
     else link.removeAttribute('aria-current');
   }
   markNavHere(known);
-  await render(known);
+  await navigateRender(known);
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
 }
@@ -10050,6 +11027,14 @@ function applyTheme(mode) {
   if (tint && colour) tint.setAttribute('content', colour);
 }
 
+/* "MediumFast" -> "MF", for the collapsed sidebar (#300). A name with
+   no capitals keeps its first two letters rather than becoming one. */
+function presetInitials(name) {
+  const words = SonoranLabels.presetLabel(name).split(/\s+/).filter(Boolean);
+  if (words.length > 1) return words.map((word) => word[0].toUpperCase()).join('').slice(0, 3);
+  return (words[0] || '').slice(0, 2);
+}
+
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
@@ -10080,7 +11065,6 @@ function wirePresetSwitch() {
        * control is got wrong.
        */
       tabindex: name === current ? '0' : '-1',
-      text: SonoranLabels.presetLabel(name),
       onclick: () => { if (SonoranPreset.set(name)) draw(); },
       onkeydown: (event) => {
         const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -10093,7 +11077,17 @@ function wirePresetSwitch() {
         const moved = $(`[data-preset-switch] .preset-choice.active`);
         if (moved) moved.focus();
       },
-    })));
+    },
+    /*
+     * Two spellings (#300). The full name is the button's text and its
+     * accessible name. The initials are for the collapsed sidebar, which
+     * is about 52 px wide: there the full name goes off the screen and
+     * comes back as a label on hover and focus, and the initials are
+     * what shows. `aria-hidden`, so a screen reader hears "Medium Fast"
+     * once and never "M F".
+     */
+    el('span', { class: 'nav-label', text: SonoranLabels.presetLabel(name) }),
+    el('span', { class: 'preset-short', 'aria-hidden': 'true', text: presetInitials(name) }))));
   };
 
   draw();
@@ -10151,7 +11145,12 @@ function wire() {
   wireFamilyFilter();
   for (const button of $$('[data-chat-view-choice]')) {
     button.addEventListener('click', () => {
-      if (currentChatChannel) location.hash = chatHref(currentChatChannel, button.dataset.chatViewChoice).slice(1);
+      if (!currentChatChannel) return;
+      // The range rides along, so the other view shows the same rows and
+      // the key they were loaded under still matches (#297).
+      const at = location.hash.indexOf('?');
+      const query = at < 0 ? '' : location.hash.slice(at);
+      location.hash = `${chatHref(currentChatChannel, button.dataset.chatViewChoice).slice(1)}${query}`;
     });
   }
   for (const button of $$('.toggle')) {
@@ -10215,6 +11214,49 @@ function wire() {
       }
     });
   }
+  /*
+   * The Statistics range (#294). A quick range redraws at once. The date
+   * boxes redraw on `change`, and only once the pair makes a range the
+   * API will answer; otherwise the refusal is said beside them.
+   */
+  for (const button of $$('[data-stats-quick]')) {
+    button.addEventListener('click', () => {
+      const key = button.dataset.statsQuick;
+      if (!Object.hasOwn(STATS_RANGES, key)) return;
+      const note = $('[data-stats-range-note]');
+      if (note) note.hidden = true;
+      statsWriteRange({ key, from: null, to: null });
+      render('stats');
+    });
+  }
+  for (const box of $$('[data-stats-from], [data-stats-to]')) {
+    box.addEventListener('change', () => {
+      const page = $('[data-page="stats"]');
+      const from = calendarDay($('[data-stats-from]', page).value);
+      const to = calendarDay($('[data-stats-to]', page).value);
+      const refusal = statsRangeRefusal(from, to);
+      const note = $('[data-stats-range-note]', page);
+      if (note) {
+        note.textContent = refusal || '';
+        note.hidden = !refusal;
+      }
+      if (refusal) return;
+      statsWriteRange({ key: 'custom', from, to });
+      render('stats');
+    });
+  }
+  for (const toggle of $$('[data-stats-custom-toggle]')) {
+    toggle.addEventListener('click', () => {
+      const range = toggle.closest('[data-stats-range]');
+      if (!range) return;
+      const open = range.classList.toggle('show-custom');
+      toggle.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const first = $('[data-stats-from]', range);
+        if (first) first.focus();
+      }
+    });
+  }
   for (const button of $$('[data-chat-quick]')) {
     button.addEventListener('click', () => {
       const hours = Number(button.dataset.chatQuick);
@@ -10254,6 +11296,14 @@ function wire() {
   $('[data-node-filter-apply]').addEventListener('click', () => {
     filterPanel.hidden = true;
     filterToggle.setAttribute('aria-expanded', 'false');
+    /*
+     * Hiding the panel takes the focus out of Apply, and the browser puts
+     * it on the document body, so a keyboard reader starts again from the
+     * top of the page (#251, WCAG 2.4.3). The panel is a disclosure, so
+     * focus goes back to the button that opened it. The button is never
+     * `disabled` while the list loads: that would blur it again.
+     */
+    filterToggle.focus();
     render('nodes');
   });
   $('[data-node-filter-clear]').addEventListener('click', () => {
@@ -10385,6 +11435,10 @@ function wire() {
    */
 
   wireNav();
+  wireSidebarCollapse();
+  wireOptions();
+  wireFolds();
+  foldSubs();
 }
 
 /*
@@ -10415,6 +11469,11 @@ function wireNav() {
     toggle.setAttribute('aria-expanded', String(open));
     menu.hidden = !open;
     $('use', toggle).setAttribute('href', open ? '#i-menu-close' : '#i-menu');
+    // The phone bar is sticky (#271). Open, the menu is taller than a
+    // phone screen, and a sticky box never scrolls its own foot into
+    // view, so the CSS gives the open bar a height and a scroll.
+    const bar = toggle.closest('.sidebar');
+    if (bar) bar.toggleAttribute('data-menu-open', open && narrow.matches);
   };
 
   const apply = () => {
@@ -10423,6 +11482,25 @@ function wireNav() {
     toggle.hidden = !narrow.matches;
     setOpen(!narrow.matches);
   };
+
+  /*
+   * How much of the screen the sticky phone bar covers, as `--bar-h`,
+   * for the things that stick under it: the node page's section chips
+   * (#286) and the firehose's "N new" pill (#280). Each was built on a
+   * page with no sticky bar and stuck at the very top, so with the bar
+   * (#271) the chips hid behind it and the pill could not be tapped.
+   *
+   * Measured rather than written down: the bar's height follows its
+   * font, and CI's fonts are wider than a Mac's. The open menu is not
+   * a height anything sticks under, so it keeps the closed figure.
+   */
+  const sidebar = toggle.closest('.sidebar');
+  const barHeight = () => {
+    if (!sidebar || sidebar.hasAttribute('data-menu-open')) return;
+    const height = narrow.matches ? Math.ceil(sidebar.getBoundingClientRect().height) : 0;
+    document.documentElement.style.setProperty('--bar-h', `${height}px`);
+  };
+  if (sidebar && 'ResizeObserver' in window) new ResizeObserver(barHeight).observe(sidebar);
 
   toggle.addEventListener('click', () => {
     setOpen(toggle.getAttribute('aria-expanded') !== 'true');
@@ -10463,6 +11541,219 @@ function wireNav() {
   });
   narrow.addEventListener('change', apply);
   apply();
+}
+
+/*
+ * An Options button over a panel of page controls (#299).
+ *
+ * Graph and Coverage had more controls than their page head could hold
+ * on one row. The ones a reader changes least go into a panel under the
+ * head, behind a button, in the same shape as the Nodes Filters button:
+ * `aria-expanded`, `aria-controls`, and a count on it.
+ *
+ * The count is how many controls in the panel differ from where they
+ * start, so a changed option is never out of sight without the button
+ * saying so, and it is in the accessible name too, because a badge is
+ * invisible to a screen reader. "Where they start" is read from the
+ * control itself: a select's `defaultSelected` option, an input's
+ * `defaultValue`, and for a toggle button `data-option-default`, which
+ * is recorded from the markup here or set by whoever builds the button.
+ */
+function optionDiffers(control) {
+  if (control.matches('select')) {
+    const start = [...control.options].find((option) => option.defaultSelected) || control.options[0];
+    return Boolean(start) && control.value !== start.value;
+  }
+  if (control.matches('input[type="checkbox"], input[type="radio"]')) {
+    return control.checked !== control.defaultChecked;
+  }
+  if (control.matches('input')) return control.value !== control.defaultValue;
+  if (control.matches('button[aria-pressed]') && control.dataset.optionDefault != null) {
+    return control.getAttribute('aria-pressed') !== control.dataset.optionDefault;
+  }
+  return false;
+}
+
+function drawOptionCount(button) {
+  const panel = document.getElementById(button.getAttribute('aria-controls'));
+  if (!panel) return;
+  const changed = $$('select, input, button[aria-pressed]', panel)
+    .filter((control) => !control.closest('[hidden]') && optionDiffers(control)).length;
+  const badge = $('[data-options-count]', button);
+  if (badge) {
+    badge.textContent = changed ? String(changed) : '';
+    badge.hidden = !changed;
+  }
+  const word = button.dataset.optionsWord || 'Options';
+  button.setAttribute('aria-label', changed ? `${word}, ${changed} changed` : word);
+}
+
+/* Every Options count on the page, after a render may have restored a
+   control's value from the address without firing an event. */
+function drawOptionCounts() {
+  for (const button of $$('[data-options-open]')) drawOptionCount(button);
+}
+
+function wireOptions() {
+  for (const button of $$('[data-options-open]')) {
+    const panel = document.getElementById(button.getAttribute('aria-controls'));
+    if (!panel) continue;
+    for (const toggle of $$('button[aria-pressed]', panel)) {
+      if (toggle.dataset.optionDefault == null) {
+        toggle.dataset.optionDefault = toggle.getAttribute('aria-pressed');
+      }
+    }
+    button.addEventListener('click', () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    });
+    /*
+     * After the control's own handler, hence the timeout. The observer
+     * catches what no event announces: a toggle's `aria-pressed` set in
+     * code, and coverage.js rebuilding its Show buttons on every press.
+     */
+    const redraw = () => setTimeout(() => drawOptionCount(button), 0);
+    panel.addEventListener('input', redraw);
+    panel.addEventListener('change', redraw);
+    panel.addEventListener('click', redraw);
+    new MutationObserver(redraw).observe(panel, {
+      subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed', 'hidden'],
+    });
+    drawOptionCount(button);
+  }
+}
+
+/*
+ * Page-head controls fold behind the Options or Filters button on a
+ * phone (#275).
+ *
+ * Measured in the mobile review, the controls took 74% of an iPhone SE's
+ * first screen on Graph and all of it on RF. Below 40rem each control
+ * marked `data-fold` moves into its page's Options panel, and Live and
+ * one primary control stay in the head. Moved, not copied: a copy would
+ * be two controls for one value, and every listener and every `$(...,
+ * page)` lookup still finds the one element, because the panel is inside
+ * the same page. A comment marks where each one lives, so it goes back to
+ * exactly its place when the screen widens.
+ *
+ * The count on the button already covers what is in the panel, so a
+ * folded control that is not at its start is never out of sight without
+ * the button saying so. A button marked `data-fold-only` exists only for
+ * this (RF has no Options of its own); it is hidden above 40rem, and its
+ * panel is closed when its controls go home.
+ */
+const PHONE_FOLD = '(max-width: 40rem)';
+
+function wireFolds() {
+  const phone = matchMedia(PHONE_FOLD);
+  const homes = new Map();
+  for (const control of $$('[data-fold]')) {
+    const home = document.createComment(' folds into Options on a phone (#275) ');
+    control.before(home);
+    homes.set(control, home);
+  }
+  const apply = () => {
+    for (const [control, home] of homes) {
+      const panel = $('[data-options-panel]', control.closest('.page'));
+      if (!panel) continue;
+      let slot = $('[data-options-folded]', panel);
+      if (!slot) {
+        slot = el('div', { class: 'options-folded', 'data-options-folded': true });
+        panel.prepend(slot);
+      }
+      if (phone.matches) slot.append(control);
+      else home.after(control);
+    }
+    if (!phone.matches) {
+      for (const button of $$('[data-options-open][data-fold-only]')) {
+        const panel = document.getElementById(button.getAttribute('aria-controls'));
+        if (panel) panel.hidden = true;
+        button.setAttribute('aria-expanded', 'false');
+      }
+    }
+    drawOptionCounts();
+  };
+  phone.addEventListener('change', apply);
+  apply();
+}
+
+/*
+ * A long page description, one line on a phone (#275).
+ *
+ * On RF the description was 102 px of a 568 px iPhone SE screen, before a
+ * single control. Below 40rem a `data-sub-fold` description shows its
+ * first line with an ellipsis, and the whole sentence is behind the same
+ * `?` button every column and figure uses (`fitHint`), which a tap and a
+ * keyboard both reach. Above 40rem the full text shows and the button is
+ * hidden. Safe to run again: chat rewrites its description on a render,
+ * which removes both halves, and this puts them back.
+ */
+function foldSub(sub) {
+  if (!sub || sub.hidden || $('.sub-text', sub)) return;
+  const text = sub.textContent.trim();
+  if (!text) return;
+  const title = $('h2', sub.closest('.page-head'));
+  replace(sub, el('span', { class: 'sub-text', text }));
+  fitHint(sub, 'page', title ? title.textContent.trim() : 'this page', text, []);
+}
+
+function foldSubs() {
+  for (const sub of $$('[data-sub-fold]')) foldSub(sub);
+}
+
+/*
+ * Collapse the desktop sidebar to its icons (#300).
+ *
+ * The state is an attribute on `<html>`, not on the sidebar, because the
+ * boot script in index.html sets it before the first paint and nothing
+ * else exists yet at that moment. `sonoran.nav` is its own key: it is a
+ * per-viewer convenience, so a refused storage only means the page starts
+ * expanded, which is where a new visitor starts anyway (Will).
+ *
+ * Below 60rem the button is hidden and the attribute does nothing: the
+ * phone bar has its Menu button, and the collapsed rules are scoped to
+ * the wide layout in app.css.
+ */
+const SIDEBAR_KEY = 'sonoran.nav';
+
+function wireSidebarCollapse() {
+  const button = $('[data-sidebar-collapse]');
+  if (!button) return;
+  const root = document.documentElement;
+  const narrow = matchMedia('(max-width: 60rem)');
+  const collapsed = () => root.getAttribute('data-sidebar') === 'collapsed';
+
+  const draw = () => {
+    button.hidden = narrow.matches;
+    button.setAttribute('aria-expanded', String(!collapsed()));
+    // The name says what a press will do, not what the state is; the
+    // state is `aria-expanded`.
+    button.setAttribute('aria-label', collapsed() ? 'Expand navigation' : 'Collapse navigation');
+    $('use', button).setAttribute('href', collapsed() ? '#i-rail-expand' : '#i-rail-collapse');
+  };
+
+  button.addEventListener('click', () => {
+    const next = !collapsed();
+    if (next) root.setAttribute('data-sidebar', 'collapsed');
+    else root.removeAttribute('data-sidebar');
+    try {
+      localStorage.setItem(SIDEBAR_KEY, next ? 'collapsed' : 'expanded');
+    } catch {
+      // Storage off. The choice holds for this visit.
+    }
+    draw();
+    /*
+     * The content column changed width and the window did not. ECharts
+     * resizes on the window's `resize` (see the listener near the top of
+     * this file), and so does Leaflet (`trackResize`), so one synthetic
+     * event after the layout settles redraws every chart and map on the
+     * page at the new width.
+     */
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  });
+  narrow.addEventListener('change', draw);
+  draw();
 }
 
 /* The page the nav button says you are on, so the answer does not need

@@ -131,12 +131,37 @@ def test_a_hint_is_not_written_in_the_protocol_s_words() -> None:
 
 def test_the_phone_journey_walks_the_control_that_replaced_the_block() -> None:
     """The journey is the same question — can a finger reach what a
-    column means — asked of the new control. It must still demand the
-    Uploads sentence and an exact protocol value.
+    column means — asked of the new control. It must still demand a
+    column's sentence and an exact protocol value.
+
+    The sentence was the Uploads one. Since #273 a phone reads the
+    firehose as cards, a card leaves Uploads to the packet page, and so
+    its heading is not on a phone's screen; the journey asks for the
+    "What it said" sentence, which a card does show.
     """
     start = E2E.index("'a phone can read what a column means'")
-    body = E2E[start : start + 3000]
+    body = E2E[start : start + 3600]
     assert ".hint-open" in body, "the journey does not open the new control"
-    assert "uploaded this packet to MQTT" in body
+    assert "A short line from the decoded packet" in body
     assert "TELEMETRY_APP|POSITION_APP|NODEINFO_APP" in body
     assert "runs off the screen" in body, "nothing checks the panel fits the phone"
+
+
+def test_the_panel_wraps_what_it_inherits_from_the_heading() -> None:
+    """#298: the panel is a child of the `th`, and `th` is `nowrap`.
+
+    The top layer changes where the panel draws, not what it inherits.
+    So the sentence ran on one line and the panel scrolled sideways to
+    show it: Node ID measured 519 px of text in a 350 px panel. The
+    panel resets `white-space` beside the other values it undoes.
+    """
+    start = CSS.index(".hint-pop {")
+    body = CSS[start : CSS.index(".hint-pop[hidden]")]
+    assert "white-space: normal;" in body, "the panel inherits `nowrap` from the heading"
+    assert "overflow-wrap: anywhere;" in body
+    # And a browser measures it, because a rule that is present can
+    # still lose to a more specific one.
+    start = E2E.index("'a hint panel wraps its sentence at every width (#298)'")
+    journey = E2E[start : start + 4000]
+    assert "panel.scrollWidth" in journey
+    assert "size.scroll <= size.client + 1" in journey

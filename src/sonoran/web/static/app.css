@@ -587,6 +587,16 @@ a.button-link[hidden] { display: none; }
 a.button-link:hover { border-color: var(--accent); }
 a.button-link .icon { width: 1.05rem; height: 1.05rem; fill: currentColor; flex: 0 0 auto; }
 a.button-link .icon + span { margin-left: .4rem; }
+/*
+ * In a panel heading, at its top right (#289). The heading is small,
+ * uppercase, spaced and muted, and a button inside it must be none of
+ * those. `.panel > h3` already wraps and pushes a second child to the
+ * right, so on a narrow panel the button drops under the title.
+ */
+.panel > h3 a.button-link {
+  font-size: .88rem; font-weight: 400; text-transform: none;
+  letter-spacing: normal; color: var(--text);
+}
 
 /* Panels */
 
@@ -689,6 +699,31 @@ a.button-link .icon + span { margin-left: .4rem; }
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+/*
+ * The node page's section chips (#286). Drawn on a phone only, where the
+ * page is one column seven screens long. The row sticks to the top of
+ * the screen and scrolls sideways when six chips do not fit, which they
+ * do not at 320 px; it never widens the page. Each chip is 44 px tall,
+ * the size the mobile review asks of a touch target.
+ *
+ * `scroll-margin-top` stops a panel landing under the row it was
+ * reached from.
+ */
+.node-jump { display: none; }
+@media (max-width: 40rem) {
+  /* Two selectors' worth, to beat `[data-node-body] > *` further down,
+     which would centre the row at 100% instead of taking it to the
+     screen edges. */
+  [data-node-body] > .node-jump {
+    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none;
+    /* Under the sticky phone bar (#271), not behind it. */
+    position: sticky; top: var(--bar-h, 0px); z-index: 5;
+    width: auto; margin-inline: -1rem; padding: .4rem 1rem;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .node-jump .chip { flex: 0 0 auto; min-height: 2.75rem; }
+  [data-node-body] [data-jump] { scroll-margin-top: 4rem; }
 }
 /* "View on full map" sits at the right of the heading it belongs to
  * (#193.6), the way the node page's other headings carry a count. */
@@ -814,6 +849,30 @@ h3:has(.node-map-link) { display: flex; align-items: baseline; gap: .5rem; }
   grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
   margin-bottom: 1rem;
 }
+/*
+ * Four across, or two, and never three (#287).
+ *
+ * Three tracks of 15 rem fit from 47 rem of row width, and in that band
+ * the Identity panel was a third of an iPad in portrait: "(CLIENT_BASE"
+ * and ")" broke onto two lines, and the long name took four. Two
+ * across gives each panel half the row and still fills it, as two rows
+ * of two.
+ *
+ * The rule measures the ROW, not the viewport. The sidebar comes and
+ * goes at 60 rem, so the same row width happens at 834 px with no
+ * sidebar and at 1112 px with one, and both squeezed.
+ *
+ * How it reads: below 63 rem (four tracks of 15 rem and three 1 rem
+ * gaps) the clamp is zero, so the track floor is a third of the row
+ * plus a pixel and a third track can never fit. From 63 rem up the
+ * clamp takes the whole row away again and the floor is 15 rem, as
+ * above. `min(100%, ...)` keeps a phone at one column.
+ */
+.grid.summary-row {
+  grid-template-columns: repeat(auto-fit, minmax(
+    min(100%, max(15rem, calc(100% / 3 + 1px - clamp(0px, (100% - 63rem) * 1000, 100%)))),
+    1fr));
+}
 
 /*
  * Two rows of two, not three and a stray.
@@ -880,6 +939,62 @@ h3:has(.node-map-link) { display: flex; align-items: baseline; gap: .5rem; }
   flex: 0 0 auto;
 }
 .node-name .id { font: var(--mono); color: var(--muted); flex: 0 0 auto; }
+
+/*
+ * A node list as cards on a phone (#272).
+ *
+ * At 390 px the nodes table hid 61% of its width, and Role and Last
+ * heard, the column a regular reader most wants, were off to the right.
+ * Below 40rem each row becomes a two-line card: the name and short name,
+ * then role, last heard and the gateway tag. The table stays at every
+ * other width.
+ *
+ * CSS only, on the same table. The rows, the appended pages, the sort
+ * and the hints are the ones the desktop uses, so nothing can drift.
+ * The heading row stays as a wrapped row of sort buttons, so a phone can
+ * still sort by every column, including the two the card leaves out.
+ *
+ * The cells are picked by position. `nodeColumns` is Node, Node ID,
+ * Hardware, Role, Flags, Last heard. The dashboard's Recently heard is
+ * Node, Role, Heard. The e2e journey reads Role and Last heard off a
+ * card, so a reordered column fails it rather than showing the wrong
+ * value.
+ */
+@media (max-width: 40rem) {
+  .node-cards table, .node-cards tbody, .recent-cards table, .recent-cards tbody {
+    display: block; width: 100%;
+  }
+  .node-cards thead, .recent-cards thead { display: block; }
+  .node-cards thead tr, .recent-cards thead tr {
+    display: flex; flex-wrap: wrap; align-items: center; column-gap: .25rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .node-cards th, .recent-cards th { display: block; border: 0; padding-left: 0; }
+  .node-cards tbody tr, .recent-cards tbody tr {
+    display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .4rem; row-gap: .15rem;
+    padding: .55rem .6rem; border-bottom: 1px solid var(--line);
+  }
+  .node-cards td, .recent-cards td {
+    display: block; padding: 0; border: 0; white-space: normal; text-align: left;
+  }
+  /* Line one: the name, and the short name beside it. */
+  .node-cards td:nth-child(1), .recent-cards td:nth-child(1) { flex: 1 0 100%; min-width: 0; }
+  .node-cards td:nth-child(1) .linky, .recent-cards td:nth-child(1) .linky { max-width: 100%; }
+  /* Line two: role, last heard, gateway, in that order. */
+  .node-cards td:nth-child(2), .node-cards td:nth-child(3) { display: none; }
+  .node-cards td:nth-child(4) { order: 1; }
+  .node-cards td:nth-child(6) { order: 2; }
+  .node-cards td:nth-child(5) { order: 3; }
+  .node-cards td:nth-child(6)::before,
+  .node-cards td:nth-child(5)::before,
+  .recent-cards td:nth-child(3)::before { content: '\00b7'; margin-right: .4rem; color: var(--muted); }
+  /* Only the gateway tag earns a place on the card. A row with none has
+     no third item, and no separator hanging at the end. */
+  .node-cards td:nth-child(5) .tag:not(.gateway) { display: none; }
+  .node-cards td:nth-child(5):not(:has(.gateway)) { display: none; }
+  .node-cards td:nth-child(4), .node-cards td:nth-child(6),
+  .recent-cards td:nth-child(2), .recent-cards td:nth-child(3) { color: var(--muted); font-size: .85rem; }
+}
 
 /* Tables and lists */
 
@@ -964,11 +1079,30 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
   padding: .7rem .8rem;
   font-size: .82rem; font-weight: 400; line-height: 1.5;
   text-transform: none; letter-spacing: 0; text-align: left;
+  /* The panel is a child of the heading in the document, and the top
+     layer changes where it draws, not what it inherits. A `th` is
+     `nowrap`, so without this the sentence ran on one line and the
+     panel scrolled sideways to show it (#298). `overflow-wrap` keeps a
+     long enum with no space in it from doing the same. */
+  white-space: normal; overflow-wrap: anywhere;
   color: var(--muted); background: var(--panel);
   border: 1px solid var(--line); border-radius: .5rem;
   box-shadow: 0 .5rem 1.5rem var(--scroll-shadow);
 }
 .hint-pop[hidden] { display: none; }
+/* A `tapTip` panel is built of spans, because its button can sit inside
+   phrasing content such as a tag in a table cell (#276). */
+.hint-pop .hint-name, .hint-pop .hint-line { display: block; margin: 0 0 .4rem; }
+.hint-pop .hint-line:last-child { margin-bottom: 0; }
+/* A value that opens its own meaning (#276). A tag keeps its look; any
+   other value reads as text with a dotted line under it, which says
+   "there is more here" without looking like a link somewhere else. */
+.tip-open { font-family: inherit; line-height: inherit; background: none; cursor: pointer; }
+.tip-open:not(.tag) {
+  border: 0; padding: 0; color: inherit; font-size: inherit;
+  text-decoration: underline dotted; text-underline-offset: .2em;
+}
+.tip-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hint-pop p { margin: 0 0 .4rem; }
 .hint-pop p:last-child { margin-bottom: 0; }
 .hint-pop .hint-name {
@@ -980,6 +1114,22 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
    not push the panel past the edge of a 320 px screen. */
 .hint-pop .hint-exact { font: var(--mono); overflow-wrap: anywhere; }
 tbody tr:hover { background: var(--panel-2); }
+/*
+ * A column that stays put while the rest of a wide table scrolls under
+ * it (#274). It needs a background of its own, or the cells that pass
+ * beneath show through, and that background must follow the row's
+ * hover. The rule on its right edge stands in for the scroll shadow,
+ * which the stuck cell now covers.
+ */
+th.stick, td.stick {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--panel); box-shadow: inset -1px 0 var(--line);
+}
+tbody tr:hover td.stick { background: var(--panel-2); }
+/* A column a phone can do without. The row leads to the rest (#274). */
+@media (max-width: 40rem) {
+  th.low, td.low { display: none; }
+}
 td.wrap { white-space: normal; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -1012,14 +1162,11 @@ dl.kv.fields { align-items: baseline; }
 
 .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
 /*
- * The dashboard feed sizes to what it holds.
- *
- * `max-height` cut the last message across the middle, which looks like
- * a message that ended there. The live feeds on the map keep the cap,
- * because those hold forty rows and grow while you watch; this one gets
- * eight from the endpoint and then stops.
+ * The live feeds on the map keep the cap, because those hold forty rows
+ * and grow while you watch. The dashboard's latest messages are not a
+ * `.feed` any more (#296): they are `.messages`, five of them, with no
+ * cap to cut the last one across the middle.
  */
-.page[data-page="dashboard"] .feed { max-height: none; overflow-y: visible; }
 .feed li { border-left: 2px solid var(--line); padding: .1rem .6rem; }
 .feed li .meta { color: var(--muted); font-size: .78rem; display: flex; gap: .5rem; flex-wrap: wrap; }
 
@@ -1047,7 +1194,7 @@ dl.kv.fields { align-items: baseline; }
    viewport, so on a phone with the address bar showing it is taller
    than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
 /* No rem ceiling, for the same reason as #planner-map (#70). */
-#map { height: max(20rem, 70svh); background: var(--panel-2); }
+#live-map { height: max(20rem, 70svh); background: var(--panel-2); }
 /*
  * A panel that floats over the map.
  *
@@ -1177,7 +1324,7 @@ body.watch-mode .map-shell.watch {
 }
 body.watch-mode { overflow: hidden; }
 .map-shell.watch { height: 100%; background: var(--bg); }
-.map-shell.watch #map { height: 100%; }
+.map-shell.watch #live-map { height: 100%; }
 
 /*
  * One strip across the top, holding the two things that may never hide:
@@ -1191,7 +1338,7 @@ body.watch-mode { overflow: hidden; }
  * The watch chrome sits above the animation canvas, and the numbers
  * below say why the numbers are what they are.
  *
- * `#map` is `position: relative` with `z-index: auto`, so it does not
+ * `#live-map` is `position: relative` with `z-index: auto`, so it does not
  * open a stacking context and the Leaflet panes inside it compete
  * directly with the chrome beside it. The animation pane is at 620,
  * which is where it has to be to clear Leaflet's own marker pane at
@@ -1200,7 +1347,7 @@ body.watch-mode { overflow: hidden; }
  * screenshot of the expanded panel: a gold halo sitting on top of a
  * row's SNR cell.
  *
- * Giving `#map` a stacking context would fix it and would also put
+ * Giving `#live-map` a stacking context would fix it and would also put
  * Leaflet's own controls under the panel, and one of those controls is
  * the button out of watch mode. So the chrome is raised instead:
  * everything above 620, and still below Leaflet's control container at
@@ -1721,6 +1868,17 @@ body.chart-staged { overflow: hidden; }
 .messages .who .when {
   margin-inline-start: auto; color: var(--muted); text-decoration: none; flex: none;
 }
+/*
+ * A real tap target (#269). The time link measured 41 x 19 px, and a
+ * page of chat holds twenty of them. The hit area is padded to 44 px
+ * each way (WCAG 2.5.5, and Apple's and Google's own minimum), and the
+ * same amount is taken back as a negative margin, so the line is exactly
+ * as tall as before and the text does not move.
+ */
+.messages .who a.when {
+  display: inline-flex; align-items: center; justify-content: flex-end;
+  min-height: 44px; min-width: 44px; margin-block: -12.5px;
+}
 .messages a.when:hover, .messages a.when:focus-visible { text-decoration: underline; }
 .messages .body { overflow-wrap: anywhere; }
 .messages .body .hash { color: var(--accent); }
@@ -1866,6 +2024,33 @@ body.chart-staged { overflow: hidden; }
 .chat-range .range-quick { display: flex; gap: .25rem; }
 
 /*
+ * The Statistics range (#294) borrows the chat range above, and adds the
+ * one thing the chat does not need: which quick range is in force. The
+ * pressed chip is filled, as the preset switch's chosen side is.
+ */
+.stats-range { justify-content: flex-end; }
+.stats-range .chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.stats-range input[type="date"] { padding: .3rem .4rem; }
+.stats-range .range-refusal {
+  flex: 1 1 100%;
+  margin: 0;
+  text-align: right;
+  font-size: .78rem;
+  color: var(--warn);
+}
+/* The range a widget counts, beside its title. */
+.range-chip {
+  margin-left: .35rem;
+  font-size: .72rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/*
  * At a phone width the range wraps to its own line and the quick buttons
  * come first, because they are what gets used on a phone -- typing a
  * datetime on a 320px screen is a last resort, not the common path.
@@ -1891,8 +2076,18 @@ body.chart-staged { overflow: hidden; }
  * count is a second row that says nothing the channel name has not.
  */
 @media (max-width: 40rem) {
-  .chat-range { width: 100%; }
-  .chat-range .range-quick { flex: 1 1 auto; }
+  /*
+   * The range's parts join the head's own row (#275). `width: 100%`
+   * here made the range a full row with the quick ranges stretched
+   * across it, "Dates..." pushed to the far right with a gap, and Live
+   * on a row of its own. As `contents` the quick ranges, Dates and Live
+   * wrap as one row of controls: one row on a 390 px phone, and Live
+   * starts the second at 320. The date fields keep their full-width
+   * line when opened.
+   */
+  .chat-range { display: contents; }
+  .chat-range .range-quick { flex: 0 0 auto; }
+  .range-custom { align-items: center; }
   .chat-range input[type="datetime-local"] { flex: 1 1 8rem; min-width: 0; }
   .range-custom { display: inline-flex; }
   .range-custom-fields { display: none; flex: 1 1 100%; }
@@ -1908,6 +2103,9 @@ body.chart-staged { overflow: hidden; }
    */
   .chat-range.show-custom .range-custom-fields { display: flex; flex-wrap: wrap; }
   .range-custom-fields input[type="datetime-local"] { flex: 1 1 100%; }
+  /* A date box is narrow enough for two in a row, with "to" between. */
+  .stats-range input[type="date"] { flex: 1 1 7rem; min-width: 0; }
+  .stats-range .range-refusal { text-align: left; }
   .chat-full .page-head { margin-bottom: .5rem; }
   .chat-full .page-head .controls { gap: .4rem; }
   .chat-full .chat-title-row h2 { font-size: 1.15rem; }
@@ -2066,7 +2264,19 @@ a.more { text-decoration: none; display: inline-block; }
 .empty { color: var(--muted); font-style: italic; padding: .5rem 0; }
 .loading { color: var(--muted); }
 
-@media (max-width: 60rem) {
+/*
+ * Touch sizing follows the pointer as well as the width (#267).
+ *
+ * These two rules used to live in the 60rem block below alone. An iPad
+ * in landscape is 1112 px wide, so it took the desktop sizes while its
+ * finger is exactly a phone's finger: measured on the seeded database,
+ * 91 targets under 44 px on the dashboard and 106 on chat, against 29
+ * and 55 on a phone. `(pointer: coarse)` is the question that matters
+ * here. The width stays in the query too, so a narrow desktop window
+ * keeps the sizes it always had, and a mouse on a wide screen is
+ * untouched. A touch laptop takes the larger size, which is correct.
+ */
+@media (max-width: 60rem), (pointer: coarse) {
   /*
    * A finger is not a pointer. The base control is about 34 px tall,
    * which clears WCAG 2.2 SC 2.5.8 Target Size (Minimum) at 24x24 CSS
@@ -2082,6 +2292,14 @@ a.more { text-decoration: none; display: inline-block; }
   input, select, button, .sidebar nav a {
     min-height: 2.75rem;
   }
+  input, select, button { padding-block: .55rem; }
+  .sidebar nav a { align-items: center; }
+  /* A link drawn as a button (#258, #289) is a button to a finger, and
+     the rule above names `button`, which cannot reach it. */
+  a.button-link { min-height: 2.75rem; }
+}
+
+@media (max-width: 60rem) {
   /*
    * The four summary tiles went one to a row on a phone, so eight
    * hundred pixels of counting stood between the nav and the first
@@ -2092,8 +2310,6 @@ a.more { text-decoration: none; display: inline-block; }
   .grid[data-summary] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid[data-summary] .stat { padding: .85rem .9rem; }
   .grid[data-summary] .stat .value { font-size: 1.6rem; }
-  input, select, button { padding-block: .55rem; }
-  .sidebar nav a { align-items: center; }
 
   .shell { flex-direction: column; }
   .sidebar {
@@ -2134,6 +2350,55 @@ a.more { text-decoration: none; display: inline-block; }
    * ticker.
    */
   .map-overlay:not(.watch-panel) { position: static; width: auto; margin-top: .6rem; }
+}
+
+/*
+ * The four summary tiles as one compact block on a phone (#278).
+ *
+ * Measured at 390 px, the two by two above still took 415 px on the
+ * dashboard, a whole screen of four numbers before the first panel. Each
+ * tile was a 1.6 rem figure, a label, a delta and 1.7 rem of padding,
+ * and the "i" beside each label is a button, so the 44 px touch height
+ * above made every label row 44 px tall.
+ *
+ * Here the tiles keep two by two and lose the air: less padding, a
+ * smaller figure, and the change ("▲ 4%") on the figure's own line
+ * instead of a line of its own. The words after it ("on the day
+ * before") leave the screen but stay for a screen reader, and the
+ * tile's hint says them. The "i" keeps its 44 px tap area but takes
+ * only its own height in the row, through a negative margin, so the
+ * target does not grow the tile.
+ */
+@media (max-width: 40rem) {
+  .grid[data-summary] { gap: .5rem; }
+  .grid[data-summary] > .panel { padding: 0; }
+  .grid[data-summary] .stat {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: .4rem;
+    row-gap: .15rem;
+    padding: .5rem .65rem;
+  }
+  .grid[data-summary] .stat .value { grid-area: 1 / 1; font-size: 1.25rem; }
+  .grid[data-summary] .stat .delta {
+    grid-area: 1 / 2;
+    font-size: .7rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .grid[data-summary] .stat .label {
+    grid-area: 2 / 1 / 3 / 3;
+    font-size: .66rem;
+    letter-spacing: .03em;
+    line-height: 1.25;
+  }
+  .grid[data-summary] .stat .hint-open { margin-block: -.875rem; }
+  .grid[data-summary] .delta-rest {
+    position: absolute; width: 1px; height: 1px; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
 }
 
 /*
@@ -2208,7 +2473,99 @@ a.more { text-decoration: none; display: inline-block; }
   .site-menu { flex: 1 1 100%; }
   .site-menu .status,
   .sidebar .status { font-size: .78rem; }
+
+  /*
+   * The drawer's preset and Settings, above the fold (#279).
+   *
+   * Opened on a 390 x 844 phone the preset switch ended at 850 px and
+   * Settings at 908, both under the screen, so the two controls a reader
+   * opens the menu for besides a page needed a scroll to find. Tightened
+   * rather than reordered: moving the footer above the links by CSS
+   * `order` would put the eye and the Tab key in different places.
+   *
+   * - The status card goes from the drawer. The sticky bar (#271) shows
+   *   the same dot and time on every screen, open or closed, so this was
+   *   a second copy of it. The `.sr-only` region still announces.
+   * - The links keep their 44 px rows and lose the gap between them;
+   *   each row is its own target, so the gap bought nothing a finger
+   *   needs.
+   * - The footer's own spacing tightens.
+   */
+  .sidebar .menu-foot .status { display: none; }
+  .sidebar nav { gap: 0; }
+  .sidebar .menu-foot { gap: .5rem; padding-top: .6rem; }
+
+  /*
+   * The bar stays on the screen (#271).
+   *
+   * Nothing was sticky. After 1,200 px of the dashboard, the firehose,
+   * chat or RF, the menu button and the live state had both scrolled
+   * away, and the firehose is twelve screens long on an iPhone 14. The
+   * bar is one row of about 57 px, opaque, and holds the menu button and
+   * the live dot with its time. The page-head controls stay in the page:
+   * a sticky Live and filter row would rebuild the tall header the
+   * review measured on every screen (section 4.4).
+   *
+   * Not hide-on-scroll-down. That is "moderately" better by NN/g and
+   * costs a scroll listener on every page; it can come later.
+   *
+   * `z-index` above Leaflet's controls (1000), which share the root
+   * stacking context and would otherwise draw over the bar as a map
+   * scrolls under it.
+   */
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 1100;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  /* Open, the menu is taller than a phone: the bar takes the screen and
+     scrolls inside itself, so the preset and Settings can be reached. */
+  .sidebar[data-menu-open] {
+    max-height: 100svh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* A link to a fragment, or focus moved into the page, must not land
+     under the bar. */
+  html { scroll-padding-top: 4.5rem; }
+  /* Watch mode fills the screen under the bar's z-index; the bar steps
+     back rather than sitting on top of the fullscreen map. */
+  body.watch-mode .sidebar { position: static; z-index: auto; }
+
+  .sidebar .bar-status {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .4rem;
+    /* A zero basis, so the row never wraps for the sake of the time: it
+       takes what the mark and the button leave, and the words give way
+       with an ellipsis. At 320 px an `auto` basis pushed it and the
+       button onto a second row and the bar was 110 px tall. */
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+    font-size: .75rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .bar-status > span:last-child {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bar-status .dot {
+    flex: 0 0 auto;
+    width: .5rem; height: .5rem; border-radius: 50%;
+    background: var(--good);
+  }
+  .bar-status .dot.stale { background: var(--warn); }
+  .bar-status .dot.down { background: var(--bad); }
+  /* The status now carries the push to the right, so the button sits
+     beside it rather than being pushed away from it. */
+  .bar-status + .nav-toggle { margin-left: .25rem; }
 }
+/* The bar copy is for the phone bar only; the sidebar has the card. */
+.bar-status { display: none; }
 
 @media (max-width: 60rem) and (max-height: 32rem) {
   .sidebar {
@@ -2229,6 +2586,24 @@ a.more { text-decoration: none; display: inline-block; }
   background: var(--panel-2); border: 1px solid var(--line); border-radius: .35rem;
   padding: .6rem; overflow-x: auto; font: var(--mono); margin: 0; max-height: 24rem;
 }
+/*
+ * Route, Path there and Path back on one row, or one under another, and
+ * never two across (#288). Two across leaves Path back alone beside an
+ * empty cell, the gap Will reported.
+ *
+ * Measured on the row, not the viewport, for the reason in #287: the
+ * sidebar comes and goes at 60 rem. Below 58.5 rem of row the clamp term
+ * is huge, the floor is the whole row, and there is one column. From
+ * 58.5 rem the floor is a third of the row less the gap, so exactly
+ * three fit: at 1280 px (976 px of row) each panel is about 315 px. A
+ * phone, an iPad either way up and a 1024 px laptop get one column,
+ * where the Route list keeps its labels and values on one line.
+ */
+.grid.trace-top {
+  grid-template-columns: repeat(auto-fit, minmax(
+    min(100%, max(calc(100% / 3 - 1rem), calc((58.5rem - 100%) * 1000))),
+    1fr));
+}
 /* The drawing arrives recoloured, with a transparent page, so it sits on
    the panel like the rest of the site. See `api/trace_drawing.py`. */
 .trace-drawing {
@@ -2244,6 +2619,115 @@ a.more { text-decoration: none; display: inline-block; }
 tr.row-link { cursor: pointer; }
 tr.row-link:hover td { background: var(--panel-2); }
 tr.row-link:focus-within td { background: var(--panel-2); }
+
+/*
+ * The firehose as cards on a phone (#273).
+ *
+ * Eight columns in a 320 px screen hid 64% of the table sideways: on an
+ * iPhone SE only Time and From were in view, and what the packet was and
+ * what it said were off to the right on every row. A packet is a record,
+ * not a row to compare with its neighbours, so below 40rem each one is
+ * two lines:
+ *
+ *     12:04:31  Sky Island  → Everyone
+ *     Position  33.45, -112.07 …
+ *
+ * The same table, its row laid out as wrapping lines, and not a second
+ * renderer. The live redraw keeps its rows by key (`redrawLiveTable`), so
+ * a reader's place and selection survive a poll here as they do on a
+ * desktop. The columns are picked by position: Time, From, To, Type, What
+ * it said, then Channel, Hops and Uploads, which the packet page shows
+ * one tap away.
+ *
+ * The headings become one line of words above the cards, the five that
+ * are shown. They carry the column hints (#99), and the Type hint is
+ * where a phone reader finds the exact protocol value, so hiding them
+ * would take both away from a finger.
+ */
+@media (max-width: 40rem) {
+  [data-firehose-table] table,
+  [data-firehose-table] thead,
+  [data-firehose-table] tbody { display: block; }
+  [data-firehose-table] tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: .6rem;
+    padding: .45rem .6rem;
+    border-bottom: 1px solid var(--line);
+  }
+  [data-firehose-table] th { display: block; padding: 0; border: 0; }
+  [data-firehose-table] th:nth-child(n + 6) { display: none; }
+  /* The line break between the two lines: a full-width item between
+     the first three cells and the last two. When from and to do not fit
+     on one line, "to" wraps under "from" rather than being cut. */
+  [data-firehose-table] tbody tr::after { content: ""; flex-basis: 100%; order: 2; }
+  [data-firehose-table] td {
+    display: block; padding: 0; border: 0; min-width: 0; max-width: 100%; order: 1;
+  }
+  [data-firehose-table] td:nth-child(3)::before { content: "→ " / ""; color: var(--muted); }
+  [data-firehose-table] td:nth-child(4) { order: 3; color: var(--muted); }
+  [data-firehose-table] td:nth-child(5) {
+    order: 3; flex: 1 1 8rem; max-width: none; white-space: normal; overflow-wrap: anywhere;
+  }
+  [data-firehose-table] td:nth-child(n + 6) { display: none; }
+}
+
+/*
+ * A node's summary in a sheet at the foot of a phone's screen (#281).
+ * See node-sheet.js. No backdrop: the map above it stays in use. Above
+ * Leaflet's controls (1000) and below the skip link (1200).
+ */
+.node-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100;
+  max-height: 50svh; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--panel); color: var(--text);
+  border-top: 1px solid var(--line); border-radius: .9rem .9rem 0 0;
+  box-shadow: 0 -4px 18px var(--scroll-shadow);
+  padding: 0 1rem max(.75rem, env(safe-area-inset-bottom));
+}
+.node-sheet[hidden] { display: none; }
+.node-sheet-bar {
+  position: sticky; top: 0; display: flex; align-items: center; gap: .5rem;
+  background: var(--panel);
+}
+.node-sheet-grab {
+  flex: 1; min-height: 44px; display: flex; align-items: center; justify-content: center;
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.node-sheet-grab[hidden] { display: flex; visibility: hidden; }
+.node-sheet-grabber { width: 2.5rem; height: .3rem; border-radius: 999px; background: var(--muted); }
+.node-sheet-close {
+  width: 44px; height: 44px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 50%;
+  font-size: 1.4rem; line-height: 1; cursor: pointer;
+}
+.node-sheet-body { padding-bottom: .25rem; }
+.node-sheet-body .linky { min-height: 44px; }
+.node-sheet[data-state="peek"] .node-sheet-more { display: none; }
+
+/*
+ * "3 new ↑" over the firehose (#280). The holder is sticky and has no
+ * height, so the pill floats at the top of the screen while the table
+ * scrolls under it, and showing it moves no row.
+ */
+.new-pill-anchor {
+  /* Under the sticky phone bar (#271), or it cannot be tapped. */
+  position: sticky; top: calc(var(--bar-h, 0px) + .5rem); z-index: 6; height: 0;
+  display: flex; justify-content: center;
+}
+.new-pill {
+  min-height: 44px; padding: 0 1.1rem; border: 0; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font: inherit; font-weight: 650; cursor: pointer;
+  box-shadow: 0 2px 10px var(--scroll-shadow);
+}
+.new-pill[hidden] { display: none; }
+/* Where the pill scrolls to: the newest row, clear of the screen edge. */
+[data-firehose-table] { scroll-margin-top: 1rem; }
+.new-pill:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 /*
  * `.open-link` was here, for a per-row "Open >" link. The first cell is
  * the link now and the row is clickable, so the third way to do one thing
@@ -2531,8 +3015,6 @@ div.check { cursor: default; }
 
 .coverage-pick { display: flex; align-items: center; gap: .45rem; font-size: .85rem; color: var(--muted); }
 
-.coverage-layers { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .85rem; }
-
 .coverage-opacity {
   display: flex;
   align-items: center;
@@ -2591,28 +3073,10 @@ div.check { cursor: default; }
 .coverage-view-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /*
- * The layer buttons read as one control, so they sit in a row and the
- * chosen one is filled rather than outlined. A reader must be able to
- * tell at a glance which question the map is answering.
+ * The layer pills were here (`.coverage-layers button`). The layer is a
+ * select in the page head now (#299), and the rules went with the pills:
+ * dead CSS that still looks live is how a removed control comes back.
  */
-.coverage-layers button {
-  font: inherit;
-  font-size: .82rem;
-  padding: .38rem .8rem;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
-  cursor: pointer;
-}
-.coverage-layers button:hover { border-color: var(--accent-soft); color: var(--text); }
-.coverage-layers button[aria-pressed="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-.coverage-layers button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .coverage-legend {
   position: absolute;
@@ -2740,6 +3204,55 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   border: 1px solid var(--line); border-radius: .6rem; background: var(--panel);
   padding: 1rem; margin-bottom: .9rem;
 }
+/*
+ * The Options panel under a page head (#299): the Nodes filter panel's
+ * box, holding a row of ordinary controls rather than a grid of facets.
+ * `display: flex` beats the user agent's `[hidden]`, hence the second
+ * rule.
+ */
+.options-panel {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem;
+  border: 1px solid var(--line); border-radius: .6rem; background: var(--panel);
+  padding: .75rem 1rem; margin-bottom: .9rem;
+}
+.options-panel[hidden] { display: none; }
+/* The coverage controls carried margins for their old rows above the map. */
+.options-panel .coverage-view-controls,
+.options-panel .coverage-opacity { margin: 0; }
+
+/*
+ * Folding on a phone (#275). See `wireFolds` and `foldSub` in app.js.
+ *
+ * The slot the folded controls land in takes no box of its own, so they
+ * wrap in the panel's row like the controls already there.
+ */
+.options-folded { display: contents; }
+/* A Filters button that exists only to hold folded controls. */
+@media (min-width: 40.01rem) {
+  button[data-fold-only] { display: none; }
+}
+/* The description's `?` is for the one-line phone form only. */
+[data-sub-fold] > .hint-open { display: none; }
+@media (max-width: 40rem) {
+  /* One unwrapped line is as wide as the whole sentence, and a flex item
+     will not shrink under its content unless told it may. Without this
+     the page scrolled sideways by up to 1010 px at 320. */
+  .page-head > div:first-child { min-width: 0; max-width: 100%; }
+  [data-sub-fold] { display: flex; align-items: center; gap: .15rem; }
+  [data-sub-fold] > .sub-text {
+    flex: 0 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  [data-sub-fold] > .hint-open { display: inline-flex; flex: 0 0 auto; }
+  /*
+   * A search box beside the one control left in a folded head gives way
+   * before the row wraps. At a fixed 196 px it left 8 px to spare beside
+   * Graph's Options button on a Mac; on CI's wider Linux fonts the button
+   * did not fit, the row wrapped, and the head grew by a whole control
+   * row, to 37% of an iPhone SE's first screen.
+   */
+  .page-head .controls > input[type="search"] { flex: 1 1 7rem; min-width: 7rem; width: auto; }
+}
 .filter-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
 .filter-group { border: 0; margin: 0; padding: 0; min-width: 0; }
 .filter-group > legend {
@@ -2856,22 +3369,6 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   white-space: normal;
 }
 
-/*
- * The same height in the reader's own units, under a box that asks for
- * metres (§6.5, and `docs/PLANNER.md` 4).
- *
- * The planner's typed boxes are metres and stay metres: the number goes
- * into the propagation model, and confusing the two overstates every
- * antenna by 3.28 times. But the rest of the dashboard reads in feet by
- * default, so a reader who has never seen the label is the one at risk.
- * This echoes what they typed in their own units, read-only, so the box
- * cannot be misread without the page saying so.
- *
- * Hidden entirely for a reader already on metric: there it would repeat
- * the box.
- */
-.planner-unit-hint[hidden] { display: none; }
-.planner-unit-hint { font-size: .76rem; margin: -.3rem 0 .6rem; }
 .planner-slot-note[hidden] { display: none; }
 .planner-slot-note { font-size: .78rem; margin: -.2rem 0 .6rem; }
 .board-note { font-size: .78rem; margin: .3rem 0 .6rem; }
@@ -2917,14 +3414,18 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    `.health-cards`, so only the summary half needs anything new. */
 .health-headline { font-weight: 650; margin: 0 0 .4rem; }
 .health-dots { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .6rem; }
+/* The row of dots is one button that lists the checks (#276). Tall
+   enough to hit with a finger, with no underline under a row of dots. */
+.health-dots-row { margin: 0 0 .6rem; }
+.health-dots.tip-open { margin: 0; min-height: 1.5rem; align-items: center; text-decoration: none; }
 .health-dot {
   width: .7rem;
   height: .7rem;
   border-radius: 50%;
   /* A dot carries state by colour, so it needs a non-colour cue too
-     (WCAG 1.4.1). The ring differs in width per state, and each dot has
-     a `title`; the row as a whole is labelled with the sentence above
-     it, which is what a screen reader actually reads. */
+     (WCAG 1.4.1). The ring differs in width per state, and the row is a
+     button that lists each check by name (#276); it is labelled with the
+     sentence above it, which is what a screen reader actually reads. */
   background: var(--muted);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / .35);
 }
@@ -3151,6 +3652,53 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* The dark basemap is the light one inverted. In light mode the tiles
  * are drawn as they come, not filtered twice. */
 :root[data-theme="light"] .leaflet-tile-pane .basemap-tiles img.leaflet-tile { filter: none; }
+
+/*
+ * More contrast, when the reader's system asks for it (#285).
+ *
+ * Most of the small text on this site is in `--muted`: labels, notes,
+ * table headings, the "heard 3 h ago" under a name. It clears the 4.5:1
+ * floor (6.7 dark, 6.9 light, against `--panel`), and that is the floor,
+ * not what a reader who asked for more contrast wants. These values
+ * clear 7:1 (WCAG 1.4.6, AAA) against `--bg`, `--panel` and `--panel-2`
+ * in both themes, and `--line` clears 3:1 (WCAG 1.4.11) against all
+ * three, where it was 1.2 to 1.5. The ratios are in docs/design/palette.md
+ * and `test_contrast_more.py` computes them again.
+ *
+ * After the light theme on purpose: the light rule inside this block has
+ * the same weight as the one above and wins by coming later. The charts
+ * read `--muted` and `--line` when the page loads, so they follow too.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --muted: #e0cfc0;
+    --line: #8a6f5c;
+  }
+  :root[data-theme="light"] {
+    --muted: #3f3025;
+    --line: #8a7462;
+  }
+  /* A table heading is small, uppercase and muted: the hardest text on
+     the page to read. Here it takes the body text colour. */
+  th { color: var(--text); }
+}
+
+/*
+ * Forced colours (Windows High Contrast and its kin), #285.
+ *
+ * The browser replaces every colour with the reader's system palette.
+ * That is right for text and borders, and wrong for the few marks whose
+ * colour IS the information: a legend swatch that says which role a
+ * colour means, and the live status dot. Replaced, every swatch becomes
+ * the same system colour and the legend says nothing. They keep their
+ * own colours. A pressed toggle loses its fill, but it carries a tick
+ * as well, so it still reads as pressed.
+ */
+@media (forced-colors: active) {
+  .swatch,
+  .sidebar .status .dot { forced-color-adjust: none; }
+  .legend-key[aria-pressed="true"] { border-color: Highlight; }
+}
 
 /* The theme control in the nav (#50). */
 
@@ -3528,6 +4076,155 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 }
 
 /*
+ * The sidebar collapsed to its icons (#300).
+ *
+ * The button sits beside the logo at the top of the sidebar, and a new
+ * visitor starts expanded (Will). `data-sidebar="collapsed"` on `<html>`
+ * is set by the boot script before the first paint and by
+ * `wireSidebarCollapse` after, and every rule here is scoped to the wide
+ * layout: below 60rem the sidebar is the phone bar and none of this
+ * applies.
+ *
+ * Every name stays in the tree. A label goes off the screen the
+ * `.sr-only` way, never `display: none`, so a screen reader still reads
+ * "Nodes" and `markNavHere` still reads the link's text. A `title` does
+ * not reach a keyboard or a finger (#191), so the same label comes back
+ * on the screen beside the rail on hover and on keyboard focus.
+ */
+.sidebar-collapse {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+.sidebar-collapse:hover { color: var(--text); border-color: var(--line); }
+.sidebar-collapse .icon { width: 1.15rem; height: 1.15rem; fill: currentColor; vertical-align: 0; }
+/* `display: grid` above beats the user agent's `[hidden]`. */
+.sidebar-collapse[hidden] { display: none; }
+/* The short preset names exist only for the collapsed rail. */
+.preset-short { display: none; }
+
+@media (min-width: 60.01rem) {
+  html[data-sidebar="collapsed"] .sidebar {
+    width: 4.25rem;
+    flex-basis: 4.25rem;
+    padding-right: .5rem;
+    padding-left: calc(.5rem + var(--safe-left));
+    gap: .9rem;
+  }
+  html[data-sidebar="collapsed"] .sidebar-collapse { margin: 0 auto; }
+  html[data-sidebar="collapsed"] .brand { justify-content: center; }
+  /* The mark and the wordmark leave the screen, and the h1 stays in the
+     tree. The mark carries an inline `display`, so this cannot be
+     `display: none` either. */
+  html[data-sidebar="collapsed"] .brand-mark,
+  html[data-sidebar="collapsed"] .brand-text,
+  html[data-sidebar="collapsed"] .sidebar .nav-label,
+  html[data-sidebar="collapsed"] .menu-field-label,
+  html[data-sidebar="collapsed"] .preset-scope {
+    position: absolute; width: 1px; height: 1px; margin: -1px;
+    padding: 0; border: 0; overflow: hidden; clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  html[data-sidebar="collapsed"] .sidebar nav a,
+  html[data-sidebar="collapsed"] .menu-settings-link {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  /* The status is its dot; the words come back on hover. */
+  html[data-sidebar="collapsed"] .menu-foot .status {
+    justify-content: center;
+    padding-inline: 0;
+    min-height: 2.25rem;
+  }
+  /* The preset stays in the rail as its initials, one above the other.
+     Both are still radios with their full names, so the choice is one
+     press and not a menu to open first. */
+  html[data-sidebar="collapsed"] .preset-switch { grid-auto-flow: row; grid-auto-rows: 1fr; }
+  html[data-sidebar="collapsed"] .preset-switch::before {
+    right: .2rem;
+    width: auto;
+    bottom: auto;
+    height: calc((100% - .4rem) / var(--preset-count, 2));
+    transform: translateY(calc(var(--preset-index, 0) * 100%));
+  }
+  html[data-sidebar="collapsed"] .preset-choice { padding-inline: 0; }
+  html[data-sidebar="collapsed"] .preset-short { display: inline; }
+
+  /*
+   * The label beside the rail, on hover and on keyboard focus.
+   *
+   * `position: fixed` because the sidebar scrolls (`overflow-y: auto`),
+   * and an absolutely placed label would be clipped by it. `top` is left
+   * at `auto`, so the label keeps its static position: centred on the
+   * row it names, wherever the sidebar has scrolled to. Only `left` is
+   * set, to just past the rail.
+   */
+  html[data-sidebar="collapsed"] .sidebar :is(a, button, .status):is(:hover, :focus-visible) > .nav-label {
+    position: fixed;
+    left: calc(4.25rem + .5rem + var(--safe-left));
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+    padding: .35rem .6rem;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: .4rem;
+    font-size: .82rem;
+    font-weight: 600;
+    z-index: 1300;
+    pointer-events: none;
+  }
+}
+
+/*
+ * The fixed-size controls, at finger size on a touch screen (#268).
+ *
+ * The general 44 px rule (`input, select, button`, #267) is an element
+ * rule, so every control below out-specifies it with a size of its own,
+ * and Leaflet draws anchors rather than buttons. Measured on an iPhone
+ * 14 in the mobile review (section 2.3): the zoom buttons 30 x 30 on five
+ * pages, the popup close 24 x 24, Full screen 30 tall, the map Key 29
+ * tall, Watch mode 30 wide, the reaction pill 24 tall, the menu button
+ * 40 wide and the drawer's Settings link 37 tall. 2.75 rem is 44 px,
+ * Apple's figure; see the note on the 60rem block.
+ *
+ * `(pointer: coarse)` and not a width, for the reason #267 gives: an iPad
+ * in landscape is desktop-wide and touched with a finger. A mouse keeps
+ * every size it had.
+ *
+ * It sits here, after every rule it overrides, so that the order and not
+ * a raised specificity decides it.
+ */
+@media (pointer: coarse) {
+  .leaflet-touch .leaflet-bar a {
+    width: 2.75rem; height: 2.75rem; line-height: 2.75rem;
+  }
+  .leaflet-container a.leaflet-popup-close-button {
+    width: 2.75rem; height: 2.75rem; line-height: 2.75rem;
+  }
+  .watch-control button { width: 2.75rem; height: 2.75rem; }
+  .chart-expand { min-height: 2.75rem; }
+  /* Padding rather than flex: a flex `summary` loses its disclosure
+     triangle, which is the only sign the Key opens. */
+  .map-key summary { min-height: 2.75rem; padding-block: .75rem; box-sizing: border-box; }
+  .reaction > summary { min-height: 2.75rem; }
+  .nav-toggle { min-width: 2.75rem; justify-content: center; }
+  .menu-settings-link { min-height: 2.75rem; }
+  .sidebar-collapse { width: 2.75rem; height: 2.75rem; }
+}
+
+/*
  * The Filters button, carrying how many are in force.
  *
  * A number on the control rather than a sentence beside the table, so the
@@ -3644,6 +4341,20 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/*
+ * The controls come first (#299), on Graph and Coverage.
+ *
+ * A dense title block is `flex: 1 1 auto`, and `auto` is the width of
+ * the whole subtitle on one line. A wrapping row breaks on that width,
+ * so the title block claimed the full row and pushed the controls under
+ * it even where they would have fitted beside it: Graph at 1280 and 1440
+ * px, with its controls already down to four. A small basis lets the
+ * two share the row, and the subtitle, already ellipsised, gives way.
+ *
+ * Its own class rather than a change to `.dense`, because the Map is
+ * dense too and Will named it as a head he likes as it is.
+ */
+.page-head.dense.fit > div:first-child { flex: 1 1 10rem; }
 
 /*
  * Under about a tablet, the subtitle goes rather than shrinking to

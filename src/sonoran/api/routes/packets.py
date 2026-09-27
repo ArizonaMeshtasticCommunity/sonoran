@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
-from sonoran.api.packet_summary import summaries
+from sonoran.api.packet_summary import summaries, text_of
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
@@ -154,7 +154,11 @@ async def list_packets(
             min(packet.first_seen_at for packet, _ in rows),
         )
         for item, (packet, _) in zip(items, rows, strict=True):
-            item["summary"] = lines.get((packet.from_node_num, packet.packet_id))
+            parts = lines.get((packet.from_node_num, packet.packet_id))
+            item["summary"] = text_of(parts)
+            # The same line with each measurement as a number and its SI
+            # unit, so the browser can write it in the reader's units.
+            item["summary_parts"] = parts
     return items
 
 

@@ -185,6 +185,22 @@ screen readers — it is not decorative by default — and `aria-pressed`
 already carries the state, so the empty alternative text stops the
 control reading as "tick Traffic, pressed".
 
+## 7.6 More contrast, and forced colours
+
+When the system asks for more contrast (`prefers-contrast: more`), two
+tokens change and table headings take `--text`. Ratios are against
+`--bg`, `--panel` and `--panel-2`, in that order.
+
+| Token | Dark | Ratios | Light | Ratios | Floor |
+| --- | --- | --- | --- | --- | --- |
+| `--muted` | `#e0cfc0` | 12.4, 11.5, 10.2 | `#3f3025` | 11.4, 12.6, 10.5 | 7:1 (WCAG 1.4.6) |
+| `--line` | `#8a6f5c` | 4.0, 3.7, 3.3 | `#8a7462` | 4.0, 4.4, 3.7 | 3:1 (WCAG 1.4.11) |
+
+Under `forced-colors: active` the browser uses the system palette. The
+legend swatches and the status dot keep their own colours, because
+their colour is the information. `tests/unit/test_contrast_more.py`
+checks the floors.
+
 ## 8. Checking contrast
 
 The figures above use the WCAG 2.2 relative luminance formula. To
