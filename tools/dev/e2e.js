@@ -909,21 +909,107 @@ async function main() {
       const answer = await fetch(`${base.replace(/\/$/, '')}/api/coverage`);
       return answer.ok ? (await answer.json()).available === true : false;
     });
-    const select = page.locator('[data-coverage-preset]');
-    const options = await select.locator('option').count();
+    /*
+     * The page's own preset picker (`[data-coverage-preset]`) is gone: the
+     * preset is the menu's, for every page (AGENTS.md 9.7). This used to
+     * select the removed element, which only passed because a preview has
+     * no published run (#299). It now drives the menu's switch, and the
+     * layer drop-down that replaced the three pills.
+     */
+    const layer = page.locator('[data-coverage-layers]');
     if (!published) {
-      must(options === 0, `no run is published, yet ${options} presets were offered`);
+      must(!(await layer.isVisible()), 'no run is published, yet a layer is offered');
       const said = await page.locator('[data-page="coverage"]').innerText();
       must(said.trim().length > 40, 'no run, and the page said nothing about it');
       return 'no run published; the page says so';
     }
-    must(options > 0, 'a run is published but no preset was offered');
-    if (options > 1) {
-      await select.selectOption(await select.locator('option').nth(1).getAttribute('value'));
+    const presets = page.locator('[data-preset-switch] [role="radio"]');
+    const count = await presets.count();
+    must(count > 0, 'a run is published but the menu offers no preset');
+    const layers = await layer.locator('option').count();
+    must(layers >= 2, `a run is published but the layer drop-down holds ${layers} options`);
+    const second = await layer.locator('option').nth(1).getAttribute('value');
+    await layer.selectOption(second);
+    await page.waitForTimeout(800);
+    const title = (await page.locator('[data-coverage-legend-title]').textContent()).trim();
+    const chosen = (await layer.locator('option:checked').textContent()).trim();
+    must(title === chosen, `the legend says "${title}" after choosing "${chosen}"`);
+    if (count === 2) {
+      // Switch, then back: the choice is global and outlives this page.
+      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
       await page.waitForTimeout(4000);
+      must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away on a preset switch');
+      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
+      await page.waitForTimeout(1000);
     }
     must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away');
-    return `${options} presets`;
+    return `${count} presets in the menu, ${layers} layers, legend follows the layer`;
+  });
+
+  await journey(context, 'page heads keep their controls on the title row (#299)', async (page) => {
+    /*
+     * Coverage and Graph dropped their controls under the title at laptop
+     * widths; Graph broke them into two ragged rows as well. Measured with
+     * the CI slack (letter-spacing .05em, as the Who hears it journey does),
+     * because the runner's fonts are wider than a Mac's.
+     */
+    const bad = [];
+    let coverageGap = null;
+    await open(page, 'graph', 1500);
+    await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+    for (const width of [1280, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const name of ['graph', 'coverage', 'nodes', 'firehose', 'planner']) {
+        // A hash change routes in the same document, so the spacing stays.
+        await page.evaluate((hash) => { location.hash = hash; }, name);
+        await page.waitForTimeout(2500);
+        const got = await page.evaluate(() => {
+          const head = document.querySelector('.page.active .page-head');
+          const title = head.querySelector('h2').getBoundingClientRect();
+          const controls = head.querySelector('.controls').getBoundingClientRect();
+          const map = document.querySelector('.page.active #coverage-map');
+          return {
+            below: controls.height > 0 && controls.top >= title.bottom,
+            rows: Math.round(controls.height),
+            map: map ? Math.round(map.getBoundingClientRect().top - head.getBoundingClientRect().top) : null,
+          };
+        });
+        if (got.below) bad.push(`${name} at ${width}: controls under the title`);
+        if (got.rows > 60) bad.push(`${name} at ${width}: controls in ${got.rows} px, more than one row`);
+        if (name === 'coverage' && width === 1440) coverageGap = got.map;
+      }
+    }
+    await page.setViewportSize({ width: 1500, height: 1050 });
+    must(bad.length === 0, bad.join('; '));
+    // With a run published the map starts right under the head (was 205).
+    if (coverageGap != null) must(coverageGap <= 90, `the coverage map starts ${coverageGap} px below the head`);
+    return `5 pages at 1280 and 1440 px, one row each${coverageGap != null ? `; coverage map ${coverageGap} px below the head` : ''}`;
+  });
+
+  await journey(context, 'the graph Options button counts what changed (#299)', async (page) => {
+    await open(page, 'graph', 3000);
+    const button = page.locator('[data-page="graph"] [data-options-open]');
+    const panel = page.locator('#graph-options');
+    must(await panel.isHidden(), 'the options panel starts open');
+    must((await button.getAttribute('aria-label')) === 'Options', `starts as "${await button.getAttribute('aria-label')}"`);
+    await button.click();
+    must((await button.getAttribute('aria-expanded')) === 'true', 'the button did not say it opened');
+    must(await panel.isVisible(), 'the panel did not open');
+    await page.locator('[data-graph-unconfirmed]').click();
+    await page.waitForTimeout(300);
+    must((await button.getAttribute('aria-label')) === 'Options, 1 changed',
+      `one toggle changed, the button says "${await button.getAttribute('aria-label')}"`);
+    await page.locator('[data-graph-layout]').selectOption('free');
+    await page.waitForTimeout(300);
+    const two = (await page.locator('[data-page="graph"] [data-options-count]').textContent()).trim();
+    must(two === '2', `two options changed, the badge says "${two}"`);
+    await page.locator('[data-graph-unconfirmed]').click();
+    await page.locator('[data-graph-layout]').selectOption('spread');
+    await page.waitForTimeout(300);
+    must(await page.locator('[data-page="graph"] [data-options-count]').isHidden(), 'back to the start, the badge stayed');
+    await button.click();
+    must(await panel.isHidden(), 'a second press did not close the panel');
+    return 'opens, counts 1 then 2, clears, closes';
   });
 
   await journey(context, 'the embed snippet can be got at', async (page) => {

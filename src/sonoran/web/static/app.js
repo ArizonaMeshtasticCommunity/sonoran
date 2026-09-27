@@ -9941,6 +9941,8 @@ async function route() {
   }
   markNavHere(known);
   await render(known);
+  // A render can restore a control from the address without an event.
+  drawOptionCounts();
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
 }
@@ -10410,6 +10412,7 @@ function wire() {
 
   wireNav();
   wireSidebarCollapse();
+  wireOptions();
 }
 
 /*
@@ -10493,6 +10496,87 @@ function wireNav() {
   });
   narrow.addEventListener('change', apply);
   apply();
+}
+
+/*
+ * An Options button over a panel of page controls (#299).
+ *
+ * Graph and Coverage had more controls than their page head could hold
+ * on one row. The ones a reader changes least go into a panel under the
+ * head, behind a button, in the same shape as the Nodes Filters button:
+ * `aria-expanded`, `aria-controls`, and a count on it.
+ *
+ * The count is how many controls in the panel differ from where they
+ * start, so a changed option is never out of sight without the button
+ * saying so, and it is in the accessible name too, because a badge is
+ * invisible to a screen reader. "Where they start" is read from the
+ * control itself: a select's `defaultSelected` option, an input's
+ * `defaultValue`, and for a toggle button `data-option-default`, which
+ * is recorded from the markup here or set by whoever builds the button.
+ */
+function optionDiffers(control) {
+  if (control.matches('select')) {
+    const start = [...control.options].find((option) => option.defaultSelected) || control.options[0];
+    return Boolean(start) && control.value !== start.value;
+  }
+  if (control.matches('input[type="checkbox"], input[type="radio"]')) {
+    return control.checked !== control.defaultChecked;
+  }
+  if (control.matches('input')) return control.value !== control.defaultValue;
+  if (control.matches('button[aria-pressed]') && control.dataset.optionDefault != null) {
+    return control.getAttribute('aria-pressed') !== control.dataset.optionDefault;
+  }
+  return false;
+}
+
+function drawOptionCount(button) {
+  const panel = document.getElementById(button.getAttribute('aria-controls'));
+  if (!panel) return;
+  const changed = $$('select, input, button[aria-pressed]', panel)
+    .filter((control) => !control.closest('[hidden]') && optionDiffers(control)).length;
+  const badge = $('[data-options-count]', button);
+  if (badge) {
+    badge.textContent = changed ? String(changed) : '';
+    badge.hidden = !changed;
+  }
+  const word = button.dataset.optionsWord || 'Options';
+  button.setAttribute('aria-label', changed ? `${word}, ${changed} changed` : word);
+}
+
+/* Every Options count on the page, after a render may have restored a
+   control's value from the address without firing an event. */
+function drawOptionCounts() {
+  for (const button of $$('[data-options-open]')) drawOptionCount(button);
+}
+
+function wireOptions() {
+  for (const button of $$('[data-options-open]')) {
+    const panel = document.getElementById(button.getAttribute('aria-controls'));
+    if (!panel) continue;
+    for (const toggle of $$('button[aria-pressed]', panel)) {
+      if (toggle.dataset.optionDefault == null) {
+        toggle.dataset.optionDefault = toggle.getAttribute('aria-pressed');
+      }
+    }
+    button.addEventListener('click', () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    });
+    /*
+     * After the control's own handler, hence the timeout. The observer
+     * catches what no event announces: a toggle's `aria-pressed` set in
+     * code, and coverage.js rebuilding its Show buttons on every press.
+     */
+    const redraw = () => setTimeout(() => drawOptionCount(button), 0);
+    panel.addEventListener('input', redraw);
+    panel.addEventListener('change', redraw);
+    panel.addEventListener('click', redraw);
+    new MutationObserver(redraw).observe(panel, {
+      subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed', 'hidden'],
+    });
+    drawOptionCount(button);
+  }
 }
 
 /*

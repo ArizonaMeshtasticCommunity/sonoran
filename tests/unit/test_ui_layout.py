@@ -6,6 +6,8 @@ Every item below was found in a rendered screenshot or in a keyboard pass,
 not in the markup.
 """
 
+import re
+
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import STATIC_DIR, create_app
@@ -286,3 +288,44 @@ def test_no_hint_lives_only_in_a_tooltip() -> None:
     assert "function revealHints(" in script
     # And it is called after every render, not only on first paint.
     assert "revealHints(page);" in script
+
+
+# ------------------------------------------------------ one-row heads (#299)
+
+
+def _page_head(html: str, page: str) -> str:
+    """From the page's head to its Options panel, which follows the head."""
+    start = html.index("page-head", html.index(f'data-page="{page}"'))
+    return html[start : html.index(f'id="{page}-options"', start)]
+
+
+def test_the_graph_head_keeps_four_controls_and_options_holds_the_rest() -> None:
+    """Will approved: Layout, the two link toggles and Reset layout go behind
+    an Options button, so the rest fits on the title row."""
+    html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
+    head = _page_head(html, "graph")
+    for kept in ("data-graph-hours", "data-graph-search", "data-graph-view", "data-options-open"):
+        assert kept in head, f"{kept} left the graph head"
+    panel = html[html.index('id="graph-options"') :]
+    panel = panel[: panel.index("</div>")]
+    for moved in (
+        "data-graph-layout",
+        "data-graph-unconfirmed",
+        "data-graph-weak",
+        "data-graph-reset",
+    ):
+        assert moved not in head, f"{moved} is still in the graph head"
+        assert moved in panel, f"{moved} is not in the Options panel"
+
+
+def test_the_coverage_layer_is_one_drop_down_in_the_head() -> None:
+    """Will approved: the three layer pills become one drop-down."""
+    html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
+    head = _page_head(html, "coverage")
+    assert re.search(r"<select data-coverage-layers\b", head), (
+        "the layer is not a select in the head"
+    )
+    assert "data-options-open" in head
+    panel = html[html.index('id="coverage-options"') :]
+    assert "data-coverage-views" in panel[: panel.index("</label>")]
+    assert "data-coverage-opacity" in panel[: panel.index("</label>")]

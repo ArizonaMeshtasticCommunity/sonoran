@@ -734,7 +734,16 @@
         </section>
 
         <section class="page" data-page="coverage">
-          <div class="page-head">
+          <!--
+            One row, like Nodes and the Map (#299). The layer pills, the
+            Show toggles and the opacity slider were three rows OUTSIDE the
+            head, and the map began 205 px below the head's top at every
+            width. The layer is now one drop-down in the head (Will:
+            "Sounds good"), and the Show toggles and the opacity are behind
+            Options. Every moved control keeps the attribute coverage.js
+            finds it by.
+          -->
+          <div class="page-head dense fit">
             <div>
               <h2>Coverage</h2>
               <p class="sub" data-coverage-sub>Where the mesh reaches, predicted from the routers and repeaters that carry it.</p>
@@ -745,22 +754,28 @@
               <label class="coverage-pick" data-coverage-siteset-wrap hidden>Predict from
                 <select data-coverage-siteset aria-label="Which nodes the run predicted from"></select>
               </label>
+              <label class="coverage-pick">Layer
+                <select data-coverage-layers aria-label="Coverage layer"></select>
+              </label>
+              <button type="button" class="toggle" data-options-open data-coverage-options
+                      aria-expanded="false" aria-controls="coverage-options">Options<span
+                      class="filter-count" data-options-count hidden></span></button>
             </div>
           </div>
 
           <p class="notice" data-coverage-notice hidden></p>
 
-          <div class="coverage-layers" role="group" aria-label="Coverage layer" data-coverage-layers></div>
+          <div class="options-panel" id="coverage-options" data-options-panel hidden>
+            <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
 
-          <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
-
-          <!-- Per-viewer control. Restyles the signal tiles already in
-               this browser; changes nothing on the server. -->
-          <label class="coverage-opacity" data-coverage-opacity-wrap>Signal opacity
-            <input type="range" min="0" max="100" step="5" value="100"
-                   data-coverage-opacity aria-label="Signal strength opacity" />
-            <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
-          </label>
+            <!-- Per-viewer control. Restyles the signal tiles already in
+                 this browser; changes nothing on the server. -->
+            <label class="coverage-opacity" data-coverage-opacity-wrap>Signal opacity
+              <input type="range" min="0" max="100" step="5" value="100"
+                     data-coverage-opacity aria-label="Signal strength opacity" />
+              <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
+            </label>
+          </div>
 
           <div class="map-shell">
             <div id="coverage-map"></div>
@@ -1478,7 +1493,7 @@
         <!-- Mesh graph -->
         <section class="page" data-page="graph">
           <!-- A dense head: title, subtitle and controls on one row (Will). -->
-          <div class="page-head dense">
+          <div class="page-head dense fit">
             <div>
               <h2>Mesh graph</h2>
               <p class="sub">One graph per channel. Nodes on different presets cannot hear each other.</p>
@@ -1496,21 +1511,6 @@
                      aria-label="Find a node in this graph" />
               <!-- What the search found (#223). Hidden until something is typed. -->
               <span class="muted" data-graph-search-note hidden></span>
-              <!--
-                The mesh is a geographic thing. Laying it out on real
-                positions puts the Phoenix and Tucson knots where they
-                belong and holds them there between redraws, instead of
-                solving a different ball of wire every time.
-              -->
-              <label class="muted">Layout
-                <select data-graph-layout>
-                  <option value="spread" selected>On the ground, spread</option>
-                  <option value="ground">On the ground, exact</option>
-                  <option value="force-geo">Geo-seeded force</option>
-                  <option value="free">Free force</option>
-                  <option value="signal">By signal, not geography</option>
-                </select>
-              </label>
               <label class="muted">View
                 <select data-graph-view>
                   <option value="all" selected>Whole preset</option>
@@ -1518,12 +1518,41 @@
                   <option value="focus">One node</option>
                 </select>
               </label>
-              <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
-              <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show unjudged links</button>
-              <button type="button" data-graph-reset>Reset layout</button>
+              <!--
+                Layout, the two link toggles and Reset layout are behind
+                this button (#299, Will: "Sounds good"). Seven controls
+                were 1291 px against a 1136 px head at 1440, so they
+                dropped under the title and broke into two ragged rows.
+                The count on the button is how many of them differ from
+                where they start, so a changed option is never hidden
+                without saying so. The pattern is the Nodes Filters button.
+              -->
+              <button type="button" class="toggle" data-options-open aria-expanded="false"
+                      aria-controls="graph-options">Options<span class="filter-count"
+                      data-options-count hidden></span></button>
               <!-- The "Open mesh-graph" link was here. Removed at Will's
                    request, 2026-09-26. -->
             </div>
+          </div>
+          <div class="options-panel" id="graph-options" data-options-panel hidden>
+            <!--
+              The mesh is a geographic thing. Laying it out on real
+              positions puts the Phoenix and Tucson knots where they
+              belong and holds them there between redraws, instead of
+              solving a different ball of wire every time.
+            -->
+            <label class="muted">Layout
+              <select data-graph-layout>
+                <option value="spread" selected>On the ground, spread</option>
+                <option value="ground">On the ground, exact</option>
+                <option value="force-geo">Geo-seeded force</option>
+                <option value="free">Free force</option>
+                <option value="signal">By signal, not geography</option>
+              </select>
+            </label>
+            <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
+            <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show unjudged links</button>
+            <button type="button" data-graph-reset>Reset layout</button>
           </div>
           <!--
             The channel tab strip was here.

@@ -2638,8 +2638,6 @@ div.check { cursor: default; }
 
 .coverage-pick { display: flex; align-items: center; gap: .45rem; font-size: .85rem; color: var(--muted); }
 
-.coverage-layers { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .85rem; }
-
 .coverage-opacity {
   display: flex;
   align-items: center;
@@ -2698,28 +2696,10 @@ div.check { cursor: default; }
 .coverage-view-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /*
- * The layer buttons read as one control, so they sit in a row and the
- * chosen one is filled rather than outlined. A reader must be able to
- * tell at a glance which question the map is answering.
+ * The layer pills were here (`.coverage-layers button`). The layer is a
+ * select in the page head now (#299), and the rules went with the pills:
+ * dead CSS that still looks live is how a removed control comes back.
  */
-.coverage-layers button {
-  font: inherit;
-  font-size: .82rem;
-  padding: .38rem .8rem;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
-  cursor: pointer;
-}
-.coverage-layers button:hover { border-color: var(--accent-soft); color: var(--text); }
-.coverage-layers button[aria-pressed="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-.coverage-layers button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .coverage-legend {
   position: absolute;
@@ -2847,6 +2827,21 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   border: 1px solid var(--line); border-radius: .6rem; background: var(--panel);
   padding: 1rem; margin-bottom: .9rem;
 }
+/*
+ * The Options panel under a page head (#299): the Nodes filter panel's
+ * box, holding a row of ordinary controls rather than a grid of facets.
+ * `display: flex` beats the user agent's `[hidden]`, hence the second
+ * rule.
+ */
+.options-panel {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem;
+  border: 1px solid var(--line); border-radius: .6rem; background: var(--panel);
+  padding: .75rem 1rem; margin-bottom: .9rem;
+}
+.options-panel[hidden] { display: none; }
+/* The coverage controls carried margins for their old rows above the map. */
+.options-panel .coverage-view-controls,
+.options-panel .coverage-opacity { margin: 0; }
 .filter-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
 .filter-group { border: 0; margin: 0; padding: 0; min-width: 0; }
 .filter-group > legend {
@@ -3900,6 +3895,20 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/*
+ * The controls come first (#299), on Graph and Coverage.
+ *
+ * A dense title block is `flex: 1 1 auto`, and `auto` is the width of
+ * the whole subtitle on one line. A wrapping row breaks on that width,
+ * so the title block claimed the full row and pushed the controls under
+ * it even where they would have fitted beside it: Graph at 1280 and 1440
+ * px, with its controls already down to four. A small basis lets the
+ * two share the row, and the subtitle, already ellipsised, gives way.
+ *
+ * Its own class rather than a change to `.dense`, because the Map is
+ * dense too and Will named it as a head he likes as it is.
+ */
+.page-head.dense.fit > div:first-child { flex: 1 1 10rem; }
 
 /*
  * Under about a tablet, the subtitle goes rather than shrinking to
