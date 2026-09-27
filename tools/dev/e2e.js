@@ -3298,16 +3298,27 @@ async function main() {
       const at = await page.evaluate((name) => {
         const panel = document.querySelector(`[data-jump="${name}"]`);
         const bar = document.querySelector('.node-jump').getBoundingClientRect();
+        // The chips stick under the site's sticky phone bar (#271), and
+        // must be what a finger touches there, not the bar over them.
+        const site = document.querySelector('.sidebar').getBoundingClientRect();
+        // The chip just tapped: the row scrolls sideways to keep it in
+        // view, so the first chip can be off the screen's left edge.
+        const chip = document.querySelector(`.node-jump [data-jump-to="${name}"]`).getBoundingClientRect();
+        const hit = document.elementFromPoint(chip.left + chip.width / 2, chip.top + chip.height / 2);
         return {
           panel: Math.round(panel.getBoundingClientRect().top),
           barTop: Math.round(bar.top),
+          siteBottom: Math.round(site.bottom),
+          chipOnTop: !!hit && !!hit.closest('.node-jump'),
           barBottom: Math.round(bar.bottom),
           focused: document.activeElement === panel,
           scrollY: Math.round(window.scrollY),
           doc: [document.documentElement.scrollWidth, document.documentElement.clientWidth],
         };
       }, key);
-      must(Math.abs(at.barTop) <= 1, `the chips left the top of the screen after ${key}: top ${at.barTop}`);
+      must(Math.abs(at.barTop - at.siteBottom) <= 1,
+        `the chips are not just under the top bar after ${key}: top ${at.barTop}, bar ends ${at.siteBottom}`);
+      must(at.chipOnTop, `something covers the chips after ${key}`);
       must(at.panel >= at.barBottom - 1 && at.panel <= at.barBottom + 40,
         `${key} landed at ${at.panel} px, and the chips end at ${at.barBottom}`);
       must(at.focused, `${key} did not take the focus`);
@@ -3477,7 +3488,14 @@ async function main() {
       const one = document.querySelector('[data-page="firehose"] .new-pill');
       if (!one || one.hidden) return null;
       const box = one.getBoundingClientRect();
-      return { text: one.textContent, top: Math.round(box.top), height: Math.round(box.height) };
+      // Under the sticky phone bar (#271), and the thing a finger at its
+      // centre would actually touch: it was once drawn behind the bar.
+      const bar = document.querySelector('.sidebar').getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return {
+        text: one.textContent, top: Math.round(box.top), height: Math.round(box.height),
+        barBottom: Math.round(bar.bottom), tappable: !!hit && one.contains(hit),
+      };
     });
 
     // The control: at the top, new packets are in plain sight.
@@ -3498,7 +3516,9 @@ async function main() {
     await poll();
     let shown = await pill();
     must(shown && /^3 new/.test(shown.text), `after 3 new packets the pill says ${JSON.stringify(shown)}`);
-    must(shown.top >= 0 && shown.top < 80 && shown.height >= 44, `the pill is not at the top of the screen: ${JSON.stringify(shown)}`);
+    must(shown.top >= shown.barBottom && shown.top < shown.barBottom + 40 && shown.height >= 44,
+      `the pill is not just under the top bar: ${JSON.stringify(shown)}`);
+    must(shown.tappable, `something covers the pill: ${JSON.stringify(shown)}`);
     const held = await page.evaluate((key) => Math.round(
       document.querySelector(`[data-firehose-table] tbody tr[data-row-key="${key}"]`).getBoundingClientRect().top), row0.key);
     must(Math.abs(held - row0.top) <= 2, `the row being read moved from ${row0.top} to ${held} px`);

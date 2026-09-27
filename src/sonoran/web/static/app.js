@@ -11483,6 +11483,25 @@ function wireNav() {
     setOpen(!narrow.matches);
   };
 
+  /*
+   * How much of the screen the sticky phone bar covers, as `--bar-h`,
+   * for the things that stick under it: the node page's section chips
+   * (#286) and the firehose's "N new" pill (#280). Each was built on a
+   * page with no sticky bar and stuck at the very top, so with the bar
+   * (#271) the chips hid behind it and the pill could not be tapped.
+   *
+   * Measured rather than written down: the bar's height follows its
+   * font, and CI's fonts are wider than a Mac's. The open menu is not
+   * a height anything sticks under, so it keeps the closed figure.
+   */
+  const sidebar = toggle.closest('.sidebar');
+  const barHeight = () => {
+    if (!sidebar || sidebar.hasAttribute('data-menu-open')) return;
+    const height = narrow.matches ? Math.ceil(sidebar.getBoundingClientRect().height) : 0;
+    document.documentElement.style.setProperty('--bar-h', `${height}px`);
+  };
+  if (sidebar && 'ResizeObserver' in window) new ResizeObserver(barHeight).observe(sidebar);
+
   toggle.addEventListener('click', () => {
     setOpen(toggle.getAttribute('aria-expanded') !== 'true');
   });

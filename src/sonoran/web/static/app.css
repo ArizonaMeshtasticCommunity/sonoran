@@ -717,7 +717,8 @@ a.button-link .icon + span { margin-left: .4rem; }
      screen edges. */
   [data-node-body] > .node-jump {
     display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none;
-    position: sticky; top: 0; z-index: 5;
+    /* Under the sticky phone bar (#271), not behind it. */
+    position: sticky; top: var(--bar-h, 0px); z-index: 5;
     width: auto; margin-inline: -1rem; padding: .4rem 1rem;
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
@@ -2713,7 +2714,8 @@ tr.row-link:focus-within td { background: var(--panel-2); }
  * scrolls under it, and showing it moves no row.
  */
 .new-pill-anchor {
-  position: sticky; top: .5rem; z-index: 6; height: 0;
+  /* Under the sticky phone bar (#271), or it cannot be tapped. */
+  position: sticky; top: calc(var(--bar-h, 0px) + .5rem); z-index: 6; height: 0;
   display: flex; justify-content: center;
 }
 .new-pill {
