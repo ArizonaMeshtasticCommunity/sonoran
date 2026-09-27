@@ -3152,6 +3152,53 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * are drawn as they come, not filtered twice. */
 :root[data-theme="light"] .leaflet-tile-pane .basemap-tiles img.leaflet-tile { filter: none; }
 
+/*
+ * More contrast, when the reader's system asks for it (#285).
+ *
+ * Most of the small text on this site is in `--muted`: labels, notes,
+ * table headings, the "heard 3 h ago" under a name. It clears the 4.5:1
+ * floor (6.7 dark, 6.9 light, against `--panel`), and that is the floor,
+ * not what a reader who asked for more contrast wants. These values
+ * clear 7:1 (WCAG 1.4.6, AAA) against `--bg`, `--panel` and `--panel-2`
+ * in both themes, and `--line` clears 3:1 (WCAG 1.4.11) against all
+ * three, where it was 1.2 to 1.5. The ratios are in docs/design/palette.md
+ * and `test_contrast_more.py` computes them again.
+ *
+ * After the light theme on purpose: the light rule inside this block has
+ * the same weight as the one above and wins by coming later. The charts
+ * read `--muted` and `--line` when the page loads, so they follow too.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --muted: #e0cfc0;
+    --line: #8a6f5c;
+  }
+  :root[data-theme="light"] {
+    --muted: #3f3025;
+    --line: #8a7462;
+  }
+  /* A table heading is small, uppercase and muted: the hardest text on
+     the page to read. Here it takes the body text colour. */
+  th { color: var(--text); }
+}
+
+/*
+ * Forced colours (Windows High Contrast and its kin), #285.
+ *
+ * The browser replaces every colour with the reader's system palette.
+ * That is right for text and borders, and wrong for the few marks whose
+ * colour IS the information: a legend swatch that says which role a
+ * colour means, and the live status dot. Replaced, every swatch becomes
+ * the same system colour and the legend says nothing. They keep their
+ * own colours. A pressed toggle loses its fill, but it carries a tick
+ * as well, so it still reads as pressed.
+ */
+@media (forced-colors: active) {
+  .swatch,
+  .sidebar .status .dot { forced-color-adjust: none; }
+  .legend-key[aria-pressed="true"] { border-color: Highlight; }
+}
+
 /* The theme control in the nav (#50). */
 
 /*

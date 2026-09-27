@@ -1843,6 +1843,59 @@ async function main() {
     await moving.close();
   }
 
+  await journey(context, 'more contrast reaches the page (#285)', async (page) => {
+    /*
+     * Playwright 1.49 has no `contrast` option, so the media feature is
+     * set through the DevTools protocol. The same page is read before
+     * and after, so the "before" is the control.
+     */
+    await open(page, 'nodes', 3000);
+    await waitFor(page, () => Boolean(document.querySelector('[data-page="nodes"] th')), 20000);
+    const read = () => page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      const th = document.querySelector('[data-page="nodes"] th');
+      return {
+        more: matchMedia('(prefers-contrast: more)').matches,
+        muted: root.getPropertyValue('--muted').trim(),
+        text: getComputedStyle(document.body).color,
+        th: th ? getComputedStyle(th).color : null,
+      };
+    });
+    const before = await read();
+    must(!before.more && before.th && before.th !== before.text, `the control is not ordinary: ${JSON.stringify(before)}`);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-contrast', value: 'more' }] });
+    const after = await read();
+    must(after.more, 'the browser did not take prefers-contrast: more');
+    must(after.muted !== before.muted, `--muted stayed ${after.muted}`);
+    must(after.th === after.text, `a table heading is ${after.th}, the body text is ${after.text}`);
+    await cdp.send('Emulation.setEmulatedMedia', { features: [] });
+
+    // Forced colours: a legend swatch keeps the colour it stands for.
+    // The nodes page's requests land first, or leaving aborts them.
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await page.goto('about:blank');
+    await page.emulateMedia({ forcedColors: 'active' });
+    await open(page, 'map', 3000);
+    await waitFor(page, () => Boolean(document.querySelector('[data-map-legend] .legend-key .swatch')), 20000);
+    const swatch = await page.evaluate(() => {
+      const one = document.querySelector('[data-map-legend] .legend-key .swatch');
+      if (!one) return null;
+      const probe = document.createElement('i');
+      // The probe opts out as well, or its own colour is forced.
+      probe.style.forcedColorAdjust = 'none';
+      probe.style.color = one.style.background;
+      document.body.append(probe);
+      const meant = getComputedStyle(probe).color;
+      probe.remove();
+      return { forced: matchMedia('(forced-colors: active)').matches, meant, drawn: getComputedStyle(one).backgroundColor };
+    });
+    must(swatch, 'the map legend drew no swatch');
+    must(swatch.forced, 'the browser did not take forced-colors: active');
+    must(swatch.drawn === swatch.meant, `under forced colours a swatch drew ${swatch.drawn}, it stands for ${swatch.meant}`);
+    return `--muted ${before.muted} -> ${after.muted}; th takes the text colour; forced swatch ${swatch.drawn}`;
+  });
+
   /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
