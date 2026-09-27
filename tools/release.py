@@ -274,7 +274,12 @@ def render_changelog(releases: list[dict[str, str]]) -> str:
         "",
     ]
     for release in releases:
-        date = release["publishedAt"][:10]
+        # The tag is named for the Arizona date (`RELEASE_ZONE`), so the
+        # heading must be too. `publishedAt` is UTC, and a release published
+        # in the Arizona evening is already tomorrow in UTC: the first one,
+        # v2026.09.26, printed as "2026-09-27" under its own name.
+        published = datetime.fromisoformat(release["publishedAt"].replace("Z", "+00:00"))
+        date = published.astimezone(RELEASE_ZONE).date().isoformat()
         out.append(f"## {release['tagName']} — {date}")
         out.append("")
         body = release["body"].replace("\r\n", "\n").strip()
