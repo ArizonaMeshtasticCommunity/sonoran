@@ -1012,14 +1012,11 @@ dl.kv.fields { align-items: baseline; }
 
 .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
 /*
- * The dashboard feed sizes to what it holds.
- *
- * `max-height` cut the last message across the middle, which looks like
- * a message that ended there. The live feeds on the map keep the cap,
- * because those hold forty rows and grow while you watch; this one gets
- * eight from the endpoint and then stops.
+ * The live feeds on the map keep the cap, because those hold forty rows
+ * and grow while you watch. The dashboard's latest messages are not a
+ * `.feed` any more (#296): they are `.messages`, five of them, with no
+ * cap to cut the last one across the middle.
  */
-.page[data-page="dashboard"] .feed { max-height: none; overflow-y: visible; }
 .feed li { border-left: 2px solid var(--line); padding: .1rem .6rem; }
 .feed li .meta { color: var(--muted); font-size: .78rem; display: flex; gap: .5rem; flex-wrap: wrap; }
 

@@ -573,9 +573,22 @@ function shortUrl(raw) {
   }
 }
 
+/*
+ * Control characters a radio can send and a page cannot draw (#296).
+ *
+ * A live message was the single byte "\x07", a bell, and it drew as an
+ * empty line under its sender. The C0 controls and DEL are taken out;
+ * a newline and a tab are kept, because they are text. The pattern is
+ * inside the function so the tests that lift `messageBody` out of this
+ * file get it too.
+ */
 function messageBody(text) {
   const node = el('span', { class: 'body' });
-  for (const chunk of String(text ?? '').split(URL_IN_TEXT)) {
+  // eslint-disable-next-line no-control-regex
+  const clean = String(text ?? '').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '');
+  // Nothing left to draw is no line at all, not an empty one.
+  if (!clean.trim()) node.hidden = true;
+  for (const chunk of clean.split(URL_IN_TEXT)) {
     if (!chunk) continue;
     // A stateless test. `URL_IN_TEXT` is global, and `.test()` on a
     // global regex advances `lastIndex`, so using it here would give a
@@ -1404,13 +1417,20 @@ const PAGES = {};
  */
 const PORTNUM_CHART_HOURS = 24;
 
+/*
+ * How many messages the dashboard shows (#296). Will: "only show the 5
+ * latest messages and add a view all messages button". It asked for 12,
+ * and the panel stood 979 px tall beside a short chart.
+ */
+const DASHBOARD_MESSAGES = 5;
+
 PAGES.dashboard = async (page) => {
   await Promise.all([loadSummary(page), loadTopTalkers(page)]);
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
     // messages from channels a LongFast radio never hears.
-    `api/chat?limit=12${chatFeedChannel()}`,
+    `api/chat?limit=${DASHBOARD_MESSAGES}${chatFeedChannel()}`,
     /*
      * The same 24 hours and the same preset the chart's own heading and
      * the firehose it links into use (§7.1).
@@ -1434,9 +1454,16 @@ PAGES.dashboard = async (page) => {
       ], nodes, 'No nodes heard yet.')
     : failure(new Error('Cannot load nodes.')));
 
+  /*
+   * No channel on each row (#296). The request is filtered to the preset's
+   * channel, so the label said the same word five times; it is said once,
+   * in the heading.
+   */
+  const feedChannel = $('[data-recent-chat-channel]', page);
+  if (feedChannel) feedChannel.textContent = presetChannel() ? SonoranLabels.presetLabel(presetChannel()) : '';
   replace($('[data-recent-chat]', page), messages
     ? (messages.length
-        ? messages.map((message) => messageItem(message, { showChannel: true }))
+        ? messages.map((message) => messageItem(message))
         : [empty('No messages stored.')])
     : [failure(new Error('Cannot load messages.'))]);
 

@@ -114,10 +114,40 @@ def test_every_chat_card_is_the_same_width() -> None:
 def test_the_dashboard_feed_is_not_cut_across_a_message() -> None:
     """`max-height` cut the last message in half, which looks like a
     message that ended there. The live feeds on the map keep the cap: they
-    hold forty rows and grow while you watch."""
+    hold forty rows and grow while you watch.
+
+    Since #296 the dashboard list is not a `.feed`, so the cap cannot
+    reach it; `.messages` has none.
+    """
     css = _read("app.css")
-    assert '.page[data-page="dashboard"] .feed { max-height: none;' in css
     assert "max-height: 26rem" in css
+    messages = css[css.index(".messages { list-style: none;") :]
+    assert "max-height" not in messages[: messages.index("}")]
+
+
+def test_the_dashboard_messages_use_the_message_styling() -> None:
+    """#296: as a `.feed` the list got none of the `.messages` rules.
+
+    The name was a bordered button, the channel ran into the time, and the
+    time was an underlined link in the browser's own blue. Five rows, and
+    a way to all of them at the foot of the panel.
+    """
+    text = _client().get("/").text
+    dashboard = text[text.index('data-page="dashboard"') : text.index('data-page="map"')]
+    tag = dashboard[: dashboard.index("data-recent-chat>")]
+    tag = tag[tag.rindex("<ul") :]
+    assert 'class="messages' in tag, f"the dashboard list is not `.messages`: {tag}"
+    foot = dashboard[dashboard.index("data-recent-chat>") :]
+    foot = foot[: foot.index("</div>")]
+    assert '<a class="more" href="#chat">View all messages</a>' in foot, (
+        "the View all messages link is missing, or does not open the chat overview"
+    )
+    app = _read("app.js")
+    assert "const DASHBOARD_MESSAGES = 5;" in app
+    assert "api/chat?limit=${DASHBOARD_MESSAGES}" in app
+    assert "showChannel: true" not in app[app.index("PAGES.dashboard = ") :][:4000], (
+        "the dashboard repeats the channel on every row again"
+    )
 
 
 def test_a_finger_gets_a_target_it_can_hit() -> None:

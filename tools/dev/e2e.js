@@ -959,6 +959,83 @@ async function main() {
     return `${opened.rows} -> ${after.rows} rows, the anchored row drifted ${drift}px`;
   });
 
+  await journey(context, 'the dashboard shows five latest messages and a way to all of them', async (page) => {
+    /*
+     * #296. The list was a `.feed`, so none of the message styling
+     * reached it: the name was a bordered button, the channel ran into
+     * the time, the time was underlined in the browser's own blue, and
+     * a message that was one bell character drew as an empty line.
+     *
+     * The answer is extended rather than replaced, so the rows are real
+     * ones; the first is given a bell for a body, the second a reply, and
+     * the third a DM marker, because those are what must still draw.
+     */
+    const asked = [];
+    await page.route(/\/api\/chat\?limit=/, async (route, request) => {
+      asked.push(new URL(request.url()).searchParams.get('limit'));
+      const response = await route.fetch();
+      const rows = await response.json();
+      if (Array.isArray(rows) && rows.length >= 3) {
+        rows[0] = { ...rows[0], body: '\u0007' };
+        rows[1] = { ...rows[1], reply_to: { from_name: 'Quoted', body: 'the earlier message', packet_id: null } };
+        rows[2] = { ...rows[2], to_node: '!0e2e0002' };
+      }
+      await route.fulfill({ response, json: rows });
+    });
+    const seen = [];
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('about:blank');
+      await open(page, 'dashboard', 500);
+      const drawn = () => document.querySelectorAll('[data-recent-chat] > li').length > 0;
+      must(await waitFor(page, drawn, 15000), `no message drew on the dashboard at ${width}px`);
+      const m = await page.evaluate(() => {
+        const list = document.querySelector('[data-recent-chat]');
+        const rows = [...list.querySelectorAll(':scope > li')];
+        const name = list.querySelector('.who .name');
+        const when = list.querySelector('.who .when');
+        const nameStyle = getComputedStyle(name);
+        const whenStyle = getComputedStyle(when);
+        const first = rows[0].querySelector('.body');
+        return {
+          rows: rows.length,
+          list: list.className,
+          nameBorder: nameStyle.borderTopWidth,
+          nameBg: nameStyle.backgroundColor,
+          underline: whenStyle.textDecorationLine,
+          whenRight: when.getBoundingClientRect().right,
+          whoRight: when.parentElement.getBoundingClientRect().right,
+          channels: list.querySelectorAll('.channel-label').length,
+          bellHeight: first ? first.getBoundingClientRect().height : -1,
+          reply: list.querySelectorAll('.reply-quote').length,
+          dm: list.querySelectorAll('li.dm').length,
+          more: (document.querySelector('[data-page="dashboard"] a.more[href="#chat"]') || {}).textContent || '',
+          scroll: document.documentElement.scrollWidth,
+          client: document.documentElement.clientWidth,
+        };
+      });
+      must(m.rows <= 5, `the dashboard drew ${m.rows} messages, not at most 5`);
+      must(/\bmessages\b/.test(m.list), `the list is not .messages: "${m.list}"`);
+      must(m.nameBorder === '0px', `the sender name still has a ${m.nameBorder} border`);
+      must(m.underline === 'none', `the time is underlined before any hover: ${m.underline}`);
+      must(Math.abs(m.whenRight - m.whoRight) <= 1, 'the time is not on the right of its line');
+      must(m.channels === 0, `the channel is repeated on ${m.channels} rows`);
+      must(m.bellHeight === 0, `a body of one bell character drew ${m.bellHeight}px tall`);
+      must(m.reply >= 1 && m.dm >= 1, `a reply (${m.reply}) or a DM (${m.dm}) no longer draws`);
+      must(m.more.trim() === 'View all messages', 'there is no View all messages link');
+      must(m.scroll <= m.client + 1, `the dashboard scrolls sideways at ${width}px: ${m.scroll}/${m.client}`);
+      seen.push(`${width}px ${m.rows} rows`);
+    }
+    must(asked.every((limit) => limit === '5'), `the dashboard asked for ${asked.join(', ')} messages`);
+    // By keyboard: the link takes focus and Enter opens the chat overview.
+    await page.focus('[data-page="dashboard"] a.more[href="#chat"]');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(800);
+    const hash = await page.evaluate(() => window.location.hash);
+    must(hash === '#chat', `Enter on View all messages went to ${hash}`);
+    return `${seen.join(', ')}; limit=5; Enter opens #chat`;
+  });
+
   await journey(context, 'the chat table pages on as you scroll', async (page) => {
     /*
      * #297. The table view stopped at 100 rows: only the reading view
