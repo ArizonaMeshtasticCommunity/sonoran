@@ -6684,6 +6684,13 @@ const km = (value) => (
  * itself, the estimate says nothing about where in that range the node
  * is, and the only true statement is an upper bound: "under 50 mi".
  *
+ * A wide range is still shown. The issue asked whether an estimate whose
+ * range is more than half its distance ("about 5 km ± 4.6") says too
+ * little to print, and Will (2026-09-27) said keep it: it stays marked
+ * "about" with its range, so it claims no more than it knows, and a
+ * range is more use to the reader than "Not known". Do not add a cut-off
+ * here. The e2e journey on the furthest-node tile holds this.
+ *
  * Returns `{ value, bar }`, both in the reader's units. Never called with
  * a missing number: `Number(null)` is 0, and a missing estimate printed
  * as "about 0 ft" would claim two nodes stand on the same spot.

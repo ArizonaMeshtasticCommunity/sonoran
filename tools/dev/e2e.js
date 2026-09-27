@@ -542,6 +542,42 @@ async function main() {
       }
       seen.push(`${kind}=${value}`);
     }
+    /*
+     * An estimate with a wide range is still an estimate (#257).
+     *
+     * The open question was whether to hide one whose range is more than
+     * half its distance, and Will (2026-09-27) said keep it. The seeded
+     * mesh may hold no such pair, so the tile is fed two: 5 km ± 4.6,
+     * and 3 km ± 3.2, whose range passes the distance itself. Both must
+     * still print a figure with its range, never "Not known".
+     */
+    const someone = kinds.get('estimate');
+    for (const [estimate, error, word] of [[5, 4.6, 'about'], [3, 3.2, 'under']]) {
+      await page.unrouteAll();
+      await page.route(/\/api\/nodes\/[^/]+\/routes\?/, async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.furthest_heard_by = {
+          ...(body.furthest_heard_by || { node_id: '!00000001', display_name: 'Wide range' }),
+          distance_km: null, approx_distance_km: estimate, distance_error_km: error,
+        };
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(`${BASE}/?wide=${estimate}#node/${encodeURIComponent(someone)}`, { waitUntil: 'load' });
+      const read = () => {
+        const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
+          .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
+        return found ? {
+          value: found.querySelector('.value').textContent.trim(),
+          detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
+        } : null;
+      };
+      must(await waitFor(page, read, 15000), `${estimate} ± ${error} km: the furthest tile never drew`);
+      const { value, detail } = await page.evaluate(read);
+      must(value.startsWith(`${word} `), `${estimate} ± ${error} km reads "${value}", wanted "${word} ..."`);
+      must(/±|rounded by up to/.test(detail), `${estimate} ± ${error} km lost its range: "${detail}"`);
+      seen.push(`${estimate}±${error}=${value}`);
+    }
     return seen.join('; ');
   });
 
