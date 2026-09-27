@@ -14,6 +14,7 @@ from sqlalchemy import (
     and_,
     case,
     func,
+    literal,
     not_,
     or_,
     select,
@@ -970,8 +971,11 @@ def _after_cursor(
     and every NULL comes after every value, because NULLs sort last.
     """
     value, when, sender, packet_id = cursor
+    # `literal`, not the bare values: `tuple_` would bind them anyway, but
+    # only its column-typed signature is visible to mypy, which the CI
+    # typecheck job enforces.
     tail = tuple_(Packet.first_seen_at, Packet.from_node_num, Packet.packet_id) < tuple_(
-        when, sender, packet_id
+        literal(when), literal(sender), literal(packet_id)
     )
     if value is None:
         return and_(column.is_(None), tail)
