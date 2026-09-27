@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api.cache import KeyedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.routes.gaps import read_assessment
@@ -38,10 +39,15 @@ router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 # cannot be told apart on one chart.
 SIGNAL_GATEWAYS = 6
 
-# The most traceroutes the route widgets read. A row limit must never
-# decide what evidence exists (AGENTS.md 9.19), so the answer says when
-# it was reached rather than pretend the list was whole.
-ROUTE_TRACE_LIMIT = 2000
+# The route widgets read every traceroute in the window that names the
+# node. They used to read the newest 2000 and say so, and at the 30 day
+# default the busiest node was then counted from about a tenth of its
+# evidence (#290, AGENTS.md 9.19). There is no row limit now; the rows
+# are lean and the answer is held for a short while instead.
+#
+# One hold per (node, window), with a ceiling on how many, for the
+# reasons in `graph.py`: the key comes from the address.
+_routes_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=128)
 
 
 def bucket_seconds(hours: int) -> int:
@@ -361,6 +367,7 @@ async def _direct_signal(
 @router.get("/{node_id}/routes")
 async def node_routes(
     node_id: str,
+    request: Request,
     hours: int = Query(default=24, ge=1, le=720),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
@@ -394,8 +401,21 @@ async def node_routes(
 
     `hears` and `heard_by` also list gateways that uploaded a packet
     with no hop used (kind `gateway`): see `_direct_links`.
+
+    Every traceroute in the window that names the node is read (#290).
+    The answer is held for `stats_cache_seconds`, keyed on everything
+    that changes it: the node and the window.
     """
     node_num = require_node_num(node_id)
+    return await _routes_cache.get(
+        f"{node_num}|{hours}",
+        request.app.state.settings.stats_cache_seconds,
+        lambda: _node_routes(session, node_num, hours),
+    )
+
+
+async def _node_routes(session: AsyncSession, node_num: int, hours: int) -> dict[str, object]:
+    """The work behind `/api/nodes/{node_id}/routes`. Cached by its caller."""
     now = datetime.now(UTC)
     since = now - timedelta(hours=hours)
 
@@ -428,12 +448,21 @@ async def node_routes(
         else:
             _note(heard_by, reporter, "neighbor", total, snr, last)
 
+    # The whole window, and only the columns the rules read. A whole ORM
+    # object for each row cost more than reading the rows: measured on
+    # 19,801 rows, 0.44 s of object building against 0.18 s of query.
     traces = (
-        await session.scalars(
-            select(Traceroute)
-            .where(Traceroute.seen_at >= since, _mentions(node_num))
-            .order_by(Traceroute.seen_at.desc())
-            .limit(ROUTE_TRACE_LIMIT)
+        await session.execute(
+            select(
+                Traceroute.from_node_num,
+                Traceroute.to_node_num,
+                Traceroute.request_id,
+                Traceroute.route,
+                Traceroute.route_back,
+                Traceroute.snr_towards,
+                Traceroute.snr_back,
+                Traceroute.seen_at,
+            ).where(Traceroute.seen_at >= since, _mentions(node_num))
         )
     ).all()
     segments: list[tuple[int, int, float | None]] = []
@@ -525,8 +554,9 @@ async def node_routes(
         if furthest_heard
         else _no_distance_reason(hears_rows, own, quiet=False),
         "coarse_excluded": coarse_excluded,
+        # How many traceroutes the answer was built from. Every one in
+        # the window: there is no limit to have reached any more.
         "traces_read": len(traces),
-        "trace_limit_reached": len(traces) >= ROUTE_TRACE_LIMIT,
         "hop_depth": await _hop_depth(session, node_num, since, now),
     }
 

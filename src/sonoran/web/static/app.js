@@ -419,8 +419,18 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
    * Reflow excepts, so it is the one place extra width costs a reader
    * the most.
    */
+  /*
+   * Two more column options, for a table that compares rows and is too
+   * wide for a phone (mobile review item 9, #274).
+   *
+   * `stick` keeps the column in place while the rest scrolls under it,
+   * so a reader who scrolls sideways still knows which row they read.
+   * `low` marks a column a phone can do without: below 40rem it is not
+   * drawn, and the reader gets it from wherever the row leads.
+   */
+  const place = (column) => [column.stick ? 'stick' : '', column.low ? 'low' : ''];
   const head = el('tr', {}, columns.map((column) => {
-    const classes = [column.num ? 'num' : ''];
+    const classes = [column.num ? 'num' : '', ...place(column)];
     /*
      * A column may also carry `sort`: the name the server knows the
      * column by. The heading then becomes a button that asks the
@@ -472,7 +482,8 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
     };
     return el('tr', href ? { class: 'row-link', onclick: open } : {}, columns.map((column) => {
       const value = column.cell(row);
-      return el('td', { class: [column.num ? 'num' : '', column.wrap ? 'wrap' : ''].join(' ').trim() || null },
+      const classes = [column.num ? 'num' : '', column.wrap ? 'wrap' : '', ...place(column)];
+      return el('td', { class: classes.filter(Boolean).join(' ') || null },
         value && value.nodeType ? value : el('span', { text: value == null ? '-' : String(value) }));
     }));
   });
@@ -7004,6 +7015,13 @@ const km = (value) => (
  * itself, the estimate says nothing about where in that range the node
  * is, and the only true statement is an upper bound: "under 50 mi".
  *
+ * A wide range is still shown. The issue asked whether an estimate whose
+ * range is more than half its distance ("about 5 km ± 4.6") says too
+ * little to print, and Will (2026-09-27) said keep it: it stays marked
+ * "about" with its range, so it claims no more than it knows, and a
+ * range is more use to the reader than "Not known". Do not add a cut-off
+ * here. The e2e journey on the furthest-node tile holds this.
+ *
  * Returns `{ value, bar }`, both in the reader's units. Never called with
  * a missing number: `Number(null)` is 0, and a missing estimate printed
  * as "about 0 ft" would claim two nodes stand on the same spot.
@@ -7207,8 +7225,10 @@ function routesPanel(routes) {
     el('p', { class: 'muted' },
       'A rounded position can be kilometres out, so a distance from one is marked "about" with the range the rounding allows. '
       + 'The longest route segment needs an exact position at both ends, and rounded pairs are left out of it'
-      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')
-      + (routes.trace_limit_reached ? ` Only the newest ${count(routes.traces_read)} traceroutes were read.` : '')),
+      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')),
+    // "Only the newest 2,000 traceroutes were read" was here. Every
+    // traceroute in the window is read now, so there is no cut to own
+    // up to (#290).
     el('div', { class: 'grid two' },
       el('div', { class: 'route-list' },
         el('h4', { text: `Who hears it (${count(routes.heard_by.length)})` }),
@@ -7522,6 +7542,51 @@ async function drawTimeline(target, nodeId, pageHours, types) {
   }
 }
 
+/*
+ * A row of section chips that stays at the top of a phone screen (#286).
+ *
+ * The node page is 13 panels in one column on a phone, 7.1 screens on an
+ * iPhone 14, with the packet timeline past y = 3760 and no way to reach
+ * it but to scroll. The chips are the mobile review's item 21.
+ *
+ * Buttons, not `#` links. The address is this dashboard's router, and a
+ * link to `#node-timeline` would leave the node page for one that does
+ * not exist. Each chip finds its panel when pressed, by `data-jump`,
+ * because Health and Links and routes are swapped for their finished
+ * panels after the first draw. The panel then takes the focus, so a
+ * screen reader goes where the eye went.
+ *
+ * CSS draws the row below 40rem only. A wider screen shows two columns
+ * and the page is short enough to scan.
+ */
+const NODE_JUMPS = [
+  ['identity', 'Identity'], ['health', 'Health'], ['activity', 'Activity'],
+  ['map', 'Map'], ['links', 'Links'], ['timeline', 'Timeline'],
+];
+
+function nodeJumpBar(body) {
+  return el('nav', { class: 'node-jump', 'aria-label': 'Sections of this page' },
+    NODE_JUMPS.map(([key, label]) => el('button', {
+      type: 'button',
+      class: 'chip',
+      'data-jump-to': key,
+      text: label,
+      onclick: () => {
+        const target = $(`[data-jump="${key}"]`, body);
+        if (!target) return;
+        target.setAttribute('tabindex', '-1');
+        target.scrollIntoView({ behavior: REDUCED_MOTION.matches ? 'auto' : 'smooth', block: 'start' });
+        target.focus({ preventScroll: true });
+      },
+    })));
+}
+
+/** Mark a node page panel as the place one of the section chips goes. */
+function jumpTarget(key, panel) {
+  panel.setAttribute('data-jump', key);
+  return panel;
+}
+
 async function loadNodeDetail(nodeId) {
   const page = $('[data-page="node"]');
   const hours = $('[data-node-hours]', page).value || '720';
@@ -7561,12 +7626,13 @@ async function loadNodeDetail(nodeId) {
    * came for — below the fold on a busy node. Both are capped at five
    * rows now and say how many more there are.
    */
-  const health = el('div', { class: 'panel' }, el('p', { class: 'loading', text: 'Loading health checks' }));
-  const routes = el('div', { class: 'panel span-2' },
-    el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' }));
+  const health = jumpTarget('health',
+    el('div', { class: 'panel' }, el('p', { class: 'loading', text: 'Loading health checks' })));
+  const routes = jumpTarget('links', el('div', { class: 'panel span-2' },
+    el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' })));
   const history = el('div', { class: 'grid two span-2 history-grid' });
-  const packets = el('div', { class: 'panel span-2 timeline' },
-    el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' }));
+  const packets = jumpTarget('timeline', el('div', { class: 'panel span-2 timeline' },
+    el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' })));
 
   /*
    * The four short panels get a row of their own (#102).
@@ -7595,9 +7661,9 @@ async function loadNodeDetail(nodeId) {
    * the two separated by Activity and Weather.
    */
   const summary = el('div', { class: 'grid summary-row' },
-    identityPanel(node),
+    jumpTarget('identity', identityPanel(node)),
     el('div', { class: 'summary-stack' }, devicePanel(detail), health),
-    activityPanel(detail),
+    jumpTarget('activity', activityPanel(detail)),
     weatherPanel(detail));
 
   /*
@@ -7619,7 +7685,7 @@ async function loadNodeDetail(nodeId) {
    * line on the first screen, which is what the issue asked for.
    */
   // `health` is inside `summary` now, so it is not passed again here.
-  replace(body, summary, nodeMapPanel(detail), el('div', { class: 'grid two' },
+  replace(body, summary, jumpTarget('map', nodeMapPanel(detail)), el('div', { class: 'grid two' },
     routes,
     history,
     messagesPanel(detail),
@@ -7627,6 +7693,8 @@ async function loadNodeDetail(nodeId) {
     heardByPanel(detail.heard_by),
     signalPanel,
     packets));
+  // The chips go first, above the summary, and stick from there (#286).
+  body.prepend(nodeJumpBar(body));
 
   const id = encodeURIComponent(nodeId);
   const [gaps, historyData, routesData] = await getAll([
@@ -7636,8 +7704,8 @@ async function loadNodeDetail(nodeId) {
   ]);
   // The page may have moved on to another node while these loaded.
   if (currentNodeId !== nodeId) return;
-  health.replaceWith(healthPanel(gaps, detail, issuesPanel(gaps)));
-  routes.replaceWith(routesPanel(routesData));
+  health.replaceWith(jumpTarget('health', healthPanel(gaps, detail, issuesPanel(gaps))));
+  routes.replaceWith(jumpTarget('links', routesPanel(routesData)));
   drawNodeHistory(history, historyData);
   const types = (detail.activity.by_portnum || []).map((row) => row.portnum);
   await Promise.all([
@@ -9017,9 +9085,16 @@ PAGES.traceroutes = async (page) => {
   const target = $('[data-traceroute-table]', page);
   const rows = await get('api/traceroutes?limit=100').catch((error) => error);
   if (rows instanceof Error) return replace(target, failure(rows));
+  /*
+   * On a phone 57% of this table was off to the side (#274). The Time
+   * column stays put while the rest scrolls, because it is the link to
+   * the trace. Hops and Signal measured are not drawn below 40rem: both
+   * are on the trace page, one tap away, with each hop spelled out.
+   */
   replace(target, table([
     {
       label: 'Time',
+      stick: true,
       cell: (row) => el('a', {
         class: 'linky', href: `#traceroute/${row.id}`, text: stamp(row.seen_at),
       }),
@@ -9027,10 +9102,11 @@ PAGES.traceroutes = async (page) => {
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => nodeChip({ node_id: row.to_node, display_name: row.to_name }) },
     { label: 'Path', wrap: true, cell: (row) => (row.route_names || []).join(' \u2192 ') || 'direct' },
-    { label: 'Hops', num: true, cell: (row) => (row.hops || []).length },
+    { label: 'Hops', num: true, low: true, cell: (row) => (row.hops || []).length },
     {
       label: 'Signal measured',
       num: true,
+      low: true,
       hint: 'How many hops came back with a signal reading. The firmware reports no reading for a hop it could not measure, and often sends fewer readings than hops.',
       cell: (row) =>
         `${(row.hops || []).filter((hop) => hop.snr != null).length} of ${(row.hops || []).length}`,
@@ -9136,10 +9212,14 @@ function drawBroadcastTable(page, data) {
           [`Sends every ${everySeconds(rate.interval_seconds)}. `
             + `The default is every ${everySeconds(rate.default_seconds)}.`])));
 
+  // As on the traceroutes page (#274): the node stays put while the
+  // rest scrolls, and the raw packet count gives way on a phone. The
+  // rates beside it are the point of the table, and they already carry
+  // what the count would say.
   replace(target, table(
     [
-      { label: 'Node', cell: (row) => nodeChip(row) },
-      { label: 'Packets', num: true, cell: (row) => count(row.packet_count) },
+      { label: 'Node', stick: true, cell: (row) => nodeChip(row) },
+      { label: 'Packets', num: true, low: true, cell: (row) => count(row.packet_count) },
       { label: 'Send rate against default', cell: rates },
       { label: 'Health', cell: health },
     ],
@@ -9491,14 +9571,40 @@ function traceroutePath(hops) {
  * CSS filter over its picture would invert its colours too. The link
  * still opens mesh-graph itself.
  */
-function meshGraphTrace(trace) {
+/*
+ * The whole panel, heading included, so the traceroute page and the
+ * packet page draw the same thing (Will, 2026-09-27: the packet page gets
+ * the same button). `extra` is the grid class the caller needs.
+ *
+ * "Open in mesh-graph" is a link drawn as a button at the top right of
+ * the drawing (#289), the `a.button-link` of the node page (#258). It
+ * stays an `<a>`, so middle-click and "Open in new tab" still work. It
+ * sits in the heading and not over the picture: the picture is hidden
+ * until it loads and replaced by a sentence when mesh-graph has none,
+ * and the button stays in both cases (Will, 2026-09-27). With no URL
+ * there is no button, only the sentence that says why.
+ */
+function meshGraphTrace(trace, extra = '') {
   const url = trace && trace.graph_url;
-  if (!url) return empty('This traceroute has no packet ID, so it cannot be linked.');
+  const panel = (...body) => el('div', { class: `panel ${extra}`.trim(), 'data-mesh-graph-panel': '' },
+    el('h3', {}, el('span', { text: 'mesh-graph drawing' }),
+      url
+        ? el('a', { class: 'button-link', href: url, target: '_blank', rel: 'noopener' },
+            icon('#i-external'), el('span', { text: 'Open in mesh-graph' }),
+            el('span', { class: 'sr-only', text: ' (opens in a new tab)' }))
+        : null),
+    ...body);
+  if (!url) return panel(empty('This traceroute has no packet ID, so it cannot be linked.'));
   const drawing = el('img', {
     src: trace.drawing_url ? api(trace.drawing_url) : url,
     alt: '',
     class: 'trace-drawing',
-    loading: 'lazy',
+    /*
+     * Not `loading: 'lazy'`. The picture is `display: none` until it
+     * loads, and Chromium never fetches a lazy image that has no box:
+     * measured, the request was not made at all, so neither the drawing
+     * nor the "holds no drawing" sentence ever appeared (#289).
+     */
     onload: (event) => { event.target.style.display = 'block'; },
     onerror: (event) => {
       event.target.replaceWith(el('p', {
@@ -9507,11 +9613,7 @@ function meshGraphTrace(trace) {
       }));
     },
   });
-  return el('div', {},
-    el('p', { style: 'margin:0 0 .5rem' },
-      el('a', { class: 'linky', href: url, target: '_blank', rel: 'noopener',
-        text: 'Open this trace in mesh-graph' })),
-    drawing);
+  return panel(drawing);
 }
 
 
@@ -9585,7 +9687,17 @@ PAGES.traceroute = async (page) => {
       text: `${trace.hops.length} hops, ${measured} with a signal reading, `
         + `${stamp(trace.seen_at)}` }));
 
-  replace(body, el('div', { class: 'grid two' },
+  /*
+   * Route, Path there and Path back are the three panels on top, and
+   * the drawing is under them at full width (Will, #288). Path back
+   * used to come after the drawing, so the two paths were a screen
+   * apart, and it was left out when there was none, which changed the
+   * shape of the page from one trace to the next.
+   *
+   * `.trace-top` is one column or three, never two: a two-column row
+   * of three panels leaves Path back alone beside an empty cell.
+   */
+  replace(body, el('div', { class: 'grid trace-top' },
     el('div', { class: 'panel' },
       el('h3', {}, 'Route'),
       el('dl', { class: 'kv' },
@@ -9612,23 +9724,48 @@ PAGES.traceroute = async (page) => {
     el('div', { class: 'panel' },
       el('h3', {}, 'Path there'),
       traceroutePath(trace.hops)),
-    el('div', { class: 'panel span-2' },
-      el('h3', {}, 'mesh-graph drawing'),
-      meshGraphTrace(trace)),
-    trace.return_hops && trace.return_hops.length
-      ? el('div', { class: 'panel' },
-          el('h3', {}, 'Path back',
-            el('span', { class: 'muted',
-              text: trace.return_delivered ? 'delivered' : 'still in flight' })),
-          trace.return_delivered
-            ? null
-            : el('p', { class: 'notice' },
-                'The broker saw this reply while it was still travelling. It had reached '
-                + `${trace.reply_reached} when it was captured. Whether it arrived back at `
-                + `${trace.from_name} is not recorded.`),
-          traceroutePath(trace.return_hops))
-      : null));
+    pathBackPanel(trace),
+    meshGraphTrace(trace, 'span-2')));
 };
+
+/*
+ * The Path back panel, which is drawn for every trace (#288).
+ *
+ * Will (2026-09-27): when a trace has no reply, keep the panel on top
+ * and have it say no reply was seen. That sentence has to be true, and
+ * a request row never holds a return path even when a reply came: the
+ * reply is a row of its own. So the API looks for it (`reply_id`), and
+ * this says "no reply was seen" only when none was stored. A reply
+ * that carries no return path says that instead, because a reply was
+ * plainly seen.
+ */
+function pathBackPanel(trace) {
+  if (trace.return_hops && trace.return_hops.length) {
+    return el('div', { class: 'panel' },
+      el('h3', {}, 'Path back',
+        el('span', { class: 'muted',
+          text: trace.return_delivered ? 'delivered' : 'still in flight' })),
+      trace.return_delivered
+        ? null
+        : el('p', { class: 'notice' },
+            'The broker saw this reply while it was still travelling. It had reached '
+            + `${trace.reply_reached} when it was captured. Whether it arrived back at `
+            + `${trace.from_name} is not recorded.`),
+      traceroutePath(trace.return_hops));
+  }
+  let why;
+  if (trace.is_reply) {
+    why = empty('This reply carried no return path.');
+  } else if (trace.reply_id != null) {
+    why = el('p', { class: 'muted', 'data-path-back': 'elsewhere' },
+      'The reply is stored as a traceroute of its own. ',
+      el('a', { class: 'linky', href: `#traceroute/${trace.reply_id}`, text: 'Open the reply' }),
+      ' to see the path back.');
+  } else {
+    why = el('p', { class: 'muted', 'data-path-back': 'none' }, 'No reply was seen for this request.');
+  }
+  return el('div', { class: 'panel' }, el('h3', {}, 'Path back'), why);
+}
 
 
 /* Labels and units for the decoded values a packet can carry. */
@@ -10109,9 +10246,7 @@ PAGES.packet = async (page) => {
           el('h3', {}, 'Path this packet took',
             el('a', { class: 'linky', href: `#traceroute/${trace.id}`, text: 'full page' })),
           traceroutePath(trace.hops)),
-        el('div', { class: 'panel' },
-          el('h3', {}, 'mesh-graph drawing'),
-          meshGraphTrace(trace)));
+        meshGraphTrace(trace));
     }
   }
 };

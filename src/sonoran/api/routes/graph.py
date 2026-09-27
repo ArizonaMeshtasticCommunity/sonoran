@@ -26,6 +26,7 @@ from sonoran.api.names import BROADCAST_NODE_NUM, format_node_id, name_of, resol
 from sonoran.api.traces import (
     SNR_SCALE,
     UNKNOWN_SNR,
+    TraceRow,
     evidenced_hops,
     forward_path,
     is_reply,
@@ -371,7 +372,7 @@ async def _neighbor_edges(
     return edges
 
 
-def _trace_links(row: Traceroute) -> list[tuple[int, int, float | None, int, int]]:
+def _trace_links(row: TraceRow) -> list[tuple[int, int, float | None, int, int]]:
     """Return the links one traceroute proves.
 
     Each item holds the two ends, the reading, the position of the hop,

@@ -587,6 +587,16 @@ a.button-link[hidden] { display: none; }
 a.button-link:hover { border-color: var(--accent); }
 a.button-link .icon { width: 1.05rem; height: 1.05rem; fill: currentColor; flex: 0 0 auto; }
 a.button-link .icon + span { margin-left: .4rem; }
+/*
+ * In a panel heading, at its top right (#289). The heading is small,
+ * uppercase, spaced and muted, and a button inside it must be none of
+ * those. `.panel > h3` already wraps and pushes a second child to the
+ * right, so on a narrow panel the button drops under the title.
+ */
+.panel > h3 a.button-link {
+  font-size: .88rem; font-weight: 400; text-transform: none;
+  letter-spacing: normal; color: var(--text);
+}
 
 /* Panels */
 
@@ -689,6 +699,30 @@ a.button-link .icon + span { margin-left: .4rem; }
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+/*
+ * The node page's section chips (#286). Drawn on a phone only, where the
+ * page is one column seven screens long. The row sticks to the top of
+ * the screen and scrolls sideways when six chips do not fit, which they
+ * do not at 320 px; it never widens the page. Each chip is 44 px tall,
+ * the size the mobile review asks of a touch target.
+ *
+ * `scroll-margin-top` stops a panel landing under the row it was
+ * reached from.
+ */
+.node-jump { display: none; }
+@media (max-width: 40rem) {
+  /* Two selectors' worth, to beat `[data-node-body] > *` further down,
+     which would centre the row at 100% instead of taking it to the
+     screen edges. */
+  [data-node-body] > .node-jump {
+    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none;
+    position: sticky; top: 0; z-index: 5;
+    width: auto; margin-inline: -1rem; padding: .4rem 1rem;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .node-jump .chip { flex: 0 0 auto; min-height: 2.75rem; }
+  [data-node-body] [data-jump] { scroll-margin-top: 4rem; }
 }
 /* "View on full map" sits at the right of the heading it belongs to
  * (#193.6), the way the node page's other headings carry a count. */
@@ -813,6 +847,30 @@ h3:has(.node-map-link) { display: flex; align-items: baseline; gap: .5rem; }
 .grid.summary-row {
   grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
   margin-bottom: 1rem;
+}
+/*
+ * Four across, or two, and never three (#287).
+ *
+ * Three tracks of 15 rem fit from 47 rem of row width, and in that band
+ * the Identity panel was a third of an iPad in portrait: "(CLIENT_BASE"
+ * and ")" broke onto two lines, and the long name took four. Two
+ * across gives each panel half the row and still fills it, as two rows
+ * of two.
+ *
+ * The rule measures the ROW, not the viewport. The sidebar comes and
+ * goes at 60 rem, so the same row width happens at 834 px with no
+ * sidebar and at 1112 px with one, and both squeezed.
+ *
+ * How it reads: below 63 rem (four tracks of 15 rem and three 1 rem
+ * gaps) the clamp is zero, so the track floor is a third of the row
+ * plus a pixel and a third track can never fit. From 63 rem up the
+ * clamp takes the whole row away again and the floor is 15 rem, as
+ * above. `min(100%, ...)` keeps a phone at one column.
+ */
+.grid.summary-row {
+  grid-template-columns: repeat(auto-fit, minmax(
+    min(100%, max(15rem, calc(100% / 3 + 1px - clamp(0px, (100% - 63rem) * 1000, 100%)))),
+    1fr));
 }
 
 /*
@@ -1055,6 +1113,22 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
    not push the panel past the edge of a 320 px screen. */
 .hint-pop .hint-exact { font: var(--mono); overflow-wrap: anywhere; }
 tbody tr:hover { background: var(--panel-2); }
+/*
+ * A column that stays put while the rest of a wide table scrolls under
+ * it (#274). It needs a background of its own, or the cells that pass
+ * beneath show through, and that background must follow the row's
+ * hover. The rule on its right edge stands in for the scroll shadow,
+ * which the stuck cell now covers.
+ */
+th.stick, td.stick {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--panel); box-shadow: inset -1px 0 var(--line);
+}
+tbody tr:hover td.stick { background: var(--panel-2); }
+/* A column a phone can do without. The row leads to the rest (#274). */
+@media (max-width: 40rem) {
+  th.low, td.low { display: none; }
+}
 td.wrap { white-space: normal; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -2219,6 +2293,9 @@ a.more { text-decoration: none; display: inline-block; }
   }
   input, select, button { padding-block: .55rem; }
   .sidebar nav a { align-items: center; }
+  /* A link drawn as a button (#258, #289) is a button to a finger, and
+     the rule above names `button`, which cannot reach it. */
+  a.button-link { min-height: 2.75rem; }
 }
 
 @media (max-width: 60rem) {
@@ -2507,6 +2584,24 @@ a.more { text-decoration: none; display: inline-block; }
 .panel pre {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: .35rem;
   padding: .6rem; overflow-x: auto; font: var(--mono); margin: 0; max-height: 24rem;
+}
+/*
+ * Route, Path there and Path back on one row, or one under another, and
+ * never two across (#288). Two across leaves Path back alone beside an
+ * empty cell, the gap Will reported.
+ *
+ * Measured on the row, not the viewport, for the reason in #287: the
+ * sidebar comes and goes at 60 rem. Below 58.5 rem of row the clamp term
+ * is huge, the floor is the whole row, and there is one column. From
+ * 58.5 rem the floor is a third of the row less the gap, so exactly
+ * three fit: at 1280 px (976 px of row) each panel is about 315 px. A
+ * phone, an iPad either way up and a 1024 px laptop get one column,
+ * where the Route list keeps its labels and values on one line.
+ */
+.grid.trace-top {
+  grid-template-columns: repeat(auto-fit, minmax(
+    min(100%, max(calc(100% / 3 - 1rem), calc((58.5rem - 100%) * 1000))),
+    1fr));
 }
 /* The drawing arrives recoloured, with a transparent page, so it sits on
    the panel like the rest of the site. See `api/trace_drawing.py`. */

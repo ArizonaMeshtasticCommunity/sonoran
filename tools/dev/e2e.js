@@ -59,6 +59,7 @@ const errors = [];
  * failure still counts as an error.
  */
 const IGNORE = /404|favicon|tile|No terrain is held for this area/i;
+const DRAWING = /\/api\/traceroutes\/\d+\/drawing\.svg$/;
 
 /*
  * A console error is only ours if it came from our own origin.
@@ -140,7 +141,15 @@ async function journey(context, name, body) {
     // A console error carries the offending URL in its location, which
     // the text does not.
     const where = (message.location() || {}).url || '';
-    if (!isOurs(where)) {
+    /*
+     * The trace drawing is mesh-graph's picture, proxied by our API
+     * (#51), so a failure there is mesh-graph's answer on our origin:
+     * 502 when it cannot be reached, which is every test instance, and
+     * 404 when it holds no drawing. It counts as somebody else's host.
+     * It went unseen until #289, because the picture was lazy-loaded
+     * while hidden and Chromium never asked for it at all.
+     */
+    if (!isOurs(where) || DRAWING.test(where)) {
       elsewhere.push(`${name}: ${message.text()} [${where || 'unknown host'}]`);
       return;
     }
@@ -184,10 +193,10 @@ const open = async (page, hash, settle = 3500) => {
  * `Runtime.callFunctionOn` and is not subject to the policy, which is
  * why every journey in this file uses it.
  */
-async function waitFor(page, condition, timeout = 240000, step = 500) {
+async function waitFor(page, condition, timeout = 240000, step = 500, arg = undefined) {
   const until = Date.now() + timeout;
   for (;;) {
-    if (await page.evaluate(condition)) return true;
+    if (await page.evaluate(condition, arg)) return true;
     if (Date.now() >= until) return false;
     await page.waitForTimeout(step);
   }
@@ -445,6 +454,56 @@ async function main() {
     return `${busiest.id}, heard by ${busiest.heard}: ${fits}; wider letters ${wide.scroll}/${wide.client}`;
   });
 
+  await journey(context, 'the node summary is never three narrow columns (#287)', async (page) => {
+    /*
+     * At 834 px, an iPad in portrait, the four summary panels fell into
+     * three columns and the Identity panel was a third of the screen:
+     * "(CLIENT_BASE" and ")" on two lines, Last heard on three. The
+     * same row width comes back at 1112 px, where the sidebar is shown.
+     * So the column count is read at both, and at the widths either
+     * side, and three is a failure wherever it appears.
+     *
+     * The node is a CLIENT_BASE when the instance has one, because that
+     * is the longest role label the review found breaking.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=200`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    const node = nodes.find((row) => row.role === 'CLIENT_BASE') || nodes[0];
+    const measure = () => {
+      const row = document.querySelector('[data-node-body] .summary-row');
+      if (!row || !row.children.length) return null;
+      const lefts = new Set([...row.children].map((child) => Math.round(child.getBoundingClientRect().left)));
+      const identity = row.children[0];
+      const lines = [...identity.querySelectorAll('dd')].map((dd) =>
+        Math.round(dd.getBoundingClientRect().height / (parseFloat(getComputedStyle(dd).lineHeight) || 20)));
+      return {
+        columns: lefts.size,
+        share: identity.getBoundingClientRect().width / row.getBoundingClientRect().width,
+        worst: Math.max(...lines),
+      };
+    };
+    await page.setViewportSize({ width: 834, height: 1112 });
+    await page.goto(`${BASE}/#node/${encodeURIComponent(node.node_id)}`, { waitUntil: 'load' });
+    must(await waitFor(page, measure, 15000), 'the summary row never drew');
+    const out = [];
+    for (const width of [834, 900, 1024, 1112, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 1112 });
+      await page.waitForTimeout(400);
+      const size = await page.evaluate(measure);
+      must(size.columns !== 3, `the summary row is three columns at ${width} px`);
+      out.push(`${width}:${size.columns}`);
+    }
+    // At the iPad width, with the wider letters of the CI runner's
+    // fonts, no identity value may take more than two lines.
+    await page.setViewportSize({ width: 834, height: 1112 });
+    await page.addStyleTag({ content: '[data-node-body] * { letter-spacing: .05em !important; }' });
+    await page.waitForTimeout(400);
+    const ipad = await page.evaluate(measure);
+    must(ipad.worst <= 2, `an identity value takes ${ipad.worst} lines at 834 px`);
+    return `${node.role || 'no role'}: columns ${out.join(' ')}; identity ${Math.round(ipad.share * 100)}% wide, `
+      + `longest value ${ipad.worst} line(s) at 834 px`;
+  });
+
   await journey(context, 'a furthest-node tile shows a distance or says why not', async (page) => {
     /*
      * #257. Every node shows a distance -- with a range when a position
@@ -496,6 +555,42 @@ async function main() {
         must(detail.length > 40, `${id} (${kind}): no sentence says why: "${detail}"`);
       }
       seen.push(`${kind}=${value}`);
+    }
+    /*
+     * An estimate with a wide range is still an estimate (#257).
+     *
+     * The open question was whether to hide one whose range is more than
+     * half its distance, and Will (2026-09-27) said keep it. The seeded
+     * mesh may hold no such pair, so the tile is fed two: 5 km ± 4.6,
+     * and 3 km ± 3.2, whose range passes the distance itself. Both must
+     * still print a figure with its range, never "Not known".
+     */
+    const someone = kinds.get('estimate');
+    for (const [estimate, error, word] of [[5, 4.6, 'about'], [3, 3.2, 'under']]) {
+      await page.unrouteAll();
+      await page.route(/\/api\/nodes\/[^/]+\/routes\?/, async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.furthest_heard_by = {
+          ...(body.furthest_heard_by || { node_id: '!00000001', display_name: 'Wide range' }),
+          distance_km: null, approx_distance_km: estimate, distance_error_km: error,
+        };
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(`${BASE}/?wide=${estimate}#node/${encodeURIComponent(someone)}`, { waitUntil: 'load' });
+      const read = () => {
+        const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
+          .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
+        return found ? {
+          value: found.querySelector('.value').textContent.trim(),
+          detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
+        } : null;
+      };
+      must(await waitFor(page, read, 15000), `${estimate} ± ${error} km: the furthest tile never drew`);
+      const { value, detail } = await page.evaluate(read);
+      must(value.startsWith(`${word} `), `${estimate} ± ${error} km reads "${value}", wanted "${word} ..."`);
+      must(/±|rounded by up to/.test(detail), `${estimate} ± ${error} km lost its range: "${detail}"`);
+      seen.push(`${estimate}±${error}=${value}`);
     }
     return seen.join('; ');
   });
@@ -1715,6 +1810,161 @@ async function main() {
     await page.waitForTimeout(3000);
     must(/#traceroute|#packet|#node|#link/.test(page.url()), `did not navigate (${page.url()})`);
     return 'opened one';
+  });
+
+  await journey(context, 'a traceroute puts Route, Path there and Path back on top (#288)', async (page) => {
+    /*
+     * Will asked for the three on top and the drawing under them. The
+     * order is read from the page, and so is the shape: three on one
+     * row at 1280 and 1600 px with nothing beside them, one column on a
+     * phone, the drawing below at full width either way.
+     *
+     * Then the Path back panel must still be there when there is no
+     * path back, and say the true thing. The seeded mesh holds replies
+     * only, so the page is fed the same row as a request twice: once
+     * with no reply stored, where it must say no reply was seen, and
+     * once with a reply stored, where it must link to it instead.
+     */
+    const rows = await (await page.request.get(`${BASE}/api/traceroutes?limit=1`)).json();
+    if (!rows.length) return 'no traceroute stored to open';
+    const id = rows[0].id;
+    // The drawing comes from mesh-graph, which a test instance cannot
+    // reach, and it is not what this journey is about. It is answered
+    // the way mesh-graph answers for a trace it holds no drawing of.
+    const noDrawing = () => page.route(/\/drawing\.svg$/, (route) => route.fulfill({ status: 404, body: '' }));
+    await noDrawing();
+    const shape = () => {
+      const body = document.querySelector('[data-trace-body]');
+      const panels = [...body.querySelectorAll('.panel')];
+      if (panels.length < 4) return null;
+      const boxes = panels.map((panel) => panel.getBoundingClientRect());
+      const top = boxes.slice(0, 3);
+      return {
+        heads: panels.map((panel) => panel.querySelector('h3').firstChild.textContent.trim()),
+        columns: new Set(top.map((box) => Math.round(box.left))).size,
+        rowFull: Math.abs(top[0].left - boxes[3].left) <= 1 && Math.abs(top[2].right - boxes[3].right) <= 1,
+        below: boxes[3].top >= Math.max(...top.map((box) => box.bottom)) - 1,
+        back: panels[2].innerText,
+        doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    };
+    const out = [];
+    for (const [width, columns] of [[1600, 3], [1280, 3], [1024, 1], [390, 1]]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${BASE}/?w=${width}#traceroute/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, shape, 15000), `the trace page never drew at ${width} px`);
+      const got = await page.evaluate(shape);
+      must(got.heads.slice(0, 3).join('|') === 'Route|Path there|Path back',
+        `the panels on top are ${got.heads.slice(0, 3).join(', ')} at ${width} px`);
+      must(got.columns === columns, `${got.columns} columns at ${width} px, wanted ${columns}`);
+      must(got.below && got.rowFull, `the drawing is not a full-width panel under the three at ${width} px`);
+      must(got.doc <= 1, `the page scrolls sideways at ${width} px`);
+      out.push(`${width}:${got.columns}`);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    for (const reply of [null, 424242]) {
+      await page.unrouteAll();
+      await noDrawing();
+      await page.route(new RegExp(`/api/traceroutes/${id}$`), async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        Object.assign(body, { is_reply: false, request_id: null, return_hops: [], reply_id: reply });
+        await route.fulfill({ response, json: body });
+      });
+      await page.goto(`${BASE}/?r=${reply}#traceroute/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, shape, 15000), 'the trace page never drew as a request');
+      const got = await page.evaluate(shape);
+      must(got.heads[2] === 'Path back', 'a request with no path back lost its Path back panel');
+      if (reply == null) {
+        must(/No reply was seen/.test(got.back), `with no reply stored it says ${JSON.stringify(got.back)}`);
+      } else {
+        must(!/No reply was seen/.test(got.back), 'it says no reply was seen when one was stored');
+        const href = await page.evaluate(() =>
+          document.querySelector('[data-path-back="elsewhere"] a').getAttribute('href'));
+        must(href === `#traceroute/${reply}`, `the reply link goes to ${href}`);
+      }
+    }
+    return `columns ${out.join(' ')}; no reply and stored reply both said truly`;
+  });
+
+  await journey(context, 'the mesh-graph button sits at the top right of the drawing (#289)', async (page) => {
+    /*
+     * The link was a line of text above the drawing. It is now a link
+     * drawn as a button in the drawing's heading, on the trace page and
+     * on the packet page alike. Claims: it is an `<a>` to `graph_url`
+     * that opens a new tab; it is at the heading's right edge on a wide
+     * screen and 44 px tall on a phone; it stays when mesh-graph has no
+     * drawing (Will, 2026-09-27); and a trace with no URL has no button.
+     */
+    const rows = await (await page.request.get(`${BASE}/api/traceroutes?limit=1`)).json();
+    if (!rows.length) return 'no traceroute stored to open';
+    const trace = rows[0];
+    // mesh-graph holds no drawing of it, as far as this page can tell.
+    await page.route(/\/drawing\.svg$/, (route) => route.fulfill({ status: 404, body: '' }));
+    const button = () => {
+      const panel = document.querySelector('[data-mesh-graph-panel]');
+      if (!panel || !panel.querySelector('.trace-drawing, p')) return null;
+      const a = panel.querySelector('h3 a.button-link');
+      const head = panel.querySelector('h3').getBoundingClientRect();
+      const box = a && a.getBoundingClientRect();
+      return {
+        found: Boolean(a),
+        tag: a && a.tagName, href: a && a.getAttribute('href'), target: a && a.target, rel: a && a.rel,
+        right: box && Math.round(head.right - box.right),
+        top: box && Math.round(box.top - head.top),
+        height: box && Math.round(box.height),
+        text: panel.innerText,
+        doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    };
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${BASE}/?b=1#traceroute/${trace.id}`, { waitUntil: 'load' });
+    must(await waitFor(page, button, 15000), 'the drawing panel never drew');
+    // The picture fails after the panel is drawn, so wait for its answer.
+    await waitFor(page, () => /holds no drawing/.test(
+      document.querySelector('[data-mesh-graph-panel]').innerText), 10000);
+    const wide = await page.evaluate(button);
+    must(wide.found && wide.tag === 'A', 'the drawing panel has no mesh-graph link in its heading');
+    must(wide.href === trace.graph_url, `it goes to ${wide.href}, not ${trace.graph_url}`);
+    must(wide.target === '_blank' && /noopener/.test(wide.rel), `target=${wide.target} rel=${wide.rel}`);
+    must(Math.abs(wide.right) <= 1 && wide.top <= 4, `it is ${wide.right} px from the right, ${wide.top} px down`);
+    must(/holds no drawing/.test(wide.text), 'the page did not say mesh-graph has no drawing');
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.waitForTimeout(400);
+    const narrow = await page.evaluate(button);
+    must(narrow.height >= 44, `it is ${narrow.height} px tall on a phone`);
+    must(narrow.doc <= 1, 'the page scrolls sideways at 390 px');
+
+    // The packet page draws the same panel. The seeded mesh stores no
+    // packet row for its traceroutes, so a real traceroute packet is
+    // opened and its lookup answered with the trace above.
+    const packets = await (await page.request.get(
+      `${BASE}/api/packets?portnum=TRACEROUTE_APP&limit=1`)).json();
+    let onPacket = 'no traceroute packet stored';
+    if (packets.length) {
+      await page.route(/\/api\/traceroutes\/by-packet\//, (route) => route.fulfill({ json: trace }));
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const [from, id] = [packets[0].from_node, packets[0].packet_key.split(':')[1]];
+      await page.goto(`${BASE}/?b=2#packet/${from}/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, button, 15000), 'the packet page drew no mesh-graph panel');
+      const packet = await page.evaluate(button);
+      must(packet.found && packet.href === trace.graph_url, 'the packet page has no matching button');
+      onPacket = 'same on the packet page';
+    }
+
+    // No URL, no button, and the sentence that says why.
+    await page.route(new RegExp(`/api/traceroutes/${trace.id}$`), async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), graph_url: null } });
+    });
+    await page.goto(`${BASE}/?b=3#traceroute/${trace.id}`, { waitUntil: 'load' });
+    must(await waitFor(page, button, 15000), 'the drawing panel never drew without a URL');
+    const none = await page.evaluate(button);
+    must(!none.found, 'a trace with no URL still has a button');
+    must(/cannot be linked/.test(none.text), 'a trace with no URL does not say why');
+    return `top right at 1280 (${wide.right} px), ${narrow.height} px tall at 390, `
+      + `kept with no drawing, ${onPacket}, gone with no URL`;
   });
 
   await journey(context, 'the firehose draws rows', async (page) => {
@@ -2953,6 +3203,107 @@ async function main() {
     must(lines === dotCount, `${dotCount} dots but ${lines} checks named`);
 
     return done.join(', ');
+  });
+
+  await journey(phone, 'a wide comparison table keeps its first column on a phone (#274)', async (page) => {
+    /*
+     * The traceroutes table had 57% of its width off to the side at
+     * 390 px, and the stats "Nodes worth a look" table 45%. Two claims
+     * each: the columns a phone can do without are not drawn, and the
+     * first column is still where it was after the rest has scrolled
+     * all the way to the end. Then the same page at desktop width must
+     * draw every column again, so a rule that hid them everywhere
+     * fails too.
+     */
+    const measure = (spec) => {
+      const wrap = document.querySelector(spec.wrap);
+      const table = wrap && wrap.querySelector('table');
+      const first = table && table.querySelector('tbody td');
+      if (!first) return null;
+      wrap.scrollLeft = wrap.scrollWidth;
+      const held = Math.round(first.getBoundingClientRect().left - wrap.getBoundingClientRect().left);
+      const scrolled = wrap.scrollLeft;
+      wrap.scrollLeft = 0;
+      return {
+        shown: [...table.querySelectorAll('thead th')]
+          .filter((th) => th.getBoundingClientRect().width > 0).map((th) => th.dataset.label),
+        held, scrolled, scroll: table.scrollWidth, client: wrap.clientWidth,
+      };
+    };
+    const specs = [
+      { hash: 'traceroutes', wrap: '[data-traceroute-table]', first: 'Time', low: ['Hops', 'Signal measured'] },
+      { hash: 'stats', wrap: '[data-broadcast-table]', first: 'Node', low: ['Packets'] },
+    ];
+    const out = [];
+    for (const spec of specs) {
+      await page.setViewportSize({ width: 390, height: 664 });
+      await page.goto(`${BASE}/?${spec.hash}#${spec.hash}`, { waitUntil: 'load' });
+      if (!(await waitFor(page, measure, 15000, 500, spec))) {
+        out.push(`${spec.hash}: no rows on this instance`);
+        continue;
+      }
+      const phoneSize = await page.evaluate(measure, spec);
+      must(phoneSize.shown[0] === spec.first, `${spec.hash}: the first column is ${phoneSize.shown[0]}`);
+      for (const label of spec.low) {
+        must(!phoneSize.shown.includes(label), `${spec.hash}: ${label} is still drawn at 390 px`);
+      }
+      // Only a table that really scrolled can show the column held.
+      if (phoneSize.scrolled > 0) {
+        must(Math.abs(phoneSize.held) <= 1,
+          `${spec.hash}: the ${spec.first} column moved ${phoneSize.held} px when the table scrolled ${phoneSize.scrolled} px`);
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.waitForTimeout(400);
+      const wide = await page.evaluate(measure, spec);
+      for (const label of spec.low) {
+        must(wide.shown.includes(label), `${spec.hash}: ${label} is gone at 1440 px as well`);
+      }
+      out.push(`${spec.hash} ${phoneSize.scroll}/${phoneSize.client}, held ${phoneSize.held} after ${phoneSize.scrolled} px`);
+    }
+    return out.join('; ');
+  });
+
+  await journey(phone, 'a phone jumps to a node page section and keeps the chips (#286)', async (page) => {
+    /*
+     * The packet timeline was past y = 3760 on an iPhone 14 with no way
+     * to reach it but to scroll. Each chip must land its panel just
+     * under the row, with the row still on screen at the top, and give
+     * the panel the focus. The row must not widen the page, and a
+     * desktop must not draw it.
+     */
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    must(nodes.length, 'no node to open');
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    const drawn = () => Boolean(document.querySelector('[data-jump="timeline"] table, [data-jump="timeline"] .empty'));
+    await waitFor(page, drawn, 15000);
+    const out = [];
+    for (const key of ['timeline', 'links', 'identity']) {
+      await page.locator(`.node-jump [data-jump-to="${key}"]`).tap();
+      await page.waitForTimeout(1200);
+      const at = await page.evaluate((name) => {
+        const panel = document.querySelector(`[data-jump="${name}"]`);
+        const bar = document.querySelector('.node-jump').getBoundingClientRect();
+        return {
+          panel: Math.round(panel.getBoundingClientRect().top),
+          barTop: Math.round(bar.top),
+          barBottom: Math.round(bar.bottom),
+          focused: document.activeElement === panel,
+          scrollY: Math.round(window.scrollY),
+          doc: [document.documentElement.scrollWidth, document.documentElement.clientWidth],
+        };
+      }, key);
+      must(Math.abs(at.barTop) <= 1, `the chips left the top of the screen after ${key}: top ${at.barTop}`);
+      must(at.panel >= at.barBottom - 1 && at.panel <= at.barBottom + 40,
+        `${key} landed at ${at.panel} px, and the chips end at ${at.barBottom}`);
+      must(at.focused, `${key} did not take the focus`);
+      must(at.doc[0] <= at.doc[1] + 1, `the page scrolls sideways: ${at.doc.join('/')}`);
+      out.push(`${key} at ${at.panel} (y ${at.scrollY})`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(300);
+    const wide = await page.evaluate(() => document.querySelector('.node-jump').getBoundingClientRect().height);
+    must(wide === 0, 'the section chips are drawn on a desktop');
+    return out.join(', ');
   });
 
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
