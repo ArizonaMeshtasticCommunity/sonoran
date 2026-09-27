@@ -1896,8 +1896,8 @@ a.more { text-decoration: none; display: inline-block; }
 
 /* --- Weekly check-in: who took part, and for how many weeks ------- */
 
-.check-ins, .absences ul { list-style: none; margin: .25rem 0 .75rem; padding: 0; }
-.check-in, .absence {
+.absences ul { list-style: none; margin: .25rem 0 .75rem; padding: 0; }
+.absence {
   display: flex; flex-wrap: wrap; gap: .25rem .6rem; align-items: baseline;
   padding: .3rem 0; border-bottom: 1px solid var(--panel-2);
 }
@@ -1908,15 +1908,70 @@ a.more { text-decoration: none; display: inline-block; }
  * anything; a flex item defaults to `min-width: auto`, which refuses to
  * shrink below its content and pushes the row wider than the viewport.
  */
-.check-in > :first-child, .absence > :first-child { min-width: 0; flex: 1 1 8rem; }
-.streak {
-  flex: 0 0 auto; font-size: .8rem; font-weight: 600; color: var(--accent);
-  border: 1px solid var(--line); border-radius: .8rem; padding: .05rem .5rem;
-  background: var(--panel-2);
+.absence > :first-child { min-width: 0; flex: 1 1 8rem; }
+
+/*
+ * The streak pill beside a sender's name (#262).
+ *
+ * Will: "a small badge (maybe a rounded pill design with a small
+ * symbol?)" and "Use the full scheme for the site so it's not just
+ * orange." Each length tier takes a colour from the palette's
+ * categorical groups rather than from the status set, because a short
+ * run is not a fault and must not wear `--bad` or `--warn`.
+ *
+ * **The tier colour never carries the words.** The text is `--text` on
+ * a tint of the tier over `--panel`, and the tier shows in the border,
+ * the tint and the symbol. The obvious alternative -- tier-coloured
+ * text on a tier-coloured tint -- is the accent-on-accent badge that
+ * shipped on the nodes page at 1:1, and on the light theme the violet
+ * and teal tiers fall under 4.5:1 that way. `--text` on a 16% tint,
+ * measured in Chromium on the running page from the computed colours:
+ * 11.50 to 11.84 dark, 13.64 to 13.88 light, across all four tiers. The
+ * unknown pill (`--muted` on `--panel`) measured 6.69 dark, 6.90 light.
+ * The symbol, which is decoration beside the words, measured 4.07 or
+ * better against the tint, over the 3:1 a graphic needs.
+ *
+ * `color-mix` resolves against the theme's own `--panel`, so the light
+ * theme needs no second block: the tokens it mixes already have light
+ * twins.
+ */
+.streak-pill {
+  --tier: var(--muted);
+  display: inline-flex; align-items: center; gap: .25rem; flex: none;
+  white-space: nowrap; font-size: .72rem; font-weight: 600; line-height: 1.35;
+  padding: 0 .5rem 0 .4rem; border-radius: 999px;
+  border: 1px solid var(--tier);
+  background: color-mix(in srgb, var(--tier) 16%, var(--panel));
+  color: var(--text);
 }
-/* A run whose beginning is off the end of the read. Same words, quieter
-   colour, because the number is a floor rather than a measurement. */
-.streak.bounded { color: var(--muted); }
+.streak-pill .icon { width: .8rem; height: .8rem; fill: var(--tier); flex: none; }
+.streak-pill.start { --tier: var(--accent-2); }
+.streak-pill.short { --tier: var(--pkt-nodeinfo); }
+.streak-pill.steady { --tier: var(--role-ROUTER_LATE); }
+.streak-pill.long { --tier: var(--accent); }
+/* Not known is its own look and never a tier: dashed, no tint, muted
+   words, the way `unknown` is drawn everywhere else on the site. */
+.streak-pill.unknown {
+  --tier: var(--role-stale); border-style: dashed; background: var(--panel); color: var(--muted);
+}
+/*
+ * The check-in header line may wrap.
+ *
+ * Name, pill and time sit on one line at any width a phone has, but a
+ * node name is whatever its owner typed, and a long one beside a pill
+ * that refuses to wrap would otherwise push the page sideways at 320 px.
+ */
+.meshnet-messages .who { flex-wrap: wrap; align-items: center; row-gap: .15rem; }
+.meshnet-messages .who .name { min-width: 0; overflow-wrap: anywhere; text-align: start; }
+/*
+ * Hashtags are not accented on this page (#262).
+ *
+ * Every message here carries `#meshnet` -- that is how it got onto the
+ * page -- so highlighting the tag highlights every line, which
+ * highlights nothing. The chat pages keep the accent, where a tag is
+ * the exception.
+ */
+.meshnet-messages .body .hash { color: inherit; }
 .small { font-size: .8rem; }
 .absences h4 { margin: .75rem 0 .2rem; font-size: .85rem; font-weight: 650; }
 .absent-word { flex: 0 0 auto; font-size: .8rem; font-weight: 600; }

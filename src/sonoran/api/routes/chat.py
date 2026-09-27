@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import Select, and_, func, select, tuple_
+from sqlalchemy import ColumnElement, Select, and_, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -573,8 +573,41 @@ async def overview(
     return {"window_hours": hours, "sections": sections}
 
 
+def _check_in_filter(word: str, channel: str) -> tuple[ColumnElement[bool], ...]:
+    """Return what makes a stored message a check-in (#262).
+
+    One definition, used by BOTH reads in `tagged`: the message list
+    and the 52-week aggregate the streaks are counted from. They used to
+    carry two copies of the same three conditions, and a copy is where
+    a scope gets added to one read and forgotten on the other -- which
+    here would mean a page that shows MediumFast messages beside streaks
+    counted across every channel, and no way for a reader to tell.
+
+    **The channel is part of the definition, and it is applied here, on
+    the server.** The weekly net runs on MediumFast (Will: "For the
+    whole weekly check-in it should only be for the MediumFast
+    channel"). Filtering in the browser would hide the other channels'
+    messages and leave their weeks inside every streak, because the
+    streak is an aggregate the browser never sees the rows of. A node
+    that posted `#meshnet` on LongFast one week and MediumFast the next
+    would read "2 weeks" beside a list that showed it once.
+
+    Exact equality, not the case-folded match `classify` uses for
+    grouping: the channel name is what the MQTT topic carried, and
+    `trivia` and `Trivia` on this mesh are two different channels with
+    two different sets of people on them.
+    """
+    return (
+        TextMessage.channel == channel,
+        # `_TAG` allows an underscore, which is a LIKE wildcard:
+        # `#foo_bar` matched `#fooXbar`.
+        TextMessage.body.ilike(contains(f"#{word}"), escape=LIKE_ESCAPE),
+        TextMessage.emoji.is_(False),
+    )
+
+
 async def _weekly_check_ins(
-    session: AsyncSession, word: str, floor: datetime
+    session: AsyncSession, word: str, floor: datetime, channel: str
 ) -> dict[tuple[int, datetime], dict[str, object]]:
     """Return one entry per node per week it carried the tag.
 
@@ -608,13 +641,7 @@ async def _weekly_check_ins(
             func.min(TextMessage.seen_at).label("first_seen"),
             func.max(TextMessage.seen_at).label("last_seen"),
         )
-        .where(
-            # `_TAG` allows an underscore, which is a LIKE wildcard:
-            # `#foo_bar` matched `#fooXbar`.
-            TextMessage.body.ilike(contains(f"#{word}"), escape=LIKE_ESCAPE),
-            TextMessage.seen_at >= floor,
-            TextMessage.emoji.is_(False),
-        )
+        .where(*_check_in_filter(word, channel), TextMessage.seen_at >= floor)
         .group_by(TextMessage.from_node_num, week)
     )
     found: dict[tuple[int, datetime], dict[str, object]] = {}
@@ -634,6 +661,33 @@ async def _weekly_check_ins(
         held["first_seen"] = min(cast("datetime", held["first_seen"]), row.first_seen)
         held["last_seen"] = max(cast("datetime", held["last_seen"]), row.last_seen)
     return found
+
+
+def _message_streak(
+    weeks: frozenset[datetime] | None, week: datetime, floor: datetime
+) -> dict[str, object]:
+    """Return the streak a sender was on when one message was posted (#262).
+
+    The page draws the streak as a pill beside the name on each message,
+    so each message carries the run as of ITS week -- not the sender's
+    run today. A message from four weeks ago beside today's number would
+    say "12 weeks" about a week in which the run was 8.
+
+    The run comes from the same aggregate and the same `_streak_as_of`
+    as the roster, so a pill and the roster can never disagree. A
+    message whose sender and week are somehow not in the aggregate gets
+    `None`, which the page words as "Streak not known" -- never a 0,
+    because rule 3 says a check-in's run is at least 1 and a zero here
+    would be a missing figure drawn as a real one.
+    """
+    if not weeks or week not in weeks:
+        return {"streak_weeks": None, "streak_at_least": False, "first_ever": False}
+    length, at_least = _streak_as_of(weeks, week, floor)
+    return {
+        "streak_weeks": length,
+        "streak_at_least": at_least,
+        "first_ever": min(weeks) == week,
+    }
 
 
 def _week_roster(
@@ -709,8 +763,10 @@ async def tagged(
 ) -> dict[str, object]:
     """Return messages that carry one hashtag, grouped by week, with streaks.
 
-    The weekly mesh network check-in uses the `#meshnet` tag. A week
-    starts on Monday in UTC.
+    The weekly mesh network check-in uses the `#meshnet` tag, on the
+    deployment's primary preset channel (`default_preset`, MediumFast
+    here) and on no other: see `_check_in_filter`. A week starts on
+    Monday in UTC.
 
     Every week in the display window is returned, including one nobody
     checked in, because a gap is the point of the page and a week that is
@@ -724,6 +780,11 @@ async def tagged(
     here: every field below is a claim about a person's participation.
     """
     word = _require_tag(tag)
+    # The net's channel is the deployment's primary preset (#262). A
+    # setting rather than the literal "MediumFast" for the reason
+    # `default_preset` is one: another mesh running its net on LongFast
+    # should not have to patch this route to get a page at all.
+    channel = str(request.app.state.settings.default_preset)
     now = datetime.now(UTC)
     current_week = _week_start(now)
     since = current_week - timedelta(weeks=weeks - 1)
@@ -733,13 +794,7 @@ async def tagged(
         (
             await session.scalars(
                 select(TextMessage)
-                .where(
-                    # `_TAG` allows an underscore, which is a LIKE
-                    # wildcard: `#foo_bar` matched `#fooXbar`.
-                    TextMessage.body.ilike(contains(f"#{word}"), escape=LIKE_ESCAPE),
-                    TextMessage.seen_at >= since,
-                    TextMessage.emoji.is_(False),
-                )
+                .where(*_check_in_filter(word, channel), TextMessage.seen_at >= since)
                 .order_by(TextMessage.seen_at.desc())
                 .limit(limit)
             )
@@ -747,12 +802,14 @@ async def tagged(
     )
     messages = await _as_messages(session, rows)
 
+    buckets = await _weekly_check_ins(session, word, floor, channel)
+    by_node = _check_in_weeks(buckets)
+
     shown: dict[datetime, list[dict[str, object]]] = {}
     for row, message in zip(rows, messages, strict=True):
-        shown.setdefault(_week_start(row.seen_at), []).append(message)
-
-    buckets = await _weekly_check_ins(session, word, floor)
-    by_node = _check_in_weeks(buckets)
+        week_of = _week_start(row.seen_at)
+        message.update(_message_streak(by_node.get(row.from_node_num), week_of, floor))
+        shown.setdefault(week_of, []).append(message)
     names = await resolve_names(session, list(by_node))
 
     keeping_text = bool(request.app.state.settings.store_text_messages)
@@ -801,6 +858,9 @@ async def tagged(
 
     return {
         "tag": f"#{word}",
+        # Which channel the check-ins were read from, so the page says
+        # so from the answer rather than from its own assumption.
+        "channel": channel,
         "window_weeks": weeks,
         # Whether the ingest is keeping message bodies at all. With it
         # off there will never be a check-in to find, and an empty page

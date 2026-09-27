@@ -182,5 +182,45 @@ eq('the whole week', M.messagesTruncated({ messages_shown: 5, message_count: 5 }
 eq('nothing known', M.messagesTruncated({}), false);
 eq('only one known', M.messagesTruncated({ message_count: 9 }), false);
 
+// --- the pill beside a name (#262) ------------------------------------
+console.log('\nthe streak pill');
+{
+  const five = M.streakPill({ streak_weeks: 5, first_ever: false });
+  eq('five weeks reads as Will sketched it', five.text, '5 weeks');
+  // The words stay in the pill: colour and symbol are never the only signal.
+  has('and the accessible name is the full sentence', five.label, '5 weeks in a row');
+  has('which says what the number is', five.label, 'Check-in streak');
+  eq('a bounded run keeps its plus', M.streakPill({ streak_weeks: 52, streak_at_least: true }).text,
+    '52+ weeks');
+  lacks('and never reads as a measured 52', M.streakPill({ streak_weeks: 52, streak_at_least: true }).text,
+    '52 weeks');
+  eq('a bounded run of one is plural, because it may be more',
+    M.streakPill({ streak_weeks: 1, streak_at_least: true, first_ever: true }).text, '1+ weeks');
+  eq('a first check-in says so', M.streakPill({ streak_weeks: 1, first_ever: true }).text, 'First check-in');
+  eq('a restart says so', M.streakPill({ streak_weeks: 1, first_ever: false }).text, 'Back after a gap');
+}
+
+console.log('\nthe pill tiers are lengths, from the palette, not only orange');
+eq('one week is the start tier', M.streakPill({ streak_weeks: 1, first_ever: true }).tier, 'start');
+eq('two weeks is short', M.streakPill({ streak_weeks: 2 }).tier, 'short');
+eq('three weeks is short', M.streakPill({ streak_weeks: 3 }).tier, 'short');
+eq('four weeks is steady', M.streakPill({ streak_weeks: 4 }).tier, 'steady');
+eq('eleven weeks is steady', M.streakPill({ streak_weeks: 11 }).tier, 'steady');
+eq('twelve weeks is long', M.streakPill({ streak_weeks: 12 }).tier, 'long');
+eq('a bounded 52+ is long', M.streakPill({ streak_weeks: 52, streak_at_least: true }).tier, 'long');
+{
+  const tiers = new Set([1, 2, 5, 20].map((n) => M.streakPill({ streak_weeks: n, first_ever: n === 1 }).tier));
+  eq('four lengths wear four different tiers', tiers.size, 4);
+}
+
+console.log('\na pill with no run on it');
+for (const entry of [{}, { streak_weeks: null }, { streak_weeks: undefined }, { streak_weeks: '4' },
+  { streak_weeks: 0 }, null, undefined]) {
+  const pill = M.streakPill(entry);
+  eq(`${JSON.stringify(entry)} is the unknown tier`, pill.tier, 'unknown');
+  eq(`${JSON.stringify(entry)} says so`, pill.text, 'Streak not known');
+  lacks(`${JSON.stringify(entry)} prints no zero`, `${pill.text} ${pill.label}`, '0');
+}
+
 if (failed) { console.log(`\n${failed} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');

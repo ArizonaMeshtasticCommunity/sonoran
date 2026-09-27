@@ -1041,6 +1041,16 @@ Returns messages that carry one hashtag, grouped by week. The weekly
 mesh network check-in uses the `#meshnet` tag. A week starts on Monday
 in UTC.
 
+**One channel only (#262).** The endpoint reads the channel named by the
+`default_preset` setting (MediumFast on this mesh) and no other. The
+scope applies to both reads: the message list and the 52-week aggregate
+that the streaks come from. A tagged message on any other channel is not
+returned and does not count toward a streak. The scope is on the server
+because a caller never sees the rows a streak is counted from, so a
+filter in the caller would leave other channels inside every run. The
+match is exact, not case-folded. The response carries `channel`, the
+name that was read.
+
 Query parameters:
 
 - `tag` — the tag word, with or without the hash sign. Default
@@ -1057,6 +1067,11 @@ a gap is the point of this endpoint, and a week simply absent from the
 list reads as a week that never happened. Weeks older than the earliest
 tagged message the read could find are left out, because there is no
 evidence about them either way.
+
+Each message carries `streak_weeks`, `streak_at_least` and `first_ever`:
+the sender's run as of the week of that message, from the same aggregate
+and the same rules as `check_ins`. `streak_weeks` is null, never 0, when
+no run is known for the message.
 
 `message_count` is measured by an aggregate and `messages` is capped by
 `limit`, so on a busy week the two disagree. `messages_shown` is the
