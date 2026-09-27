@@ -81,8 +81,24 @@
     });
   }
 
+  /*
+   * No zoom or fade animation when the reader asks for less motion
+   * (#284). Leaflet animates a zoom by scaling the whole map, and Apple
+   * names zooming and scaling as the motion to reduce first. The CSS
+   * rule that near-zeroes transitions does not stop it: Leaflet runs
+   * the zoom from JavaScript and waits for the transition to end.
+   *
+   * Read once, when the maps are made. A reader who changes the system
+   * setting gets the new behaviour on the next load, as with the charts.
+   */
+  const still = matches('(prefers-reduced-motion: reduce)');
+  if (still) {
+    L.Map.mergeOptions({ zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false });
+  }
+
   // For the console and the e2e: what this browser was given.
   window.SonoranMapDefaults = {
     touchTolerance: matches('(pointer: coarse)') ? TOUCH_TOLERANCE_PX : 0,
+    still,
   };
 })();

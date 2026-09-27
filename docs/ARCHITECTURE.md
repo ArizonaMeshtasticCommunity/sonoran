@@ -452,7 +452,9 @@ general proxy for the tile source.
 - `map-defaults.js` loads straight after Leaflet and sets what every
   map shares. On a touch screen (`pointer: coarse`) every map draws on
   a canvas with a 20 px hit tolerance, and a tap goes to the nearest
-  dot, not to the dot drawn last (#266).
+  dot, not to the dot drawn last (#266). Under
+  `prefers-reduced-motion: reduce` no map animates its zoom or fades,
+  and `chart()` in `app.js` turns off ECharts animation (#284).
 - The pages call the JSON API. All node names come from the API.
   The browser does no name lookup and no join.
 - The API serves `index.html` and replaces `__SONORAN_CONFIG__` with the

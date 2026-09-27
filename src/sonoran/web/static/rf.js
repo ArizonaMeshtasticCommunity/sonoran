@@ -823,6 +823,9 @@
     const css = getComputedStyle(document.documentElement);
     const token = (name, fallback) => (css.getPropertyValue(name) || '').trim() || fallback;
     chart.setOption({
+      // Still when the reader asks for less motion (#284). See `chart()`
+      // in app.js, which holds the query.
+      animation: !REDUCED_MOTION.matches,
       backgroundColor: 'transparent',
       textStyle: { color: token('--muted', '#b59c88') },
       tooltip: { trigger: 'axis', valueFormatter: (v) => (v == null ? '-' : `${v.toFixed(1)} %`) },

@@ -1809,6 +1809,41 @@ async function main() {
   }
 
   /*
+   * #284: charts and map zooms move on a canvas and a transform, where
+   * the CSS reduced-motion rule does not reach. Read in a context that
+   * asks for less motion, and in one that does not, as the control.
+   */
+  for (const motion of ['reduce', 'no-preference']) {
+    const moving = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: motion });
+    await journey(moving, `charts and map zoom follow reduced motion (${motion}) (#284)`, async (page) => {
+      const want = motion === 'reduce';
+      await open(page, 'stats', 1000);
+      must(await waitFor(page, () => document.querySelectorAll('[data-page="stats"] canvas').length > 0, 30000),
+        'statistics drew no chart');
+      // `charts` inside the page is app.js's own map of instances.
+      const animations = await page.evaluate(() => [...charts.values()]
+        .filter((one) => !one.isDisposed())
+        .map((one) => one.getOption().animation));
+      must(animations.length > 0, 'no chart instance to read');
+      // ECharts' own default reads back as 'auto', which animates.
+      must(animations.every((on) => (on === false) === want),
+        `chart animation ${JSON.stringify(animations)}, expected ${want ? 'false' : 'on'}`);
+      // Let the page's requests land before leaving, or they abort as errors.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await page.goto('about:blank');
+      await open(page, 'map', 2500);
+      const map = await page.evaluate(() => {
+        const { options } = window.SonoranMap.map;
+        return { zoom: options.zoomAnimation, fade: options.fadeAnimation, marker: options.markerZoomAnimation };
+      });
+      must(map.zoom === !want && map.fade === !want && map.marker === !want,
+        `map animation ${JSON.stringify(map)}, expected ${!want}`);
+      return `${animations.length} charts animation ${JSON.stringify(animations[0])}; map zoom/fade/marker ${!want}`;
+    });
+    await moving.close();
+  }
+
+  /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
    * 400 percent zoom the criterion is derived from.

@@ -857,8 +857,18 @@ function widenGraphRoam(instance) {
   return true;
 }
 
+/*
+ * `chart` turns off ECharts' entry and update animation when the reader
+ * asks for less motion (#284). The CSS already honours
+ * `prefers-reduced-motion`, but a chart animates on its canvas, where no
+ * CSS reaches. It is set in `chart` rather than only in CHART_BASE so
+ * that every chart gets it, the ones that build their option without
+ * CHART_BASE included. The stored option carries it too, so a
+ * full-screen redraw stays still.
+ */
 function chart(target, option) {
   if (!target) return null;
+  if (REDUCED_MOTION.matches) option = { ...option, animation: false };
   // The box collapses while it holds a sentence instead of a chart, and
   // ECharts measures the box when it starts, so the height comes back
   // before the instance is made. See `chartEmpty`.

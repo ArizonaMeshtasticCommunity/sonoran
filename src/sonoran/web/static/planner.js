@@ -1209,6 +1209,8 @@ function showLink(node, result, request) {
   const along = (km) => (imperial ? km * SonoranUnits.MILES_PER_KM : km);
   const up = (metres) => (imperial ? metres * SonoranUnits.FEET_PER_METRE : metres);
   instance.setOption({
+    // Still when the reader asks for less motion (#284). See `chart()`.
+    animation: !REDUCED_MOTION.matches,
     grid: { left: 48, right: 16, top: 20, bottom: 28 },
     tooltip: { trigger: 'axis' },
     xAxis: {
