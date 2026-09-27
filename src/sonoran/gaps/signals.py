@@ -147,23 +147,23 @@ REASON_SENTENCES: dict[str, str] = {
         "MQTT, so none of it is evidence about radio either way."
     ),
     "receiver_works_transmitter_does_not": (
-        "It published {neighbour_reports} neighbour reports with a measured signal, so "
+        "It published {neighbour_reports} neighbor reports with a measured signal, so "
         "its receiver works. None of the {gateways_active} active gateways heard it "
         "over the air. That points at the transmit side: an antenna, a cable, a region "
         "setting, or a power of zero."
     ),
     "no_neighbour_reports": (
-        "It published fewer than {min_neighbour_reports} neighbour reports with a "
+        "It published fewer than {min_neighbour_reports} neighbor reports with a "
         "measured signal, so we cannot tell whether its receiver works. The "
         "NeighborInfo module is off on most nodes."
     ),
     "heard_both_ways": (
-        "It published {neighbour_reports} neighbour reports with a measured signal, so "
+        "It published {neighbour_reports} neighbor reports with a measured signal, so "
         "its receiver works, and gateways heard it over the air. Both directions are "
         "accounted for."
     ),
     "receiver_works_transmitter_unmeasured": (
-        "It published {neighbour_reports} neighbour reports with a measured signal, so "
+        "It published {neighbour_reports} neighbor reports with a measured signal, so "
         "its receiver works. Whether anything heard it over the air is not settled in "
         "this window, so the pair is not judged."
     ),
@@ -202,7 +202,7 @@ REASON_SENTENCES: dict[str, str] = {
         "to demodulate."
     ),
     "no_measured_snr": (
-        "No measured signal reading exists for it. A neighbour report or a traceroute "
+        "No measured signal reading exists for it. A neighbor report or a traceroute "
         "hop would give one; an ordinary packet does not."
     ),
     "outside_usable": (
@@ -234,7 +234,7 @@ CAVEATS: tuple[tuple[str, str], ...] = (
     (
         "receiving_is_not_observable",
         "We cannot tell whether a node can hear the mesh. A receiver leaves no trace. "
-        "The two exceptions are a node that publishes neighbour reports and a node that "
+        "The two exceptions are a node that publishes neighbor reports and a node that "
         "answered a traceroute.",
     ),
     (
@@ -245,7 +245,7 @@ CAVEATS: tuple[tuple[str, str], ...] = (
     ),
     (
         "link_loss_is_not_measurable",
-        "We cannot tell whether a link stopped working. A neighbour table decays slowly "
+        "We cannot tell whether a link stopped working. A neighbor table decays slowly "
         "and can be truncated to fit a packet, so absence from one is not proof of "
         "silence.",
     ),

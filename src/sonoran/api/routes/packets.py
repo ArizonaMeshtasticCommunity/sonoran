@@ -168,6 +168,43 @@ def _values(model: Any, row: object) -> dict[str, object]:
     }
 
 
+def _named_neighbours(
+    values: list[dict[str, object]], names: dict[int, dict[str, str | None]]
+) -> list[dict[str, object]]:
+    """Add the ID and the readable name of each reported neighbour.
+
+    A neighbour report names the nodes it heard by number only, because
+    that is all `neighbor_metrics` stores. The packet page therefore
+    printed `!0a51a002` in the table of reported neighbours, while the
+    gateway table higher up the same page printed "Usery Pass Relay" for
+    the very same node (#240).
+
+    The name is joined here and not in the browser. The browser holds no
+    node table, so it would need one request per neighbour to build the
+    same answer, and the gateway rows on this page are already named
+    server side by `resolve_names`. One more query for the whole list is
+    the cheaper half of that comparison.
+
+    `name_of` falls back to the ID form for a node this dashboard has
+    never seen a node-info packet from, so `neighbor_name` is always a
+    string worth printing and the browser needs no fallback of its own.
+    `neighbor_node_num` stays, because the raw panel shows the row as the
+    database holds it.
+    """
+    labelled: list[dict[str, object]] = []
+    for row in values:
+        num = row.get("neighbor_node_num")
+        if not isinstance(num, int):
+            # Unreachable today: the column is NOT NULL, and `_values`
+            # only drops a None. It is here because the alternative is a
+            # KeyError that takes out the whole page, and a row with no
+            # name still reads.
+            labelled.append(row)
+            continue
+        labelled.append(row | {"neighbor_id": _node_id(num), "neighbor_name": name_of(names, num)})
+    return labelled
+
+
 async def _decoded_payload(session: AsyncSession, packet: Packet) -> dict[str, object] | None:
     """Return the decoded payload of one packet.
 
@@ -203,8 +240,14 @@ async def _decoded_payload(session: AsyncSession, packet: Packet) -> dict[str, o
                 )
             ).all()
         )
-        if rows:
-            return {"kind": kind, "values": [_values(model, row) for row in rows]}
+        if not rows:
+            continue
+        values = [_values(model, row) for row in rows]
+        if kind == "neighbors":
+            # The only decoded family whose rows point at another node.
+            names = await resolve_names(session, [row.neighbor_node_num for row in rows])
+            values = _named_neighbours(values, names)
+        return {"kind": kind, "values": values}
     return None
 
 

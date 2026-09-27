@@ -78,11 +78,21 @@
    * `NEIGHBORINFO` runs two words together and `STORE_FORWARD` drops a
    * word, so both are spelled out. The rest fall through to `sentence`.
    *
-   * The spelling is British, like the rest of the interface: the mesh
-   * graph legend already says "Neighbour report".
+   * "Neighbor", not "Neighbour". This label used to be British, to
+   * match the rest of the interface and the embedded mesh-graph legend.
+   * #240 asked for the American spelling, so every visible use of the
+   * word changed together: a page that says "Neighbor info" in the
+   * firehose and "Neighbours it reported" one click later is worse than
+   * either spelling on its own. The mesh-graph legend is a separate
+   * application in an iframe and still says "Neighbour report", which
+   * this repository cannot change.
+   *
+   * The protocol keeps its own spelling everywhere it is a name and not
+   * a word: `NEIGHBORINFO_APP` here, `neighbor_metrics` in the database,
+   * `neighbor_name` in the API.
    */
   const PORTNUM_LABELS = new Map([
-    ['NEIGHBORINFO_APP', 'Neighbour info'],
+    ['NEIGHBORINFO_APP', 'Neighbor info'],
     ['NODEINFO_APP', 'Node info'],
     ['TEXT_MESSAGE_APP', 'Text message'],
     ['TEXT_MESSAGE_COMPRESSED_APP', 'Text message, compressed'],

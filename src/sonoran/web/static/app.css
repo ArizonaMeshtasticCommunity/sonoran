@@ -603,6 +603,23 @@ button:disabled:hover { border-color: var(--line); background: none; }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr)); }
 
 /*
+ * The config checker's widgets sat flush against each other (Will,
+ * 2026-09-26). `[data-config-input]` is a plain block and `.panel`
+ * carries no margin, so the measured gap between "1. Where is the node"
+ * and the row under it was 0 px.
+ *
+ * Adjacent-sibling margin rather than making the container a grid or a
+ * flex row, and that is the whole point of this rule. `.grid` sets
+ * `margin-inline: auto`, and an auto inline margin on a grid or flex
+ * ITEM absorbs the free space instead of stretching -- so turning this
+ * container into a grid would shrink the `.grid two` inside it to its
+ * content width. That is #193.1, and it cost a round trip on the gaps
+ * page. Block layout keeps `margin-inline: auto` meaning what it means
+ * today, and a margin between siblings is all that was missing.
+ */
+[data-config-input] > * + * { margin-top: 1rem; }
+
+/*
  * The node page's own column (#193.1, #193.2).
  *
  * `loadNodeDetail` puts four blocks into `[data-node-body]`: the
@@ -2792,16 +2809,52 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * tap to open before the tap that chooses.
  */
 .preset-switch {
+  position: relative;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  gap: .25rem;
   padding: .2rem;
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: .55rem;
 }
+/*
+ * The thumb slides (§3.5). It is one element behind both labels rather
+ * than a background on the chosen one, which is what makes the movement
+ * readable: a fill that jumps between two words tells you the state
+ * changed, a thumb that travels tells you WHICH WAY.
+ *
+ * `gap` is gone from the track above and that is load-bearing. The thumb
+ * is `100% / count` wide and moves by exactly its own width, so any gap
+ * between the labels would make it drift further out of line with each
+ * position. The labels keep their own padding, so nothing looks tighter.
+ *
+ * The count and the index come from `wirePresetSwitch`, because CSS
+ * cannot count its own children. A missing value falls back to a
+ * two-position switch sitting left, which is the common case and never
+ * a broken-looking one.
+ */
+.preset-switch::before {
+  content: '';
+  position: absolute;
+  top: .2rem;
+  bottom: .2rem;
+  left: .2rem;
+  width: calc((100% - .4rem) / var(--preset-count, 2));
+  border-radius: .4rem;
+  background: var(--accent);
+  transform: translateX(calc(var(--preset-index, 0) * 100%));
+  transition: transform .18s ease;
+}
+/* Somebody who has asked for less movement gets the state, not the
+   journey. WCAG 2.3.3. */
+@media (prefers-reduced-motion: reduce) {
+  .preset-switch::before { transition: none; }
+}
 .preset-choice {
+  /* Above the thumb, so the label is not painted over by it. */
+  position: relative;
+  z-index: 1;
   font: inherit;
   font-size: .8rem;
   font-weight: 550;
@@ -2812,11 +2865,14 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
-  transition: background-color .12s ease, color .12s ease;
+  transition: color .12s ease;
 }
 .preset-choice:hover { color: var(--text); }
 .preset-choice.active {
-  background: var(--accent);
+  /* No background: the thumb behind it is the fill now. Set explicitly
+     rather than left off, so this stays true if `button` ever gains a
+     default background. */
+  background: none;
   /* Chosen against the accent rather than inherited: `--text` on the
      orange accent is the same dark-on-dark problem this change is
      fixing, one control along. */

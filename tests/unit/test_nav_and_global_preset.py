@@ -500,3 +500,75 @@ def test_the_heading_outranks_the_subtitle_when_the_row_is_tight() -> None:
     heading = css[css.index(".page-head.dense h2 {") :]
     heading = heading[: heading.index("}")]
     assert "white-space: nowrap" in heading, "the heading can wrap before the subtitle gives way"
+
+
+def test_the_preset_switch_slides() -> None:
+    """The thumb is one element behind both labels (§3.5).
+
+    A fill on the chosen label tells the reader the state changed; a thumb
+    that travels tells them which way it went. That is the whole reason
+    this is a sliding switch and not a segmented one.
+
+    Measured in a browser after the change: a 207 px track, a 99.3 px
+    thumb, and its centre landing on 54 px then 153 px against active
+    labels centred on 54 px and 153 px.
+    """
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    track = css[css.index(".preset-switch {") :]
+    track = track[: track.index("}")]
+    assert "position: relative" in track, (
+        "the track is not a containing block, so an absolutely positioned thumb "
+        "would be placed against the page instead of the switch"
+    )
+    # Load-bearing: the thumb moves by exactly its own width, so a gap
+    # between labels makes it drift further off with each position.
+    assert "gap:" not in track, (
+        f"the track has a gap again; the thumb steps by its own width and will "
+        f"not line up with the later positions: {track!r}"
+    )
+
+    thumb = css[css.index(".preset-switch::before {") :]
+    thumb = thumb[: thumb.index("}")]
+    assert "position: absolute" in thumb, "the thumb is not positioned"
+    assert "var(--preset-count" in thumb, (
+        "the thumb's width does not read the option count, so it is only right "
+        "for whichever number of presets was hardcoded"
+    )
+    assert "var(--preset-index" in thumb, "the thumb does not move with the choice"
+    assert "transform" in thumb, "the thumb is placed, not moved, so it cannot slide"
+
+
+def test_the_slide_can_be_turned_off() -> None:
+    """WCAG 2.3.3: somebody who asked for less movement gets the state."""
+    css = (STATIC / "app.css").read_text(encoding="utf-8")
+    block = re.search(
+        r"@media \(prefers-reduced-motion: reduce\) \{[^}]*\.preset-switch::before[^}]*\}",
+        css,
+        re.S,
+    )
+    assert block, "the thumb animates regardless of prefers-reduced-motion"
+    assert "transition: none" in block.group(0), (
+        f"reduced motion does not stop the transition: {block.group(0)!r}"
+    )
+
+
+def test_the_switch_publishes_what_the_css_cannot_work_out() -> None:
+    """CSS cannot count children or ask which one is active.
+
+    Both custom properties have to be set by `wirePresetSwitch`, and the
+    index has to be clamped: `indexOf` answers -1 for a preset no longer on
+    offer, and -1 parks the thumb a whole position off the left of the
+    track -- visible, wrong, and pointing at nothing.
+    """
+    app = (STATIC / "app.js").read_text(encoding="utf-8")
+    start = app.index("function wirePresetSwitch()")
+    body = app[start : start + 3000]
+    assert "--preset-count" in body, "the option count is never published"
+    assert "--preset-index" in body, "the chosen index is never published"
+    assert "Math.max(0," in body, (
+        "the index is not clamped, so a preset that is no longer offered "
+        "(indexOf -> -1) puts the thumb outside the track"
+    )
+    assert "Math.max(1," in body, (
+        "the count is not floored at 1, so an empty option list divides by zero"
+    )

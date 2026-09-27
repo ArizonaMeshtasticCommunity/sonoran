@@ -684,7 +684,7 @@
         el('p', {
           class: 'muted',
           text: 'The mesh has not been measured against the model yet. The job runs daily '
-            + 'and reads the neighbour reports that nodes publish.',
+            + 'and reads the neighbor reports that nodes publish.',
         }),
       );
       return;

@@ -612,7 +612,7 @@ What each kind shows under "What it said":
 | `TEXT_MESSAGE_APP` | The message, large, with hashtags marked. | `text_message` |
 | `POSITION_APP` | Latitude, longitude, altitude, and the precision in metres, then a map. A rounded position says how far it was rounded. | `position_metrics` |
 | `TELEMETRY_APP` | Named readings with units: device, environment, air quality or power. | the four telemetry tables |
-| `NEIGHBORINFO_APP` | A table of the neighbours it reported, with the SNR it heard each at. | `neighbor_metrics` |
+| `NEIGHBORINFO_APP` | A table of the neighbors it reported, each by name, with the SNR it heard it at. | `neighbor_metrics`, named through `node` |
 | `TRACEROUTE_APP` | The path, hop by hop, and the mesh-graph drawing. | `traceroute` |
 | `NODEINFO_APP` | A sentence saying it is not stored, and a link to the node page. | not stored per packet |
 | `ROUTING_APP` | A sentence saying it is not stored. | not stored |

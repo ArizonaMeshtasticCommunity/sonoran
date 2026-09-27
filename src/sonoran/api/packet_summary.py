@@ -146,7 +146,7 @@ async def summaries(
         )
     )
     for row in rows:
-        found[(row.node_num, row.packet_id)] = f"{row.n} neighbour{'s' if row.n != 1 else ''} heard"
+        found[(row.node_num, row.packet_id)] = f"{row.n} neighbor{'s' if row.n != 1 else ''} heard"
 
     rows = await session.execute(
         bounded(

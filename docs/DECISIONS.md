@@ -183,6 +183,59 @@ site. Moved naively into the menu it would stop announcing the moment a
 phone user closed it, **and nothing would look wrong**. **Tripwire:**
 `test_the_live_region_is_not_inside_the_menu`.
 
+### A reported neighbour is named by the API, not by the browser (#240)
+
+**Decided:** join the name server side, in `_decoded_payload`, and add
+`neighbor_id` and `neighbor_name` to each row of the `neighbors` kind.
+
+The packet page printed `!0a51a002` for each node a neighbour report
+named, while "Who heard it" — the panel directly above it, on the same
+screen — printed "Usery Pass Relay" for that same node. The bug was not
+a missing lookup. The cell built the ID and then passed it as the
+display name, so a name would have been discarded even if one had been
+there.
+
+The browser holds no node table, so naming them there needs one request
+per neighbour, and the gateway rows beside them are already named by
+`resolve_names`. One query for the whole list is the cheaper half of
+that comparison, and it puts both answers on one code path. The query
+is asked **only** for the `neighbors` kind: no other decoded family
+points at a second node, and adding it to all of them would put a
+pointless query on every telemetry packet page.
+
+`name_of` already falls back to the ID form, so the "no long name"
+case the issue asks about is answered once, server side, rather than in
+every consumer. **Tripwires:**
+`test_a_reported_neighbour_carries_its_long_name`,
+`test_no_other_decoded_family_pays_for_the_name_query`,
+`test_printing_the_id_as_the_name_would_be_caught`.
+
+### The visible spelling is "neighbor", the names keep theirs (#240)
+
+**Decided:** every sentence a reader sees says "neighbor". Every
+identifier keeps the spelling it had.
+
+`labels.js` used to record the opposite call: British, to match the rest
+of the interface and the mesh-graph legend in the embed. #240 asked for
+the American spelling, and a half-done change is worse than either
+spelling — a page that says "Neighbor info" in the firehose and
+"Neighbours it reported" one click later reads as two products. So all
+of it moved together: the packet page, the node page panel and hints,
+the map and graph legends, the coverage empty state, the firehose
+summary line, the config-check field label, and the gaps reason
+sentences.
+
+Nothing else moved. `neighbor_metrics`, `neighbor_node_num` and
+`NEIGHBORINFO_APP` are the protocol's and the database's own names.
+`neighbour_reports`, `best_neighbour_snr` and `no_neighbour_reports` are
+internal keys of the gaps evidence object, `named_as_neighbour` and
+`neighbourValues` are private symbols, and `.line.neighbour` is a CSS
+class. Renaming any of them would change an API response or a stored
+artefact to fix a spelling on a page, which is a wire break for a
+cosmetic gain. The mesh-graph legend in the iframe still says
+"Neighbour report" and is a separate application. **Tripwire:**
+`test_the_british_spelling_coming_back_would_be_caught`.
+
 ---
 
 ## Safety and privacy

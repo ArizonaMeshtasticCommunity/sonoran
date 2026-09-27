@@ -60,7 +60,10 @@ def test_the_port_number_table_exists_once() -> None:
     They also disagreed about nothing and agreed about everything, which is
     the state a duplicate is in right up to the edit that changes one.
     """
-    assert "'Neighbour info'" in _read("labels.js")
+    # American, since #240. The point of this line is that the spelled
+    # out port label lives in labels.js and nowhere else; the spelling
+    # itself is pinned by test_neighbours_are_named.py.
+    assert "'Neighbor info'" in _read("labels.js")
     app = _read("app.js")
     assert "familyLabel" not in app
     assert app.count("function portnumLabel") == 0

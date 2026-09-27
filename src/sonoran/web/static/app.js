@@ -765,6 +765,94 @@ const charts = new Map();
  */
 const chartOptions = new Map();
 
+/*
+ * Let the whole canvas pan and zoom the mesh graph (#233, after #223).
+ *
+ * ECharts gates a graph series' roam on the bounding rect of what it
+ * DREW. From the vendored build:
+ *
+ *     setPointerChecker(function (e, x, y) {
+ *       var o = a.getBoundingRect();
+ *       o.applyTransform(a.transform);
+ *       return o.contain(x, y) && !hT(e, n, t);
+ *     })
+ *
+ * `a` is the series group, so the region is the box around the outermost
+ * nodes -- which is exactly what returnzork described and drew a red
+ * rectangle around: "an invisible box that has corners of outlier nodes".
+ * Drag or scroll outside it and nothing happens at all, which reads as a
+ * dead page rather than as a control with edges. Measured before this
+ * change: a drag inside the box moved the group from (80,48) to
+ * (176,108); the same drag from the empty canvas above and below it
+ * moved nothing, and the wheel did nothing there either. The report was
+ * about dragging; zoom was broken in the same place for the same reason.
+ *
+ * No series option changes this -- the rect is computed in the view, not
+ * read from the option -- so the checker itself is replaced.
+ *
+ * COMPOSED, not overridden, and that is the careful part. The original
+ * answer is asked first and honoured, so every case ECharts already
+ * allowed keeps working, including the `hT` guard that stops a drag
+ * starting on another component from being stolen by the graph. Only one
+ * case is ADDED: a pointer inside the canvas with nothing drawn under
+ * it. `findHover` returns null there, and it returns a real element over
+ * the legend -- checked on the running page, because the legend sits at
+ * `top: 0` over what looks like empty space and panning from it would be
+ * wrong.
+ *
+ * PRIVATE API, and treated that way. `_chartsViews` and `_controller`
+ * are internals of a pinned build; every step is guarded and anything
+ * missing leaves the chart exactly as it was. A graph that pans only in
+ * the middle is a poor control; a graph that throws is a broken page.
+ * `tests/unit/test_graph_roam.py` fails if these internals move, so an
+ * ECharts upgrade reports this rather than silently dropping it.
+ */
+function widenGraphRoam(instance) {
+  if (!instance || typeof instance.getZr !== 'function') return false;
+  let views;
+  try {
+    views = instance._chartsViews;
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(views)) return false;
+  const view = views.find((candidate) => candidate && candidate.type === 'graph');
+  const controller = view && view._controller;
+  if (!controller || typeof controller.setPointerChecker !== 'function') return false;
+  // Already composed. `_updateController` installs a fresh checker on
+  // every render, so this is re-applied rather than applied once -- but a
+  // double wrap would ask the original twice and grow a chain on every
+  // redraw.
+  if (controller.pointerChecker && controller.pointerChecker.sonoranWidened) return true;
+  const original = controller.pointerChecker;
+  const zr = instance.getZr();
+  const widened = (event, x, y) => {
+    // Whatever ECharts allowed, we allow.
+    if (typeof original === 'function') {
+      try {
+        if (original.call(controller, event, x, y)) return true;
+      } catch {
+        /* A throwing original must not take the gesture with it. */
+      }
+    }
+    // Inside the canvas? `x` and `y` are already chart-local.
+    const width = instance.getWidth();
+    const height = instance.getHeight();
+    if (!(x >= 0 && y >= 0 && x <= width && y <= height)) return false;
+    // Nothing drawn under the pointer. Anything drawn -- the legend, a
+    // node, a label -- keeps whatever behaviour it had.
+    try {
+      const hovered = zr.handler.findHover(x, y);
+      return !(hovered && hovered.target);
+    } catch {
+      return false;
+    }
+  };
+  widened.sonoranWidened = true;
+  controller.setPointerChecker(widened);
+  return true;
+}
+
 function chart(target, option) {
   if (!target) return null;
   // The box collapses while it holds a sentence instead of a chart, and
@@ -778,6 +866,16 @@ function chart(target, option) {
   }
   instance.setOption(option, true);
   chartOptions.set(target, option);
+  /*
+   * After `setOption`, because the graph view installs its own pointer
+   * checker while rendering, and on `finished` because a force layout
+   * keeps rendering after this call returns.
+   */
+  widenGraphRoam(instance);
+  if (!instance.__sonoranRoamWired) {
+    instance.__sonoranRoamWired = true;
+    instance.on('finished', () => widenGraphRoam(instance));
+  }
   /*
    * Name the region, and let ECharts describe the data inside it.
    *
@@ -1565,7 +1663,7 @@ function drawMapLegend(target, rows) {
     // named. A relayed line is a path, not a radio link.
     el('span', { class: 'legend-note' }, el('span', { class: 'line direct' }), 'Heard direct'),
     el('span', { class: 'legend-note' }, el('span', { class: 'line relayed' }), 'Relayed, arrow shows where it went'),
-    el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }), 'Neighbour link'),
+    el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }), 'Neighbor link'),
     /*
      * The two heat layers, named here as well as in the watch legend.
      *
@@ -2507,7 +2605,7 @@ function mapKeyBody() {
       el('span', { class: 'legend-note' }, el('span', { class: 'line stipple' }),
         'Stippled: not measured, for a hop count and for a signal alike'),
       el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }),
-        'Neighbour link, a node naming a node it hears itself')),
+        'Neighbor link, a node naming a node it hears itself')),
     el('p', { class: 'muted', text: 'A flat line takes the colour of its signal: green good, yellow fair, red weak. Every other line takes the colour of its packet.' }),
     el('h3', { text: 'What a packet was' }),
     el('div', { class: 'legend' },
@@ -3121,7 +3219,7 @@ PAGES.map = async (page) => {
     const drawn = drawLinks(edges, positions);
     if (!map.hasLayer(mapState.links)) map.addLayer(mapState.links);
     $('[data-link-summary]', page).textContent =
-      `${count(drawn)} neighbour links over ${LINK_HOURS} h.`;
+      `${count(drawn)} neighbor links over ${LINK_HOURS} h.`;
   } else {
     if (map.hasLayer(mapState.links)) map.removeLayer(mapState.links);
     $('[data-link-summary]', page).textContent = '';
@@ -4602,14 +4700,14 @@ function definitionList(values, labels) {
 
 function neighborPanel(neighbors, windowHours) {
   return el('div', { class: 'panel' },
-    el('h3', {}, 'Neighbours',
+    el('h3', {}, 'Neighbors',
       el('span', { class: 'muted',
         text: `${count(neighbors.length)} in ${windowHours} h` })),
     expandingTable([
       { label: 'Node', cell: (row) => nodeChip(row) },
       { label: 'SNR', num: true, cell: (row) => snrCell(row.snr) },
       { label: 'Last RX', num: true, cell: (row) => `${ago(row.last_rx_time || row.time)} ago` },
-    ], neighbors, 'This node reports no neighbors.', { noun: 'neighbours' }));
+    ], neighbors, 'This node reports no neighbors.', { noun: 'neighbors' }));
 }
 
 /*
@@ -4763,7 +4861,7 @@ async function drawSignalChart(target, nodeId, hours) {
     byNeighbour.get(row.neighbor_name).push([new Date(row.time).getTime(), row.snr]);
   }
   if (!byNeighbour.size) {
-    target.replaceWith(empty('This node reports no neighbours, so no direct link was measured.'));
+    target.replaceWith(empty('This node reports no neighbors, so no direct link was measured.'));
     return;
   }
   chart(target, {
@@ -5517,14 +5615,14 @@ function routesPanel(routes) {
   const depth = routes.hop_depth || { packets: 0, counts: [] };
   const columns = [
     { label: 'Node', cell: (row) => nodeChip(row) },
-    { label: 'Reports', num: true, hint: 'Neighbour reports and traceroute hops that show the link in this direction.', cell: (row) => count(row.count) },
+    { label: 'Reports', num: true, hint: 'Neighbor reports and traceroute hops that show the link in this direction.', cell: (row) => count(row.count) },
     { label: 'Best SNR', num: true, cell: (row) => snrCell(row.best_snr) },
-    { label: 'From', cell: (row) => row.kinds.map((kind) => (kind === 'neighbor' ? 'neighbour report' : 'traceroute')).join(', ') },
+    { label: 'From', cell: (row) => row.kinds.map((kind) => (kind === 'neighbor' ? 'neighbor report' : 'traceroute')).join(', ') },
     { label: 'Distance', num: true, hint: 'Only where both nodes share an exact position.', cell: (row) => km(row.distance_km) },
   ];
   return el('div', { class: 'panel span-2' },
     el('h3', {}, 'Links and routes',
-      el('span', { class: 'muted', text: `from neighbour reports and traceroutes, last ${routes.window_hours} h` })),
+      el('span', { class: 'muted', text: `from neighbor reports and traceroutes, last ${routes.window_hours} h` })),
     el('div', { class: 'route-tiles' },
       tile('Longest route segment',
         longest ? km(longest.distance_km) : '-',
@@ -5669,7 +5767,7 @@ async function loadNodeDetail(nodeId) {
 
   const signalPanel = el('div', { class: 'panel span-2' },
     el('h3', {}, 'Direct link signal over time',
-      el('span', { class: 'muted', text: 'from neighbour reports' })),
+      el('span', { class: 'muted', text: 'from neighbor reports' })),
     el('div', { class: 'chart', 'data-signal-chart': '' }));
 
   /*
@@ -6714,7 +6812,7 @@ const DECODED_LABELS = {
   body: ['Message', (v) => v],
   channel: ['Channel', (v) => v],
   snr: ['SNR', (v) => `${round(v, 2)} dB`],
-  neighbor_node_num: ['Neighbour', (v) => `!${(v >>> 0).toString(16).padStart(8, '0')}`],
+  neighbor_node_num: ['Neighbor', (v) => `!${(v >>> 0).toString(16).padStart(8, '0')}`],
   pm10_standard: ['PM1.0', (v) => `${v}`],
   pm25_standard: ['PM2.5', (v) => `${v}`],
   pm100_standard: ['PM10', (v) => `${v}`],
@@ -6787,7 +6885,7 @@ function positionMap(target, rows) {
 const DECODED_KIND = {
   text: 'Message',
   position: 'Position',
-  neighbors: 'Neighbours it reported',
+  neighbors: 'Neighbors it reported',
   device: 'Device readings',
   environment: 'Environment readings',
   air_quality: 'Air quality readings',
@@ -6956,19 +7054,39 @@ function positionValues(row) {
 function neighbourValues(rows) {
   return el('div', { class: 'table-wrap' }, table([
     {
-      label: 'Neighbour',
+      label: 'Neighbor',
       cell: (row) => {
-        const id = `!${(row.neighbor_node_num >>> 0).toString(16).padStart(8, '0')}`;
-        return nodeChip({ node_id: id, display_name: id });
+        /*
+         * The name, not the number (#240).
+         *
+         * This column printed `!0a51a002` while "Who heard it", on the
+         * same page and a few centimetres above it, printed "Usery Pass
+         * Relay" for the same node. Both are the same question — which
+         * node is this — so both must answer it the same way.
+         *
+         * `neighbor_name` comes from the API, which resolves it through
+         * `name_of` and already falls back to the ID form for a node no
+         * node-info packet has ever named. So the fallbacks below are
+         * not the "no long name" case: that one is answered upstream.
+         * They are for a row the API sent without the named fields at
+         * all, and a bare number reads better than an empty chip.
+         *
+         * `>>> 0` because a node number above 2^31 is a negative signed
+         * 32-bit integer in JavaScript, and `toString(16)` would put a
+         * minus sign in front of the ID.
+         */
+        const id = row.neighbor_id
+          || `!${(row.neighbor_node_num >>> 0).toString(16).padStart(8, '0')}`;
+        return nodeChip({ node_id: id, display_name: row.neighbor_name || id });
       },
     },
     {
       label: 'SNR',
       num: true,
-      hint: 'How well this node heard that neighbour, as it reported it. This is a measured radio link.',
+      hint: 'How well this node heard that neighbor, as it reported it. This is a measured radio link.',
       cell: (row) => snrCell(row.snr),
     },
-  ], rows, 'It reported no neighbours.'));
+  ], rows, 'It reported no neighbors.'));
 }
 
 /** The panels that show what a packet said. */
@@ -7723,7 +7841,19 @@ function wirePresetSwitch() {
 
   const draw = () => {
     const current = SonoranPreset.current();
-    replace(holder, SonoranPreset.options().map((name) => el('button', {
+    const options = SonoranPreset.options();
+    /*
+     * The thumb's size and position, for the CSS (§3.5).
+     *
+     * CSS cannot count its own children or say which one has a class, so
+     * the two numbers it needs are published here. The index is clamped at
+     * 0: `indexOf` answers -1 for a preset that is no longer on offer,
+     * and -1 would park the thumb one whole position off the left of the
+     * track -- visible, wrong, and pointing at nothing.
+     */
+    holder.style.setProperty('--preset-count', String(Math.max(1, options.length)));
+    holder.style.setProperty('--preset-index', String(Math.max(0, options.indexOf(current))));
+    replace(holder, options.map((name) => el('button', {
       type: 'button',
       role: 'radio',
       class: `preset-choice${name === current ? ' active' : ''}`,
@@ -7742,7 +7872,7 @@ function wirePresetSwitch() {
         const step = keys[event.key];
         if (!step) return;
         event.preventDefault();
-        const list = SonoranPreset.options();
+        const list = options;
         const next = list[(list.indexOf(current) + step + list.length) % list.length];
         if (SonoranPreset.set(next)) draw();
         const moved = $(`[data-preset-switch] .preset-choice.active`);

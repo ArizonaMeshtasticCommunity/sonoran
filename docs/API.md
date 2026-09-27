@@ -866,7 +866,7 @@ Query parameters:
 - `before`, `limit` — pagination.
 - `summary` — `true` adds `summary`, one short line of what the packet
   said, read from its decoded row: a message, a position with its
-  precision, battery and voltage, temperature and humidity, a neighbour
+  precision, battery and voltage, temperature and humidity, a neighbor
   count, or a traceroute request or reply. It is null for a kind that
   stores nothing to show (node info, routing), and for a text message
   while text storage is off. The firehose asks for it.
@@ -917,6 +917,17 @@ own, and an enum is its name. It is null for every other family, which
 either has a typed table read into `decoded` or is never kept, and for
 packets stored before 2026-09-22. The API holds no channel key, so it
 cannot decode a packet itself.
+
+`decoded` holds `kind` and `values`, one entry per stored row, with the
+columns of the table of that family. Column names are the database's.
+
+For `kind=neighbors` each value carries two fields the database does not
+store: `neighbor_id`, the `!hex` form of `neighbor_node_num`, and
+`neighbor_name`, the display name of that node. The name follows the
+usual rule — long name, then short name, then the ID — so it is always a
+string a page can print, and a page must not re-derive the ID from the
+number. No other kind carries a name, because no other kind points at a
+second node.
 
 Response:
 
