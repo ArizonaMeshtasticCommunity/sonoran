@@ -1506,12 +1506,13 @@ PAGES.dashboard = async (page) => {
          * `tooltipLines` returns an element and puts every value in as
          * text, so markup is shown rather than run. The formatter this
          * replaced interpolated into markup with an arrow's implicit
-         * return, which `test_tooltip_escaping` did not catch because its
-         * pattern looks for a `return` keyword.
+         * return. `test_tooltip_escaping` now reads every path out of a
+         * tooltip formatter, the fallback here included, and each one
+         * must be `tooltipLines(...)`.
          */
         formatter: (item) => {
           const band = bands[item.dataIndex];
-          if (!band) return String(item.name);
+          if (!band) return tooltipLines(item.name);
           return tooltipLines(
             `${band.label} (${band.wire})`,
             `${count(band.count)} packets`,

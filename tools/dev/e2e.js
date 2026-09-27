@@ -235,6 +235,20 @@ async function predict(page, start, timeout = 240000) {
 }
 
 /*
+ * Set the reader's units on this page, and so on every page of its context.
+ *
+ * The planner's height and range boxes follow the setting (#246), and the
+ * journeys share one browser context: "the units setting reaches the
+ * pages" switches it to metric through the real control and it stays
+ * switched. A journey that types feet says so here rather than inheriting
+ * whatever an earlier journey left. The planner rewrites its boxes when
+ * the setting changes, so this works after the form is filled too.
+ */
+async function setUnits(page, units) {
+  await page.evaluate((value) => window.SonoranSettings.set('units', value), units);
+}
+
+/*
  * Put the planner form into Advanced.
  *
  * §6.5 moved Range, and all the rest of Ground and air, out of Simple.
@@ -1258,13 +1272,15 @@ async function main() {
     // a different layout and not what #108 describes.
     must(before.position === 'sticky', `the sidebar is ${before.position} at this width`);
 
-    // Phoenix, in the middle of the served region, and 10 km rather than
-    // the default 30: the run is the slow part of this journey and a
-    // short one still fills the summary and the table.
+    // Phoenix, in the middle of the served region, and 6 mi (about 10 km)
+    // rather than the default 30 km: the run is the slow part of this
+    // journey and a short one still fills the summary and the table. The
+    // range box is in miles here because this browser has the default,
+    // imperial, units setting (#246).
     await advanced(page);
     await page.fill('[data-planner="lat"]', '33.45');
     await page.fill('[data-planner="lon"]', '-112.07');
-    await page.fill('[data-planner="radius"]', '10');
+    await page.fill('[data-planner="radius"]', '6');
     const started = Date.now();
     const run = await predict(page);
     const took = Math.round((Date.now() - started) / 1000);
@@ -1311,18 +1327,22 @@ async function main() {
      * far and says it went no further.
      */
     await open(page, 'planner', 5000);
+    await setUnits(page, 'imperial');
     await advanced(page);
     await page.fill('[data-planner="site_name"]', 'Shaw Butte');
     await page.fill('[data-planner="lat"]', '33.5905');
     await page.fill('[data-planner="lon"]', '-112.0865');
-    await page.fill('[data-planner="tx_height"]', '6');
+    // Feet and miles, which is what this browser's default units setting
+    // shows. The link carries metres whatever the box shows (#246).
+    await page.fill('[data-planner="tx_height"]', '20');
     await page.selectOption('[data-planner="preset"]', 'LONG_FAST');
-    await page.fill('[data-planner="radius"]', '10');
+    await page.fill('[data-planner="radius"]', '6');
     await page.locator('[data-planner="radius"]').blur();
     await page.waitForTimeout(500);
 
     const query = new URLSearchParams(page.url().split('?')[1] || '');
-    must(query.get('tx_height') === '6', `the address did not follow the form: ${page.url()}`);
+    must(query.get('tx_height') === '6.096', `the address did not follow the form: ${page.url()}`);
+    must(query.get('radius') === '9.656064', `6 mi went into the link as ${query.get('radius')} km`);
     // Only what moved. A link that writes all 21 fields is four times
     // as long and nobody reads it. Measured: 478 characters against 142.
     must(!query.has('tx_power'), `an untouched field was written: ${[...query.keys()].join(',')}`);
@@ -1366,7 +1386,7 @@ async function main() {
 
     // The settings travel whether or not there is terrain to predict over.
     must(back.site_name === 'Shaw Butte' && back.lat === '33.5905', `the site came back as ${back.lat}`);
-    must(back.tx_height === '6' && back.preset === 'LONG_FAST', 'the settings did not come back');
+    must(back.tx_height === '20' && back.preset === 'LONG_FAST', 'the settings did not come back');
     must(back.sensitivity === '-139', `the sensitivity came back as ${back.sensitivity}`);
     must(back.tx_power === '30', `an unshared field did not take its default: ${back.tx_power}`);
     if (!run.ran) return `${link.length} characters, settings restored; no prediction here (${run.why})`;
@@ -1376,6 +1396,80 @@ async function main() {
     must(sameCount && sameCount[0] === reached[0],
       `the same link reached ${sameCount && sameCount[0]} where the original reached ${reached[0]}`);
     return `${link.length} characters, reached ${reached[0]} in both`;
+  });
+
+  await journey(context, 'a planner link made in feet predicts the same in metres', async (page) => {
+    /*
+     * #246. The boxes read in the reader's units and the link carries
+     * metres, so a link made by an imperial reader and opened by a metric
+     * one must put the same antenna into the model. The arithmetic and a
+     * real engine run are in `test_planner_units_follow_the_setting.py`;
+     * this is the page doing it: the labels, the boxes, and, where there
+     * is terrain, the prediction itself.
+     */
+    await open(page, 'planner', 5000);
+    await setUnits(page, 'imperial');
+    await advanced(page);
+    const labels = () => page.evaluate(() => [...document.querySelectorAll('[data-planner-unit]')]
+      .map((unit) => unit.textContent).join(','));
+    must(await labels() === 'ft,ft,ft,mi', `the imperial labels read ${await labels()}`);
+    await page.fill('[data-planner="lat"]', '33.5905');
+    await page.fill('[data-planner="lon"]', '-112.0865');
+    await page.fill('[data-planner="tx_height"]', '20');
+    await page.fill('[data-planner="rx_height"]', '5');
+    await page.fill('[data-planner="radius"]', '6');
+    await page.locator('[data-planner="radius"]').blur();
+    await page.waitForTimeout(500);
+    const link = page.url();
+    const query = new URLSearchParams(link.split('?')[1] || '');
+    must(query.get('tx_height') === '6.096' && query.get('rx_height') === '1.524',
+      `the heights went into the link as ${query.get('tx_height')} and ${query.get('rx_height')}`);
+
+    // Switched to metric on this same page, the boxes keep the antenna.
+    await setUnits(page, 'metric');
+    const switched = await page.evaluate(() => ({
+      tx: document.querySelector('[data-planner="tx_height"]').value,
+      radius: document.querySelector('[data-planner="radius"]').value,
+    }));
+    must(await labels() === 'm,m,m,km', `the metric labels read ${await labels()}`);
+    must(switched.tx === '6.096' && switched.radius === '9.656064',
+      `switching units moved the boxes to ${switched.tx} m and ${switched.radius} km`);
+    await setUnits(page, 'imperial');
+    const restored = await page.evaluate(() => document.querySelector('[data-planner="tx_height"]').value);
+    must(restored === '20', `switching back to imperial shows ${restored} ft, not the 20 typed`);
+
+    const run = await predict(page, () => page.click('[data-planner-run]'));
+    const reached = run.ran
+      ? (await page.locator('[data-planner-summary]').innerText()).match(/(\d+) of (\d+)/)
+      : null;
+
+    // A clean browser whose reader chose metric.
+    const clean = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
+    await clean.addInitScript(() => {
+      window.localStorage.setItem('sonoran.settings', JSON.stringify({ units: 'metric' }));
+    });
+    const opened = await clean.newPage();
+    await opened.goto(page.url(), { waitUntil: 'load' });
+    const again = await predict(opened, null);
+    const back = await opened.evaluate(() => ({
+      tx: document.querySelector('[data-planner="tx_height"]').value,
+      rx: document.querySelector('[data-planner="rx_height"]').value,
+      radius: document.querySelector('[data-planner="radius"]').value,
+      units: [...document.querySelectorAll('[data-planner-unit]')].map((unit) => unit.textContent).join(','),
+    }));
+    const sameCount = again.ran
+      ? (await opened.locator('[data-planner-summary]').innerText()).match(/(\d+) of (\d+)/)
+      : null;
+    await opened.close();
+    await clean.close();
+
+    must(back.units === 'm,m,m,km', `the metric reader's labels read ${back.units}`);
+    must(back.tx === '6.096' && back.rx === '1.524' && back.radius === '9.656064',
+      `the metric reader got ${back.tx} m, ${back.rx} m and ${back.radius} km`);
+    if (!run.ran) return `20 ft -> 6.096 m both ways; no prediction here (${run.why})`;
+    must(sameCount && sameCount[0] === reached[0],
+      `metric reached ${sameCount && sameCount[0]} where imperial reached ${reached[0]}`);
+    return `20 ft -> 6.096 m, reached ${reached[0]} in both unit systems`;
   });
 
   await journey(context, 'a hand-typed planner link cannot break the page', async (page) => {
@@ -1399,6 +1493,7 @@ async function main() {
       return Boolean(line && !line.hidden && line.textContent.trim().length > 0);
     }, 30000);
     must(reported, 'the page said nothing at all about the link it was opened with');
+    await setUnits(page, 'imperial');
     const held = await page.evaluate(() => ({
       radius: document.querySelector('[data-planner="radius"]').value,
       tx_height: document.querySelector('[data-planner="tx_height"]').value,
@@ -1406,8 +1501,9 @@ async function main() {
       situation: document.querySelector('[data-planner="situation_fraction"]').value,
       said: document.querySelector('[data-planner-shared]').textContent.trim(),
     }));
-    must(held.radius === '150', `the range is ${held.radius} km, past the engine's 150`);
-    must(held.tx_height === '3', `"abc" became ${held.tx_height} rather than the default`);
+    // In miles and feet, which this browser reads: 150 km and 3 m.
+    must(held.radius === '93.21', `the range is ${held.radius} mi, past the engine's 150 km`);
+    must(held.tx_height === '9.84', `"abc" became ${held.tx_height} ft rather than the default 3 m`);
     must(held.preset === 'MEDIUM_FAST', `an unknown preset became ${held.preset}`);
     must(held.situation === '1', `the situation fraction is ${held.situation}`);
     must(/version 9/.test(held.said), `nothing said the version was unknown: ${held.said}`);

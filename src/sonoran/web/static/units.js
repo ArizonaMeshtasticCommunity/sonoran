@@ -11,7 +11,9 @@
  * converts metres to feet for the engine, and `docs/PLANNER.md` records
  * that confusing the two overstates every antenna by 3.28 times. That
  * conversion is arithmetic on the way into a model, not a label for a
- * reader, and it stays in metres whatever this module says.
+ * reader, and it stays in metres whatever this module says. The planner's
+ * boxes do read and accept the reader's units, but only at the box: the
+ * form, the share link and the model keep metres (#246).
  *
  * Rounding is per quantity, not one global rule. "0.3 km" reading as
  * "0.2 miles" is fine; a "12 m mast" reading as "39.37 ft" is not, because
@@ -149,6 +151,13 @@ window.SonoranUnits = (function build() {
     return imperial() ? value / FEET_PER_METRE : value;
   }
 
+  /** A typed distance, back into kilometres. Miles when imperial. */
+  function distanceToKm(typed) {
+    const value = num(typed);
+    if (value === null) return null;
+    return imperial() ? value / MILES_PER_KM : value;
+  }
+
   return {
     imperial,
     fahrenheit,
@@ -159,6 +168,7 @@ window.SonoranUnits = (function build() {
     heightUnit,
     distanceUnit,
     heightToM,
+    distanceToKm,
     FEET_PER_METRE,
     MILES_PER_KM,
   };
