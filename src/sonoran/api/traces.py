@@ -14,8 +14,33 @@ proves. See AGENTS.md 9.6.
 """
 
 from itertools import pairwise
+from typing import Protocol
 
-from sonoran.db.models import Traceroute
+
+class TraceRow(Protocol):
+    """The columns of a `traceroute` row that the rules here read.
+
+    A mapped `Traceroute` has them, and so does a lean row that selects
+    only these columns. The node page reads tens of thousands of rows in
+    one answer (#290), and building a whole ORM object for each one cost
+    more than the rules themselves. The rules stay here either way.
+    """
+
+    @property
+    def from_node_num(self) -> int: ...
+    @property
+    def to_node_num(self) -> int: ...
+    @property
+    def request_id(self) -> int | None: ...
+    @property
+    def route(self) -> list | None: ...
+    @property
+    def route_back(self) -> list | None: ...
+    @property
+    def snr_towards(self) -> list | None: ...
+    @property
+    def snr_back(self) -> list | None: ...
+
 
 # Traceroute reports store SNR in quarter dB.
 SNR_SCALE = 4
@@ -28,7 +53,7 @@ UNKNOWN_SNR = -128
 Hop = tuple[int, int, float | None]
 
 
-def is_reply(trace: Traceroute) -> bool:
+def is_reply(trace: TraceRow) -> bool:
     """Return true when this row is a traceroute reply.
 
     A reply answers a request, so it carries the request ID.
@@ -36,7 +61,7 @@ def is_reply(trace: Traceroute) -> bool:
     return trace.request_id is not None
 
 
-def trace_endpoints(trace: Traceroute) -> tuple[int, int]:
+def trace_endpoints(trace: TraceRow) -> tuple[int, int]:
     """Return the request direction of one traceroute.
 
     A reply travels back from the node that answered, so the packet
@@ -67,14 +92,14 @@ def hop_snr(readings: list[object], index: int) -> float | None:
     return value / SNR_SCALE
 
 
-def forward_path(trace: Traceroute) -> list[int]:
+def forward_path(trace: TraceRow) -> list[int]:
     """Return the nodes of the request path, from the asker to the answerer."""
     origin, destination = trace_endpoints(trace)
     hops = [origin, *(trace.route or []), destination]
     return [hop for hop in hops if isinstance(hop, int)]
 
 
-def return_path(trace: Traceroute) -> list[int]:
+def return_path(trace: TraceRow) -> list[int]:
     """Return the nodes of the reply path, or nothing when there is no reply."""
     if not is_reply(trace) or not trace.route_back:
         return []

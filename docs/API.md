@@ -236,7 +236,7 @@ Query parameters: `hours` — default 24, at most 720.
 Response: `window_hours`, `position`, `position_known`, `hears`,
 `heard_by`, `longest_segment`, `furthest_heard_by`, `furthest_heard`,
 `furthest_heard_by_reason`, `furthest_heard_reason`,
-`coarse_excluded`, `traces_read`, `trace_limit_reached`, `hop_depth`.
+`coarse_excluded`, `traces_read`, `hop_depth`.
 
 - `position` — true when the node's own position is exact.
   `position_known` — true when it has a usable position at all, exact or
@@ -270,8 +270,17 @@ gaps page uses. A pair with a coarse or missing position has no
 one is rounded has `approx_distance_km` instead, with
 `distance_error_km`: the sum of the two ends' precision deviations from
 the firmware table, which bounds how far the rounding can move the
-distance. The two are never both set on one row. At most the newest 2000 traceroutes
-are read, and `trace_limit_reached` says when that cap was hit.
+distance. The two are never both set on one row.
+
+Every traceroute in the window that names the node is read, as an end
+or as a hop either way (#290). There is no row limit: a limit decides
+what evidence exists (AGENTS.md 9.19), and the newest 2000 used to be
+about a tenth of the busiest node's 30 days. `traces_read` is how many
+were read. `trace_limit_reached` is gone with the limit. The answer is
+held for `STATS_CACHE_SECONDS` for each node and window.
+
+The panel takes no `channel`, so a node on two presets has both in one
+list (AGENTS.md 9.7).
 
 ### 3.4 `GET /api/nodes/{node_id}/heard-by`
 

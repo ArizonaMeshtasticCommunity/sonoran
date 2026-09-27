@@ -2304,3 +2304,55 @@ def test_port_zero_is_no_longer_one_bucket_called_unknown_app(  # type: ignore[n
     assert activity["packet_count"] == 5
     assert sum(row["count"] for row in activity["by_portnum"]) == 5
     assert len(activity["by_portnum"]) == 5, activity["by_portnum"]
+
+
+def test_the_route_widgets_read_every_traceroute_in_the_window(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """No row limit decides what the node page's links are (#290).
+
+    The panel read the newest 2000 traceroutes that named the node and
+    said so under the tiles. At the 30 day default that was about a
+    tenth of the busiest node's evidence. Here 2100 recent requests reach
+    9901 from 9902, and one older one reaches it from 9903, twenty days
+    back. All of it must be counted, and the older link must be there.
+    """
+    now = datetime.now(UTC)
+    try:
+        with migrated_engine.begin() as connection:
+            connection.execute(text("DELETE FROM traceroute WHERE to_node_num = 9901"))
+            # One hop each, from the asker straight to 9901, with a
+            # reading for it: a request the broker saw arrive.
+            connection.execute(
+                text(
+                    "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                    "route, snr_towards, seen_at) "
+                    "SELECT 9902, 9901, 'LongFast', 990000 + g, CAST('[]' AS jsonb), "
+                    "CAST('[20]' AS jsonb), :now - make_interval(secs => g) "
+                    "FROM generate_series(1, 2100) AS g"
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO traceroute (from_node_num, to_node_num, channel, packet_id, "
+                    "route, snr_towards, seen_at) "
+                    "VALUES (9903, 9901, 'LongFast', 993000, CAST('[]' AS jsonb), "
+                    "CAST('[12]' AS jsonb), :old)"
+                ),
+                {"old": now - timedelta(days=20)},
+            )
+
+        app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+        with TestClient(app) as client:
+            body = client.get("/api/nodes/!000026ad/routes?hours=720").json()
+    finally:
+        with migrated_engine.begin() as connection:
+            connection.execute(text("DELETE FROM traceroute WHERE to_node_num = 9901"))
+
+    hears = {row["node_id"]: row for row in body["hears"]}
+    assert body["traces_read"] == 2101, "every traceroute in the window is read"
+    assert "trace_limit_reached" not in body, "there is no limit left to report"
+    assert hears["!000026ae"]["count"] == 2100, "each report is counted, not the newest 2000"
+    assert "!000026af" in hears, "a link seen only twenty days ago is still a link"
+    assert hears["!000026af"]["count"] == 1

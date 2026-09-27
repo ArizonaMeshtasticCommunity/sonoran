@@ -6887,8 +6887,10 @@ function routesPanel(routes) {
     el('p', { class: 'muted' },
       'A rounded position can be kilometres out, so a distance from one is marked "about" with the range the rounding allows. '
       + 'The longest route segment needs an exact position at both ends, and rounded pairs are left out of it'
-      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')
-      + (routes.trace_limit_reached ? ` Only the newest ${count(routes.traces_read)} traceroutes were read.` : '')),
+      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')),
+    // "Only the newest 2,000 traceroutes were read" was here. Every
+    // traceroute in the window is read now, so there is no cut to own
+    // up to (#290).
     el('div', { class: 'grid two' },
       el('div', { class: 'route-list' },
         el('h4', { text: `Who hears it (${count(routes.heard_by.length)})` }),
