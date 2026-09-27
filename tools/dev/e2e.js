@@ -817,12 +817,24 @@ async function main() {
      * be linked to -- somebody sharing "what was said last night" would
      * send a link that opened on the default week.
      */
-    await open(page, 'chat');
-    const before = await page.locator('[data-chat-body] .panel').count();
+    /*
+     * Since #295 the range lives on a channel page only, so this finds a
+     * channel from the overview and changes the range there.
+     */
+    await open(page, 'chat', 500);
+    const link = () => {
+      const found = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return found ? decodeURIComponent(found.getAttribute('href').replace('#chat/', '')) : null;
+    };
+    must(await waitFor(page, link, 15000), 'the overview drew no channel to open');
+    const channel = await page.evaluate(link);
+    await open(page, `chat/${encodeURIComponent(channel)}/table`);
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/chat\?/.test(request.url())) asked.push(new URL(request.url()).searchParams.get('since'));
+    });
     await page.click('[data-chat-quick="24"]');
-    await page.waitForTimeout(3500);
-    const after = await page.locator('[data-chat-body] .panel').count();
-    must(after > 0, 'no channel sections after changing the range');
+    await page.waitForTimeout(3000);
     const hash = await page.evaluate(() => window.location.hash);
     must(/[?&]from=/.test(hash), `the range did not reach the address: ${hash}`);
     /*
@@ -831,7 +843,62 @@ async function main() {
      * while somebody watched it, and live would stop appending.
      */
     must(!/[?&]to=/.test(hash), `a quick range should stay open-ended: ${hash}`);
-    return `${before} sections over the default week, ${after} over 24 h`;
+    const since = asked.map((value) => new Date(value).getTime()).filter(Number.isFinite);
+    const day = Date.now() - 24 * 3600000;
+    must(since.some((when) => Math.abs(when - day) < 120000),
+      `the channel was not asked for again over the last 24 h: ${asked.join(', ')}`);
+    return `${channel} asked again from ${new Date(Math.min(...since)).toISOString()}`;
+  });
+
+  await journey(context, 'the chat overview has no range, a channel page has one', async (page) => {
+    /*
+     * #295. Will: the overview "is just supposed to be a quick way to see
+     * the recent messages and chats"; the channel pages keep the range.
+     * An old overview link with a range in it must show the same fixed
+     * window, and say that window in words.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/chat\/overview\?/.test(request.url())) asked.push(new URL(request.url()).search);
+    });
+    const shown = () => {
+      const range = document.querySelector('[data-page="chat"] [data-chat-range]');
+      const quick = document.querySelector('[data-page="chat"] [data-chat-quick="24"]');
+      return {
+        range: Boolean(range && range.offsetParent),
+        quick: Boolean(quick && quick.offsetParent),
+        sub: (document.querySelector('[data-chat-sub]') || {}).textContent || '',
+        hash: window.location.hash,
+      };
+    };
+    const seen = [];
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 800 });
+      // A real load each time: from `#chat` to `#chat?from=` is only a
+      // change of fragment, which does not load the page again.
+      await page.goto('about:blank');
+      await open(page, 'chat?from=2026-09-01T00:00:00Z', 500);
+      // Drawn, so no request is still in flight when the page is left.
+      must(await waitFor(page, () => Boolean(document.querySelector(
+        '[data-page="chat"] [data-chat-body] .panel, [data-page="chat"] [data-chat-body] .empty')), 15000),
+      `the overview never drew at ${width}px`);
+      const overview = await page.evaluate(shown);
+      must(!overview.range && !overview.quick, `the range shows on the overview at ${width}px`);
+      must(/last 7 days/.test(overview.sub), `the overview does not say its window: "${overview.sub}"`);
+      must(overview.hash === '#chat', `the old range stayed in the address: ${overview.hash}`);
+      seen.push(`${width}px hidden`);
+    }
+    must(asked.length && asked.every((query) => /[?&]hours=168(&|$)/.test(query)),
+      `the overview asked for another window: ${asked.join(', ')}`);
+    const channel = await page.evaluate(() => {
+      const link = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return link ? link.getAttribute('href') : null;
+    });
+    must(channel, 'the overview drew no channel to open');
+    await open(page, channel.slice(1), 3000);
+    const on = await page.evaluate(shown);
+    must(on.range && on.quick, 'the channel page lost its range control');
+    return `${seen.join(', ')}; hours=168 on ${asked.length} request(s); ${channel} shows the range`;
   });
 
   await journey(context, 'the chat reads bottom-up and pages upward', async (page) => {
@@ -904,6 +971,201 @@ async function main() {
     const drift = Math.abs(after.viewportY - anchor.viewportY);
     must(drift <= 4, `the list jumped ${drift}px under the reader when older messages loaded`);
     return `${opened.rows} -> ${after.rows} rows, the anchored row drifted ${drift}px`;
+  });
+
+  await journey(context, 'the dashboard shows five latest messages and a way to all of them', async (page) => {
+    /*
+     * #296. The list was a `.feed`, so none of the message styling
+     * reached it: the name was a bordered button, the channel ran into
+     * the time, the time was underlined in the browser's own blue, and
+     * a message that was one bell character drew as an empty line.
+     *
+     * The answer is extended rather than replaced, so the rows are real
+     * ones; the first is given a bell for a body, the second a reply, and
+     * the third a DM marker, because those are what must still draw.
+     */
+    const asked = [];
+    await page.route(/\/api\/chat\?limit=/, async (route, request) => {
+      asked.push(new URL(request.url()).searchParams.get('limit'));
+      const response = await route.fetch();
+      const rows = await response.json();
+      if (Array.isArray(rows) && rows.length >= 3) {
+        rows[0] = { ...rows[0], body: '\u0007' };
+        rows[1] = { ...rows[1], reply_to: { from_name: 'Quoted', body: 'the earlier message', packet_id: null } };
+        rows[2] = { ...rows[2], to_node: '!0e2e0002' };
+      }
+      await route.fulfill({ response, json: rows });
+    });
+    const seen = [];
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('about:blank');
+      await open(page, 'dashboard', 500);
+      const drawn = () => document.querySelectorAll('[data-recent-chat] > li').length > 0;
+      must(await waitFor(page, drawn, 15000), `no message drew on the dashboard at ${width}px`);
+      const m = await page.evaluate(() => {
+        const list = document.querySelector('[data-recent-chat]');
+        const rows = [...list.querySelectorAll(':scope > li')];
+        const name = list.querySelector('.who .name');
+        const when = list.querySelector('.who .when');
+        const nameStyle = getComputedStyle(name);
+        const whenStyle = getComputedStyle(when);
+        const first = rows[0].querySelector('.body');
+        return {
+          rows: rows.length,
+          list: list.className,
+          nameBorder: nameStyle.borderTopWidth,
+          nameBg: nameStyle.backgroundColor,
+          underline: whenStyle.textDecorationLine,
+          whenRight: when.getBoundingClientRect().right,
+          whoRight: when.parentElement.getBoundingClientRect().right,
+          channels: list.querySelectorAll('.channel-label').length,
+          bellHeight: first ? first.getBoundingClientRect().height : -1,
+          reply: list.querySelectorAll('.reply-quote').length,
+          dm: list.querySelectorAll('li.dm').length,
+          more: (document.querySelector('[data-page="dashboard"] a.more[href="#chat"]') || {}).textContent || '',
+          scroll: document.documentElement.scrollWidth,
+          client: document.documentElement.clientWidth,
+        };
+      });
+      must(m.rows <= 5, `the dashboard drew ${m.rows} messages, not at most 5`);
+      must(/\bmessages\b/.test(m.list), `the list is not .messages: "${m.list}"`);
+      must(m.nameBorder === '0px', `the sender name still has a ${m.nameBorder} border`);
+      must(m.underline === 'none', `the time is underlined before any hover: ${m.underline}`);
+      must(Math.abs(m.whenRight - m.whoRight) <= 1, 'the time is not on the right of its line');
+      must(m.channels === 0, `the channel is repeated on ${m.channels} rows`);
+      must(m.bellHeight === 0, `a body of one bell character drew ${m.bellHeight}px tall`);
+      must(m.reply >= 1 && m.dm >= 1, `a reply (${m.reply}) or a DM (${m.dm}) no longer draws`);
+      must(m.more.trim() === 'View all messages', 'there is no View all messages link');
+      must(m.scroll <= m.client + 1, `the dashboard scrolls sideways at ${width}px: ${m.scroll}/${m.client}`);
+      seen.push(`${width}px ${m.rows} rows`);
+    }
+    must(asked.every((limit) => limit === '5'), `the dashboard asked for ${asked.join(', ')} messages`);
+    // By keyboard: the link takes focus and Enter opens the chat overview.
+    await page.focus('[data-page="dashboard"] a.more[href="#chat"]');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(800);
+    const hash = await page.evaluate(() => window.location.hash);
+    must(hash === '#chat', `Enter on View all messages went to ${hash}`);
+    return `${seen.join(', ')}; limit=5; Enter opens #chat`;
+  });
+
+  await journey(context, 'chat times are a real tap target and say the date when old', async (page) => {
+    /*
+     * #269, from the phone review: the time links measured 41 x 19 px,
+     * twenty of them to a page, and the exact time was only in a `title`,
+     * which a phone never shows. The hit area must be 44 px each way
+     * without moving the text, and a message older than a day must show
+     * its date and time on the line itself.
+     *
+     * The channel is served here, so there is a message three days old to
+     * look at whatever the seed's clock says.
+     */
+    const CHANNEL = 'E2ETimes';
+    const now = Date.now();
+    const row = (index, ageMs) => ({
+      packet_id: 910000 + index, from_node: '!0e2e0003', from_node_id: '!0e2e0003', from_name: 'Times test',
+      to_node: '^all', channel: CHANNEL, body: `message ${index}`, seen_at: new Date(now - ageMs).toISOString(),
+      reply_id: null, emoji: false, reply_to: null, reactions: [], metrics: null,
+    });
+    const rows = [row(1, 5 * 60000), row(0, 3 * 86400000)];
+    await page.route(/\/api\/chat\?/, async (route, request) => {
+      const query = new URL(request.url()).searchParams;
+      if (query.get('channel') !== CHANNEL) return route.continue();
+      return route.fulfill({ json: query.get('before') ? [] : rows });
+    });
+    const measure = () => [...document.querySelectorAll('.page.active .messages .who a.when')].map((link) => {
+      const box = link.getBoundingClientRect();
+      return { w: Math.round(box.width), h: Math.round(box.height), text: link.textContent, title: link.title };
+    });
+    const seen = [];
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('about:blank');
+      await open(page, `chat/${CHANNEL}`, 500);
+      must(await waitFor(page, () => document.querySelectorAll('[data-chat-scroll] a.when').length === 2, 15000),
+        `the served messages never drew at ${width}px`);
+      const times = await page.evaluate(measure);
+      for (const time of times) {
+        must(time.w >= 44 && time.h >= 44, `a time link is ${time.w} x ${time.h} px at ${width}px`);
+      }
+      const [old, fresh] = times;
+      must(!/ago$/.test(old.text) && /\d/.test(old.text) && old.title.startsWith(old.text),
+        `a three-day-old message says "${old.text}", not its date and time`);
+      must(/ago$/.test(fresh.text), `a five-minute-old message says "${fresh.text}"`);
+      seen.push(`${width}px ${times.map((t) => `${t.w}x${t.h}`).join(' ')} "${old.text}"`);
+    }
+    // The dashboard's feed uses the same line.
+    await page.goto('about:blank');
+    await open(page, 'dashboard', 500);
+    must(await waitFor(page, () => document.querySelectorAll('[data-recent-chat] a.when').length > 0, 15000),
+      'no time link drew on the dashboard');
+    const dash = await page.evaluate(measure);
+    must(dash.every((time) => time.w >= 44 && time.h >= 44),
+      `a dashboard time link is under 44 px: ${dash.map((t) => `${t.w}x${t.h}`).join(' ')}`);
+    return `${seen.join('; ')}; dashboard ${dash.length} at >= 44x44`;
+  });
+
+  await journey(context, 'the chat table pages on as you scroll', async (page) => {
+    /*
+     * #297. The table view stopped at 100 rows: only the reading view
+     * paged. Will decided there is no "Load older" button, so the table
+     * must load its next page as the reader scrolls to its foot.
+     *
+     * The seed holds a few dozen messages a channel, less than one page,
+     * so the channel here is served by the journey: 250 messages a minute
+     * apart, answered the way `/api/chat` answers (newest first, `before`
+     * exclusive, `limit`). Each `seen_at` carries microseconds, so the
+     * cursor can be checked to be the row's own string and not one
+     * rounded through a Date.
+     */
+    const CHANNEL = 'E2EPaging';
+    const TOTAL = 250;
+    const now = Date.now();
+    const iso = (ms, micro) => new Date(ms).toISOString().replace(/\.(\d{3})Z$/, `.$1${micro}+00:00`);
+    const all = Array.from({ length: TOTAL }, (_, index) => ({
+      packet_id: 900000 + index,
+      from_node: '!0e2e0001', from_node_id: '!0e2e0001', from_name: 'Paging test',
+      to_node: '^all', channel: CHANNEL, body: `message ${index}`,
+      seen_at: iso(now - (TOTAL - index) * 60000, String(index % 1000).padStart(3, '0')),
+      reply_id: null, emoji: false, reply_to: null, reactions: [], metrics: null,
+    })).reverse();
+    const cursors = [];
+    await page.route(/\/api\/chat\?/, async (route, request) => {
+      const query = new URL(request.url()).searchParams;
+      if (query.get('channel') !== CHANNEL) return route.continue();
+      const before = query.get('before');
+      if (before) cursors.push(before);
+      const since = query.get('since') ? new Date(query.get('since')).getTime() : null;
+      const limit = Number(query.get('limit') || 100);
+      const rows = all
+        .filter((row) => !before || row.seen_at < before)
+        .filter((row) => since == null || new Date(row.seen_at).getTime() >= since)
+        .slice(0, limit);
+      return route.fulfill({ json: rows });
+    });
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await open(page, `chat/${CHANNEL}/table`, 3000);
+    const count = () => document.querySelectorAll('[data-page="chat"] [data-chat-body] tbody tr').length;
+    const opened = await page.evaluate(count);
+    must(opened === 100, `the table opened with ${opened} rows, not one page of 100`);
+    for (let step = 0; step < 6 && (await page.evaluate(count)) < TOTAL; step += 1) {
+      await page.mouse.wheel(0, 20000);
+      await page.waitForTimeout(700);
+    }
+    const reached = await page.evaluate(count);
+    must(reached === TOTAL, `scrolling the table reached ${reached} of ${TOTAL} rows`);
+    const badge = await page.locator('[data-chat-count]').innerText();
+    must(/250 messages/.test(badge), `the count should say every message is loaded: "${badge}"`);
+    must(cursors.length >= 2 && cursors.every((cursor) => all.some((row) => row.seen_at === cursor)),
+      `a cursor was not a row's own timestamp: ${cursors.join(', ')}`);
+
+    // Switching to the reading view keeps what was loaded.
+    await page.click('[data-chat-view-choice="chat"]');
+    await page.waitForTimeout(1500);
+    const kept = await page.evaluate(() => document.querySelectorAll('[data-chat-scroll] .messages li').length);
+    must(kept === TOTAL, `switching to the chat view kept ${kept} of ${TOTAL} rows`);
+    return `100 -> ${reached} rows in the table by scrolling, ${kept} kept on switching view`;
   });
 
   await journey(context, 'coverage switches preset', async (page) => {

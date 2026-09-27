@@ -93,6 +93,15 @@ const links = two.kids.filter((k) => typeof k !== 'string' && k.attrs.class === 
 eq('both urls are shortened', links.length, 2);
 eq('the second is not swallowed', links[1].attrs.text, 'example.org/two');
 
+// --- #296: a control character is not a line of text ---------------
+
+const bell = api.messageBody('\u0007');
+ok('a body of one bell character draws nothing', bell.hidden === true && bell.kids.length === 0,
+  JSON.stringify({ hidden: bell.hidden, kids: bell.kids }));
+const rung = api.messageBody('ding\u0007 dong\nnext');
+eq('the bell is taken out, the newline kept', rung.kids.join(''), 'ding dong\nnext');
+ok('text with a bell in it still draws', rung.hidden !== true);
+
 // --- #196: dots that read at the opening zoom ----------------------
 
 ok('the opening view uses small dots', api.nodeRadius(7) < 3, `got ${api.nodeRadius(7)}`);

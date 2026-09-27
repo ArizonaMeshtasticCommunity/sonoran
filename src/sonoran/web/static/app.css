@@ -1012,14 +1012,11 @@ dl.kv.fields { align-items: baseline; }
 
 .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
 /*
- * The dashboard feed sizes to what it holds.
- *
- * `max-height` cut the last message across the middle, which looks like
- * a message that ended there. The live feeds on the map keep the cap,
- * because those hold forty rows and grow while you watch; this one gets
- * eight from the endpoint and then stops.
+ * The live feeds on the map keep the cap, because those hold forty rows
+ * and grow while you watch. The dashboard's latest messages are not a
+ * `.feed` any more (#296): they are `.messages`, five of them, with no
+ * cap to cut the last one across the middle.
  */
-.page[data-page="dashboard"] .feed { max-height: none; overflow-y: visible; }
 .feed li { border-left: 2px solid var(--line); padding: .1rem .6rem; }
 .feed li .meta { color: var(--muted); font-size: .78rem; display: flex; gap: .5rem; flex-wrap: wrap; }
 
@@ -1720,6 +1717,17 @@ body.chart-staged { overflow: hidden; }
  * point of the line: muted, right, and underlined only on purpose. */
 .messages .who .when {
   margin-inline-start: auto; color: var(--muted); text-decoration: none; flex: none;
+}
+/*
+ * A real tap target (#269). The time link measured 41 x 19 px, and a
+ * page of chat holds twenty of them. The hit area is padded to 44 px
+ * each way (WCAG 2.5.5, and Apple's and Google's own minimum), and the
+ * same amount is taken back as a negative margin, so the line is exactly
+ * as tall as before and the text does not move.
+ */
+.messages .who a.when {
+  display: inline-flex; align-items: center; justify-content: flex-end;
+  min-height: 44px; min-width: 44px; margin-block: -12.5px;
 }
 .messages a.when:hover, .messages a.when:focus-visible { text-decoration: underline; }
 .messages .body { overflow-wrap: anywhere; }

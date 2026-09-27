@@ -498,16 +498,25 @@ async def overview(
     """
     since = datetime.now(UTC) - timedelta(hours=hours)
     core = tuple(request.app.state.settings.core_channels)
+    # `count` counts messages the way `/api/chat` lists them: tapbacks
+    # left out (#297). It counted every row, so MediumFast said "Open all
+    # 1,252 messages" over a channel page that ends at 663 -- the other
+    # 589 were reactions, which the page attaches to their message rather
+    # than listing. The tapbacks are still counted, separately, and the
+    # GROUP BY still reads every row, so a channel of nothing but
+    # tapbacks keeps its section with a count of 0.
+    message_count = func.count().filter(TextMessage.emoji.is_(False))
     counts = (
         await session.execute(
             select(
                 TextMessage.channel,
-                func.count().label("count"),
+                message_count.label("count"),
+                func.count().filter(TextMessage.emoji.is_(True)).label("reactions"),
                 func.max(TextMessage.seen_at).label("last_seen"),
             )
             .where(TextMessage.seen_at >= since)
             .group_by(TextMessage.channel)
-            .order_by(func.count().desc())
+            .order_by(message_count.desc())
         )
     ).all()
 
@@ -562,6 +571,7 @@ async def overview(
             classify(row.channel, core)
             | {
                 "count": row.count,
+                "reactions": row.reactions,
                 "last_seen": row.last_seen,
                 # A channel whose every message in the window is a
                 # tapback has a count but no messages. It kept its

@@ -365,8 +365,15 @@
               <div class="table-wrap" data-top-talkers></div>
             </div>
             <div class="panel">
-              <h3>Latest messages</h3>
-              <ul class="feed" data-recent-chat></ul>
+              <!--
+                The list is `.messages`, the node page's and the chat's own
+                message styling (#296). As a `.feed` it got none of it: the
+                name was a bordered button and the time an underlined link.
+                The channel is said once here, not on every row.
+              -->
+              <h3>Latest messages <span class="muted head-note" data-recent-chat-channel></span></h3>
+              <ul class="messages dashboard-messages" data-recent-chat></ul>
+              <p class="more-wrap"><a class="more" href="#chat">View all messages</a></p>
             </div>
             <div class="panel">
               <h3>Packet types (24 h)</h3>
@@ -1673,7 +1680,7 @@
                 <h2 data-chat-title>Chat</h2>
                 <span class="chat-count" data-chat-count hidden></span>
               </div>
-              <p class="sub" data-chat-sub>One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
+              <p class="sub" data-chat-sub>Messages from the last 7 days. One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
             </div>
             <div class="controls">
               <!--

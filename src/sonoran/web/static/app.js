@@ -573,9 +573,22 @@ function shortUrl(raw) {
   }
 }
 
+/*
+ * Control characters a radio can send and a page cannot draw (#296).
+ *
+ * A live message was the single byte "\x07", a bell, and it drew as an
+ * empty line under its sender. The C0 controls and DEL are taken out;
+ * a newline and a tab are kept, because they are text. The pattern is
+ * inside the function so the tests that lift `messageBody` out of this
+ * file get it too.
+ */
 function messageBody(text) {
   const node = el('span', { class: 'body' });
-  for (const chunk of String(text ?? '').split(URL_IN_TEXT)) {
+  // eslint-disable-next-line no-control-regex
+  const clean = String(text ?? '').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '');
+  // Nothing left to draw is no line at all, not an empty one.
+  if (!clean.trim()) node.hidden = true;
+  for (const chunk of clean.split(URL_IN_TEXT)) {
     if (!chunk) continue;
     // A stateless test. `URL_IN_TEXT` is global, and `.test()` on a
     // global regex advances `lastIndex`, so using it here would give a
@@ -718,6 +731,19 @@ function replyQuote(parent) {
  */
 const QUIET_CHANNELS = new Set(['Traffic', 'Weather']);
 
+/*
+ * A message's time as the line shows it (#269).
+ *
+ * The exact time was only in a `title`, which a phone never shows. "3d
+ * ago" is no use to somebody who wants to know which evening it was, so
+ * a message older than a day shows its date and time instead. A newer
+ * one keeps "5m ago", which is exact enough to read, and the packet it
+ * opens gives the clock time.
+ */
+function messageWhen(value) {
+  return ageHours(value) >= 24 ? stamp(value) : `${ago(value)} ago`;
+}
+
 function messageItem(message, options = {}) {
   const direct = message.to_node && message.to_node !== '^all';
   const quiet = QUIET_CHANNELS.has(message.channel);
@@ -747,11 +773,11 @@ function messageItem(message, options = {}) {
         ? el('span', { class: 'channel-label', text: message.channel }) : null,
       message.packet_id == null
         ? el('time', { class: 'when', datetime: message.seen_at || '',
-            title: stamp(message.seen_at), text: `${ago(message.seen_at)} ago` })
+            title: stamp(message.seen_at), text: messageWhen(message.seen_at) })
         : el('a', {
-            class: 'when', title: `Open packet ${message.packet_id}`,
+            class: 'when', title: `${stamp(message.seen_at)}. Open packet ${message.packet_id}`,
             href: `#packet/${encodeURIComponent(message.from_node)}/${message.packet_id}`,
-            text: `${ago(message.seen_at)} ago`,
+            text: messageWhen(message.seen_at),
           })),
     messageBody(message.body),
     reactionChips(message.reactions, message.channel));
@@ -1404,13 +1430,20 @@ const PAGES = {};
  */
 const PORTNUM_CHART_HOURS = 24;
 
+/*
+ * How many messages the dashboard shows (#296). Will: "only show the 5
+ * latest messages and add a view all messages button". It asked for 12,
+ * and the panel stood 979 px tall beside a short chart.
+ */
+const DASHBOARD_MESSAGES = 5;
+
 PAGES.dashboard = async (page) => {
   await Promise.all([loadSummary(page), loadTopTalkers(page)]);
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
     // messages from channels a LongFast radio never hears.
-    `api/chat?limit=12${chatFeedChannel()}`,
+    `api/chat?limit=${DASHBOARD_MESSAGES}${chatFeedChannel()}`,
     /*
      * The same 24 hours and the same preset the chart's own heading and
      * the firehose it links into use (§7.1).
@@ -1434,9 +1467,16 @@ PAGES.dashboard = async (page) => {
       ], nodes, 'No nodes heard yet.')
     : failure(new Error('Cannot load nodes.')));
 
+  /*
+   * No channel on each row (#296). The request is filtered to the preset's
+   * channel, so the label said the same word five times; it is said once,
+   * in the heading.
+   */
+  const feedChannel = $('[data-recent-chat-channel]', page);
+  if (feedChannel) feedChannel.textContent = presetChannel() ? SonoranLabels.presetLabel(presetChannel()) : '';
   replace($('[data-recent-chat]', page), messages
     ? (messages.length
-        ? messages.map((message) => messageItem(message, { showChannel: true }))
+        ? messages.map((message) => messageItem(message))
         : [empty('No messages stored.')])
     : [failure(new Error('Cannot load messages.'))]);
 
@@ -7385,6 +7425,9 @@ const CHAT_NEAR_TOP = 240;
  */
 const CHAT_AT_BOTTOM = 48;
 const CHAT_DEFAULT_HOURS = 168;
+/* The overview's one window (#295), and the same window in words. */
+const CHAT_OVERVIEW_HOURS = 168;
+const CHAT_OVERVIEW_WINDOW = '7 days';
 
 let currentChatChannel = null;
 let chatView = 'chat';
@@ -7397,6 +7440,12 @@ let chatBusy = false;
 /* Which channel and range `chatRows` holds, so a changed channel or range
    starts again rather than mixing two conversations together. */
 let chatRowsKey = null;
+/* The range `chatRows` was first filled over. Paging older reads its
+   `from`, so the default week does not creep forward between pages. */
+let chatRowsRange = null;
+/* The observer at the foot of the table view (#297). One at a time: a
+   new draw disconnects the last one. */
+let chatTableWatch = null;
 
 /** A Date from an address parameter, or null for anything unusable. */
 function chatDate(raw) {
@@ -7491,18 +7540,51 @@ async function chatFetch(channel, { since, before, limit = CHAT_PAGE }) {
   const params = new URLSearchParams({
     channel, limit: String(limit), metrics: 'true',
   });
-  if (since) params.set('since', since.toISOString());
-  if (before) params.set('before', before.toISOString());
+  /*
+   * A cursor may be the row's own `seen_at` string, sent as the API wrote
+   * it. The column holds microseconds and a Date holds milliseconds, so a
+   * cursor rounded through `new Date` could skip a second row stamped in
+   * the same millisecond (#297).
+   */
+  const instant = (when) => (typeof when === 'string' ? when : when.toISOString());
+  if (since) params.set('since', instant(since));
+  if (before) params.set('before', instant(before));
   return get(`api/chat?${params}`);
 }
 
-/** The key `chatRows` was filled for. A change means start again. */
-function chatKey(channel, range) {
+/**
+ * The key `chatRows` was filled for. A change means start again.
+ *
+ * Built from the range the ADDRESS names, not the range in force. With no
+ * range in the address the range in force is "the last week, from now",
+ * and its start moves every millisecond, so a key made from it never
+ * matched twice: switching to the table, or pressing Live, threw away
+ * every page the reader had scrolled in (#297). The default range is the
+ * token `default` instead, which stays put.
+ */
+function chatKey(channel, addressRange) {
+  if (!addressRange) return `${channel || ''}|default`;
   return [
     channel || '',
-    range.from ? range.from.toISOString() : '',
-    range.to ? range.to.toISOString() : '',
+    addressRange.from ? addressRange.from.toISOString() : '',
+    addressRange.to ? addressRange.to.toISOString() : '',
   ].join('|');
+}
+
+/**
+ * Put the newest page on top of the rows held.
+ *
+ * Pure, so it is run in a test rather than read. A page that comes back
+ * FULL may have more behind it than it holds, and the rows between it and
+ * what is held would be a hole nobody could see. So a full page replaces
+ * what is held, and the reader pages older from there as on a first visit.
+ */
+function chatMergeNewer(held, incoming, pageSize) {
+  const served = Array.isArray(incoming) ? incoming : [];
+  if (served.length >= pageSize) return { rows: served, restarted: true };
+  const seen = new Set((held || []).map(chatRowKey));
+  const fresh = served.filter((row) => !seen.has(chatRowKey(row)));
+  return { rows: [...fresh, ...(held || [])], restarted: false };
 }
 
 
@@ -7611,6 +7693,14 @@ function chatHead(page, channel, sub) {
   subtitle.textContent = sub || '';
   subtitle.hidden = !sub;
   $('[data-chat-back]', page).hidden = !channel;
+  /*
+   * The range is for a channel page only (#295). Will: the overview "is
+   * just supposed to be a quick way to see the recent messages and
+   * chats". Hidden, not removed, because the channel pages use the same
+   * markup.
+   */
+  const range = $('[data-chat-range]', page);
+  if (range) range.hidden = !channel;
   const views = $('[data-chat-view]', page);
   views.hidden = !channel;
   for (const button of $$('[data-chat-view-choice]', views)) {
@@ -7626,9 +7716,10 @@ function chatHead(page, channel, sub) {
       tally.textContent = chatOldestReached
         ? `${count(chatRows.length)} message${chatRows.length === 1 ? '' : 's'}`
         : `${count(chatRows.length)} shown`;
+      // The table is newest first, so its older rows are further DOWN.
       tally.title = chatOldestReached
         ? 'Every message in the range is loaded.'
-        : 'Older messages are still to load. Scroll up for more.';
+        : `Older messages are still to load. Scroll ${chatView === 'table' ? 'down' : 'up'} for more.`;
     }
   }
 }
@@ -7684,16 +7775,19 @@ function chatDrawRows(scroller) {
  */
 async function chatLoadOlder(page) {
   if (chatBusy || chatOldestReached || !currentChatChannel) return;
-  const scroller = $('[data-chat-scroll]', page);
-  if (!scroller) return;
+  // The table view pages too (#297). It is newest first, so the older
+  // rows go on at the BOTTOM and nothing above the reader moves.
+  const table = chatView === 'table';
+  const scroller = table ? null : $('[data-chat-scroll]', page);
+  if (!table && !scroller) return;
   const oldest = chatRows.length ? chatRows[chatRows.length - 1] : null;
   if (!oldest) return;
-  const range = chatRange();
+  const range = chatRowsRange || chatRange();
   chatBusy = true;
   try {
     const older = await chatFetch(currentChatChannel, {
       since: range.from,
-      before: new Date(oldest.seen_at),
+      before: oldest.seen_at,
     });
     if (!Array.isArray(older) || !older.length) {
       chatOldestReached = true;
@@ -7710,6 +7804,11 @@ async function chatLoadOlder(page) {
       else chatRows = [...chatRows, ...fresh];
       if (older.length < CHAT_PAGE) chatOldestReached = true;
     }
+    if (table) {
+      chatDrawTable(page);
+      chatHead(page, currentChatChannel, '');
+      return;
+    }
     const before = scroller.scrollHeight;
     const top = scroller.scrollTop;
     chatDrawRows(scroller);
@@ -7717,9 +7816,62 @@ async function chatLoadOlder(page) {
     chatHead(page, currentChatChannel, '');
   } catch (error) {
     if (window.console) window.console.warn('could not load older messages', error);
+    /*
+     * The table's observer fires on a CHANGE of intersection. After a
+     * failure the foot is still in view, so nothing would ever change and
+     * nothing would ask again. The next scroll, wheel or touch the reader
+     * makes re-arms it, which is the retry (#297).
+     */
+    if (table) {
+      const again = () => {
+        for (const type of ['scroll', 'wheel', 'touchmove']) window.removeEventListener(type, again);
+        chatWatchTableFoot(page);
+      };
+      for (const type of ['scroll', 'wheel', 'touchmove']) {
+        window.addEventListener(type, again, { passive: true });
+      }
+    }
   } finally {
     chatBusy = false;
   }
+}
+
+/*
+ * The table view and the line at its foot (#297).
+ *
+ * The table stopped at 100 rows: the reading view paged on as the reader
+ * scrolled, and the table had nothing that asked for more. Will decided
+ * there is no "Load older" button in either view, so the table loads the
+ * next page when its foot comes near the bottom of the screen, as the
+ * nodes list does.
+ */
+function chatDrawTable(page) {
+  const body = $('[data-chat-body]', page);
+  if (!body) return;
+  replace(body, el('div', { class: 'panel' },
+    chatRows.length
+      ? [
+          chatTable(chatRows),
+          chatOldestReached
+            ? el('p', { class: 'chat-edge muted', text: 'The start of this range.' })
+            : el('p', { class: 'chat-edge muted', 'data-chat-older': '', text: 'Scroll down for older messages…' }),
+        ]
+      : empty('No messages on this channel in this range.')));
+  chatWatchTableFoot(page);
+}
+
+/** Watch the table's foot, and ask for older rows when it nears the screen. */
+function chatWatchTableFoot(page) {
+  if (chatTableWatch) chatTableWatch.disconnect();
+  chatTableWatch = null;
+  const foot = $('[data-chat-body] [data-chat-older]', page);
+  if (!foot || typeof IntersectionObserver !== 'function') return;
+  chatTableWatch = new IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) return;
+    if (currentPage !== 'chat' || chatView !== 'table') return;
+    chatLoadOlder(page);
+  }, { rootMargin: '400px 0px' });
+  chatTableWatch.observe(foot);
 }
 
 /*
@@ -7780,17 +7932,28 @@ async function chatAppendNew() {
 }
 
 async function chatChannelPage(page, channel) {
-  const range = chatRange();
-  const key = chatKey(channel, range);
+  const key = chatKey(channel, chatRangeFromAddress());
   const body = $('[data-chat-body]', page);
   chatDrawRange(page);
+  if (chatTableWatch) chatTableWatch.disconnect();
+  chatTableWatch = null;
+
+  // Where the reader is in the reading view, if it is already drawn, so a
+  // redraw of the same rows (Live pressed, the view switched back) puts
+  // them back there rather than at the newest message.
+  const held = $('[data-chat-scroll]', page);
+  const place = key === chatRowsKey && held && held.isConnected
+    ? { top: held.scrollTop, atBottom: chatAtBottom(held) }
+    : null;
 
   // A different channel or range is a different conversation.
   if (key !== chatRowsKey) {
     chatRows = [];
     chatOldestReached = false;
     chatRowsKey = key;
+    chatRowsRange = chatRange();
   }
+  const range = chatRowsRange;
 
   if (!chatRows.length) {
     const first = await chatFetch(channel, { since: range.from, before: range.to })
@@ -7798,15 +7961,26 @@ async function chatChannelPage(page, channel) {
     if (first instanceof Error) return replace(body, failure(first));
     chatRows = Array.isArray(first) ? first : [];
     if (chatRows.length < CHAT_PAGE) chatOldestReached = true;
+  } else if (!chatRangeIsHistory(range)) {
+    /*
+     * The rows are kept across a redraw now (#297), so what arrived since
+     * they were loaded has to be asked for. The table view's live tick
+     * lands here, and before this it re-fetched the newest page each time.
+     */
+    const newer = await chatFetch(channel, { since: chatRows[0].seen_at, before: null })
+      .catch(() => null);
+    if (newer) {
+      const merged = chatMergeNewer(chatRows, newer, CHAT_PAGE);
+      chatRows = merged.rows;
+      if (merged.restarted) chatOldestReached = false;
+    }
   }
 
   if (chatView === 'table') {
     page.classList.remove('chat-full');
     chatHead(page, channel, '');
-    return replace(body, el('div', { class: 'panel' },
-      chatRows.length
-        ? chatTable(chatRows)
-        : empty('No messages on this channel in this range.')));
+    chatDrawTable(page);
+    return undefined;
   }
 
   /*
@@ -7826,11 +8000,25 @@ async function chatChannelPage(page, channel) {
   const scroller = el('div', { class: 'chat-scroll', 'data-chat-scroll': '', tabindex: '0' });
   replace(body, scroller);
   chatDrawRows(scroller);
-  // Opens at the newest message, like every other chat.
-  scroller.scrollTop = scroller.scrollHeight;
+  // Opens at the newest message, like every other chat -- unless the
+  // reader was part-way up these same rows, in which case they stay there.
+  // New rows only ever go on at the bottom, so the old offset still
+  // points at the same message.
+  scroller.scrollTop = place && !place.atBottom ? place.top : scroller.scrollHeight;
   scroller.addEventListener('scroll', () => {
     if (scroller.scrollTop <= CHAT_NEAR_TOP) chatLoadOlder(page);
   }, { passive: true });
+  /*
+   * A retry needs an event. After a failed load at the very top, a
+   * further upward wheel or drag moves nothing, so `scroll` never fires
+   * again and the page is stuck (#297). `wheel` and `touchmove` fire
+   * whether or not anything moved.
+   */
+  const nudge = () => {
+    if (scroller.scrollTop <= CHAT_NEAR_TOP) chatLoadOlder(page);
+  };
+  scroller.addEventListener('wheel', nudge, { passive: true });
+  scroller.addEventListener('touchmove', nudge, { passive: true });
   return undefined;
 }
 
@@ -7838,29 +8026,29 @@ PAGES.chat = async (page) => {
   if (currentChatChannel) return chatChannelPage(page, currentChatChannel);
   // The overview is an ordinary scrolling page, not the pinned chat.
   page.classList.remove('chat-full');
-  chatHead(page, null,
-    'One section for each detected channel on the preset chosen in the menu, grouped by what it '
-    + 'is for. New names land in Custom.');
   /*
-   * The overview counts a WINDOW, not a range.
+   * The overview has a fixed window and no range control (#295).
    *
-   * `/api/chat/overview` takes `hours` and nothing else, and widening it
-   * to a pair of instants is a change to a shared endpoint for the sake of
-   * a list of channel names. The span of the chosen range is used instead,
-   * rounded up to the hour and clamped to what the endpoint accepts, so
-   * the channel list covers at least what the reader asked for.
+   * It used to turn the chosen range into a span of hours, because
+   * `/api/chat/overview` takes `hours` and nothing else. So an end date
+   * did nothing, and a range set here was lost as soon as a channel was
+   * opened. Will asked for the overview to be a quick look at recent
+   * messages, and for the channel pages to keep the range. The window is
+   * said in words, because no control on the page says it any more.
    *
-   * Rounded UP deliberately: a list that showed slightly less than the
-   * range would hide a channel whose only message sits near the edge.
+   * An old link such as `#chat?from=…` shows the same page as `#chat`.
+   * The query is taken out of the address, so the link does not look as
+   * if it holds a range. `replaceState`, so the router does not run again.
    */
-  const range = chatRange();
-  const end = range.to ? range.to.getTime() : Date.now();
-  const start = range.from ? range.from.getTime() : end - CHAT_DEFAULT_HOURS * 3600000;
-  const spanHours = Math.ceil(Math.max(1, (end - start) / 3600000));
-  const hours = String(Math.min(8760, spanHours));
-  chatDrawRange(page);
+  if (window.location.hash.startsWith('#chat?')) window.history.replaceState(null, '', '#chat');
+  chatHead(page, null,
+    `Messages from the last ${CHAT_OVERVIEW_WINDOW}. One section for each detected channel `
+    + 'on the preset chosen in the menu, grouped by what it is for. New names land in Custom.');
   const body = $('[data-chat-body]', page);
-  const data = await get(`api/chat/overview?hours=${hours}`).catch((error) => error);
+  const data = await get(`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}`).catch((error) => error);
+  // A channel was opened while this loaded. Drawing the overview now
+  // would put it over the channel page that is already there.
+  if (currentChatChannel) return undefined;
   if (data instanceof Error) return replace(body, failure(data));
   if (!data.sections.length) {
     return replace(body, empty('No channels have stored messages. Text storage may be off.'));
@@ -9775,6 +9963,27 @@ function drawPresetScope(name) {
   note.textContent = applies ? '' : 'Not used on this page.';
 }
 
+/*
+ * A navigation that arrived while another page was still drawing.
+ *
+ * `render` drops a call while one is in flight, which is right for the
+ * live tick and wrong for the router. Opening a channel while the chat
+ * overview was still loading was dropped, and the reader was left on
+ * "Loading" under a channel address (#295, seen at about one load in
+ * two when the overview took 3.8 s). The router's call is kept here and
+ * run when the drawing in flight ends.
+ */
+let pendingRender = null;
+
+/** Draw a page the router opened, after any draw still in flight. */
+async function navigateRender(name) {
+  if (loading) {
+    pendingRender = name;
+    return;
+  }
+  await render(name);
+}
+
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
@@ -9790,6 +9999,11 @@ async function render(name) {
     loading = false;
     markScrollableTables(page);
     revealHints(page);
+  }
+  if (pendingRender) {
+    const next = pendingRender;
+    pendingRender = null;
+    if (next === currentPage) await render(next);
   }
 }
 
@@ -9874,6 +10088,14 @@ async function route() {
      * line that was here referenced two constants that no longer exist,
      * and `node --check` does not notice that.
      */
+    /*
+     * Arriving from anywhere else starts from the newest page. The key
+     * is stable now (#297), so rows loaded on an earlier visit would
+     * otherwise be shown with a gap where the time away should be.
+     * Switching between Chat and Table stays on the channel and keeps
+     * what was loaded.
+     */
+    if (currentPage !== 'chat' || currentChatChannel !== channel) chatRowsKey = null;
     currentChatChannel = channel;
     chatView = parts[2] === 'table' ? 'table' : 'chat';
   }
@@ -9934,7 +10156,7 @@ async function route() {
     else link.removeAttribute('aria-current');
   }
   markNavHere(known);
-  await render(known);
+  await navigateRender(known);
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
 }
@@ -10152,7 +10374,12 @@ function wire() {
   wireFamilyFilter();
   for (const button of $$('[data-chat-view-choice]')) {
     button.addEventListener('click', () => {
-      if (currentChatChannel) location.hash = chatHref(currentChatChannel, button.dataset.chatViewChoice).slice(1);
+      if (!currentChatChannel) return;
+      // The range rides along, so the other view shows the same rows and
+      // the key they were loaded under still matches (#297).
+      const at = location.hash.indexOf('?');
+      const query = at < 0 ? '' : location.hash.slice(at);
+      location.hash = `${chatHref(currentChatChannel, button.dataset.chatViewChoice).slice(1)}${query}`;
     });
   }
   for (const button of $$('.toggle')) {
