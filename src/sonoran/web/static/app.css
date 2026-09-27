@@ -814,6 +814,30 @@ h3:has(.node-map-link) { display: flex; align-items: baseline; gap: .5rem; }
   grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
   margin-bottom: 1rem;
 }
+/*
+ * Four across, or two, and never three (#287).
+ *
+ * Three tracks of 15 rem fit from 47 rem of row width, and in that band
+ * the Identity panel was a third of an iPad in portrait: "(CLIENT_BASE"
+ * and ")" broke onto two lines, and the long name took four. Two
+ * across gives each panel half the row and still fills it, as two rows
+ * of two.
+ *
+ * The rule measures the ROW, not the viewport. The sidebar comes and
+ * goes at 60 rem, so the same row width happens at 834 px with no
+ * sidebar and at 1112 px with one, and both squeezed.
+ *
+ * How it reads: below 63 rem (four tracks of 15 rem and three 1 rem
+ * gaps) the clamp is zero, so the track floor is a third of the row
+ * plus a pixel and a third track can never fit. From 63 rem up the
+ * clamp takes the whole row away again and the floor is 15 rem, as
+ * above. `min(100%, ...)` keeps a phone at one column.
+ */
+.grid.summary-row {
+  grid-template-columns: repeat(auto-fit, minmax(
+    min(100%, max(15rem, calc(100% / 3 + 1px - clamp(0px, (100% - 63rem) * 1000, 100%)))),
+    1fr));
+}
 
 /*
  * Two rows of two, not three and a stray.

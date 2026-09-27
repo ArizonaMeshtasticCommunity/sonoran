@@ -431,6 +431,56 @@ async function main() {
     return `${busiest.id}, heard by ${busiest.heard}: ${fits}; wider letters ${wide.scroll}/${wide.client}`;
   });
 
+  await journey(context, 'the node summary is never three narrow columns (#287)', async (page) => {
+    /*
+     * At 834 px, an iPad in portrait, the four summary panels fell into
+     * three columns and the Identity panel was a third of the screen:
+     * "(CLIENT_BASE" and ")" on two lines, Last heard on three. The
+     * same row width comes back at 1112 px, where the sidebar is shown.
+     * So the column count is read at both, and at the widths either
+     * side, and three is a failure wherever it appears.
+     *
+     * The node is a CLIENT_BASE when the instance has one, because that
+     * is the longest role label the review found breaking.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=200`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    const node = nodes.find((row) => row.role === 'CLIENT_BASE') || nodes[0];
+    const measure = () => {
+      const row = document.querySelector('[data-node-body] .summary-row');
+      if (!row || !row.children.length) return null;
+      const lefts = new Set([...row.children].map((child) => Math.round(child.getBoundingClientRect().left)));
+      const identity = row.children[0];
+      const lines = [...identity.querySelectorAll('dd')].map((dd) =>
+        Math.round(dd.getBoundingClientRect().height / (parseFloat(getComputedStyle(dd).lineHeight) || 20)));
+      return {
+        columns: lefts.size,
+        share: identity.getBoundingClientRect().width / row.getBoundingClientRect().width,
+        worst: Math.max(...lines),
+      };
+    };
+    await page.setViewportSize({ width: 834, height: 1112 });
+    await page.goto(`${BASE}/#node/${encodeURIComponent(node.node_id)}`, { waitUntil: 'load' });
+    must(await waitFor(page, measure, 15000), 'the summary row never drew');
+    const out = [];
+    for (const width of [834, 900, 1024, 1112, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 1112 });
+      await page.waitForTimeout(400);
+      const size = await page.evaluate(measure);
+      must(size.columns !== 3, `the summary row is three columns at ${width} px`);
+      out.push(`${width}:${size.columns}`);
+    }
+    // At the iPad width, with the wider letters of the CI runner's
+    // fonts, no identity value may take more than two lines.
+    await page.setViewportSize({ width: 834, height: 1112 });
+    await page.addStyleTag({ content: '[data-node-body] * { letter-spacing: .05em !important; }' });
+    await page.waitForTimeout(400);
+    const ipad = await page.evaluate(measure);
+    must(ipad.worst <= 2, `an identity value takes ${ipad.worst} lines at 834 px`);
+    return `${node.role || 'no role'}: columns ${out.join(' ')}; identity ${Math.round(ipad.share * 100)}% wide, `
+      + `longest value ${ipad.worst} line(s) at 834 px`;
+  });
+
   await journey(context, 'a furthest-node tile shows a distance or says why not', async (page) => {
     /*
      * #257. Every node shows a distance -- with a range when a position
