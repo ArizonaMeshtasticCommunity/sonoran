@@ -10254,6 +10254,14 @@ function wire() {
   $('[data-node-filter-apply]').addEventListener('click', () => {
     filterPanel.hidden = true;
     filterToggle.setAttribute('aria-expanded', 'false');
+    /*
+     * Hiding the panel takes the focus out of Apply, and the browser puts
+     * it on the document body, so a keyboard reader starts again from the
+     * top of the page (#251, WCAG 2.4.3). The panel is a disclosure, so
+     * focus goes back to the button that opened it. The button is never
+     * `disabled` while the list loads: that would blur it again.
+     */
+    filterToggle.focus();
     render('nodes');
   });
   $('[data-node-filter-clear]').addEventListener('click', () => {

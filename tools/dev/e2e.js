@@ -650,6 +650,35 @@ async function main() {
     return `${total(nowSaying)} nodes, reordered by role (aria-sort=${announced})`;
   });
 
+  await journey(context, 'Apply in the node filters leaves focus on the Filters button (#251)', async (page) => {
+    /*
+     * Hiding the panel took the focus out of Apply and left it on the
+     * document body, so the next Tab started from the top of the page.
+     * Walked with the keyboard only, and read from `activeElement`
+     * after the list has reloaded, not by eye.
+     */
+    await open(page, 'nodes');
+    const toggle = page.locator('[data-page="nodes"] [data-node-filter-open]');
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    must((await toggle.getAttribute('aria-expanded')) === 'true', 'Enter did not open the panel');
+    await page.locator('[data-node-filter-apply]').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2500);
+    const focus = await page.evaluate(() => {
+      const active = document.activeElement;
+      return {
+        onToggle: active === document.querySelector('[data-node-filter-open]'),
+        tag: active ? active.tagName : null,
+        hidden: document.querySelector('[data-node-filters]').hidden,
+      };
+    });
+    must(focus.hidden, 'Apply did not close the panel');
+    must(focus.onToggle, `after Apply the focus is on <${String(focus.tag).toLowerCase()}>, not the Filters button`);
+    return 'Apply closes the panel and focus stays on Filters';
+  });
+
   await journey(context, 'the units setting reaches the pages', async (page) => {
     /*
      * The setting has to change what is ON SCREEN, which is a different
