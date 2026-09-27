@@ -78,6 +78,20 @@ A change is complete only when all of these pass:
 6. Alembic migrations apply cleanly.
 7. The matching doc in `docs/` is updated.
 8. Commit messages use conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`).
+9. `npx eslint src/sonoran/web/static` passes. Install it with
+   `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
+   ignored, and nothing is added to the served frontend.
+
+`node --check` is not a substitute for item 9. It parses a file and does
+no scope analysis, so a reference to a deleted name passes it and throws
+in the reader's browser. Six such references were found in one session's
+work before ESLint existed here, and one of them was invisible to a grep
+for the attribute, because the dangling name was the variable the element
+had been assigned to (#248). The classic scripts share one global scope;
+`eslint.config.mjs` derives the shared names from what each file actually
+declares, so deleting a declaration fails every remaining caller in every
+other file. Do not replace that with a hand-kept list: a list keeps the
+deleted name and waves the stale reference through.
 
 See `docs/QA.md` for the full process.
 
