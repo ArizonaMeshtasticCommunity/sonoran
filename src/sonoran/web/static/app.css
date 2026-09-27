@@ -2225,6 +2225,27 @@ a.more { text-decoration: none; display: inline-block; }
   .sidebar .status { font-size: .78rem; }
 
   /*
+   * The drawer's preset and Settings, above the fold (#279).
+   *
+   * Opened on a 390 x 844 phone the preset switch ended at 850 px and
+   * Settings at 908, both under the screen, so the two controls a reader
+   * opens the menu for besides a page needed a scroll to find. Tightened
+   * rather than reordered: moving the footer above the links by CSS
+   * `order` would put the eye and the Tab key in different places.
+   *
+   * - The status card goes from the drawer. The sticky bar (#271) shows
+   *   the same dot and time on every screen, open or closed, so this was
+   *   a second copy of it. The `.sr-only` region still announces.
+   * - The links keep their 44 px rows and lose the gap between them;
+   *   each row is its own target, so the gap bought nothing a finger
+   *   needs.
+   * - The footer's own spacing tightens.
+   */
+  .sidebar .menu-foot .status { display: none; }
+  .sidebar nav { gap: 0; }
+  .sidebar .menu-foot { gap: .5rem; padding-top: .6rem; }
+
+  /*
    * The bar stays on the screen (#271).
    *
    * Nothing was sticky. After 1,200 px of the dashboard, the firehose,

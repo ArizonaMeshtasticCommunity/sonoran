@@ -1626,6 +1626,40 @@ async function main() {
     return `stuck at 0 after ${got.scrollY} px, ${got.height} px tall, shows "${got.status}"`;
   });
 
+  /*
+   * The drawer on a full iPhone 14 screen (#279). The `phone` context is
+   * 664 px tall, which is that phone with Safari's bars showing; fourteen
+   * 44 px links cannot leave room for the footer there, and the drawer
+   * scrolls inside itself (#271). At 844 nothing should need a scroll.
+   */
+  const tall = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  });
+  await journey(tall, 'the drawer shows the preset and Settings without a scroll (#279)', async (page) => {
+    await open(page, 'dashboard', 2500);
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const bottom = (selector) => {
+        const box = document.querySelector(selector).getBoundingClientRect();
+        return box.height ? Math.round(box.bottom) : null;
+      };
+      return {
+        scrolled: document.querySelector('.sidebar').scrollTop + window.scrollY,
+        preset: bottom('.preset-switch'),
+        settings: bottom('.menu-settings-link'),
+        link: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
+        height: window.innerHeight,
+      };
+    });
+    must(got.scrolled === 0, `the drawer opened scrolled by ${got.scrolled} px`);
+    must(got.link >= 44, `a nav link is ${got.link} px, under 44; the rows were tightened too far`);
+    must(got.preset && got.preset <= got.height, `the preset switch ends at ${got.preset}, under the ${got.height} px screen`);
+    must(got.settings && got.settings <= got.height, `Settings ends at ${got.settings}, under the ${got.height} px screen`);
+    return `preset ends at ${got.preset}, Settings at ${got.settings} of ${got.height}`;
+  });
+  await tall.close();
+
   await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
     /*
      * Each of these has a size of its own, so the general 44 px rule for
