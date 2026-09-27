@@ -2244,6 +2244,59 @@ a.more { text-decoration: none; display: inline-block; }
 tr.row-link { cursor: pointer; }
 tr.row-link:hover td { background: var(--panel-2); }
 tr.row-link:focus-within td { background: var(--panel-2); }
+
+/*
+ * The firehose as cards on a phone (#273).
+ *
+ * Eight columns in a 320 px screen hid 64% of the table sideways: on an
+ * iPhone SE only Time and From were in view, and what the packet was and
+ * what it said were off to the right on every row. A packet is a record,
+ * not a row to compare with its neighbours, so below 40rem each one is
+ * two lines:
+ *
+ *     12:04:31  Sky Island  → Everyone
+ *     Position  33.45, -112.07 …
+ *
+ * The same table, its row laid out as wrapping lines, and not a second
+ * renderer. The live redraw keeps its rows by key (`redrawLiveTable`), so
+ * a reader's place and selection survive a poll here as they do on a
+ * desktop. The columns are picked by position: Time, From, To, Type, What
+ * it said, then Channel, Hops and Uploads, which the packet page shows
+ * one tap away.
+ *
+ * The headings become one line of words above the cards, the five that
+ * are shown. They carry the column hints (#99), and the Type hint is
+ * where a phone reader finds the exact protocol value, so hiding them
+ * would take both away from a finger.
+ */
+@media (max-width: 40rem) {
+  [data-firehose-table] table,
+  [data-firehose-table] thead,
+  [data-firehose-table] tbody { display: block; }
+  [data-firehose-table] tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: .6rem;
+    padding: .45rem .6rem;
+    border-bottom: 1px solid var(--line);
+  }
+  [data-firehose-table] th { display: block; padding: 0; border: 0; }
+  [data-firehose-table] th:nth-child(n + 6) { display: none; }
+  /* The line break between the two lines: a full-width item between
+     the first three cells and the last two. When from and to do not fit
+     on one line, "to" wraps under "from" rather than being cut. */
+  [data-firehose-table] tbody tr::after { content: ""; flex-basis: 100%; order: 2; }
+  [data-firehose-table] td {
+    display: block; padding: 0; border: 0; min-width: 0; max-width: 100%; order: 1;
+  }
+  [data-firehose-table] td:nth-child(3)::before { content: "→ " / ""; color: var(--muted); }
+  [data-firehose-table] td:nth-child(4) { order: 3; color: var(--muted); }
+  [data-firehose-table] td:nth-child(5) {
+    order: 3; flex: 1 1 8rem; max-width: none; white-space: normal; overflow-wrap: anywhere;
+  }
+  [data-firehose-table] td:nth-child(n + 6) { display: none; }
+}
 /*
  * `.open-link` was here, for a per-row "Open >" link. The first cell is
  * the link now and the row is clickable, so the third way to do one thing

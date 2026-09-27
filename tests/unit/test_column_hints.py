@@ -131,12 +131,17 @@ def test_a_hint_is_not_written_in_the_protocol_s_words() -> None:
 
 def test_the_phone_journey_walks_the_control_that_replaced_the_block() -> None:
     """The journey is the same question — can a finger reach what a
-    column means — asked of the new control. It must still demand the
-    Uploads sentence and an exact protocol value.
+    column means — asked of the new control. It must still demand a
+    column's sentence and an exact protocol value.
+
+    The sentence was the Uploads one. Since #273 a phone reads the
+    firehose as cards, a card leaves Uploads to the packet page, and so
+    its heading is not on a phone's screen; the journey asks for the
+    "What it said" sentence, which a card does show.
     """
     start = E2E.index("'a phone can read what a column means'")
-    body = E2E[start : start + 3000]
+    body = E2E[start : start + 3600]
     assert ".hint-open" in body, "the journey does not open the new control"
-    assert "uploaded this packet to MQTT" in body
+    assert "A short line from the decoded packet" in body
     assert "TELEMETRY_APP|POSITION_APP|NODEINFO_APP" in body
     assert "runs off the screen" in body, "nothing checks the panel fits the phone"

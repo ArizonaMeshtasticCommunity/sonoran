@@ -1610,13 +1610,22 @@ async function main() {
      * exact wire value, and neither is on the screen until it is asked
      * for. A `title` tooltip could pass neither check on a touch
      * screen.
+     *
+     * Since #273 a phone reads the firehose as cards, and Uploads is one
+     * of the three columns a card leaves to the packet page, so its
+     * heading is not on a phone's screen. The sentence checked here is
+     * "What it said", which a card does show; the Uploads sentence is
+     * the same code on the same kind of heading.
      */
     await open(page, 'firehose', 4500);
+    // The fixed pause alone lost to a slow first query on a loaded
+    // machine, one run in two here: wait for the headings' controls.
+    await waitFor(page, () => document.querySelectorAll('[data-page="firehose"] .hint-open').length > 0, 30000);
     const table = page.locator('[data-page="firehose"] .table-wrap').first();
     const buttons = table.locator('.hint-open');
     must((await buttons.count()) > 0, 'no column carries a hint control');
-    const uploads = table.locator('th[data-label="Uploads"] .hint-open');
-    must((await uploads.count()) > 0, 'the Uploads column has no hint control');
+    const uploads = table.locator('th[data-label="What it said"] .hint-open');
+    must((await uploads.count()) > 0, 'the What it said column has no hint control');
     must((await uploads.getAttribute('aria-expanded')) === 'false', 'the hint starts open');
     const panel = page.locator(`#${await uploads.getAttribute('aria-controls')}`);
     must(!(await panel.isVisible()), 'the sentence is on the screen before it is asked for');
@@ -1625,8 +1634,8 @@ async function main() {
     await page.waitForTimeout(250);
     must((await uploads.getAttribute('aria-expanded')) === 'true', 'tapping did not open it');
     must(await panel.isVisible(), 'the panel did not appear');
-    must(/uploaded this packet to MQTT/.test(await panel.innerText()),
-      'the Uploads sentence is not in the panel');
+    must(/A short line from the decoded packet/.test(await panel.innerText()),
+      'the What it said sentence is not in the panel');
     // It must fit the screen, which is what `.table-wrap` would have
     // taken away from a panel drawn inside the table.
     const box = await panel.boundingBox();
@@ -2049,6 +2058,60 @@ async function main() {
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
     return 'all 14 pages, no sideways document scroll';
+  });
+  await journey(narrow, 'the firehose reads as cards on a phone (#273)', async (page) => {
+    /*
+     * Eight columns hid 64% of the firehose sideways on a phone. Below
+     * 40rem each packet is two lines: time, from, to; then type and what
+     * it said. Measured with letter-spacing added, because the CI
+     * runner's fonts are wider than a Mac's.
+     */
+    await open(page, 'firehose', 3000);
+    must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 0, 20000),
+      'the firehose drew no rows');
+    await page.addStyleTag({ content: '[data-firehose-table] * { letter-spacing: .05em !important; }' });
+    const out = [];
+    for (const width of [320, 390, ...TABLE_WIDTHS.slice(1)]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(400);
+      const got = await page.evaluate(() => {
+        const wrap = document.querySelector('[data-firehose-table]');
+        const rows = [...wrap.querySelectorAll('tbody tr')];
+        const box = wrap.getBoundingClientRect();
+        const bad = [];
+        for (const row of rows) {
+          const cell = (n) => row.children[n].getBoundingClientRect();
+          const [time, from, type, what] = [cell(0), cell(1), cell(3), cell(4)];
+          for (const [name, r] of [['time', time], ['from', from], ['type', type], ['what', what]]) {
+            if (!r.width || r.right > box.right + 1 || r.left < box.left - 1) bad.push(name);
+          }
+          if (!(type.top >= time.bottom - 1)) bad.push('one line');
+        }
+        const heads = [...wrap.querySelectorAll('thead th')];
+        return {
+          scroll: wrap.scrollWidth,
+          client: wrap.clientWidth,
+          head: document.querySelector('[data-firehose-table] thead').getBoundingClientRect().height,
+          // The headings a reader can see, and whether each fits the panel.
+          shown: heads.filter((th) => th.getBoundingClientRect().width > 0).map((th) => th.dataset.label),
+          headsFit: heads.every((th) => th.getBoundingClientRect().right <= box.right + 1),
+          rows: rows.length,
+          bad: [...new Set(bad)],
+        };
+      });
+      if (width <= 640) {
+        must(got.scroll <= got.client + 1, `at ${width} px the firehose scrolls sideways: ${got.scroll} in ${got.client}`);
+        must(got.bad.length === 0, `at ${width} px a card is wrong: ${got.bad.join(', ')}`);
+        // The headings stay, as one line of words that carries the hints.
+        must(got.shown.join() === 'Time,From,To,Type,What it said',
+          `at ${width} px the headings shown are ${got.shown.join(', ')}`);
+        must(got.headsFit, `at ${width} px a heading runs out of the panel`);
+      } else {
+        must(got.head > 10, `at ${width} px the firehose is not a table any more`);
+      }
+      out.push(`${width}:${got.scroll}/${got.client}`);
+    }
+    return `cards to 640 px, a table above; ${out.join(' ')}`;
   });
   await narrow.close();
 
