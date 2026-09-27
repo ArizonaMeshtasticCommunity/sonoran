@@ -2167,6 +2167,55 @@ a.more { text-decoration: none; display: inline-block; }
 }
 
 /*
+ * The four summary tiles as one compact block on a phone (#278).
+ *
+ * Measured at 390 px, the two by two above still took 415 px on the
+ * dashboard, a whole screen of four numbers before the first panel. Each
+ * tile was a 1.6 rem figure, a label, a delta and 1.7 rem of padding,
+ * and the "i" beside each label is a button, so the 44 px touch height
+ * above made every label row 44 px tall.
+ *
+ * Here the tiles keep two by two and lose the air: less padding, a
+ * smaller figure, and the change ("▲ 4%") on the figure's own line
+ * instead of a line of its own. The words after it ("on the day
+ * before") leave the screen but stay for a screen reader, and the
+ * tile's hint says them. The "i" keeps its 44 px tap area but takes
+ * only its own height in the row, through a negative margin, so the
+ * target does not grow the tile.
+ */
+@media (max-width: 40rem) {
+  .grid[data-summary] { gap: .5rem; }
+  .grid[data-summary] > .panel { padding: 0; }
+  .grid[data-summary] .stat {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: .4rem;
+    row-gap: .15rem;
+    padding: .5rem .65rem;
+  }
+  .grid[data-summary] .stat .value { grid-area: 1 / 1; font-size: 1.25rem; }
+  .grid[data-summary] .stat .delta {
+    grid-area: 1 / 2;
+    font-size: .7rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .grid[data-summary] .stat .label {
+    grid-area: 2 / 1 / 3 / 3;
+    font-size: .66rem;
+    letter-spacing: .03em;
+    line-height: 1.25;
+  }
+  .grid[data-summary] .stat .hint-open { margin-block: -.875rem; }
+  .grid[data-summary] .delta-rest {
+    position: absolute; width: 1px; height: 1px; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+}
+
+/*
  * A phone on its side: the header goes on one line.
  *
  * WCAG 2.2 SC 1.3.4 Orientation (Level AA) says the content must not

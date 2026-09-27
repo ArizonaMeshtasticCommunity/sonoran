@@ -529,7 +529,8 @@ function statTile(label, value, delta, hint) {
         'data-label': label,
         text: label,
       }),
-      delta ? el('span', { class: 'delta', text: delta }) : null));
+      // Text, or a node when part of the line folds away on a phone.
+      delta ? el('span', { class: 'delta' }, delta) : null));
 }
 
 /** Render an SNR value with its quality colour. */
@@ -1263,6 +1264,16 @@ function changeOn(current, previous, before) {
   return `${change > 0 ? '▲' : '▼'} ${Math.round(Math.abs(change))}% on ${before}`;
 }
 
+/*
+ * "▲ 4% on the day before" as two parts, so a phone can show "▲ 4%"
+ * beside the figure and fold the words away (#278). The words stay in
+ * the page for a screen reader, and the tile's hint says them too.
+ */
+function compactDelta(text) {
+  const found = text && /^(.*?)( (?:on|as) .*)$/.exec(text);
+  return found ? [found[1], el('span', { class: 'delta-rest', text: found[2] })] : text;
+}
+
 /**
  * Shared summary tiles used by the dashboard and the statistics page.
  *
@@ -1298,8 +1309,10 @@ async function loadSummary(page, { hours = null, query = null, span = null } = {
     if (!windowed) return snapshotDelta(key);
     if (key === 'node_count' || key === 'gateway_count') return snapshotDelta(key);
     if (cap) return cap;
-    return changeOn(stats[key], stats.previous ? stats.previous[key] : null, before);
+    return compactDelta(changeOn(stats[key], stats.previous ? stats.previous[key] : null, before));
   };
+  // Said in the hint too, because a phone shows only "▲ 4%" (#278).
+  const compared = windowed && !cap ? ` The line under the figure compares with ${before}.` : '';
   // "(24 h)" on the two that follow the window, "(all time)" on the two
   // that do not, so one row of tiles does not mix two meanings unlabelled.
   const label = (name, rolling) => (windowed ? `${name} (${rolling ? named : 'all time'})` : name);
@@ -1317,11 +1330,11 @@ async function loadSummary(page, { hours = null, query = null, span = null } = {
     statTile(label('Nodes', false), count(stats.node_count), delta('node_count'),
       'How many nodes this database holds: every node it has ever heard.'),
     statTile(label('Packets', true), count(stats.packet_count), delta('packet_count'),
-      `Packets stored${within}. The same packet uploaded by several gateways is counted once.`),
+      `Packets stored${within}. The same packet uploaded by several gateways is counted once.${compared}`),
     statTile(label('Uploads', true), count(stats.observation_count), delta('observation_count'),
       `One for each time a gateway uploaded a packet to MQTT${within}. One packet is often `
       + 'uploaded by several gateways, and by the same gateway more than once, so this '
-      + 'is larger than the packet count and is not a count of gateways.'),
+      + `is larger than the packet count and is not a count of gateways.${compared}`),
     statTile(label('Gateways', false), count(stats.gateway_count), delta('gateway_count'),
       'Nodes that upload what they hear to MQTT, counting every one ever seen. They are '
       + 'the only observers this database has.'));

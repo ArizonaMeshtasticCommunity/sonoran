@@ -1849,6 +1849,62 @@ async function main() {
     return 'every control is 16 px or larger';
   });
 
+  await journey(phone, 'the summary tiles are one compact block on a phone (#278)', async (page) => {
+    /*
+     * The four numbers took 292 px, 35% of the first screen, in the mobile
+     * review, and 415 px on the dashboard once each tile carried a delta.
+     * The ask was a strip about 120 px tall. Measured with the CI runner's
+     * wider fonts imitated (letter-spacing .05em), at this phone's 390 px
+     * and at 320 px, on both pages that carry the tiles.
+     */
+    const measure = async () => page.evaluate(() => {
+      const grid = document.querySelector('.page.active [data-summary]');
+      const tiles = [...grid.children];
+      const box = grid.getBoundingClientRect();
+      const over = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+      const spill = tiles.some((tile) => tile.scrollWidth > tile.clientWidth + 1);
+      return { height: Math.round(box.height), tiles: tiles.length, over, spill };
+    });
+    const found = [];
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 664 });
+      for (const name of ['dashboard', 'stats']) {
+        await open(page, name, 1500);
+        await waitFor(page, () => !loading, 60000);
+        await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+        await page.waitForTimeout(200);
+        const got = await measure();
+        must(got.tiles === 4, `${name} at ${width} px drew ${got.tiles} tiles`);
+        must(got.over <= 0, `${name} at ${width} px scrolls sideways by ${got.over} px`);
+        must(!got.spill, `a tile's text spills out of it on ${name} at ${width} px`);
+        // About 120 px was the ask at 390; it measures 126 px, and 139 px
+        // with the wider letters, which wrap one label. The limits leave
+        // room for a runner whose fonts are wider still, and are still
+        // well under the 415 px this replaced. 320 px wraps the longer
+        // labels to a second line, so it is allowed more.
+        const limit = width === 390 ? 160 : 185;
+        must(got.height <= limit, `${name} at ${width} px: the tiles are ${got.height} px tall, over ${limit}`);
+        found.push(`${name} ${width}px ${got.height}px`);
+      }
+    }
+    /*
+     * The words after the change are off the screen, not out of the page:
+     * a screen reader still hears "on the day before".
+     */
+    await page.setViewportSize({ width: 390, height: 664 });
+    await open(page, 'dashboard', 1500);
+    await waitFor(page, () => !loading, 60000);
+    const words = await page.evaluate(() => {
+      const rest = document.querySelector('[data-summary] .delta-rest');
+      return rest ? { text: rest.textContent, shown: rest.getBoundingClientRect().width > 1 } : null;
+    });
+    if (words) {
+      must(/before/.test(words.text), `the delta lost its words: "${words.text}"`);
+      must(!words.shown, 'the delta words still take room on a phone');
+    }
+    return found.join(', ');
+  });
+
   await phone.close();
 
   /*
