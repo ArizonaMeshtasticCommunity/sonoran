@@ -82,7 +82,7 @@ def test_the_page_does_not_compute_a_streak_of_its_own() -> None:
     whole = code[
         code.index("const MESHNET = window.SonoranMeshnet") : code.index("function redrawLiveTable")
     ]
-    assert "MESHNET.streakWord" in whole
+    assert "MESHNET.streakPill" in whole
     assert "MESHNET.absenceWord" in whole
     for forbidden in ("+= 1", "++", "reduce("):
         assert forbidden not in whole, f"{forbidden} in the check-in section looks like arithmetic"
@@ -203,7 +203,80 @@ def test_the_week_summary_can_wrap_at_320px() -> None:
     summary = css[css.index(".week > summary {") :]
     summary = summary[: summary.index("}")]
     assert "flex-wrap: wrap" in summary
-    for row in (".check-in, .absence {", ".check-in > :first-child, .absence > :first-child {"):
+    for row in (".absence {", ".absence > :first-child {", ".meshnet-messages .who {"):
         block = css[css.index(row) :]
         block = block[: block.index("}")]
         assert "wrap" in block or "min-width: 0" in block, f"{row} cannot shrink"
+
+
+# --- #262: MediumFast only, a pill beside the name, quiet hashtags -----
+
+
+def _week_section() -> str:
+    code = _code("app.js")
+    week = code[code.index("function meshnetWeek(") :]
+    return week[: week.index("\n}")]
+
+
+def test_a_check_in_message_shows_no_channel() -> None:
+    """Every check-in is on one channel now, so a label per line says nothing.
+
+    Will: "I don't think you should post what channel it was posted on."
+    """
+    week = _week_section()
+    assert "messageItem(message, { badge: streakPill(message, floor) })" in week
+    assert "showChannel" not in week, "the check-in page is labelling each message's channel again"
+
+
+def test_the_streak_pill_has_a_name_and_keeps_its_words() -> None:
+    """Colour and symbol are never the only signal (WCAG 1.4.1).
+
+    A plain span is `generic`, and ARIA prohibits naming a generic
+    element, so the pill takes `role="img"` to carry its accessible name.
+    The visible words stay inside it as well.
+    """
+    code = _code("app.js")
+    pill = code[code.index("function streakPill(entry, floor)") :]
+    pill = pill[: pill.index("\n}")]
+    assert "role: 'img'" in pill
+    assert "'aria-label': pill.label" in pill
+    assert "el('span', { text: pill.text })" in pill
+    assert "MESHNET.streakPill(entry)" in pill
+
+
+def test_the_pill_text_is_not_tier_coloured() -> None:
+    """The 1:1 accent-on-accent badge has shipped here once already.
+
+    The tier shows in the border, the tint and the symbol; the words are
+    `--text`, which measured above 11:1 on every tier's tint in both
+    themes on the running page.
+    """
+    css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+    block = css[css.index(".streak-pill {") :]
+    block = block[: block.index("}")]
+    assert "color: var(--text);" in block
+    assert "color: var(--tier)" not in block
+    # And the tiers are not the status colours: a short run is not a fault.
+    tiers = css[css.index(".streak-pill.start {") : css.index(".streak-pill.unknown {")]
+    for status in ("--good", "--warn", "--bad", "--status-"):
+        assert status not in tiers, f"a streak tier borrows the status colour {status}"
+
+
+def test_hashtags_are_not_accented_on_the_check_in_page() -> None:
+    """Every message here carries #meshnet, so an accent on it marks every line."""
+    css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+    assert ".meshnet-messages .body .hash { color: inherit; }" in css
+    # The chat pages keep theirs.
+    assert ".messages .body .hash { color: var(--accent); }" in css
+
+
+def test_the_page_says_it_reads_one_channel() -> None:
+    """The description names the channel, and the name comes from the server."""
+    html = TestClient(create_app(Settings(_env_file=None))).get("/").text
+    section = html[html.index('data-page="meshnet"') :]
+    section = section[: section.index("</section>")]
+    assert "data-meshnet-channel" in section
+    assert "does not count toward a streak" in section
+    page = _code("app.js")
+    assert "$$('[data-meshnet-channel]', page)" in page
+    assert "holder.textContent = data.channel" in page

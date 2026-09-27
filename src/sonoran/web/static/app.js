@@ -739,6 +739,10 @@ function messageItem(message, options = {}) {
         onclick: () => openNode(message.from_node),
         text: message.from_name || message.from_node,
       }),
+      // Something the page wants beside the name, such as the check-in
+      // page's streak pill (#262). It sits after the name and before the
+      // time, which is where Will's sketch put it.
+      options.badge || null,
       options.showChannel && message.channel
         ? el('span', { class: 'channel-label', text: message.channel }) : null,
       message.packet_id == null
@@ -7159,28 +7163,32 @@ const WEEK_LOCAL = new Intl.DateTimeFormat(undefined, {
   weekday: 'long', hour: '2-digit', minute: '2-digit', timeZone: TZ,
 });
 
-/** One check-in: who, and how many weeks running. */
-function checkInRow(entry, streaks) {
-  const floor = streaks && streaks.floor_week
-    ? WEEK_DATE.format(new Date(streaks.floor_week)) : null;
-  return el('li', { class: 'check-in' },
-    nodeChip(entry),
-    el('span', {
-      class: `streak${entry.streak_at_least ? ' bounded' : ''}`,
-      title: MESHNET.streakDetail(entry, floor),
-      text: MESHNET.streakWord(entry),
-    }),
-    /*
-     * The message count, and only when it is more than one.
-     *
-     * Two messages in a week are still one check-in -- the unit is the
-     * week -- so this sits well away from the streak chip. An earlier
-     * sketch put them side by side and "2 messages / 1 week in a row"
-     * read as a contradiction.
-     */
-    MESHNET.counted(entry.message_count) > 1
-      ? el('span', { class: 'muted small', text: `${count(entry.message_count)} messages` })
-      : null);
+/*
+ * The streak pill beside a sender's name (#262).
+ *
+ * This replaced a roster row per node -- name, then a chip reading "5
+ * weeks in a row" -- which Will did not like: "next to their name they
+ * should have a small badge ... showing what streak they are on with
+ * that one specific message." So the run now rides on each message, as
+ * of that message's week, and the server sends it there
+ * (`_message_streak`) so the pill and the arithmetic cannot disagree.
+ *
+ * `role="img"` is what lets the pill HAVE an accessible name: a plain
+ * span is `generic`, and ARIA prohibits naming a generic element, so an
+ * `aria-label` on it is dropped by some screen readers and read by
+ * others. The visible words stay in the pill as well, so colour and
+ * symbol are never the only signal.
+ */
+function streakPill(entry, floor) {
+  const pill = MESHNET.streakPill(entry);
+  return el('span', {
+    class: `streak-pill ${pill.tier}${entry && entry.streak_at_least ? ' bounded' : ''}`,
+    role: 'img',
+    'aria-label': pill.label,
+    title: MESHNET.streakDetail(entry, floor),
+  },
+  icon(pill.tier === 'start' ? '#i-streak-start' : '#i-streak'),
+  el('span', { text: pill.text }));
 }
 
 /** One node that took part last week and not in this one. */
@@ -7196,6 +7204,8 @@ function absenceRow(entry, inProgress) {
 }
 
 function meshnetWeek(week, streaks, index) {
+  const floor = streaks && streaks.floor_week
+    ? WEEK_DATE.format(new Date(streaks.floor_week)) : null;
   const ends = new Date(new Date(week.week_end).getTime() - 1);
   const range = `${WEEK_DATE.format(new Date(week.week_start))} - ${WEEK_DATE.format(ends)}`;
   const messages = week.messages || [];
@@ -7205,15 +7215,6 @@ function meshnetWeek(week, streaks, index) {
       week.in_progress ? el('span', { class: 'in-progress', text: 'in progress' }) : null,
       el('span', { class: 'count', text: MESHNET.weekWord(week) })),
     el('div', {},
-      (week.check_ins || []).length
-        ? el('ul', { class: 'check-ins' },
-            week.check_ins.map((entry) => checkInRow(entry, streaks)))
-        : null,
-      (week.not_seen || []).length
-        ? el('div', { class: 'absences' },
-            el('h4', { text: week.in_progress ? 'Checked in last week, not yet this week' : 'Checked in the week before, no message found in this one' }),
-            el('ul', {}, week.not_seen.map((entry) => absenceRow(entry, week.in_progress))))
-        : null,
       /*
        * A week with nobody in it says so here as well as in its heading.
        * These weeks are drawn at all because a gap that is simply absent
@@ -7221,9 +7222,30 @@ function meshnetWeek(week, streaks, index) {
        */
       !(week.check_ins || []).length && !(week.not_seen || []).length
         ? empty('No message carrying the tag was found in this week.') : null,
+      /*
+       * Each message: sender, streak pill, time, and the words (#262).
+       *
+       * No channel label. Every check-in on this page is on one channel
+       * now, so a label on each line would repeat the page description
+       * forty times and say nothing.
+       */
       messages.length
-        ? el('ul', { class: 'messages' },
-            messages.map((message) => messageItem(message, { showChannel: true })))
+        ? el('ul', { class: 'messages meshnet-messages' },
+            messages.map((message) => messageItem(message, { badge: streakPill(message, floor) })))
+        : null,
+      /*
+       * Who took part the week before and has no message in this one.
+       *
+       * Kept after #262, below the messages rather than above them. The
+       * messages are what the page is for now; this list is the one place
+       * the page says "still open" for the week in progress, which is the
+       * honest state a pill on a message cannot carry -- there is no
+       * message to hang it on.
+       */
+      (week.not_seen || []).length
+        ? el('div', { class: 'absences' },
+            el('h4', { text: week.in_progress ? 'Checked in last week, not yet this week' : 'Checked in the week before, no message found in this one' }),
+            el('ul', {}, week.not_seen.map((entry) => absenceRow(entry, week.in_progress))))
         : null,
       // The message list is capped by the endpoint's `limit` and the
       // count beside it is measured, so on a busy week they disagree.
@@ -7246,6 +7268,16 @@ PAGES.meshnet = async (page) => {
     return replace(body, failure(data));
   }
 
+  /*
+   * The channel, from the answer rather than from the markup (#262).
+   *
+   * The server decides which channel counts (`default_preset`), and the
+   * description says what the server read. Written into the HTML it
+   * would go on saying MediumFast on a deployment whose net is not.
+   */
+  for (const holder of $$('[data-meshnet-channel]', page)) {
+    if (data.channel) holder.textContent = data.channel;
+  }
   /*
    * "Nothing to compute from" and "nobody checked in" are two different
    * sentences, and the plan named this as its own risk: message text

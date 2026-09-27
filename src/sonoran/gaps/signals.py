@@ -80,6 +80,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api import traces
 from sonoran.config import Settings
+from sonoran.coverage.grid import MIN_LEVEL, to_dbm
 from sonoran.db.models import (
     MeshPacketMetrics,
     NeighborMetrics,
@@ -121,6 +122,145 @@ SIGNAL_LABELS: dict[str, str] = {
     "sole_observer": "Only one gateway hears it directly",
     "outside_predicted_usable": "Outside the predicted usable map",
 }
+
+# What a signal's `value` is measured in (#265).
+#
+# StarSkream, relayed by Will: a new user seeing "Yes 0.226" gets nothing
+# from it; it took a hover over the evidence to work out that 0.226 was
+# 22.6%. The page printed `String(value)` because nothing told it what
+# the number was, and the number is a different kind of thing on every
+# signal: a share of hours, a margin in dB, a count of gateways, a
+# predicted level in dBm.
+#
+# So the unit is decided here, beside the rule that made the number, and
+# travels with it. Every `Signal` that carries a value must name one
+# (`Signal.__post_init__` refuses otherwise), and the page formats by
+# the unit and never by the signal's name. A value with no unit is not
+# printed at all: a bare number is exactly what #265 is about.
+FRACTION = "fraction"  # 0 to 1. Drawn as a percentage.
+DB = "db"  # A margin in dB. Drawn signed, because below zero is a real answer.
+GATEWAYS = "gateways"  # A whole count of gateways.
+DBM = "dbm"  # A predicted signal level in dBm.
+METRES = "m"  # A distance. Only `position_too_coarse`, which is `unknown`.
+UNITS: frozenset[str] = frozenset({FRACTION, DB, GATEWAYS, DBM, METRES})
+
+# The unit a column's heading names, per signal (#265).
+#
+# `Gets out over the air only sometimes (% of hours heard)`, as the
+# suggestion asked. Two signals carry no number at all: their answer is
+# the state and the sentence, so their heading has no unit.
+SIGNAL_UNIT_LABELS: dict[str, str] = {
+    "rf_intermittent": "% of hours heard",
+    "weak_best_link": "dB of margin",
+    "sole_observer": "gateways",
+    "outside_predicted_usable": "predicted dBm",
+}
+
+# What each column means, for somebody who joined the mesh last week
+# (#265). The key above the table and the column hints read these.
+#
+# Three parts each, the three a newcomer asks: what the check looks at,
+# what counts as a problem, and what the node's owner can do about it.
+# `{...}` fields are filled from the thresholds this run used, so the
+# key cannot state a limit the assessment did not apply.
+SIGNAL_KEY: dict[str, dict[str, str]] = {
+    "hears_but_is_not_heard": {
+        "measures": (
+            "Whether the node can hear the mesh but the mesh cannot hear it. It can only be "
+            "told for a node that publishes neighbor reports, which prove its receiver works."
+        ),
+        "problem": (
+            "Yes when it published at least {min_neighbour_reports} neighbor reports and no "
+            "gateway heard it over the air."
+        ),
+        "owner": (
+            "Check the transmit side: the antenna and its cable, the region setting, and that "
+            "transmit power is not zero."
+        ),
+    },
+    "radio_isolated": {
+        "measures": (
+            "Whether any gateway heard the node over the radio, rather than only receiving "
+            "its traffic through the node's own internet (MQTT) link."
+        ),
+        "problem": "Yes when no gateway heard it over the air in this window.",
+        "owner": (
+            "Check the antenna and the region setting. A node indoors or low down may be "
+            "heard by nobody; height and a clear view help most."
+        ),
+    },
+    "rf_intermittent": {
+        "measures": (
+            "Of the hours the node was awake, the share in which something on the air heard "
+            "it. 100% means it was heard in every hour it was awake."
+        ),
+        "problem": (
+            "Yes when that share is below {rf_ratio_bad_pct}. It needs at least "
+            "{min_active_hours} awake hours to judge."
+        ),
+        "owner": (
+            "A low share usually means a marginal link. A higher or clearer antenna position, "
+            "or a better antenna, helps."
+        ),
+    },
+    "weak_best_link": {
+        "measures": (
+            "How far the node's best measured link is above the weakest signal this preset "
+            "can still decode, in dB. More is better."
+        ),
+        "problem": "Yes when the margin is below {margin_bad_db} dB.",
+        "owner": (
+            "Little margin means small changes, such as weather or a parked truck, can break "
+            "the link. More height or a better antenna adds margin."
+        ),
+    },
+    "sole_observer": {
+        "measures": (
+            "How many gateways hear the node directly, with no relay in between. This says "
+            "as much about where our gateways are as about the node."
+        ),
+        "problem": (
+            "Yes when exactly one gateway hears it directly, unless that one receives it so "
+            "strongly that it must be close by."
+        ),
+        "owner": (
+            "Nothing needs fixing on the node. A second gateway within reach would make the "
+            "reading more certain."
+        ),
+    },
+    "outside_predicted_usable": {
+        "measures": (
+            "Whether the published coverage prediction reaches the place the node stands. "
+            "This is a prediction, not a measurement."
+        ),
+        "problem": (
+            "Yes when the predicted signal there is below what this preset needs. A node "
+            "that works anyway shows where the prediction is wrong."
+        ),
+        "owner": (
+            "Nothing, if the node works. If it does not, a better site or a relay nearby "
+            "would help."
+        ),
+    },
+}
+
+
+def signal_key(thresholds: dict[str, object]) -> dict[str, dict[str, str]]:
+    """Return the key for every signal, with this run's thresholds filled in.
+
+    A threshold the run did not report is left visible as `unknown`
+    rather than dropped, the rule `sentence_for` follows: an unnamed
+    value must be visible, not invisible.
+    """
+    values: dict[str, object] = dict(thresholds)
+    ratio = thresholds.get("rf_ratio_bad")
+    if isinstance(ratio, int | float) and not isinstance(ratio, bool):
+        values["rf_ratio_bad_pct"] = f"{ratio * 100:g}%"
+    return {
+        name: {part: text.format_map(_Missing(values)) for part, text in parts.items()}
+        for name, parts in SIGNAL_KEY.items()
+    }
+
 
 # What the page says for each machine reason. The reason is the short
 # name; this is the sentence. Every one of them is a measurement or an
@@ -279,6 +419,17 @@ class Signal:
     reason: str
     value: float | None = None
     evidence: dict[str, object] = field(default_factory=dict)
+    unit: str | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse a number that does not say what it is (#265).
+
+        "Yes 0.226" is what a unitless value looks like on the page. A
+        new signal that forgets its unit fails here, where it is made,
+        rather than as a bare number in front of a reader.
+        """
+        if self.value is not None and self.unit not in UNITS:
+            raise ValueError(f"signal {self.reason!r} has a value and no known unit: {self.unit!r}")
 
     def as_dict(self) -> dict[str, object]:
         """Return the signal as the API serves it."""
@@ -287,6 +438,7 @@ class Signal:
             "reason": self.reason,
             "sentence": sentence_for(self.reason, self.value, self.evidence),
             "value": self.value,
+            "unit": self.unit,
             "evidence": dict(self.evidence),
         }
 
@@ -998,10 +1150,14 @@ def rf_intermittent(evidence: NodeEvidence, settings: Settings) -> Signal:
     }
     if ratio is None or evidence.active_hours < settings.gaps_min_active_hours:
         return Signal(UNKNOWN, "too_few_active_hours", evidence=counts)
-    value = round(ratio, 3)
+    # Not rounded here (#265). Rounding to three places turned a share
+    # just short of every hour into 1.0, and the page would then print
+    # "100%" -- a perfect score nobody measured. The page rounds for
+    # display and says ">99.9%" for that case.
+    value = ratio
     if ratio < settings.gaps_rf_ratio_bad:
-        return Signal(BAD, "rf_in_few_hours", value=value, evidence=counts)
-    return Signal(OK, "rf_in_most_hours", value=value, evidence=counts)
+        return Signal(BAD, "rf_in_few_hours", value=value, evidence=counts, unit=FRACTION)
+    return Signal(OK, "rf_in_most_hours", value=value, evidence=counts, unit=FRACTION)
 
 
 # --------------------------------------------------------------- 4.4
@@ -1043,13 +1199,16 @@ def sole_observer(evidence: NodeEvidence, settings: Settings) -> Signal:
         return Signal(UNKNOWN, "no_direct_observation", evidence=counts)
     if evidence.direct_gateways == 1:
         if _sole_gateway_is_close(evidence, settings):
-            return Signal(OK, "one_gateway_hears_it_close", value=1.0, evidence=counts)
-        return Signal(BAD, "one_gateway_hears_it", value=1.0, evidence=counts)
+            return Signal(
+                OK, "one_gateway_hears_it_close", value=1.0, evidence=counts, unit=GATEWAYS
+            )
+        return Signal(BAD, "one_gateway_hears_it", value=1.0, evidence=counts, unit=GATEWAYS)
     return Signal(
         OK,
         "several_gateways_hear_it",
         value=float(evidence.direct_gateways),
         evidence=counts,
+        unit=GATEWAYS,
     )
 
 
@@ -1111,8 +1270,8 @@ def weak_best_link(evidence: NodeEvidence, settings: Settings, preset: ModemPres
         return Signal(UNKNOWN, "no_measured_snr", evidence=counts)
     margin = round(snr - required, 2)
     if margin < settings.gaps_margin_bad_db:
-        return Signal(BAD, "thin_margin", value=margin, evidence=counts)
-    return Signal(OK, "adequate_margin", value=margin, evidence=counts)
+        return Signal(BAD, "thin_margin", value=margin, evidence=counts, unit=DB)
+    return Signal(OK, "adequate_margin", value=margin, evidence=counts, unit=DB)
 
 
 # --------------------------------------------------------------- 4.6
@@ -1190,14 +1349,22 @@ def outside_predicted_usable(
             "position_too_coarse",
             value=None if deviation_m is None else round(deviation_m, 1),
             evidence={**counts, "deviation_m": deviation_m},
+            unit=METRES,
         )
     level = coverage.level_of(node_num)
     if level is None:
         return Signal(UNKNOWN, "outside_run_region", evidence=counts)
     counts["level"] = level
+    # The value is the predicted level in dBm, not the engine's byte
+    # (#265). The byte carries a 200 dB offset (`coverage/grid.py`), so
+    # it printed as "62" for -138 dBm. A byte of zero means the run
+    # reached the cell and predicted nothing there, which has no dBm at
+    # all: that is `None`, never -200 dBm, and the sentence says it.
+    predicted = to_dbm(level) if level >= MIN_LEVEL else None
+    unit = None if predicted is None else DBM
     if level < coverage.threshold_level:
-        return Signal(BAD, "outside_usable", value=float(level), evidence=counts)
-    return Signal(OK, "inside_usable", value=float(level), evidence=counts)
+        return Signal(BAD, "outside_usable", value=predicted, evidence=counts, unit=unit)
+    return Signal(OK, "inside_usable", value=predicted, evidence=counts, unit=unit)
 
 
 # --------------------------------------------------------------- 4.8

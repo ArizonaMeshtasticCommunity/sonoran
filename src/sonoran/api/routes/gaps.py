@@ -25,7 +25,7 @@ from fastapi import APIRouter, Query, Request
 
 from sonoran.config import Settings
 from sonoran.gaps import store
-from sonoran.gaps.signals import BAD, OK, UNKNOWN
+from sonoran.gaps.signals import BAD, OK, SIGNAL_UNIT_LABELS, UNKNOWN, signal_key
 from sonoran.gaps.siting import SITING_CAVEATS
 from sonoran.radio.presets import preset_for_channel
 
@@ -201,7 +201,19 @@ async def gaps_summary(
 
     # Everything except the node rows, which have their own endpoint.
     summary = {key: value for key, value in document.items() if key != "nodes"}
-    return {**summary, "presets": _presets(settings)}
+    thresholds = document.get("thresholds")
+    return {
+        **summary,
+        "presets": _presets(settings),
+        # What each column's number is measured in, and what each column
+        # means for a newcomer (#265). Both are definitions, so they come
+        # from `gaps/signals.py` as it is now rather than from the file,
+        # and an assessment written before they existed still gets a key.
+        # The unit of each VALUE is different: it rides on the signal in
+        # the file, because it belongs to the number the job wrote.
+        "signal_units": dict(SIGNAL_UNIT_LABELS),
+        "signal_key": signal_key(thresholds if isinstance(thresholds, dict) else {}),
+    }
 
 
 @router.get("/nodes")

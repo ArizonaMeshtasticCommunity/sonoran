@@ -559,6 +559,14 @@ pessimistic.
 `caveats` is what this feature cannot answer at all. A page shows it
 permanently and never behind a toggle.
 
+`signal_units` names what each numbered signal's value is measured in,
+for a column heading (`rf_intermittent`: `% of hours heard`).
+`signal_key` holds, for each signal, `measures`, `problem` and `owner`:
+what the check looks at, what counts as a problem, and what the node's
+owner can do, with this run's `thresholds` filled in. Both are
+definitions from `gaps/signals.py`, so they are served for an
+assessment written before they existed (#265).
+
 ### 3C.2 `GET /api/gaps/nodes`
 
 Returns the assessed nodes of one preset, worst first.
@@ -601,6 +609,7 @@ know. It is not a score.
           "reason": "no_gateway_heard_it",
           "sentence": "None of the 31 gateways active in this window heard it over the air. ...",
           "value": null,
+          "unit": null,
           "evidence": {"packets": 412, "rf_packets": 0, "gateways_active": 31}
         }
       }
@@ -608,6 +617,20 @@ know. It is not a score.
   ]
 }
 ```
+
+**`value` and `unit` (#265).** A signal's `value` is null unless the
+signal measured a number, and a value always carries a `unit`: the job
+cannot build a signal with a value and no unit. The units are
+`fraction` (0 to 1, `rf_intermittent`: the share of awake hours in which
+something on the air heard the node), `db` (a signed margin,
+`weak_best_link`), `gateways` (a whole count, `sole_observer`), `dbm`
+(the predicted level, `outside_predicted_usable`) and `m` (the position
+error, only on the `unknown` state `position_too_coarse`). The
+`fraction` is not rounded: a share just short of 1 stays short of 1, so a
+reader can show ">99.9%" rather than a perfect score nobody measured.
+A predicted level of nothing at all is `value: null`, never -200 dBm.
+An assessment written before `unit` existed has none, and a reader must
+then show no number rather than guess one.
 
 `position_confidence` is `exact`, `coarse` or `none`. A `coarse` node is
 still listed, with its `position_deviation_m`, and its
@@ -1041,6 +1064,16 @@ Returns messages that carry one hashtag, grouped by week. The weekly
 mesh network check-in uses the `#meshnet` tag. A week starts on Monday
 in UTC.
 
+**One channel only (#262).** The endpoint reads the channel named by the
+`default_preset` setting (MediumFast on this mesh) and no other. The
+scope applies to both reads: the message list and the 52-week aggregate
+that the streaks come from. A tagged message on any other channel is not
+returned and does not count toward a streak. The scope is on the server
+because a caller never sees the rows a streak is counted from, so a
+filter in the caller would leave other channels inside every run. The
+match is exact, not case-folded. The response carries `channel`, the
+name that was read.
+
 Query parameters:
 
 - `tag` — the tag word, with or without the hash sign. Default
@@ -1057,6 +1090,11 @@ a gap is the point of this endpoint, and a week simply absent from the
 list reads as a week that never happened. Weeks older than the earliest
 tagged message the read could find are left out, because there is no
 evidence about them either way.
+
+Each message carries `streak_weeks`, `streak_at_least` and `first_ever`:
+the sender's run as of the week of that message, from the same aggregate
+and the same rules as `check_ins`. `streak_weeks` is null, never 0, when
+no run is known for the message.
 
 `message_count` is measured by an aggregate and `messages` is capped by
 `limit`, so on a busy week the two disagree. `messages_shown` is the
