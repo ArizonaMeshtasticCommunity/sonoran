@@ -372,6 +372,50 @@ async function main() {
     return tableFitsAt(page, find, 'the Activity table');
   });
 
+  await journey(context, 'the Who hears it table fits its panel at every width', async (page) => {
+    /*
+     * #260. On the node heard by the most nodes, as the issue asks: the
+     * rows come from `/routes`, so that is what is compared. One row's
+     * name is then replaced with a long name that has no space in it --
+     * names like that are ordinary on this mesh -- because a table that
+     * fits only short names has not been shown to fit.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=40`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    let busiest = null;
+    for (const node of nodes) {
+      const id = encodeURIComponent(node.node_id);
+      const routes = await (await page.request.get(`${BASE}/api/nodes/${id}/routes?hours=720`)).json();
+      const heard = (routes.heard_by || []).length;
+      if (!busiest || heard > busiest.heard) busiest = { id: node.node_id, heard };
+    }
+    must(busiest && busiest.heard > 0, 'no node on this instance is heard by any other node');
+    const LONG_NAME = 'UTOPIA-PLANITIA-G3-RIDGELINE-REPEATER';
+    await page.route(/\/api\/nodes\/[^/]+\/routes\?/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (body.heard_by && body.heard_by.length) body.heard_by[0].display_name = LONG_NAME;
+      await route.fulfill({ response, json: body });
+    });
+    const find = () => {
+      const heading = [...document.querySelectorAll('[data-page="node"] h4')]
+        .find((node) => /^Who hears it/.test(node.textContent));
+      const wrap = heading && heading.parentElement.querySelector('.table-wrap');
+      const table = wrap && wrap.querySelector('table');
+      return table ? {
+        scroll: Math.max(table.scrollWidth, wrap.scrollWidth),
+        client: wrap.clientWidth,
+        text: wrap.innerText,
+      } : null;
+    };
+    await page.goto(`${BASE}/#node/${encodeURIComponent(busiest.id)}`, { waitUntil: 'load' });
+    must(await waitFor(page, find, 15000), 'the Who hears it table never drew');
+    must((await page.evaluate(find)).text.includes(LONG_NAME),
+      'the long name was not drawn, so this would measure a table that was never stressed');
+    const fits = await tableFitsAt(page, find, 'the Who hears it table');
+    return `${busiest.id}, heard by ${busiest.heard}: ${fits}`;
+  });
+
   await journey(context, 'the nodes search narrows the list', async (page) => {
     await open(page, 'nodes');
     const count = () => page.locator('[data-page="nodes"] tbody tr').count();

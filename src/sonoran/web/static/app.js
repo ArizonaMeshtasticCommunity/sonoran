@@ -6248,11 +6248,46 @@ function routesPanel(routes) {
     ? 'Its own position is rounded, so no distance can be measured.'
     : 'None with an exact position.';
   const depth = routes.hop_depth || { packets: 0, counts: [] };
+  /*
+   * Three columns, not five (#260).
+   *
+   * "Who hears it" scrolled sideways at every width, desktop included:
+   * at 1440 px the table was 633 px in a 543 px half-panel, and at
+   * 320 px 633 in 254. Five `nowrap` columns -- Node, Reports, Best SNR,
+   * From, Distance -- cannot fit half of a panel, and no amount of
+   * padding would change that.
+   *
+   * The question the table answers is "who hears this node, and how
+   * well?", which is a name, a signal and a distance. The other two
+   * columns are evidence FOR the row, not answers of their own, so they
+   * moved under the name as one muted line: "3 reports: neighbor report,
+   * traceroute". Nothing was dropped, and the count keeps its own words
+   * rather than becoming a bare number in a narrow cell.
+   *
+   * The name wraps as well (`.route-list` in app.css). `.node-name .long`
+   * is `nowrap` with an ellipsis everywhere else, and inside a table cell
+   * that is not a cut but a floor: the cell grows to the whole name first.
+   * Long names are ordinary on this mesh ("UTOPIA PLANITIA G3"), and some
+   * have no space in them at all, so it breaks anywhere.
+   *
+   * The headings are short and carry their meaning in hints, and the
+   * numbers stay right-aligned with tabular figures (`num: true`), so a
+   * narrower column still lines up.
+   *
+   * Asserted at 320, 768, 1024 and 1440 px on the node heard by the most
+   * nodes, by the e2e journey "the Who hears it table fits its panel".
+   */
+  const evidence = (row) => {
+    const kinds = row.kinds.map((kind) => (kind === 'neighbor' ? 'neighbor report' : 'traceroute')).join(', ');
+    // `count` prints an absent number as "-", never as 0.
+    return `${count(row.count)} ${row.count === 1 ? 'report' : 'reports'}: ${kinds}`;
+  };
   const columns = [
-    { label: 'Node', cell: (row) => nodeChip(row) },
-    { label: 'Reports', num: true, hint: 'Neighbor reports and traceroute hops that show the link in this direction.', cell: (row) => count(row.count) },
-    { label: 'Best SNR', num: true, cell: (row) => snrCell(row.best_snr) },
-    { label: 'From', cell: (row) => row.kinds.map((kind) => (kind === 'neighbor' ? 'neighbor report' : 'traceroute')).join(', ') },
+    { label: 'Node', wrap: true,
+      hint: 'Under each name: how many neighbor reports and traceroute hops show the link in this direction, and which of the two they were.',
+      cell: (row) => el('div', { class: 'route-who' },
+        nodeChip(row), el('span', { class: 'muted', text: evidence(row) })) },
+    { label: 'SNR', num: true, hint: 'The best signal-to-noise ratio any of those reports measured on the link.', cell: (row) => snrCell(row.best_snr) },
     { label: 'Distance', num: true, hint: 'Only where both nodes share an exact position.', cell: (row) => km(row.distance_km) },
   ];
   return el('div', { class: 'panel span-2' },
@@ -6277,10 +6312,10 @@ function routesPanel(routes) {
       + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')
       + (routes.trace_limit_reached ? ` Only the newest ${count(routes.traces_read)} traceroutes were read.` : '')),
     el('div', { class: 'grid two' },
-      el('div', {},
+      el('div', { class: 'route-list' },
         el('h4', { text: `Who hears it (${count(routes.heard_by.length)})` }),
         expandingTable(columns, routes.heard_by, 'No node reports hearing it in the window.', { noun: 'nodes' })),
-      el('div', {},
+      el('div', { class: 'route-list' },
         el('h4', { text: `Who it hears (${count(routes.hears.length)})` }),
         expandingTable(columns, routes.hears, 'It reports hearing no node in the window.', { noun: 'nodes' }))));
 }
