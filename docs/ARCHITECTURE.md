@@ -440,8 +440,8 @@ general proxy for the tile source.
 
 - Job: the user interface.
 - Static HTML, CSS, and JavaScript files. There is no build step.
-- Files: `index.html`, `app.css`, `app.js`, `map-live.js`,
-  `map-watch.js`, `planner.js`, `planner-params.js`,
+- Files: `index.html`, `app.css`, `app.js`, `map-defaults.js`,
+  `map-live.js`, `map-watch.js`, `planner.js`, `planner-params.js`,
   `planner.worker.js`, `config-check.js`, `meshtastic-static.js`,
   `gaps.js`, `siting.js`,
   `protobuf-runtime.js`, and `vendor/`.
@@ -449,6 +449,10 @@ general proxy for the tile source.
   This keeps the site working without third-party availability.
 - Libraries: Leaflet for the map, ECharts for the charts and the mesh
   graph. Both are in `web/static/vendor`.
+- `map-defaults.js` loads straight after Leaflet and sets what every
+  map shares. On a touch screen (`pointer: coarse`) every map draws on
+  a canvas with a 20 px hit tolerance, and a tap goes to the nearest
+  dot, not to the dot drawn last (#266).
 - The pages call the JSON API. All node names come from the API.
   The browser does no name lookup and no join.
 - The API serves `index.html` and replaces `__SONORAN_CONFIG__` with the

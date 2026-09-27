@@ -1135,6 +1135,24 @@ async function main() {
       + `zoom radius ${radii.before} -> ${radii.after}; gone node closed its bubble`;
   });
 
+  await journey(context, 'a mouse keeps the exact dot target (#266)', async (page) => {
+    // The control for the phone journey: the wider target is for touch.
+    await open(page, 'map', 3000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 20000), 'the map drew no nodes');
+    const got = await page.evaluate(() => {
+      const { map, nodes } = window.SonoranMap;
+      const layer = nodes.getLayers()[0];
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        tolerance: layer ? map.getRenderer(layer).options.tolerance || 0 : null,
+      };
+    });
+    must(!got.coarse, 'this context reports a coarse pointer, so it cannot be the control');
+    must(got.tolerance === 0, `a mouse gets a canvas tolerance of ${got.tolerance}`);
+    return 'fine pointer, tolerance 0';
+  });
+
   await journey(context, 'a traceroute opens', async (page) => {
     await open(page, 'traceroutes', 4000);
     const link = page.locator('[data-page="traceroutes"] .linky').first();
@@ -1642,6 +1660,68 @@ async function main() {
     }
     must(small.length === 0, `under 16 px: ${small.slice(0, 4).join(', ')}`);
     return 'every control is 16 px or larger';
+  });
+
+  await journey(phone, 'a finger can hit a map dot (#266)', async (page) => {
+    /*
+     * A dot was 5 to 13 px across and the canvas counted only the dot.
+     * Two test dots are put on the live map 16 px apart, well away from
+     * the real ones, so the result does not depend on the seed. Each
+     * tap is a real touch through `page.touchscreen`, and a hit is read
+     * off the marker's own `click` event, which is what opens a node.
+     */
+    await open(page, 'map', 3000);
+    // The first draw fits the view to the nodes. Measuring before it
+    // lands would put the taps where the test dots used to be.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 20000), 'the map drew no nodes');
+    await page.waitForTimeout(500);
+    const at = await page.evaluate(() => {
+      const { map, nodes } = window.SonoranMap;
+      // No live refresh in the middle of the taps.
+      document.querySelector('[data-page="map"] [data-live]').setAttribute('aria-pressed', 'false');
+      map.setZoom(6, { animate: false });
+      map.getContainer().scrollIntoView({ block: 'start' });
+      const box = map.getContainer().getBoundingClientRect();
+      // A spot in the map's upper left, away from Arizona's dots.
+      const middle = L.point(box.width * 0.25, Math.min(box.height, window.innerHeight - box.top) * 0.3);
+      window.__e2eHits = [];
+      const make = (name, dx) => {
+        const marker = L.circleMarker(map.containerPointToLatLng(middle.add([dx, 0])), { radius: 2.5 });
+        marker.on('click', () => window.__e2eHits.push(name));
+        marker.addTo(nodes);
+        return name;
+      };
+      make('left', 0);
+      make('right', 16);
+      return {
+        x: box.left + middle.x,
+        y: box.top + middle.y,
+        tolerance: map.getRenderer(nodes.getLayers()[0]).options.tolerance,
+      };
+    });
+    must(at.tolerance >= 19.5, `the canvas tolerance is ${at.tolerance}, so a 2.5 px dot is a ${2 * (2.5 + at.tolerance)} px target`);
+    await page.waitForTimeout(300);
+    const tap = async (dx, dy) => {
+      await page.evaluate(() => { window.__e2eHits = []; });
+      await page.touchscreen.tap(at.x + dx, at.y + dy);
+      // Well past the double-tap window, so no two taps read as one.
+      await page.waitForTimeout(800);
+      return page.evaluate(() => window.__e2eHits.slice());
+    };
+    // 18 px above the left dot: outside the dot, inside the target.
+    const near = await tap(0, -18);
+    must(near.join() === 'left', `a tap 18 px from a dot hit ${JSON.stringify(near)}`);
+    // Square on the right dot, whose neighbour's target also reaches.
+    const onRight = await tap(16, 0);
+    must(onRight.join() === 'right', `a tap on the right dot hit ${JSON.stringify(onRight)}, not the dot under the finger`);
+    const onLeft = await tap(0, 0);
+    must(onLeft.join() === 'left', `a tap on the left dot hit ${JSON.stringify(onLeft)}`);
+    // The negative control, in the same page: far outside any target.
+    const far = await tap(0, -40);
+    must(far.length === 0, `a tap 40 px from any dot still hit ${JSON.stringify(far)}`);
+    return `tolerance ${at.tolerance} px, a 2.5 px dot is a ${2 * (2.5 + at.tolerance)} px target; `
+      + 'nearest dot wins a shared tap; 40 px away hits nothing';
   });
 
   await journey(phone, 'the map page opens at its top (#270)', async (page) => {
