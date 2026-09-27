@@ -5449,8 +5449,50 @@ function weatherPanel(detail) {
     list || telemetryEmpty('This node sends no environment telemetry.'));
 }
 
+/*
+ * The Device readings as rows, each with its flag (#254).
+ *
+ * Not through `definitionList`, which the Weather panel and the packet
+ * page share and which has no idea what "bad" is. Same filter as it,
+ * though: a reading the node did not send is not a row, so a missing
+ * value cannot be drawn at all, let alone drawn red.
+ *
+ * A battery above 100 % is the firmware saying "external power"
+ * (`telemetry.proto`: "0-100 (>100 means powered)"). "101 %" read as a
+ * battery charged past full to somebody new to this, so it says so.
+ */
+function deviceRows(device) {
+  return Object.entries(device || {})
+    .filter(([key, value]) => value != null && DEVICE_LABELS[key])
+    .map(([key, value]) => {
+      const [label, format] = DEVICE_LABELS[key];
+      const text = key === 'battery_level' && batteryState(value) === 'mains'
+        ? 'External power' : format(value);
+      return { key, label, text, flag: fieldFlag(key, value) };
+    });
+}
+
+/**
+ * Rows as a definition list, the flag on the value it is about.
+ *
+ * The hint rides on the `dt` as `data-hint`, and `revealHints` turns it
+ * into the same button and popover as a column heading (#256): it opens
+ * on click, tap, Enter and Space, never on hover alone. It is revealed
+ * here, on the list itself, so the buttons are there as soon as the
+ * panel is, and not only after the slowest chart on the page loads.
+ */
+function fieldList(rows) {
+  const list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text, flag }) => [
+    el('dt', { 'data-label': label, 'data-hint': FIELD_HINTS[key] || null }, label),
+    fieldValue(text, flag),
+  ]));
+  revealHints(list);
+  return list;
+}
+
 function devicePanel(detail) {
-  const list = definitionList(detail.device, DEVICE_LABELS);
+  const rows = deviceRows(detail.device);
+  const list = rows.length ? fieldList(rows) : null;
   return el('div', { class: 'panel' },
     el('h3', {
       'data-label': 'Device',
@@ -5476,32 +5518,59 @@ function messagesPanel(detail) {
       : empty('This node sent no stored messages in the window.'));
 }
 
-function identityPanel(node) {
+/*
+ * The Identity rows (#254).
+ *
+ * Placeholders are capitalised: "Unknown", "Not reported", "Never".
+ * They are values in a list, and the list's other values -- "Yes",
+ * "No", a name -- are capitalised, so a lower-case "unknown" read as a
+ * sentence that had lost its start. #193.4 did the same for Yes and No.
+ *
+ * `ago()` is not used for the placeholder: it answers "never" and
+ * "unknown" in lower case for every page on the site, and here it is
+ * only reached once `last_heard` is known.
+ */
+function identityRows(node) {
   const rows = [
-    ['Node ID', node.node_id],
-    ['Long name', node.long_name || 'not reported'],
-    ['Short name', node.short_name || 'not reported'],
-    ['Hardware', node.hw_model || 'unknown'],
-    ['Role', node.role ? `${roleLabel(node.role)} (${node.role})` : 'unknown'],
+    { key: 'node_id', label: 'Node ID', text: node.node_id },
+    { key: 'long_name', label: 'Long name', text: node.long_name || 'Not reported' },
+    { key: 'short_name', label: 'Short name', text: node.short_name || 'Not reported' },
+    { key: 'hw_model', label: 'Hardware', text: node.hw_model || 'Unknown' },
+    { key: 'role', label: 'Role', text: node.role ? `${roleLabel(node.role)} (${node.role})` : 'Unknown' },
     // Through `yesNo`, not inlined. These two were the reason #193.4
     // could be "fixed" in the helper and still show lower case here.
-    ['Licensed', yesNo(node.is_licensed)],
-    ['MQTT gateway', yesNo(node.is_mqtt_gateway)],
-    ['Channel', node.last_channel || 'unknown'],
-    ['First seen', stamp(node.first_seen)],
-    ['Last heard', node.last_heard ? `${stamp(node.last_heard)} (${ago(node.last_heard)} ago)` : 'never'],
+    // The API always sends a boolean; were it ever absent, the row says
+    // Unknown rather than drawing an empty cell or, worse, "No".
+    { key: 'is_licensed', label: 'Licensed', text: yesNo(node.is_licensed) ?? 'Unknown' },
+    { key: 'is_mqtt_gateway', label: 'MQTT gateway', text: yesNo(node.is_mqtt_gateway) ?? 'Unknown' },
+    { key: 'last_channel', label: 'Channel', text: node.last_channel || 'Unknown' },
+    { key: 'first_seen', label: 'First seen', text: stamp(node.first_seen) },
+    {
+      key: 'last_heard',
+      label: 'Last heard',
+      text: node.last_heard ? `${stamp(node.last_heard)} (${ago(node.last_heard)} ago)` : 'Never',
+    },
   ];
   if (node.position) {
-    rows.push(['Position', `${round(node.position.lat, 5)}, ${round(node.position.lon, 5)}`]);
-    rows.push([
-      'Altitude',
-      node.position.altitude == null ? 'unknown' : SonoranUnits.heightFromM(node.position.altitude),
-    ]);
+    rows.push({
+      key: 'position',
+      label: 'Position',
+      text: `${round(node.position.lat, 5)}, ${round(node.position.lon, 5)}`,
+    });
+    rows.push({
+      key: 'altitude',
+      label: 'Altitude',
+      text: node.position.altitude == null ? 'Unknown' : SonoranUnits.heightFromM(node.position.altitude),
+      flag: altitudeFlag(node),
+    });
   }
+  return rows;
+}
+
+function identityPanel(node) {
   return el('div', { class: 'panel' },
     el('h3', {}, 'Identity'),
-    el('dl', { class: 'kv' }, rows.flatMap(([label, value]) =>
-      [el('dt', { text: label }), el('dd', { text: value })])));
+    fieldList(identityRows(node)));
 }
 
 function activityPanel(detail) {
@@ -5560,6 +5629,328 @@ const HEALTH_STATES = {
 const BATTERY_LOW = 5;
 const BATTERY_WEAK = 35;
 const ON_MAINS_ABOVE = 100;
+
+/*
+ * The one reading of a battery level, for the Power card and the Device
+ * panel both (#254).
+ *
+ * The two used to hold their own comparison, and a red Device row
+ * beside a green Power card is the page contradicting itself. `mains`
+ * is its own answer and not `ok`: the firmware sends 101 for "no
+ * battery, or charging" (`MAGIC_USB_BATTERY_LEVEL` in
+ * src/modules/Telemetry/DeviceTelemetry.cpp), which is not a charge.
+ * No level at all is `unknown`, never `bad` -- see `reading` below.
+ */
+function batteryState(level) {
+  const value = reading(level);
+  if (value == null) return 'unknown';
+  if (value > ON_MAINS_ABOVE) return 'mains';
+  return value > BATTERY_WEAK ? 'ok' : value >= BATTERY_LOW ? 'warn' : 'bad';
+}
+
+/* --- What is bad in Identity and Device (#254) ------------------- */
+
+/*
+ * A value as a number, or null. Refuses null BEFORE any comparison.
+ *
+ * `Number(null)` is 0, and `null < 5` is true, so a node that sent no
+ * battery level would read as a flat battery. That shape has caused
+ * five bugs in this repository. A value we do not have is never a bad
+ * measurement: absent is `null`, and every threshold below starts here.
+ */
+function reading(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/*
+ * Channel use: the firmware's own two lines, not ours.
+ *
+ * meshtastic/firmware src/airtime.h (master at 6d41e27, 2026-08-20):
+ *
+ *     uint8_t max_channel_util_percent = 40;
+ *     uint8_t polite_channel_util_percent = 25;
+ *
+ * `isTxAllowedChannelUtil` in src/airtime.cpp allows a send only while
+ * utilisation is BELOW the figure, so the figure itself is the first
+ * value at which the node holds back. Hence `>=` in `FIELD_FLAGS`.
+ *
+ * - At 25 % most nodes skip their own routine broadcasts: position
+ *   (PositionModule), device telemetry (DeviceTelemetry) and neighbour
+ *   info (NeighborInfoModule) all ask with `polite = true`. Some roles
+ *   are let off one check each: TRACKER and TAK_TRACKER for position,
+ *   sensor and router roles for device telemetry (`isSensorOrRouterRole`).
+ * - At 40 % a node also stops sending NodeInfo (NodeInfoModule asks
+ *   with `polite = false`), which is how its name and hardware reach
+ *   everybody else.
+ *
+ * The figure is the node's own measure of the last minute -- six ten
+ * second slots, `CHANNEL_UTILIZATION_PERIODS` -- of every packet it
+ * sent or heard and of LoRa noise, as `telemetry.proto` says. So it is
+ * mostly a fact about the node's neighbourhood.
+ */
+const CHANNEL_USE_POLITE = 25;
+const CHANNEL_USE_MAX = 40;
+
+/*
+ * Air time sending: OUR judgement, stated as one.
+ *
+ * The firmware sets no limit on it in the US. `isTxAllowedAirUtil`
+ * applies only where the region has a duty cycle below 100 %, and US
+ * is `RDEF(US, 902.0f, 928.0f, 100, ...)` in src/mesh/RadioInterface.cpp.
+ * (EU_868 is 10 %, and there the node stops its metadata at half that.)
+ * A search of the meshtastic/meshtastic documentation repository found
+ * no figure for it either. So:
+ *
+ * - `AIR_TX_HIGH` is tied to the channel line above. A node that sends
+ *   for a quarter of the hour fills, on its own, the share of air at
+ *   which every node that hears it starts skipping its own broadcasts.
+ *   It is the same constant, so the two cannot drift.
+ * - `AIR_TX_CHECK` is a judgement and nothing firmer: one node taking
+ *   two fifths of that shared quarter is worth a look.
+ */
+const AIR_TX_CHECK = 10;
+const AIR_TX_HIGH = CHANNEL_USE_POLITE;
+
+/*
+ * The fields that can be bad, and what each state is called.
+ *
+ * Every flag carries a word as well as a colour and a shape (WCAG
+ * 1.4.1): red alone tells a colour-blind reader nothing, and it tells a
+ * screen reader nothing at all. The glyphs are the health cards', so a
+ * red row and a red card mean the same thing.
+ *
+ * Deliberately NOT here:
+ * - Voltage. The cut-off depends on the cell. The firmware's own table
+ *   (`OCV_ARRAY` in src/power.h) runs 4.19 V to 3.10 V for a Li-ion
+ *   cell and 3.65 V to 2.50 V for LiFePO4, and a two-cell board such as
+ *   the T-Beam 1W reads 6 to 8 V. One figure would be wrong for one of
+ *   them. The battery level is the firmware's own conversion for that
+ *   board, so the page judges the level instead.
+ * - Hardware "Unknown". This page cannot tell a node that never sent a
+ *   NodeInfo from one on a board newer than our vendored protobufs:
+ *   `_enum_name` in ingest/handlers/nodeinfo.py stores both as NULL.
+ *   Red would blame the owner for our own gap.
+ * - Role, firmware and last heard. Role is a judgement about where a
+ *   node stands, not a number. Firmware is not on this page. How old a
+ *   "last heard" may be depends on intervals the owner chose and the
+ *   page cannot see.
+ */
+const FIELD_FLAGS = {
+  channel_utilization(value) {
+    if (value >= CHANNEL_USE_MAX) return { state: 'bad', word: 'Very busy' };
+    if (value >= CHANNEL_USE_POLITE) return { state: 'warn', word: 'Busy' };
+    return null;
+  },
+  air_util_tx(value) {
+    if (value >= AIR_TX_HIGH) return { state: 'bad', word: 'Very chatty' };
+    if (value >= AIR_TX_CHECK) return { state: 'warn', word: 'Chatty' };
+    return null;
+  },
+  battery_level(value) {
+    const state = batteryState(value);
+    if (state === 'bad') return { state, word: 'Nearly flat' };
+    if (state === 'warn') return { state, word: 'Low' };
+    return null;
+  },
+};
+
+/** The flag for one device reading, or null. Null in, null out. */
+function fieldFlag(key, value) {
+  const number = reading(value);
+  if (number == null || !FIELD_FLAGS[key]) return null;
+  return FIELD_FLAGS[key](number);
+}
+
+/*
+ * The one case where a missing value IS the finding (#254).
+ *
+ * Will: "if someone is reporting their position but not Altitude we
+ * should show Unknown as red." A node with no position at all is a
+ * different state -- it is not reporting where it is -- and must not be
+ * red for altitude. Red needs both coordinates AND no altitude.
+ *
+ * Not for TAK and TAK_TRACKER. The firmware gives those roles position
+ * flags without `ALTITUDE_MSL` (`installRoleDefaults` in
+ * src/mesh/NodeDB.cpp), so they send `altitude_hae` in place of
+ * `altitude` (PositionModule.cpp), and ingest keeps only `altitude`.
+ * They DID send a height; red would blame them for what this site
+ * throws away.
+ *
+ * Ingest also stores an altitude of exactly 0 as NULL
+ * (`position.altitude or None`), so a node at sea level reads Unknown.
+ * The lowest ground in Arizona is about 20 m, so on this mesh that
+ * costs nothing, and it is noted here rather than hidden.
+ */
+const ALTITUDE_NOT_OURS = new Set(['TAK', 'TAK_TRACKER']);
+
+function altitudeFlag(node) {
+  const position = node.position;
+  if (!position || reading(position.lat) == null || reading(position.lon) == null) return null;
+  if (position.altitude != null) return null;
+  if (ALTITUDE_NOT_OURS.has(node.role)) return null;
+  return { state: 'bad', word: 'Not sent' };
+}
+
+/**
+ * One value in a definition list, with its flag when it has one.
+ *
+ * The word is visible text, not a `title` or an `aria-label`, so the
+ * accessible name and what a sighted reader sees are the same thing.
+ */
+function fieldValue(text, flag) {
+  if (!flag) return el('dd', { text });
+  const look = HEALTH_STATES[flag.state];
+  return el('dd', { class: `field-flag state-${flag.state}` },
+    el('span', { class: 'field-value', text }), ' ',
+    el('span', { class: 'field-note' },
+      el('span', { class: 'field-glyph', 'aria-hidden': 'true', text: look.glyph }),
+      ` ${flag.word}`));
+}
+
+/* --- What each Identity and Device field means (#256) ------------ */
+
+/*
+ * One sentence or three for every field, for somebody who got their
+ * first node last week. Each says what the field is, why it matters,
+ * and -- where it can be bad -- what to change on the node.
+ *
+ * **The numbers are the constants above, never typed again.** A hint
+ * that says "40 %" beside a row that turns red at 45 % is the page
+ * contradicting itself, and a second copy of a number is how that
+ * happens. `test_node_fields.py` puts a different figure in a constant
+ * and checks the hint follows it.
+ *
+ * Every fact is from the firmware or the protobufs, with the source
+ * beside it; meshtastic/firmware master 6d41e27 (2026-08-20) and the
+ * protobufs at `proto/UPSTREAM_REV.txt`. Setting names are the
+ * protobuf's, because each app words its menus differently and a menu
+ * path that is right in one app is wrong in the next.
+ *
+ * `fieldList` reads this by row key. A row with no entry here gets no
+ * hint, and the cases fail naming the row, so a new field cannot
+ * arrive without one.
+ */
+const FIELD_HINTS = {
+  // NodeDB.cpp builds the number from the last four bytes of the MAC.
+  node_id: 'The node\'s own number, written in hexadecimal after a "!". '
+    + 'The radio makes it from its hardware address, so renaming the node does not change it. '
+    + 'Use it to tell apart two nodes with the same name.',
+  // mesh.proto User.long_name; ingest writes it only from NodeInfo.
+  long_name: 'The full name the owner typed into the Meshtastic app. '
+    + 'It arrives in the node\'s NodeInfo broadcast, with the short name and the hardware. '
+    + '"Not reported" means no NodeInfo from this node has reached this site yet: '
+    + 'see Hardware for when one is sent.',
+  // mesh.proto: "A VERY short name, ideally two characters."
+  short_name: 'A very short name, ideally two characters, for small screens and the map. '
+    + 'The owner sets it next to the long name, and it arrives in the same NodeInfo broadcast, '
+    + 'so it is missing for the same reasons.',
+  // NodeInfoModule.cpp: sent ~30 s after start, then every
+  // node_info_broadcast_secs (Default.h: 3 hours -- config.proto's
+  // comment still says 900 seconds, and the firmware wins); skipped at
+  // max channel use and for CLIENT_HIDDEN. `_enum_name` in
+  // ingest/handlers/nodeinfo.py stores an unknown board as NULL.
+  hw_model: 'The model of the board. The node announces it in its NodeInfo broadcast, '
+    + 'about 30 seconds after it starts and then every 3 hours by default '
+    + '(the node_info_broadcast_secs setting). '
+    + '"Unknown" usually means none of those broadcasts has reached a gateway yet: '
+    + 'restart the node to send one now, or wait. '
+    + `It also stays Unknown when the role is CLIENT_HIDDEN, which does not announce itself; `
+    + `while channel use is ${CHANNEL_USE_MAX} % or more, because the firmware then skips NodeInfo; `
+    + 'or for a board newer than this site knows about.',
+  // config.proto Role; Meshtastic blog, "Choosing the right device
+  // role" (2024-11-10) for where ROUTER belongs and CLIENT_MUTE.
+  role: 'The job the node does in the mesh. Most nodes should be CLIENT, the default, '
+    + 'and clients relay messages for others too. '
+    + 'ROUTER is only for a fixed node on a high, clear site such as a hilltop: '
+    + 'the mesh lets a router relay first, so one in a poor spot uses up hops and makes the mesh worse. '
+    + 'CLIENT_MUTE does not relay at all, and suits a second node in the same place. '
+    + 'REPEATER is deprecated in current firmware. Change it in the device settings.',
+  // Channels::ensureLicensedOperation removes every channel key;
+  // Router.cpp: "Don't use PKC with Ham mode"; NodeInfoModule strips
+  // the public key; NodeDB.cpp forces rebroadcast_mode LOCAL_ONLY
+  // ("Don't let licensed users to rebroadcast encrypted packets");
+  // RadioInterface.cpp lifts the regional power limit. A keyless
+  // channel hashes differently (LongFast: 10, not 8), so it is a
+  // different channel from the default-key one. The rule on encryption
+  // is 47 CFR 97.113(a)(4) in the US: no messages "encoded for the
+  // purpose of obscuring their meaning".
+  is_licensed: 'Licensed (ham) mode, for owners who hold an amateur radio licence. '
+    + 'It lets the node transmit above the normal power limit. '
+    + 'The cost is that amateur rules forbid encryption, so the firmware removes the key from every channel, '
+    + 'sends direct messages without encryption, and stops relaying encrypted packets for other nodes. '
+    + 'Most traffic on this mesh, including the default channel, uses a key, '
+    + 'so a licensed node can neither read nor relay most of what it hears, and can look poorly connected. '
+    + 'Turn it on only if you are licensed and want that trade. Your call sign goes in the long name.',
+  // ingest/handlers/presence.py `store_gateway`: set when a node
+  // publishes to the broker, never cleared. module_config.proto
+  // MQTTConfig (`enabled`, `proxy_to_client_enabled`), channel.proto
+  // `uplink_enabled`.
+  is_mqtt_gateway: 'A gateway is a node with an internet connection that copies what it hears on the radio '
+    + 'up to the MQTT server. It is the only way this site sees the mesh: a packet reaches us only if '
+    + 'some gateway heard it. "Yes" means this site has seen this node upload, and it stays Yes after it stops. '
+    + 'To make a node a gateway: connect it to the internet (Wi-Fi, Ethernet, or through the phone app '
+    + 'with proxy_to_client_enabled), turn on the MQTT module, and turn on uplink for the channel.',
+  // ingest/pipeline.py passes the MQTT topic's channel to store_heard.
+  last_channel: 'The channel this site last saw the node\'s traffic on, from the MQTT topic the gateway used. '
+    + 'On this mesh it is usually the name of the radio preset, such as LongFast or MediumFast. '
+    + 'Nodes on different presets cannot hear each other at all.',
+  first_seen: 'When this site first stored a packet from this node, by this site\'s clock. '
+    + 'That is when we first heard it, not when it was switched on.',
+  // AGENTS.md 9.4: node clocks are wrong, so this is our receive time.
+  last_heard: 'When this site last received any packet from this node, through any gateway, '
+    + 'by this site\'s clock (node clocks are often wrong). '
+    + 'A working node can look quiet here when no gateway is in range of it.',
+  // config.proto ChannelSettings/ModuleSettings position_precision.
+  position: 'The last position the node shared. Owners can round it on purpose, '
+    + 'to keep their home off a public map, so the node may be some distance from this point. '
+    + 'Sharing a position is optional.',
+  // config.proto PositionFlags ALTITUDE and ALTITUDE_MSL;
+  // PositionModule.cpp sends `altitude` only with both; fixed_position.
+  altitude: 'Height above sea level, from the same position report. '
+    + 'It shows Unknown in red when the node sends a position without a height. '
+    + 'To fix it, turn on the Altitude and Altitude-is-MSL position flags. '
+    + 'If they are on, the GPS may have no 3D fix yet: it needs a clearer view of the sky '
+    + 'to measure height than position. A node with a fixed position can have its height entered by hand. '
+    + 'TAK roles send a different kind of height that this site does not store, so they are never red here.',
+  // telemetry.proto DeviceMetrics.battery_level: "0-100 (>100 means
+  // powered)". Bands: `batteryState`, and stats.py's brownout band.
+  battery_level: 'How full the battery is, as the node measures it. '
+    + '"External power" means the node reports no battery, or that it is charging. '
+    + `Yellow from ${BATTERY_LOW} to ${BATTERY_WEAK} %: low enough that the node can restart `
+    + 'when it transmits, then start again and repeat. '
+    + `Red below ${BATTERY_LOW} %: it is about to go quiet. `
+    + 'Fix: charge it, or give it a bigger battery or a solar panel.',
+  // src/power.h OCV_ARRAY: the level is derived per board.
+  voltage: 'The battery voltage the node measures. The battery level is worked out from it, '
+    + 'with a table for that board\'s kind of battery, so this page judges the level and not the voltage: '
+    + 'a voltage that is healthy for one kind of battery is flat for another.',
+  // telemetry.proto: "including well formed TX, RX and malformed RX
+  // (aka noise)"; src/airtime.cpp: the last minute. Thresholds above.
+  channel_utilization: 'How busy the radio channel is around this node: the share of the last minute '
+    + 'it spent sending or hearing anything, including other nodes\' packets and noise. '
+    + `Yellow at ${CHANNEL_USE_POLITE} %: the firmware starts skipping this node's own position, `
+    + 'telemetry and neighbour reports to leave room. '
+    + `Red at ${CHANNEL_USE_MAX} %: it also stops sending its NodeInfo. `
+    + 'It is mostly caused by the neighbourhood, not by this node. What helps: longer broadcast '
+    + 'intervals on your nodes (position, telemetry, NodeInfo), no ROUTER role unless the site calls for it, '
+    + 'and CLIENT_MUTE on a second node in the same place.',
+  // telemetry.proto: "Percent of airtime for transmission used within
+  // the last hour"; RadioLibInterface::completeSending logs every
+  // transmission, relayed ones included.
+  air_util_tx: 'The share of the last hour this node spent transmitting: its own packets and the ones it '
+    + 'relays for others. While it transmits, the channel is busy for every node in range, '
+    + 'so this adds to each neighbour\'s channel use. '
+    + `Yellow at ${AIR_TX_CHECK} %: this site's own line, worth a look; the firmware sets no limit in the US. `
+    + `Red at ${AIR_TX_HIGH} %: on its own it fills the ${CHANNEL_USE_POLITE} % at which the nodes that hear it `
+    + 'start skipping their own broadcasts. '
+    + 'Fix: longer position and telemetry intervals, turn off modules you do not use, '
+    + 'and no ROUTER role unless the site calls for it.',
+  // telemetry.proto: "How long the device has been running since the
+  // last reboot".
+  uptime_seconds: 'How long the node has run since it last restarted. '
+    + 'A node that keeps restarting shows a short uptime every time: '
+    + 'a low battery or a poor power supply is the usual cause.',
+};
 
 /** Scroll to the potential issues panel, which holds every card's evidence. */
 function showIssues() {
@@ -5639,12 +6030,14 @@ function healthChecks(gaps, detail) {
   const battery = device.battery_level;
   let powerState = 'unknown';
   let powerMeasure = 'This node sends no device telemetry.';
-  if (battery != null) {
-    if (battery > ON_MAINS_ABOVE) {
+  const band = batteryState(battery);
+  if (band !== 'unknown') {
+    if (band === 'mains') {
       powerState = 'ok';
       powerMeasure = 'On external power.';
     } else {
-      powerState = battery > BATTERY_WEAK ? 'ok' : battery >= BATTERY_LOW ? 'warn' : 'bad';
+      // The Device panel reads the same function, so the two agree.
+      powerState = band;
       powerMeasure = `Battery ${round(battery, 0)} %`
         + (device.voltage != null ? `, ${round(device.voltage, 2)} V` : '')
         + (powerState === 'warn' ? '. Low enough to restart under load.' : '.');
@@ -8752,6 +9145,17 @@ function revealHints(root = document) {
   for (const heading of $$('h3[data-hint]', root)) {
     fitHint(heading, 'panel', heading.dataset.label || heading.firstChild?.textContent?.trim()
       || heading.textContent.trim(), heading.dataset.hint, []);
+  }
+  /*
+   * And the fields of a definition list (#256): the node page's
+   * Identity and Device. The same button, so a field is explained the
+   * way a column is -- by click, tap or keyboard, never hover only.
+   * `data-label` is required reading here rather than a fallback,
+   * because once the button is in the `dt` its text includes the
+   * button's "i".
+   */
+  for (const term of $$('dt[data-hint]', root)) {
+    fitHint(term, 'field', term.dataset.label || term.textContent.trim(), term.dataset.hint, []);
   }
 }
 

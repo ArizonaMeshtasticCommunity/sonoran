@@ -119,6 +119,13 @@
     <symbol id="i-copy" viewBox="0 0 24 24"><path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/></symbol>
     <!--
+      Leaves this site (#258). The node page's "Open in mesh-graph" opens a
+      different application in a new tab, and a reader must know that
+      before they press it, not after the tab has changed under them.
+      Material Design Icons "open-in-new", the same set as the rest.
+    -->
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14,3V5H17.59L7.76,14.83L9.17,16.24L19,6.41V10H21V3M19,19H5V5H12V3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V12H19V19Z"/></symbol>
+    <!--
       The planner's address search (§6.5).
 
       §3.5's rule is that destructive, sharing and export actions carry an
@@ -1638,7 +1645,17 @@
                 <option value="168">7 days</option>
                 <option value="720" selected>30 days</option>
               </select>
-              <a class="linky" data-node-graph-link target="_blank" rel="noopener" hidden>Open in mesh-graph</a>
+              <!--
+                A link that looks like a button, not a button (#258).
+
+                It opens another application, so it stays an `<a>`: a
+                middle-click, "Open in new tab" and a screen reader's
+                list of links all depend on that, and a `<button>` with a
+                click handler would lose all three. Only the look moves.
+                The hidden sentence says where it goes, because the icon
+                alone is not an accessible name.
+              -->
+              <a class="button-link" data-node-graph-link target="_blank" rel="noopener" hidden><svg class="icon" aria-hidden="true"><use href="#i-external"/></svg><span>Open in mesh-graph</span><span class="sr-only"> (opens in a new tab)</span></a>
             </div>
           </div>
           <div data-node-body></div>

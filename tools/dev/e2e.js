@@ -1302,6 +1302,49 @@ async function main() {
     return `${await buttons.count()} columns explained, hints and exact values both reachable`;
   });
 
+  await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
+    /*
+     * Every Identity and Device field carries the same hint button as a
+     * column heading. The unit cases prove each field HAS a sentence;
+     * only a browser proves `revealHints` turned it into something a
+     * finger and a keyboard can open. So: every `dt` has a button, a tap
+     * opens one and it fits the screen, Escape shuts it, and Enter opens
+     * it again from the keyboard.
+     */
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    must(nodes.length, 'no node to open');
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(3500);
+    const fields = page.locator('[data-page="node"] .summary-row dl.fields dt');
+    const count = await fields.count();
+    must(count >= 10, `only ${count} Identity and Device fields drawn`);
+    const bare = await page.evaluate(() => [...document.querySelectorAll(
+      '[data-page="node"] .summary-row dl.fields dt')]
+      .filter((dt) => !dt.querySelector('.hint-open')).map((dt) => dt.dataset.label || dt.textContent));
+    must(bare.length === 0, `fields with no hint button: ${bare.join(', ')}`);
+
+    const gateway = page.locator('[data-page="node"] dt[data-label="MQTT gateway"] .hint-open');
+    const panel = page.locator(`#${await gateway.getAttribute('aria-controls')}`);
+    must(!(await panel.isVisible()), 'the sentence is on the screen before it is asked for');
+    await gateway.tap();
+    await page.waitForTimeout(250);
+    must(await panel.isVisible(), 'tapping the MQTT gateway hint did not open it');
+    must(/internet/.test(await panel.innerText()), 'the MQTT gateway sentence is not in the panel');
+    const box = await panel.boundingBox();
+    const width = page.viewportSize().width;
+    must(box.x >= -1 && box.x + box.width <= width + 1,
+      `the panel runs off the screen: ${Math.round(box.x)}..${Math.round(box.x + box.width)} of ${width}`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    must(!(await panel.isVisible()), 'Escape did not close it');
+    await gateway.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+    must((await gateway.getAttribute('aria-expanded')) === 'true', 'Enter did not open it');
+    await page.keyboard.press('Escape');
+    return `${count} fields, every one explained; tap, Escape and Enter all work`;
+  });
+
   await journey(phone, 'no form control invites the iOS zoom', async (page) => {
     // Under 16 px, Safari on iOS zooms the page in on focus and does
     // not zoom back out. The planner is the worst case: 21 fields.
@@ -1425,6 +1468,40 @@ async function main() {
       `opening the date range scrolls the page sideways: ${measured.scrollWidth}/${measured.clientWidth}`,
     );
     return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
+  });
+
+  await journey(narrow, 'the mesh-graph link is a link drawn as a button (#258)', async (page) => {
+    /*
+     * The node page is not in the sweep below, because it needs a node
+     * id, so its one new control is walked here. Three claims, each of
+     * which a plausible edit breaks: it is still an `<a>` that opens a
+     * new tab (turning it into a `<button>` loses middle-click), its
+     * icon is sized (an unsized `<svg>` is 300x150), and the page does
+     * not scroll sideways at 320 px with it on screen.
+     */
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    must(nodes.length, 'no node to open');
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(3500);
+    const link = await page.evaluate(() => {
+      const a = document.querySelector('[data-node-graph-link]');
+      const icon = a && a.querySelector('svg.icon');
+      const box = icon ? icon.getBoundingClientRect() : null;
+      return a && {
+        tag: a.tagName, target: a.target, rel: a.rel, href: a.getAttribute('href'),
+        visible: !a.hidden && a.getBoundingClientRect().width > 0,
+        icon: box ? [Math.round(box.width), Math.round(box.height)] : null,
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      };
+    });
+    must(link, 'the node page has no mesh-graph link');
+    must(link.tag === 'A', `it is a <${link.tag.toLowerCase()}>, and only a link opens in a new tab on middle-click`);
+    must(link.target === '_blank' && /noopener/.test(link.rel), `target=${link.target} rel=${link.rel}`);
+    must(link.visible && link.href, 'the link is hidden or has nowhere to go');
+    must(link.icon && link.icon[0] <= 24 && link.icon[1] <= 24, `the icon is unsized: ${link.icon}`);
+    must(link.scroll <= link.client + 1, `the node page scrolls sideways: ${link.scroll}/${link.client}`);
+    return `an <a> with a ${link.icon.join('x')} icon, ${link.scroll}/${link.client} px`;
   });
 
   await journey(narrow, 'every page reflows at 320 CSS px', async (page) => {
