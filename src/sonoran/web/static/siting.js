@@ -235,7 +235,7 @@
       {
         label: 'Height',
         num: true,
-        cell: (row) => (row.elevation_m == null ? EM_DASH : `${row.elevation_m} m`),
+        cell: (row) => (row.elevation_m == null ? EM_DASH : SonoranUnits.heightFromM(row.elevation_m)),
       },
       {
         label: 'Method',

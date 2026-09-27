@@ -39,6 +39,9 @@ REQUESTED_ORDER = [
     "Firehose",
     "RF",
     "Statistics",
+    # Added 2026-09-26 with the settings page. Last on purpose: it is the
+    # one link about the site rather than about the mesh.
+    "Settings",
 ]
 
 
@@ -101,34 +104,57 @@ def test_every_nav_icon_exists() -> None:
 # --- the menu footer ------------------------------------------------
 
 
-def test_the_footer_reads_status_then_preset_then_theme() -> None:
-    """The order somebody asks: connected, which mesh, then too bright."""
+def test_the_footer_reads_status_then_preset_then_settings() -> None:
+    """The order somebody asks: connected, which mesh, then everything else.
+
+    The theme control used to be the third row; it moved to the settings
+    page on 2026-09-26 and the footer holds a link in its place. One
+    control per value -- a cycle button here AND a chooser on the page
+    would be two ways to set one thing.
+    """
     html = _html()
     menu = html[html.index('<div class="site-menu"') : html.index("</aside>")]
     assert menu.index("site-nav") < menu.index("menu-foot"), "the nav is below the footer"
     status = menu.index("data-status-text")
     preset = menu.index("data-preset-switch")
-    theme = menu.index("data-theme-choice")
-    assert status < preset < theme, f"status={status}, preset={preset}, theme={theme}"
+    # `menu-settings-link`, not `href="#settings"`: the nav has a Settings
+    # link too and it comes FIRST in the menu, so matching the href found
+    # the nav entry and reported the footer as being above the status line.
+    settings = menu.index("menu-settings-link")
+    assert status < preset < settings, f"status={status}, preset={preset}, settings={settings}"
+    assert "data-theme-choice" not in menu, (
+        "the theme cycle button is back in the menu, so there are two controls for one value"
+    )
 
 
-def test_the_theme_control_is_readable() -> None:
+def test_the_menu_footer_controls_are_readable() -> None:
     """Will: "It's hard to read the dark on dark".
 
-    It was `color: var(--muted)` on `background: none`, so a grey word sat
-    on the dark sidebar at roughly 3:1 -- under the 4.5:1 body text needs.
+    The theme button was `color: var(--muted)` on `background: none`, so a
+    grey word sat on the dark sidebar at roughly 3:1 -- under the 4.5:1
+    body text needs. That button is gone; the claim now belongs to the
+    link that replaced it, and to the settings options themselves.
     """
     css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
-    rule = css[css.index(".menu-foot .theme-switch {") :]
-    rule = rule[: rule.index("}")]
-    assert "color: var(--text)" in rule, f"still not body colour: {rule!r}"
-    assert "background: var(--panel-2)" in rule, "the control has no surface to sit on"
+    link = css[css.index(".menu-settings-link {") :]
+    link = link[: link.index("}")]
+    assert "color: var(--text)" in link, f"the settings link is not body colour: {link!r}"
+    assert "background: var(--panel-2)" in link, "the link has no surface to sit on"
+    # And the chosen option on the page: white on the accent, because body
+    # colour on the orange is the same problem one control along.
+    option = css[css.index(".settings-option.active {") :]
+    option = option[: option.index("}")]
+    assert "color: #fff" in option, "the chosen option is not readable against the accent"
 
 
 def test_the_controls_can_be_reached_by_keyboard() -> None:
     """A focus ring is not decoration on a control this small."""
     css = (STATIC / "app.css").read_text(encoding="utf-8")
-    for selector in (".preset-choice:focus-visible", ".menu-foot .theme-switch:focus-visible"):
+    for selector in (
+        ".preset-choice:focus-visible",
+        ".menu-settings-link:focus-visible",
+        ".settings-option:focus-visible",
+    ):
         assert selector in css, f"{selector} has no focus style"
 
 
@@ -432,3 +458,45 @@ def test_the_dead_tab_styling_went_with_the_tabs() -> None:
     css = (STATIC / "app.css").read_text(encoding="utf-8")
     assert not re.search(r"^\.tabs[ {]", css, re.M), ".tabs rules are still here"
     assert ".watch-tabs" in css, "the live map's tab styling was removed by mistake"
+
+
+# --- the dense page head (§6.4) -------------------------------------
+
+
+def test_the_map_and_graph_heads_are_dense() -> None:
+    """Will: the title, subtitle and controls on one row, to save height.
+
+    `.page-head` was already a flex row that wraps; on those two pages the
+    controls overflow it because the title block is two stacked lines. The
+    variant makes that block one line so the row has room.
+    """
+    html = re.sub(r"<!--.*?-->", "", _html(), flags=re.S)
+    for page in ("map", "graph"):
+        start = html.index(f'data-page="{page}"')
+        head = html[start : html.index("</div>", html.index("page-head", start))]
+        assert "page-head dense" in head, f"the {page} head is not dense"
+
+
+def test_the_dense_head_still_wraps_on_a_phone() -> None:
+    """One row at 320 px would overflow the document sideways.
+
+    The e2e forbids that, and so does WCAG 2.2 SC 1.4.10 Reflow. So the
+    wrap stays and what changes by width is how much of the title block is
+    shown -- the subtitle is dropped under about a tablet rather than
+    shrinking to a fragment plus an ellipsis.
+    """
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    rule = css[css.index(".page-head.dense {") :]
+    rule = rule[: rule.index("}")]
+    assert "flex-wrap: wrap" in rule, "the dense head cannot wrap, so it will overflow at 320px"
+    assert ".page-head.dense .sub { display: none" in css, (
+        "the subtitle is not dropped at narrow widths"
+    )
+
+
+def test_the_heading_outranks_the_subtitle_when_the_row_is_tight() -> None:
+    """A clipped heading is worse than no subtitle."""
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    heading = css[css.index(".page-head.dense h2 {") :]
+    heading = heading[: heading.index("}")]
+    assert "white-space: nowrap" in heading, "the heading can wrap before the subtitle gives way"

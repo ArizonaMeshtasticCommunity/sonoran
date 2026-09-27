@@ -205,7 +205,10 @@ function snrClass(snr) {
   return 'bad';
 }
 
-const CELSIUS = (value) => (value == null ? null : `${round(value, 1)} C`);
+const CELSIUS = (value) => (
+  // null, not '', because callers test for null to omit the whole row.
+  value == null ? null : SonoranUnits.temperatureFromC(value)
+);
 
 /** Human labels and units for the weather fields the API returns. */
 const WEATHER_LABELS = {
@@ -1230,8 +1233,29 @@ async function loadLeaderboards(page) {
       SonoranPreset.setAvailable(data.presets);
     }
   }
+  /*
+   * "What this cannot know" moves onto the title as an info icon (Will,
+   * 2026-09-26). It was a `<details>` under every board -- twelve
+   * disclosures on one page, each holding a sentence most readers will
+   * read once.
+   *
+   * `data-hint` on the `h3` is all this needs: `revealHints` already turns
+   * that into a button on the heading and a panel that opens on a tap as
+   * well as a hover, which is why nothing new was built for it. It is the
+   * same control the table columns and the dashboard tiles use, so a
+   * reader learns one affordance.
+   *
+   * `data-label` is set because `fitHint` names the button "What this
+   * panel means: <label>", and the heading's own text node includes the
+   * window chip -- without it the accessible name would read "...: Best
+   * hop count last 24 h".
+   *
+   * The sentence is NOT dropped. It is the difference between a
+   * leaderboard and a scoreboard: a ranking that does not say what it
+   * cannot see invites somebody to read it as a judgement.
+   */
   replace(target, data.boards.map((board) => el('div', { class: 'panel leaderboard' },
-    el('h3', {}, board.title,
+    el('h3', { 'data-hint': board.cannot_know || null, 'data-label': board.title }, board.title,
       board.window_hours ? el('span', { class: 'muted', text: `last ${board.window_hours} h` }) : null),
     el('p', { class: 'muted', text: board.measure }),
     board.rows.length
@@ -1253,9 +1277,17 @@ async function loadLeaderboards(page) {
        */
       : empty(data.assessed === false
           ? 'No assessment has been written for this preset yet, so these boards have nothing to rank.'
-          : 'Nothing qualifies in the window.'),
-    el('details', {}, el('summary', { text: 'What this cannot know' }),
-      el('p', { class: 'muted', text: board.cannot_know })))));
+          : 'Nothing qualifies in the window.'))));
+  /*
+   * The hint buttons are added after the boards are in the DOM.
+   *
+   * `revealHints` walks what is already rendered, and `render` calls it
+   * for the page -- but these boards are drawn by their own fetch, which
+   * can land after that. Without this call the caveat would be in the
+   * markup as `data-hint` and no button would ever appear: nothing would
+   * look broken, and the sentence would simply be gone.
+   */
+  revealHints(target.parentElement || target);
 }
 
 const PAGES = {};
@@ -4504,9 +4536,36 @@ function describeNodeList(page) {
   } else {
     parts.push(`${count(nodeTotal)} nodes`);
   }
-  parts.push(`sorted by ${NODE_SORT_WORDS[nodeSort.key] || nodeSort.key}`);
-  if (filters) parts.push(`${filters} filter${filters === 1 ? '' : 's'}`);
+  /*
+   * No longer says how it is sorted or how many filters are on (Will,
+   * 2026-09-26). The column heading already carries the sort -- it is
+   * bold, `aria-sort` names it and the arrow is orange -- and the count of
+   * filters now rides on the Filters button, where it belongs: a control
+   * that says what it is holding beats a sentence describing it from a
+   * distance.
+   *
+   * What stays is the only thing the page could not say anywhere else:
+   * how many nodes there are, and how many of them are on screen.
+   */
   $('[data-node-count]', page).textContent = parts.join(' \u00b7 ');
+
+  /*
+   * The button shows the count, and says so in its accessible name too --
+   * a superscript number is invisible to a screen reader.
+   */
+  const badge = $('[data-node-filter-count]', page);
+  const button = $('[data-node-filter-open]', page);
+  if (badge) {
+    badge.textContent = filters ? String(filters) : '';
+    badge.hidden = !filters;
+  }
+  if (button) {
+    button.classList.toggle('has-filters', Boolean(filters));
+    button.setAttribute(
+      'aria-label',
+      filters ? `Filters, ${filters} in force` : 'Filters',
+    );
+  }
 }
 
 const NODE_SORT_WORDS = {
@@ -4673,7 +4732,10 @@ function identityPanel(node) {
   ];
   if (node.position) {
     rows.push(['Position', `${round(node.position.lat, 5)}, ${round(node.position.lon, 5)}`]);
-    rows.push(['Altitude', node.position.altitude == null ? 'unknown' : `${node.position.altitude} m`]);
+    rows.push([
+      'Altitude',
+      node.position.altitude == null ? 'unknown' : SonoranUnits.heightFromM(node.position.altitude),
+    ]);
   }
   return el('div', { class: 'panel' },
     el('h3', {}, 'Identity'),
@@ -5405,7 +5467,12 @@ function drawNodeHistory(target, history) {
 
 /* --- Route and neighbour widgets (#55) ---------------------------- */
 
-const km = (value) => (value == null ? '-' : `${round(value, value < 10 ? 1 : 0)} km`);
+// Keeps the old precision rule -- a tenth under ten, whole above -- and
+// hands the unit to SonoranUnits, which also drops to feet or metres
+// below a thousand of them.
+const km = (value) => (
+  value == null ? '-' : SonoranUnits.distanceFromKm(value, { digits: value < 10 ? 1 : 0 })
+);
 
 function routesPanel(routes) {
   if (!routes) return el('div', { class: 'panel span-2' }, failure(new Error('Cannot load the routes.')));
@@ -6113,14 +6180,30 @@ PAGES.firehose = async (page) => {
   const packetHref = (row) =>
     `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
   redrawLiveTable(target, rows, (row) => row.packet_key, () => table([
+    /*
+     * Time first, and it IS the link (Will, 2026-09-26).
+     *
+     * There was a leading "Packet / Open >" column whose only content was
+     * the word Open, on every row, beside a Time column that was plain
+     * text. The row is clickable as well -- `rowHref` below -- so the link
+     * was the third way to do one thing.
+     *
+     * It stays a real `<a href>` rather than becoming part of the row's
+     * click handler, and that is the point of the pattern: a handler has
+     * no URL, so right-click, copy-link, middle-click and open-in-new-tab
+     * all stop working, and none of them fail visibly.
+     *
+     * `title` keeps the full stamp, because the cell shows a clock and a
+     * reader scanning a fast list needs the date somewhere.
+     */
     {
-      label: 'Packet',
+      label: 'Time',
       cell: (row) => el('a', {
-        class: 'open-link', href: packetHref(row),
-        'aria-label': `Open packet ${row.packet_key.split(':')[1]}`, text: 'Open \u203a',
+        class: 'linky', href: packetHref(row), title: stamp(row.first_seen_at),
+        'aria-label': `Open the packet from ${row.from_name || row.from_node} at ${stamp(row.first_seen_at)}`,
+        text: clock(row.first_seen_at),
       }),
     },
-    { label: 'Time', cell: (row) => el('span', { title: stamp(row.first_seen_at), text: clock(row.first_seen_at) }) },
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => toLabel(row) },
     { label: 'Type', cell: (row) => portnumCell(row.portnum) },
@@ -6184,28 +6267,33 @@ PAGES.traceroutes = async (page) => {
       cell: (row) =>
         `${(row.hops || []).filter((hop) => hop.snr != null).length} of ${(row.hops || []).length}`,
     },
-    {
-      label: 'Packet',
-      cell: (row) => (row.packet_id == null
-        ? el('span', { class: 'muted', text: 'not recorded' })
-        : el('a', {
-            class: 'linky',
-            href: `#packet/${encodeURIComponent(row.packet_from_node)}/${row.packet_id}`,
-            text: String(row.packet_id),
-          })),
-    },
-    {
-      label: 'Drawing',
-      hint: 'Opens this trace as a drawing in mesh-graph, a separate service.',
-      cell: (row) => (row.graph_url == null
-        ? el('span', { class: 'muted', text: '-' })
-        : el('a', {
-            class: 'linky', href: row.graph_url, target: '_blank', rel: 'noopener',
-            title: 'This traceroute, drawn by mesh-graph',
-            text: 'trace',
-          })),
-    },
-  ], rows, 'No traceroutes recorded.'));
+    /*
+     * The Packet and Drawing columns were here (Will, 2026-09-26).
+     *
+     * Both were per-row links to somewhere else, on a table where the
+     * first column is already a link to the trace itself -- which is the
+     * pattern the whole site is moving to.
+     *
+     * NEITHER capability is lost, and both were checked rather than
+     * assumed:
+     *
+     * - the drawing is on the individual trace page (see `graph_url` in
+     *   the trace view), which is where Will said it belonged;
+     * - the packet id was a link to `#packet/...`, and the reverse lookup
+     *   `api/traceroutes/by-packet/...` is called from the PACKET page, so
+     *   a reader can still get between the two. Removing the column does
+     *   not remove the road.
+     *
+     * `packet_id` and `graph_url` are still sent by the API and are used
+     * elsewhere, so nothing server-side changes.
+     */
+  /*
+   * The whole row opens the trace, and the Time cell is still a real link
+   * to the same place (Will, 2026-09-26). `rowHref` ignores clicks that
+   * land on a link or a button, so the node chips in From and To still go
+   * to their own pages.
+   */
+  ], rows, 'No traceroutes recorded.', { rowHref: (row) => `#traceroute/${row.id}` }));
 };
 
 /* --- Statistics -------------------------------------------------- */
@@ -6618,7 +6706,7 @@ const DECODED_LABELS = {
   ...DEVICE_LABELS,
   latitude: ['Latitude', (v) => round(v, 5)],
   longitude: ['Longitude', (v) => round(v, 5)],
-  altitude: ['Altitude', (v) => `${v} m`],
+  altitude: ['Altitude', (v) => SonoranUnits.heightFromM(v)],
   ground_speed: ['Ground speed', (v) => `${v} m/s`],
   ground_track: ['Ground track', (v) => `${round(v, 0)} deg`],
   sats_in_view: ['Satellites', (v) => String(v)],
@@ -6829,7 +6917,7 @@ function storedPanel(packet) {
         ['Default channel', yesNo(values.has_default_channel)],
         ['Latitude', coordinate(values.latitude_i)],
         ['Longitude', coordinate(values.longitude_i)],
-        ['Altitude', values.altitude == null ? null : `${values.altitude} m`],
+        ['Altitude', values.altitude == null ? null : SonoranUnits.heightFromM(values.altitude)],
         ['Position precision', values.position_precision == null ? null : `${values.position_precision} bits`],
         ['Nodes it sees online', values.num_online_local_nodes],
       ]));
@@ -6852,10 +6940,10 @@ function positionValues(row) {
   const entries = [
     ['Latitude', round(row.latitude, 5)],
     ['Longitude', round(row.longitude, 5)],
-    row.altitude == null ? null : ['Altitude', `${row.altitude} m`],
+    row.altitude == null ? null : ['Altitude', SonoranUnits.heightFromM(row.altitude)],
     ['Precision', doubt == null
       ? 'full'
-      : `about ${doubt >= 1000 ? `${round(doubt / 1000, 1)} km` : `${Math.round(doubt)} m`} `
+      : `about ${SonoranUnits.distanceFromM(doubt)} `
         + `(${row.precision_bits} bits). The node chose to send a rounded position.`],
     row.ground_speed == null ? null : ['Ground speed', `${row.ground_speed} m/s`],
     row.sats_in_view == null ? null : ['Satellites', String(row.sats_in_view)],
@@ -7551,6 +7639,84 @@ async function route() {
  * A radio group rather than a `<select>`: two options, one word each, and
  * a select costs a tap to open before the tap that chooses.
  */
+/*
+ * The settings page.
+ *
+ * One radio group per setting, built from `SonoranSettings.options` so the
+ * page cannot offer a value the store would refuse. The words shown are
+ * here rather than in the store, because the store is about validity and
+ * this is about reading.
+ */
+const SETTING_WORDS = {
+  units: { imperial: 'Miles and feet', metric: 'Kilometres and metres' },
+  temperature: { fahrenheit: 'Fahrenheit', celsius: 'Celsius' },
+  theme: { system: 'Follow my device', light: 'Light', dark: 'Dark' },
+};
+
+PAGES.settings = async (page) => {
+  for (const group of $$('[data-setting]', page)) {
+    drawSettingChoice(group);
+  }
+};
+
+function drawSettingChoice(group) {
+  const name = group.dataset.setting;
+  const words = SETTING_WORDS[name] || {};
+  const current = SonoranSettings.get(name);
+  replace(group, SonoranSettings.options(name).map((value) => el('button', {
+    type: 'button',
+    role: 'radio',
+    class: `settings-option${value === current ? ' active' : ''}`,
+    'aria-checked': String(value === current),
+    // Only the chosen option takes a tab stop; the arrows move between
+    // them. That is how a radio group behaves, and a row of buttons each
+    // taking a stop is the usual way this control is got wrong.
+    tabindex: value === current ? '0' : '-1',
+    text: words[value] || value,
+    onclick: () => applySetting(name, value, group),
+    onkeydown: (event) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      const list = SonoranSettings.options(name);
+      const next = list[(list.indexOf(current) + step + list.length) % list.length];
+      applySetting(name, next, group);
+      const moved = $('.settings-option.active', group);
+      if (moved) moved.focus();
+    },
+  })));
+}
+
+/*
+ * Apply a setting, and show the result.
+ *
+ * The theme is the one that cannot just re-render: the colours come from
+ * an attribute on `<html>` that a script sets before paint, and the
+ * `system` option has to start following the device again. Setting the
+ * attribute here rather than reloading keeps the choice instant, and the
+ * page the reader is on.
+ */
+function applySetting(name, value, group) {
+  if (!SonoranSettings.set(name, value)) return;
+  drawSettingChoice(group);
+  if (name === 'theme') applyTheme(value);
+  // Everything else is a formatting change, so redrawing the page the
+  // reader came from is enough -- and the settings page itself shows no
+  // distances, so this is for when they navigate back.
+  else render(currentPage);
+}
+
+function applyTheme(mode) {
+  const root = document.documentElement;
+  root.setAttribute('data-theme-mode', mode);
+  if (mode === 'system') {
+    const light = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches;
+    root.setAttribute('data-theme', light ? 'light' : 'dark');
+  } else {
+    root.setAttribute('data-theme', mode);
+  }
+}
+
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
@@ -7592,56 +7758,43 @@ function wirePresetSwitch() {
     draw();
     render(currentPage);
   });
-}
-
-function wireTheme() {
-  const button = $('[data-theme-choice]');
-  if (!button) return;
 
   /*
-   * Three states, cycled, with the name saying which one it is in.
+   * A setting changed in ANOTHER tab. `applySetting` already redraws for
+   * the control on this page; this is the other tab's half.
    *
-   * `system` stays the default and stays reachable: a reader who has
-   * set their operating system to light should not have to re-say it
-   * here. `aria-pressed` would be wrong for a three-state control, so
-   * the accessible name carries the state instead -- an icon alone
-   * says nothing to a screen reader, and an icon whose meaning is
-   * "the opposite of what you see" says nothing to anyone.
+   * The theme is excluded because it needs no redraw -- `applyTheme` sets
+   * an attribute on <html> and the CSS follows -- and redrawing on it
+   * would throw away a table's scroll position for a colour change.
    */
-  const ORDER = ['system', 'light', 'dark'];
-  const LOOK = {
-    system: { icon: '#i-theme-system', word: 'System', label: 'Theme: following the system' },
-    light: { icon: '#i-theme-light', word: 'Light', label: 'Theme: light' },
-    dark: { icon: '#i-theme-dark', word: 'Dark', label: 'Theme: dark' },
-  };
+  if (window.SonoranSettings) {
+    SonoranSettings.onChange((name) => {
+      if (name === 'theme') return;
+      render(currentPage);
+    });
+  }
+}
 
-  const show = (mode) => {
-    const look = LOOK[mode] || LOOK.system;
-    $('use', button).setAttribute('href', look.icon);
-    const word = $('[data-theme-word]', button);
-    if (word) word.textContent = look.word;
-    button.setAttribute('aria-label', look.label);
-  };
-
+/*
+ * The theme control moved to the settings page (Will, 2026-09-26).
+ *
+ * `wireTheme` wired a three-state cycle button in the menu footer. It is
+ * gone, and so is this function's body: `$('[data-theme-choice]')` would
+ * now return null and the next line would throw, which is the fourth time
+ * this session a removed control has left a live reference behind.
+ *
+ * What the old button did that is still needed, and now lives in
+ * `applySetting`: `system` has to keep following the device, so choosing
+ * it re-reads `prefers-color-scheme` rather than freezing whatever was on
+ * screen. The pre-paint script in `index.html` still does the same on
+ * load, which is why there is no flash.
+ *
+ * The system-change listener stays here, because it belongs to the page
+ * rather than to any control: with `system` chosen, the device switching
+ * from light to dark has to be followed.
+ */
+function wireTheme() {
   const mode = document.documentElement.getAttribute('data-theme-mode') || 'system';
-  show(mode);
-
-  button.addEventListener('click', () => {
-    const now = document.documentElement.getAttribute('data-theme-mode') || 'system';
-    const next = ORDER[(ORDER.indexOf(now) + 1) % ORDER.length];
-    try {
-      localStorage.setItem('sonoran.theme', next);
-    } catch {
-      // Refused storage: the choice lasts for this load only, so apply
-      // it here rather than reloading into the old one.
-      document.documentElement.setAttribute('data-theme', next === 'light' ? 'light' : 'dark');
-      document.documentElement.setAttribute('data-theme-mode', next);
-      show(next);
-      return;
-    }
-    location.reload();
-  });
-
   if (mode === 'system' && window.matchMedia) {
     matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => location.reload());
   }
@@ -7676,7 +7829,15 @@ function wire() {
     graphPinned.clear();
     render('graph');
   });
-  $('[data-node-apply]').addEventListener('click', () => render('nodes'));
+  /*
+   * The Search button is gone (Will, 2026-09-26). Its handler went with
+   * it: `$('[data-node-apply]')` would return null and the next call
+   * would throw, which is the fifth time in this session a removed
+   * control has left a live reference behind.
+   *
+   * Enter in the search box is wired separately, below, and the box
+   * debounces on input -- so nothing was lost but the second ask.
+   */
   /* The filter panel. */
   const filterPanel = $('[data-node-filters]');
   const filterToggle = $('[data-node-filter-open]');

@@ -45,11 +45,26 @@ def _menu() -> str:
     return HTML[start : HTML.index("</aside>", start)]
 
 
-def test_the_menu_holds_the_nav_the_status_and_the_theme() -> None:
+def test_the_menu_holds_the_nav_the_status_and_a_way_to_the_theme() -> None:
+    """#175 asked for the updated time and the theme inside the menu.
+
+    Both are still reachable from it. The theme control itself moved to the
+    settings page on 2026-09-26 (Will), so what the menu holds now is the
+    LINK to it -- which satisfies #175's intent, that a phone user should
+    not have to leave the menu to find either.
+
+    Asserted as "a way to the theme" rather than "the theme toggle",
+    because the old assertion would have passed on a control that exists
+    and does nothing, and failed on a link that works.
+    """
     body = _menu()
     assert 'id="site-nav"' in body, "the nav is not in the menu"
     assert "data-status" in body, "#175 asks for the updated time inside the menu"
-    assert "theme-switch" in body, "#175 asks for the theme toggle inside the menu"
+    assert 'href="#settings"' in body, (
+        "the menu has no way to reach the theme, which #175 asked to be reachable from it"
+    )
+    # And the page it points at really holds the control.
+    assert 'data-setting="theme"' in HTML, "the settings page has no theme control"
 
 
 def test_the_live_region_is_not_inside_the_menu() -> None:

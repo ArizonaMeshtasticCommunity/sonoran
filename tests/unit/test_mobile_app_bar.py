@@ -12,6 +12,7 @@ cycles system -> light -> dark, verified by clicking through all three
 and by Enter.
 """
 
+import re
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static"
@@ -20,23 +21,30 @@ INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 CSS = (STATIC / "app.css").read_text(encoding="utf-8")
 
 
-def test_the_theme_control_is_a_button_that_names_its_state() -> None:
-    """`aria-pressed` would be wrong: this is three states, not on/off.
+def test_the_theme_control_says_which_state_it_is_in() -> None:
+    """The requirement outlived the control it was written for.
 
-    So the accessible name carries the state. An icon alone says
-    nothing to a screen reader, and an icon whose meaning is "the
-    opposite of what you see" says nothing to anybody.
+    A cycling icon button in the menu carried its state in an
+    `aria-label`, because `aria-pressed` would be wrong for three states
+    and an icon alone says nothing to a screen reader.
+
+    The control moved to the settings page on 2026-09-26 and became three
+    named options, which says the state in a stronger way: the chosen one
+    carries `aria-checked` and every option is a word rather than a glyph.
+    The claim is the same -- a reader is TOLD the state rather than having
+    to infer it -- so it is asserted on the new control.
     """
-    # The element itself. A wider window catches the nav toggle, which
-    # is a real two-state control and correctly carries aria-pressed.
-    start = INDEX.index("data-theme-choice")
-    opening = INDEX.rindex("<button", 0, start)
-    block = INDEX[opening : INDEX.index("</button>", start)]
-    assert "<button" in block, "the theme control is not a button"
-    assert "aria-label" in block, "the theme button does not name its state"
-    assert "aria-pressed" not in block, (
-        "aria-pressed claims an on/off state this control does not have"
-    )
+    assert 'data-setting="theme"' in INDEX, "the theme control is not on the settings page"
+    start = INDEX.index('data-setting="theme"')
+    group = INDEX[INDEX.rindex("<div", 0, start) : INDEX.index("</div>", start)]
+    assert 'role="radiogroup"' in group, "the theme options are not a radio group"
+    assert "aria-label" in group, "the group does not name what it changes"
+    # `aria-pressed` would still be wrong: three states, not on/off.
+    assert "aria-pressed" not in group
+
+    code = APP[APP.index("function drawSettingChoice") :]
+    code = code[: code.index("\nfunction ")]
+    assert "aria-checked" in code, "nothing says which option is chosen"
 
 
 def test_the_theme_keeps_all_three_states() -> None:
@@ -45,18 +53,35 @@ def test_the_theme_keeps_all_three_states() -> None:
     A two-way toggle would make somebody whose operating system is set
     to light say so again here.
     """
-    start = APP.index("const ORDER = [")
-    order = APP[start : start + 80]
+    # Read from the STORE now, which is where the three live since the
+    # cycle button was replaced by a choice. `preset.js`'s sibling holds
+    # them as the field's allowed values, so an option the store would
+    # refuse cannot be offered and a missing one cannot be chosen.
+    settings = (STATIC / "settings.js").read_text(encoding="utf-8")
+    start = settings.index("theme: { values: [")
+    values = settings[start : start + 120]
     for mode in ("system", "light", "dark"):
-        assert f"'{mode}'" in order, f"the theme cycle lost {mode}"
+        assert f"'{mode}'" in values, f"the theme setting lost {mode}"
+    assert "fallback: 'system'" in values, (
+        "following the system is no longer the default, so a reader whose "
+        "device is set to light would have to say so again here"
+    )
 
 
-def test_the_label_changes_with_the_state() -> None:
-    """Three names, one per state, or the button lies in two of them."""
-    start = APP.index("const LOOK = {")
-    look = APP[start : start + 500]
-    for word in ("following the system", "Theme: light", "Theme: dark"):
-        assert word in look, f"no accessible name for {word!r}"
+def test_each_state_has_its_own_words() -> None:
+    """Three names, one per state, or two of the three are unlabelled.
+
+    The old button carried them in `aria-label` because it showed only an
+    icon. The settings page shows the words themselves, which is why
+    "Follow my device" reads better there than "Theme: following the
+    system" did on a button.
+    """
+    start = APP.index("const SETTING_WORDS = {")
+    words = APP[start : APP.index("};", start)]
+    theme = words[words.index("theme:") :]
+    for state in ("system", "light", "dark"):
+        assert f"{state}:" in theme, f"no words for the {state} option"
+    assert "Follow my device" in theme, "the system option does not say what it follows"
 
 
 def test_the_phone_layout_is_a_bar_not_a_stack() -> None:
@@ -71,26 +96,20 @@ def test_the_phone_layout_is_a_bar_not_a_stack() -> None:
     )
 
 
-def test_the_theme_button_is_big_enough_for_a_thumb() -> None:
-    """WCAG 2.2 SC 2.5.8 is 24x24; the phone rule already gives 44.
+def test_the_settings_options_are_big_enough_for_a_thumb() -> None:
+    """WCAG 2.2 SC 2.5.8 is 24x24 CSS px; a finger wants more.
 
-    The control must not opt out of that by being sized in the bar
-    rule, which is the easy mistake when squeezing a row.
+    The claim moved with the control. `.settings-option` has vertical
+    padding plus the line box, which clears 24 px, and the e2e's "no form
+    control invites the iOS zoom" journey holds the font size separately.
+    Asserted because a squeezed row is the easy way to lose it.
     """
-    # Bounded by the end of the media block rather than by a character
-    # count. The original took the 1800 characters after the comment,
-    # which stopped covering `.theme-switch` the moment the block grew
-    # -- and then failed with "substring not found" rather than with
-    # anything about thumbs. The rule it guards has not changed.
-    start = CSS.index("One app bar at phone width")
-    opening = CSS.index("@media", start)
-    block = CSS[opening : CSS.index("\n}", opening)]
-    assert ".theme-switch" in block, (
-        "the phone bar rule no longer mentions the theme button, so this test is measuring nothing"
-    )
-    theme = block[block.index(".theme-switch") :][:200]
-    for forbidden in ("height:", "min-height: 0", "min-height:0"):
-        assert forbidden not in theme, (
-            f"the bar rule sets {forbidden!r} on the theme button, which "
-            f"can take it under the 44 px the phone rule gives every control"
-        )
+    start = CSS.index(".settings-option {")
+    rule = CSS[start : CSS.index("}", start)]
+    found = re.search(r"padding:\s*\.(\d+)rem", rule)
+    assert found, f"no vertical padding on the option: {rule!r}"
+    # .45rem top and bottom plus a ~1.2rem line box is over 24px at a
+    # 16px root. Asserted as a floor rather than a computed height,
+    # because the line box depends on the font.
+    assert int(found.group(1)) >= 4, f"padding is only .{found.group(1)}rem"
+    assert "font-size: .85rem" in rule, "the option text shrank below the tap-target assumption"

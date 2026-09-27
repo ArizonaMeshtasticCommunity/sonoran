@@ -297,8 +297,7 @@
     }
     if (meta.precision_m) {
       const metres = Number(meta.precision_m);
-      const size = metres >= 1000 ? `${(metres / 1000).toFixed(metres >= 10000 ? 0 : 1)} km` : `${Math.round(metres)} m`;
-      lines.push(`The sender blurred its own position to about ${size}`);
+      lines.push(`The sender blurred its own position to about ${SonoranUnits.distanceFromM(metres)}`);
     }
     return lines;
   }
@@ -356,7 +355,7 @@
     return el('div', { class: 'rf-tip' },
       el('strong', { text: row.id }),
       el('div', { text: style.label }),
-      row.alt_m == null ? null : el('div', { text: `${Math.round(row.alt_m).toLocaleString()} m` }),
+      row.alt_m == null ? null : el('div', { text: SonoranUnits.heightFromM(row.alt_m) }),
       readings.map((text) => el('div', { text })),
       extras,
       comment == null || comment === '' ? null : el('div', { class: 'rf-comment', text: String(comment) }),
@@ -374,7 +373,12 @@
       el('div', { text: (row.kinds || []).join(', ') || 'no kinds reported' }),
       counts.heard == null ? null
         : el('div', { text: `last minute: heard ${counts.heard}, sent ${counts.sent}, thinned ${counts.dropped}` }),
-      row.precision_m ? el('div', { class: 'muted', text: `position rounded to ${row.precision_m} m` }) : null,
+      row.precision_m
+        ? el('div', {
+          class: 'muted',
+          text: `position rounded to ${SonoranUnits.distanceFromM(row.precision_m)}`,
+        })
+        : null,
       row.spectrum_last ? el('div', { text: `sweeps the 900 MHz band, newest minute ${ago(row.spectrum_last)}` }) : null,
       el('div', { class: 'muted', text: 'Click to show where it hears aircraft.' }));
   }
@@ -838,8 +842,8 @@
       + ' Levels are relative to this station’s own receiver and never compare two stations.';
   }
 
-  /* A distance in words: "1 km", "500 m". */
-  const metres = (value) => (value >= 1000 ? `${Math.round(value / 100) / 10} km` : `${value} m`);
+  /* A distance in words, in the reader's units: "1 mi", "500 ft". */
+  const metres = (value) => SonoranUnits.distanceFromM(value);
 
   /**
    * Say where the waterfall was measured.

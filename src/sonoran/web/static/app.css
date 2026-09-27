@@ -392,6 +392,31 @@ input::placeholder { color: var(--muted); }
 button { cursor: pointer; }
 
 /*
+ * An icon inside a button (§3.5).
+ *
+ * This rule is not cosmetic. An `<svg>` with no width or height, from CSS
+ * or from an attribute, falls back to 300x150 -- the CSS default for a
+ * replaced element -- so an unsized icon does not look slightly wrong, it
+ * takes the page sideways: the planner's "Copy link" button measured
+ * 321 px inside a 320 px viewport and the reflow journey failed on it.
+ *
+ * `vertical-align` rather than a flex container, because changing a
+ * button's layout mode would reach every button in the dashboard, and
+ * because `:has()` is not something layout correctness should depend on.
+ * The margin hangs off `+ span` so that icon-only buttons -- full screen,
+ * expand, the watch controls -- get no stray gap from it.
+ *
+ * Components with their own size (`.chart-expand .icon` and the rest)
+ * out-specify this and keep theirs.
+ */
+button .icon {
+  width: 1.05rem; height: 1.05rem;
+  fill: currentColor;
+  vertical-align: -.2em;
+}
+button .icon + span { margin-left: .4rem; }
+
+/*
  * A focused control must not be smaller than 16 px on a touch screen.
  *
  * Safari on iOS zooms the whole page in when a form control under 16 px
@@ -1863,9 +1888,7 @@ a.more { text-decoration: none; display: inline-block; }
      for the bar. Full width, so a thumb has the whole row. */
   .site-menu { flex: 1 1 100%; }
   .site-menu .status,
-  .site-menu .theme-switch { width: 100%; margin: .35rem 0 0; }
   .sidebar .status { font-size: .78rem; }
-  .theme-switch { padding: .4rem .5rem; }
 }
 
 @media (max-width: 60rem) and (max-height: 32rem) {
@@ -1902,11 +1925,11 @@ a.more { text-decoration: none; display: inline-block; }
 tr.row-link { cursor: pointer; }
 tr.row-link:hover td { background: var(--panel-2); }
 tr.row-link:focus-within td { background: var(--panel-2); }
-.open-link {
-  display: inline-flex; align-items: center; min-height: 24px; white-space: nowrap;
-  color: var(--accent); font-weight: 600; text-decoration: none;
-}
-.open-link:hover { text-decoration: underline; }
+/*
+ * `.open-link` was here, for a per-row "Open >" link. The first cell is
+ * the link now and the row is clickable, so the third way to do one thing
+ * went (Will, 2026-09-26).
+ */
 td .summary { color: var(--text); }
 
 /* Traceroute path chain */
@@ -2309,18 +2332,55 @@ div.check { cursor: default; }
 .coverage-flag.good { border-color: var(--good); color: var(--good); }
 
 /* Sortable column headings, on the nodes list. */
-th.sortable { padding: 0; }
+/*
+ * A sortable heading holds two controls: the sort button and, where the
+ * column has one, the hint button that `revealHints` adds after it.
+ *
+ * `inline-flex` and not `flex` with `width: 100%`, which is what this was
+ * and is what Will reported as "the tooltip info icon is causing a line
+ * break". A full-width block button fills the cell, so the inline hint
+ * button after it had nowhere to sit but the next line.
+ *
+ * The `th` itself stays a table cell. Making IT the flex container is the
+ * tempting fix and the wrong one: `display: flex` on a `th` stops it being
+ * a table-cell, the browser wraps it in an anonymous cell, and column
+ * alignment goes with it.
+ */
+th.sortable { padding: 0 .35rem 0 0; }
 .sort-button {
-  display: flex; align-items: baseline; gap: .35rem; width: 100%;
+  display: inline-flex; align-items: baseline; gap: .35rem;
   background: none; border: 0; color: inherit; font: inherit;
   text-align: inherit; padding: .5rem .6rem; cursor: pointer;
 }
-th.num .sort-button { justify-content: flex-end; }
+/*
+ * A numeric heading right-aligns from the CELL, not from inside the
+ * button.
+ *
+ * `th.num` already sets `text-align: right` (line ~897), and an
+ * inline-level button follows the cell's text alignment. The old rule
+ * here was `justify-content: flex-end` on a button that filled the cell;
+ * now that the button is only as wide as its label, justifying inside it
+ * does nothing and the heading would have drifted to the left edge.
+ *
+ * Kept as a rule rather than deleted, because the padding has to come
+ * off the right so the label still meets the column's edge.
+ */
+th.num.sortable { padding-right: 0; padding-left: .35rem; }
 .sort-button:hover { color: var(--text); }
 .sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* The arrow is never the only signal: aria-sort carries the same fact
-   and the heading in force is brighter. */
-.sort-arrow { font-size: .8em; opacity: .45; }
+/*
+ * The arrow is never the only signal: `aria-sort` carries the same fact
+ * and the heading in force is brighter.
+ *
+ * The INACTIVE arrow is the same glyph family as the active one -- the
+ * up-down arrow, against the single up or down -- so a reader learns one
+ * shape. It was at .45 opacity, faint enough that Will asked for
+ * "something more universal"; at .7 it reads as "this column sorts"
+ * without competing with the one in force, which is the only one that
+ * goes orange.
+ */
+.sort-arrow { font-size: .8em; opacity: .7; }
+th.sortable:hover .sort-arrow { opacity: 1; }
 th.sorted { color: var(--text); }
 th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 
@@ -2624,14 +2684,6 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 :root[data-theme="light"] .leaflet-tile-pane .basemap-tiles img.leaflet-tile { filter: none; }
 
 /* The theme control in the nav (#50). */
-.theme-switch {
-  display: flex; align-items: center; gap: .4rem;
-  font-size: .82rem; color: var(--muted);
-  padding: .4rem .75rem; background: none; border: 1px solid var(--line);
-  border-radius: .4rem; cursor: pointer;
-}
-.theme-switch:hover { border-color: var(--accent-soft); color: var(--text); }
-.theme-switch .icon { width: 1.1rem; height: 1.1rem; }
 
 /*
  * The 900 MHz band on the RF page (design 7.4). The waterfall is a
@@ -2784,10 +2836,58 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * needs. Body colour on the tinted panel clears it in both themes, and
  * the control now looks like the button it is rather than a hint.
  */
-.menu-foot .theme-switch {
-  width: 100%;
-  margin: 0;
-  justify-content: flex-start;
+
+/*
+ * The `.theme-switch` rules went with the control (Will, 2026-09-26): the
+ * theme is chosen on the settings page now, as words rather than a cycling
+ * icon. `.settings-option` below is what styles it.
+ */
+
+/* ======================================================== the settings page
+ *
+ * One radio group per setting. The same shape as the menu's preset switch,
+ * because they are the same kind of control and looking different would
+ * suggest they behave differently.
+ */
+.settings-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .3rem;
+  padding: .25rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+}
+.settings-option {
+  flex: 1 1 auto;
+  font: inherit;
+  font-size: .85rem;
+  font-weight: 550;
+  padding: .45rem .7rem;
+  border: 1px solid transparent;
+  border-radius: .4rem;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .12s ease, color .12s ease;
+}
+.settings-option:hover { color: var(--text); }
+.settings-option.active {
+  background: var(--accent);
+  /* White against the accent, not `--text`: body colour on the orange is
+     the dark-on-dark problem this change set out to fix. */
+  color: #fff;
+}
+.settings-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/*
+ * The menu's link to the page, styled as the footer's other rows are so
+ * the three read as one group.
+ */
+.menu-settings-link {
+  display: flex;
+  align-items: center;
   gap: .5rem;
   font-size: .82rem;
   color: var(--text);
@@ -2795,10 +2895,97 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   border: 1px solid var(--line);
   border-radius: .5rem;
   padding: .5rem .65rem;
+  text-decoration: none;
 }
-.menu-foot .theme-switch:hover { border-color: var(--accent); }
-.menu-foot .theme-switch .icon { color: var(--accent); }
-.menu-foot .theme-switch:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.menu-settings-link:hover { border-color: var(--accent); }
+.menu-settings-link .icon { color: var(--accent); }
+.menu-settings-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Settings sits apart from the pages that show data. */
+#site-nav .nav-settings { margin-top: .35rem; }
+
+/*
+ * The Filters button, carrying how many are in force.
+ *
+ * A number on the control rather than a sentence beside the table, so the
+ * thing holding the filters is the thing that says so.
+ */
+.filter-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.15rem; height: 1.15rem; margin-left: .4rem; padding: 0 .25rem;
+  background: var(--accent); color: #fff;
+  border-radius: 999px;
+  font-size: .7rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.filter-count[hidden] { display: none; }
+/* Active, so the button reads as holding something even before the number
+   is read. Never colour alone: the number is the other signal. */
+.toggle.has-filters { border-color: var(--accent); color: var(--text); }
+
+/* The filter presets, now the first row inside the panel. */
+.filter-preset-label {
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); margin-right: .2rem;
+}
+.filter-panel .node-starts { margin: 0 0 .9rem; }
+
+/* ============================================ a dense page head (one row)
+ *
+ * Will, on the Map and the Graph: the title, the subtitle and the controls
+ * should sit on one row so the page does not spend three rows before the
+ * thing you came for.
+ *
+ * `.page-head` is already a flex row that wraps; on those two pages the
+ * controls simply overflow it, because the title block is two stacked
+ * lines and the controls are many. This variant makes the title block ONE
+ * line so the row has room.
+ *
+ * What it does not do is force one row at every width. At 320 px a single
+ * row would either overflow the document sideways -- which the e2e
+ * forbids, and rightly: WCAG 2.2 SC 1.4.10 Reflow -- or squeeze the
+ * controls to unusable. So the wrap stays, and what changes by width is
+ * how much of the title block is shown.
+ */
+.page-head.dense {
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .5rem .9rem;
+  margin-bottom: .85rem;
+}
+/* The title block becomes a line: heading, then the subtitle beside it. */
+.page-head.dense > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: .6rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.page-head.dense h2 { font-size: 1.25rem; white-space: nowrap; }
+.page-head.dense .sub {
+  margin: 0;
+  /* One line, and the first thing to give way when the row is tight: the
+     heading and the controls both outrank a description. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.page-head.dense .controls {
+  flex: 0 1 auto;
+  margin-left: auto;
+  /* The controls keep their own wrapping, so a narrow desktop gets two
+     tidy rows rather than one clipped one. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/*
+ * Under about a tablet, the subtitle goes rather than shrinking to
+ * nothing. A three-word fragment followed by an ellipsis tells a reader
+ * less than the heading already did.
+ */
+@media (max-width: 60rem) {
+  .page-head.dense .sub { display: none; }
+  .page-head.dense .controls { margin-left: 0; }
 }

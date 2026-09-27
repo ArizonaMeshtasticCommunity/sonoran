@@ -17,3 +17,9 @@ build/
 
 # Scheduled database backups. See tools/db_backup_scheduled.sh.
 backups/
+
+# Playwright for the e2e journeys, installed into the workspace rather
+# than globally. CI does the same (`npm install --no-save playwright`
+# in ci.yml), so this directory is expected untracked state on the
+# self-hosted runners and must never be committed.
+node_modules/

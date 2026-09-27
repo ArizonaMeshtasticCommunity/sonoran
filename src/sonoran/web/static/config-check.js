@@ -442,16 +442,26 @@ function drawDiagnostics(page) {
   const button = $('[data-config-diagnostics-copy]', page);
   if (!button || button.dataset.wired === 'true') return;
   button.dataset.wired = 'true';
+  /*
+   * The LABEL is written, not the button.
+   *
+   * The button carries an icon beside its text now (§3.5), and
+   * `button.textContent = ...` replaces every child -- so saying "Copied"
+   * would silently delete the icon and never bring it back. The icon is
+   * `aria-hidden` and the span holds the accessible name, so writing the
+   * span is also the half that a screen reader reads.
+   */
+  const label = button.querySelector('span') || button;
   button.addEventListener('click', async () => {
     const text = $('[data-config-diagnostics-text]', page).textContent;
     try {
       await navigator.clipboard.writeText(text);
-      button.textContent = 'Copied';
+      label.textContent = 'Copied';
     } catch {
       // Same shape as the planner's copy control: say what the
       // browser did rather than pretending it worked. The text is on
       // the page already, so selecting it by hand still works.
-      button.textContent = 'The browser refused — select the text above';
+      label.textContent = 'The browser refused — select the text above';
     }
     setTimeout(() => { button.textContent = 'Copy diagnostic report'; }, 4000);
   });

@@ -636,7 +636,10 @@ function setSite(latitude, longitude, name, altitude) {
   if (altitude != null && Number.isFinite(altitude)) {
     // A node reports the height of its ground, not of its antenna. Keep
     // the antenna height the user chose and do not overwrite it.
-    setNotice(`Site set from ${name || 'the map'}. Ground is about ${Math.round(altitude)} m.`, '');
+    setNotice(
+      `Site set from ${name || 'the map'}. Ground is about ${SonoranUnits.heightFromM(altitude)}.`,
+      '',
+    );
   } else {
     setNotice('', '');
   }
@@ -1034,7 +1037,7 @@ function writeSummary(threshold) {
     el('div', { class: 'grid' },
       statTile('Nodes reached', `${reached.length} of ${withPosition.length}`),
       statTile('Ground covered', `${area.toFixed(0)} km2`),
-      statTile('Furthest node', furthest ? `${furthest.toFixed(1)} km` : 'none'),
+      statTile('Furthest node', furthest ? SonoranUnits.distanceFromKm(furthest) : 'none'),
       statTile('Receiver threshold', `${threshold} dBm`)),
     el('section', { class: 'link-budget' },
       el('h4', { text: 'Where the power goes' }),
@@ -1059,7 +1062,7 @@ function writeSummary(threshold) {
           [
             { label: 'Node', cell: (row) => nodeChip(row.node) },
             { label: 'Predicted', num: true, cell: (row) => `${row.level.toFixed(1)} dBm` },
-            { label: 'Distance', num: true, cell: (row) => `${row.range.toFixed(1)} km` },
+            { label: 'Distance', num: true, cell: (row) => SonoranUnits.distanceFromKm(row.range) },
           ],
           reached.slice(0, 40).map((item) => ({
             node: item.node,
@@ -1145,7 +1148,7 @@ function showLink(node, result, request) {
           : `Too weak, ${Math.abs(margin).toFixed(1)} dB short`,
     }),
     el('p', { class: 'muted', style: 'font-size:.82rem' },
-      `${result.distanceKm.toFixed(1)} km on a bearing of ${result.azimuthDeg.toFixed(0)} degrees. ` +
+      `${SonoranUnits.distanceFromKm(result.distanceKm)} on a bearing of ${result.azimuthDeg.toFixed(0)} degrees. ` +
       `Path loss ${result.lossDb.toFixed(1)} dB, predicted ${level.toFixed(1)} dBm.`),
     result.itmErrno > 0
       ? el('p', { class: 'notice warn' },
@@ -1158,23 +1161,39 @@ function showLink(node, result, request) {
   // The ground between the two ends. A hill that touches the straight
   // line is the usual reason a link does not work.
   const instance = echarts.init(chart);
+  /*
+   * The axes convert here rather than through `SonoranUnits.distanceFromM`,
+   * which is the one place in the site that is right to bypass it. That
+   * helper picks its unit per value and returns a string with the unit in
+   * it -- "530 ft", "1.2 mi" -- which is what a reader of one number
+   * wants and exactly wrong for an axis, where every tick has to be the
+   * same unit and a bare number. So the unit is decided once for the axis
+   * and named on it, and the conversion is the exported constant.
+   */
+  const imperial = SonoranUnits.imperial();
+  const along = (km) => (imperial ? km * SonoranUnits.MILES_PER_KM : km);
+  const up = (metres) => (imperial ? metres * SonoranUnits.FEET_PER_METRE : metres);
   instance.setOption({
     grid: { left: 48, right: 16, top: 20, bottom: 28 },
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'category',
-      data: result.profile.map((point) => point.distanceKm.toFixed(1)),
+      data: result.profile.map((point) => along(point.distanceKm).toFixed(1)),
       axisLabel: { color: PALETTE.muted },
-      name: 'km',
+      name: SonoranUnits.distanceUnit(),
     },
-    yAxis: { type: 'value', axisLabel: { color: PALETTE.muted }, name: 'm' },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: PALETTE.muted },
+      name: SonoranUnits.heightUnit(),
+    },
     series: [
       {
         name: 'Ground',
         type: 'line',
         areaStyle: { opacity: 0.35 },
         showSymbol: false,
-        data: result.profile.map((point) => Math.round(point.groundM)),
+        data: result.profile.map((point) => Math.round(up(point.groundM))),
         itemStyle: { color: PALETTE.accent },
       },
     ],

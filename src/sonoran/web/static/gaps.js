@@ -188,13 +188,13 @@
       row.position_confidence === 'coarse'
         ? el('span', {
             class: 'muted',
-            text: `position accurate to about ${Math.round(row.position_deviation_m)} m`,
+            text: `position accurate to about ${SonoranUnits.distanceFromM(row.position_deviation_m)}`,
           })
         : null,
       row.mobile
         ? el('span', {
             class: 'muted',
-            text: `moves: positions spread ${row.position_spread_km} km`,
+            text: `moves: positions spread ${SonoranUnits.distanceFromKm(row.position_spread_km)}`,
           })
         : null);
 

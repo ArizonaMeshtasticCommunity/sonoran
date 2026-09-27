@@ -299,24 +299,140 @@ async function main() {
     );
     const before = await roles();
     const wasSaying = await summary();
+
+    /*
+     * The claim is that the sort goes to the SERVER -- a browser
+     * reordering the rows it already holds would sort one page of a
+     * capped list and leave the rest wrong.
+     *
+     * This used to read that off the summary sentence, which said
+     * "sorted by role". Will had that sentence removed on 2026-09-26
+     * (the heading already carries the sort), so the proxy went with it.
+     * Watching the request is what the sentence stood for anyway, and it
+     * is the stronger claim: a client-side sort issues no request at all,
+     * and no wording change can make this pass for the wrong reason.
+     */
+    const asked = [];
+    const watch = (request) => {
+      const url = request.url();
+      if (url.includes('api/nodes?')) asked.push(url);
+    };
+    page.on('request', watch);
     await page.click('[data-page="nodes"] th:nth-child(4) .sort-button');
     await page.waitForTimeout(2500);
+    page.off('request', watch);
     const after = await roles();
     const nowSaying = await summary();
 
-    /*
-     * The sort happens on the server, so the summary must name the new
-     * order and the total must not move. A browser that reordered the
-     * rows it already held would change the rows and leave the summary
-     * saying the old thing.
-     */
-    must(nowSaying.includes('sorted by role'), `the summary did not follow: ${nowSaying}`);
+    const sortedRequest = asked.find((url) => /[?&]sort=role\b/.test(url));
+    must(
+      sortedRequest !== undefined,
+      `no request carried sort=role; the browser sorted what it held: ${asked.join(' ') || 'no /api/nodes request at all'}`,
+    );
+    // The heading has to say it too, or a screen reader cannot tell which
+    // column the order came from.
+    const announced = await page.getAttribute('[data-page="nodes"] th:nth-child(4)', 'aria-sort');
+    must(
+      announced === 'ascending' || announced === 'descending',
+      `the heading does not announce the sort: aria-sort=${announced}`,
+    );
     const total = (line) => (line.match(/^[\d,]+/) || [''])[0];
     must(total(wasSaying) === total(nowSaying), `the total moved: ${wasSaying} -> ${nowSaying}`);
     must(before.join() !== after.join() || before.length < 2, 'the rows did not reorder');
     const sorted = [...after].sort((a, b) => a.localeCompare(b));
     must(after.join() === sorted.join(), `not in order: ${after.join(', ')}`);
-    return `${total(nowSaying)} nodes, reordered by role`;
+    return `${total(nowSaying)} nodes, reordered by role (aria-sort=${announced})`;
+  });
+
+  await journey(context, 'the units setting reaches the pages', async (page) => {
+    /*
+     * The setting has to change what is ON SCREEN, which is a different
+     * claim from the formatter being right.
+     *
+     * `units.js` had complete unit tests and nineteen call sites, and for
+     * a while NONE of them were wired: every test passed and every page
+     * still read in metres. The only instrument that catches that is a
+     * page compared against itself under the two settings.
+     *
+     * The node page is used because it is the one page in the seeded data
+     * that shows both an altitude and a set of distances. Measurements are
+     * matched with `(?!\sago)` on the end: "52m ago" is a relative time
+     * and would otherwise read as 52 metres.
+     */
+    const MEASURED = /(\d[\d,]*(?:\.\d+)?)\s?(ft|mi|km|m)\b(?!\sago)/g;
+    const measurements = async () => {
+      const text = await page.evaluate(() => document.body.innerText);
+      return [...text.matchAll(MEASURED)].map((hit) => hit[0]);
+    };
+    const openANode = async () => {
+      await open(page, 'nodes');
+      await page.locator('[data-page="nodes"] .linky').first().click();
+      await page.waitForTimeout(4500);
+      must(/#node/.test(page.url()), 'did not reach a node page');
+    };
+
+    await openANode();
+    const imperial = await measurements();
+    const feetOrMiles = imperial.filter((hit) => /\s?(ft|mi)$/.test(hit));
+    must(
+      feetOrMiles.length > 0,
+      `nothing on the node page read in feet or miles: ${imperial.join(', ') || 'no measurement at all'}`,
+    );
+    /*
+     * And NOTHING is left in metric. This assertion is here because the
+     * weaker one above passed a mutation it should have caught: reverting
+     * one of the nineteen call sites to hardcoded kilometres still left
+     * the altitude converting, so "something reads in feet" held while
+     * half the page read in kilometres. Requiring every measurement to
+     * agree is what makes one missed call site fail.
+     */
+    const strayMetric = imperial.filter((hit) => /\s?(m|km)$/.test(hit));
+    must(
+      strayMetric.length === 0,
+      `these read in metric on an imperial page, so a call site is unconverted: ${strayMetric.join(', ')}`,
+    );
+
+    /*
+     * Flipped through the real control rather than by writing storage, so
+     * a control that draws but does nothing fails here too.
+     */
+    await open(page, 'settings');
+    const metricOption = page.locator('[data-setting="units"] .settings-option', { hasText: /metric|kilometre|km/i });
+    must(await metricOption.count() > 0, 'the settings page offers no metric option');
+    await metricOption.first().click();
+    await page.waitForTimeout(600);
+
+    await openANode();
+    const metric = await measurements();
+    const metresOrKm = metric.filter((hit) => /\s?(m|km)$/.test(hit));
+    must(
+      metresOrKm.length > 0,
+      `nothing read in metres or kilometres after switching: ${metric.join(', ') || 'no measurement at all'}`,
+    );
+    must(
+      metric.filter((hit) => /\s?(ft|mi)$/.test(hit)).length === 0,
+      `still showing imperial after switching to metric: ${metric.join(', ')}`,
+    );
+
+    /*
+     * And the numbers are a CONVERSION, not a relabelling. Comparing the
+     * largest measurement each way catches a switch that changes the unit
+     * word and leaves the number alone -- which is what a naive fix looks
+     * like and reads as working.
+     */
+    const biggest = (list) => Math.max(...list.map((hit) => Number(hit.replace(/[^\d.]/g, ''))));
+    const ratio = biggest(imperial) / biggest(metric);
+    must(
+      ratio > 1.2 && ratio < 4,
+      `the numbers did not convert: ${biggest(imperial)} imperial against ${biggest(metric)} metric`,
+    );
+
+    // Put it back, so a later journey on this context is not surprised.
+    await open(page, 'settings');
+    const imperialOption = page.locator('[data-setting="units"] .settings-option', { hasText: /imperial|mile|mi\b/i });
+    if (await imperialOption.count()) await imperialOption.first().click();
+
+    return `${feetOrMiles.slice(0, 3).join(', ')} became ${metresOrKm.slice(0, 3).join(', ')}`;
   });
 
   await journey(context, 'chat reflows at 320px with a busy reaction', async (page) => {
@@ -921,8 +1037,12 @@ async function main() {
   });
   await journey(narrow, 'every page reflows at 320 CSS px', async (page) => {
     const bad = [];
+    // Every page, and the list is hardcoded on purpose so that adding a
+    // page without adding it here is a visible omission rather than a
+    // silent gap in the sweep.
     for (const name of ['dashboard', 'map', 'planner', 'coverage', 'gaps', 'config',
-      'graph', 'nodes', 'chat', 'meshnet', 'firehose', 'traceroutes', 'stats']) {
+      'graph', 'nodes', 'chat', 'meshnet', 'firehose', 'traceroutes', 'stats',
+      'settings']) {
       await open(page, name, 2500);
       const size = await page.evaluate(() => ({
         scroll: document.documentElement.scrollWidth,
@@ -933,7 +1053,7 @@ async function main() {
       if (size.scroll > size.client + 1) bad.push(`${name} ${size.scroll}/${size.client}`);
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
-    return 'all 13 pages, no sideways document scroll';
+    return 'all 14 pages, no sideways document scroll';
   });
   await narrow.close();
 

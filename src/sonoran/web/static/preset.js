@@ -138,6 +138,31 @@ window.SonoranPreset = (function build() {
     }
   }
 
+  /*
+   * Another tab chose a different preset.
+   *
+   * `storage` fires only in the OTHER tabs, so this is what makes two
+   * open tabs agree. It matters more here than for a formatting setting:
+   * the preset decides WHICH nodes and which messages a page shows, so
+   * two tabs left disagreeing show different data with both switches
+   * looking right.
+   *
+   * `chosen` is set directly rather than through `set`, because `set`
+   * would write storage again -- harmless but pointless -- and because a
+   * value that is no longer available must not be adopted: `current()`
+   * already falls back, and adopting it would strand the reader on a
+   * preset no control offers.
+   */
+  if (window.addEventListener) {
+    window.addEventListener('storage', (event) => {
+      if (event.key !== null && event.key !== KEY) return;
+      const before = current();
+      chosen = stored();
+      const after = current();
+      if (after !== before) announce(after);
+    });
+  }
+
   /** Run `fn` whenever the preset changes. Returns an unsubscribe. */
   function onChange(fn) {
     if (typeof fn !== 'function') return () => {};
