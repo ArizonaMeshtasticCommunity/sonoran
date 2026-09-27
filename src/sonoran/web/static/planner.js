@@ -1071,7 +1071,7 @@ function writeSummary(threshold) {
   replace(body, [
     el('div', { class: 'grid' },
       statTile('Nodes reached', `${reached.length} of ${withPosition.length}`),
-      statTile('Ground covered', `${area.toFixed(0)} km2`),
+      statTile('Ground covered', SonoranUnits.areaFromKm2(area)),
       statTile('Furthest node', furthest ? SonoranUnits.distanceFromKm(furthest) : 'none'),
       statTile('Receiver threshold', `${threshold} dBm`)),
     el('section', { class: 'link-budget' },

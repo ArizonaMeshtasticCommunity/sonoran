@@ -930,7 +930,12 @@ Query parameters:
   precision, battery and voltage, temperature and humidity, a neighbor
   count, or a traceroute request or reply. It is null for a kind that
   stores nothing to show (node info, routing), and for a text message
-  while text storage is off. The firehose asks for it.
+  while text storage is off. The firehose asks for it. With it comes
+  `summary_parts`: the same line as a list, where each part is text or a
+  measurement `{"value": 21.5, "unit": "°C"}`. The units are SI (`°C`,
+  `hPa`, `m`), and the browser writes each measurement in the reader's
+  units. `summary` is the parts joined in SI, for a reader that does not
+  convert (#291).
 
 Response item:
 
@@ -1577,6 +1582,10 @@ Response: `available`, `preset`, `presets`, `assessed`, `boards`.
 Each board: `key`, `title`, `measure`, `window_hours`, `cannot_know`,
 `rows`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
 a link row also carries `other_id` and `other_name`.
+`unit` is SI (`km` for a link) or a word (`%`, `gateways`). The API does
+not convert. The page writes `value` and `unit` through
+`SonoranUnits.measure`, which gives miles or kilometres from the reader's
+setting (#291).
 
 - `reachable` — the share of the hours a node was awake in which
   something on the air heard it. At least 24 hours awake. Read from the

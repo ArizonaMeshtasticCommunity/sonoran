@@ -1210,6 +1210,107 @@ async function main() {
     return `${count} charts`;
   });
 
+  await journey(context, 'statistics and the firehose follow the units setting (#291)', async (page) => {
+    /*
+     * Will: "The statistics page isn't showing the distances and metrics
+     * in what is set in the settings. Seems stuck in km."
+     *
+     * The link board is the one that was stuck, and the seeded mesh has
+     * no two-way link long enough to rank, so its rows are supplied here
+     * with the API's own shape: a value and `"unit": "km"`. The firehose
+     * line is supplied the same way, with a temperature and a pressure,
+     * because its server-built prose said "21.5 C" in every mode.
+     */
+    /*
+     * Each handler tolerates the page closing under it. The firehose
+     * refreshes on its own, so a request can still be in flight when the
+     * journey ends, and an unhandled rejection there stops the whole run.
+     */
+    const patch = (edit) => async (route) => {
+      try {
+        const response = await route.fetch();
+        const body = await response.json();
+        edit(body);
+        await route.fulfill({ response, json: body });
+      } catch {
+        await route.abort().catch(() => {});
+      }
+    };
+    await page.route(/\/api\/stats\/leaderboards(\?|$)/, patch((body) => {
+      for (const board of body.boards || []) {
+        if (board.key !== 'longest_link') continue;
+        board.rows = [{
+          node_id: '!0a51d002', display_name: 'Link End A',
+          other_id: '!0a51b007', other_name: 'Link End B',
+          value: 25, unit: 'km', detail: '9.0 dB, 3 and 4 reports each way',
+        }];
+      }
+    }));
+    await page.route(/\/api\/packets\?.*summary=true/, patch((body) => {
+      if (!body.length) return;
+      body[0].summary = '21.5 °C, humidity 40 %, 1013.2 hPa';
+      body[0].summary_parts = [
+        { value: 21.5, unit: '°C' }, ', ', 'humidity 40 %', ', ', { value: 1013.2, unit: 'hPa' },
+      ];
+    }));
+    const linkValue = async () => {
+      await waitFor(page, () => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+        .some((h) => /Longest reliable link/.test(h.textContent)), 20000);
+      return page.evaluate(() => {
+        const board = [...document.querySelectorAll('[data-page="stats"] .leaderboard')]
+          .find((panel) => /Longest reliable link/.test(panel.querySelector('h3').textContent));
+        const value = board && board.querySelector('.board .value');
+        return value ? value.textContent : null;
+      });
+    };
+    const firstSummary = async () => {
+      await waitFor(page, () => !!document.querySelector('[data-page="firehose"] .summary'), 20000);
+      return page.evaluate(() => document.querySelector('[data-page="firehose"] .summary').textContent);
+    };
+
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    const imperialLink = await linkValue();
+    must(imperialLink === '15.5 mi', `the link board read ${imperialLink} in imperial, not 15.5 mi`);
+
+    /*
+     * The same page, switched in place. The page must redraw on its own.
+     *
+     * Only once the first draw has finished: `render` ignores a call that
+     * arrives while a page is still loading, so a switch made mid-load is
+     * not redrawn. That is a separate fault from the one this journey is
+     * for, and it is noted in the #291 report.
+     */
+    await waitFor(page, () => !loading, 60000);
+    await page.evaluate(() => {
+      window.SonoranSettings.set('units', 'metric');
+      window.SonoranSettings.set('temperature', 'celsius');
+    });
+    await waitFor(page, () => {
+      const value = document.querySelector('[data-page="stats"] .leaderboard .board .value');
+      return [...document.querySelectorAll('[data-page="stats"] .leaderboard .board .value')]
+        .some((node) => /km$/.test(node.textContent)) || !value;
+    }, 10000);
+    const metricLink = await linkValue();
+    must(metricLink === '25.0 km', `the link board read ${metricLink} in metric, not 25.0 km`);
+
+    await page.goto(`${BASE}/#firehose`, { waitUntil: 'load' });
+    const metricLine = await firstSummary();
+    must(metricLine === '21.5 °C, humidity 40 %, 1013.2 hPa', `the firehose line read "${metricLine}" in metric`);
+    await waitFor(page, () => !loading, 60000);
+    await page.evaluate(() => {
+      window.SonoranSettings.set('units', 'imperial');
+      window.SonoranSettings.set('temperature', 'fahrenheit');
+    });
+    await waitFor(page, () => {
+      const line = document.querySelector('[data-page="firehose"] .summary');
+      return !!line && /inHg/.test(line.textContent);
+    }, 20000);
+    const imperialLine = await firstSummary();
+    must(imperialLine === '70.7 °F, humidity 40 %, 29.92 inHg', `the firehose line read "${imperialLine}" in imperial`);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    return `${imperialLink} / ${metricLink}; "${imperialLine}"`;
+  });
+
   await journey(context, 'the planner offers its control', async (page) => {
     await open(page, 'planner', 5000);
     must((await page.locator('[data-planner-run]').count()) > 0, 'no run control');

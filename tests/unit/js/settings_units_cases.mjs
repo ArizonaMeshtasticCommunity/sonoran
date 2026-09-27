@@ -268,5 +268,48 @@ eq('an existing theme choice is honoured',
   eq('no change means no announcement', seen, []);
 }
 
+// --- measure: a value the API sent with its SI unit (#291) ------------
+/*
+ * The link leaderboard sent `"unit": "km"` and the page printed it as it
+ * came, so Statistics read km in every mode. `measure` is the one place a
+ * `{value, unit}` pair becomes text.
+ */
+{
+  const { S, U } = load();
+  eq('km in imperial', U.measure(25, 'km'), '15.5 mi');
+  eq('m in imperial', U.measure(120, 'm'), '394 ft');
+  eq('°C in fahrenheit', U.measure(21.5, '°C'), '70.7 °F');
+  eq('hPa is inches of mercury in imperial (Will, #291)', U.measure(1013.25, 'hPa'), '29.92 inHg');
+  eq('mm is inches in imperial (Will, #291)', U.measure(25.4, 'mm'), '1.00 in');
+  eq('m/s is mph in imperial', U.measure(10, 'm/s'), '22.4 mph');
+  eq('km² is mi² in imperial', U.measure(100, 'km²'), '39 mi²');
+  eq('an unknown unit passes through', U.measure(95.5, '%'), '95.5 %');
+  eq('a word for a unit passes through', U.measure(3, 'gateways'), '3 gateways');
+  eq('null is blank, never 0', U.measure(null, 'km'), '');
+  eq('undefined is blank', U.measure(undefined, 'm'), '');
+  eq('an empty string is blank', U.measure('', '°C'), '');
+  eq('null in an unknown unit is blank too', U.measure(null, '%'), '');
+  eq('a real zero is still a reading', U.measure(0, '°C'), '32.0 °F');
+  S.set('units', 'metric');
+  S.set('temperature', 'celsius');
+  eq('km in metric', U.measure(25, 'km'), '25.0 km');
+  eq('m in metric', U.measure(120, 'm'), '120 m');
+  eq('°C in celsius', U.measure(21.5, '°C'), '21.5 °C');
+  eq('hPa in metric', U.measure(1013.25, 'hPa'), '1013.3 hPa');
+  eq('mm in metric', U.measure(2.5, 'mm'), '2.5 mm');
+  eq('m/s is km/h in metric', U.measure(10, 'm/s'), '36.0 km/h');
+  eq('km² in metric', U.measure(4.25, 'km²'), '4.3 km²');
+}
+
+// --- speeds from the other sources ------------------------------------
+{
+  const { S, U } = load();
+  eq('knots in imperial', U.speedFromKn(10), '11.5 mph');
+  eq('km/h in imperial', U.speedFromKmh(100), '62.1 mph');
+  eq('a missing speed is blank', U.speedFromKn(null), '');
+  S.set('units', 'metric');
+  eq('knots in metric', U.speedFromKn(10), '18.5 km/h');
+}
+
 if (failed) { console.log(`\n${failed} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');

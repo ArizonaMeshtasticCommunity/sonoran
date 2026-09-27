@@ -2127,7 +2127,7 @@ def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-unt
     now = datetime.now(UTC)
     sender = 7901
     with migrated_engine.begin() as connection:
-        for packet_id, portnum in ((790001, 3), (790002, 67), (790003, 4)):
+        for packet_id, portnum in ((790001, 3), (790002, 67), (790003, 4), (790004, 67)):
             connection.execute(
                 text(
                     "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
@@ -2149,6 +2149,14 @@ def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-unt
             ),
             {"s": sender, "now": now},
         )
+        connection.execute(
+            text(
+                "INSERT INTO environment_metrics (node_num, packet_id, temperature, "
+                "relative_humidity, barometric_pressure, time) "
+                "VALUES (:s, 790004, 21.5, 40, 1012.8, :now)"
+            ),
+            {"s": sender, "now": now},
+        )
 
     app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
     with TestClient(app) as client:
@@ -2160,6 +2168,24 @@ def test_the_firehose_summary_says_what_each_packet_held(  # type: ignore[no-unt
     assert by_id["790001"].startswith("33.4484, -112.0740, within about")
     assert by_id["790002"] == "on power, 4.20 V"
     assert by_id["790003"] is None, "node info stores nothing to show"
+
+    # A measurement is a number and its SI unit, for the browser to write
+    # in the reader's units (#291). The line used to say "21.5 C" to
+    # everybody, with no degree sign.
+    parts = {row["packet_key"].split(":")[1]: row["summary_parts"] for row in rich}
+    assert parts["790004"] == [
+        {"value": 21.5, "unit": "°C"},
+        ", ",
+        "humidity 40 %",
+        ", ",
+        {"value": 1012.8, "unit": "hPa"},
+    ]
+    assert by_id["790004"] == "21.5 °C, humidity 40 %, 1012.8 hPa"
+    position = parts["790001"]
+    assert position[0] == "33.4484, -112.0740"
+    assert position[1] == ", within about "
+    assert position[2]["unit"] == "m" and position[2]["value"] > 0
+    assert parts["790003"] is None
 
 
 def _seed_four_kinds_of_port_zero(migrated_engine) -> int:  # type: ignore[no-untyped-def]

@@ -214,10 +214,12 @@ const CELSIUS = (value) => (
 const WEATHER_LABELS = {
   temperature: ['Temperature', (v) => CELSIUS(v)],
   relative_humidity: ['Humidity', (v) => `${round(v, 0)} %`],
-  barometric_pressure: ['Pressure', (v) => `${round(v, 1)} hPa`],
-  wind_speed: ['Wind speed', (v) => `${round(v, 1)} m/s`],
+  // Inches of mercury, miles per hour and inches of rain when the reader
+  // chose imperial (Will, #291). The sensors report hPa, m/s and mm.
+  barometric_pressure: ['Pressure', (v) => SonoranUnits.pressureFromHpa(v)],
+  wind_speed: ['Wind speed', (v) => SonoranUnits.speedFromMs(v)],
   wind_direction: ['Wind direction', (v) => `${round(v, 0)} deg`],
-  rainfall: ['Rainfall', (v) => `${round(v, 1)} mm`],
+  rainfall: ['Rainfall', (v) => SonoranUnits.lengthFromMm(v)],
   lux: ['Light', (v) => `${round(v, 0)} lx`],
   uv_lux: ['UV', (v) => `${round(v, 0)} lx`],
   iaq: ['Air quality index', (v) => `${round(v, 0)}`],
@@ -1364,7 +1366,9 @@ async function loadLeaderboards(page) {
       ? el('ol', { class: 'board' }, board.rows.map((row) => el('li', {},
           el('span', { class: 'who' }, nodeChip(row),
             row.other_id ? [' to ', nodeChip({ node_id: row.other_id, display_name: row.other_name })] : null),
-          el('span', { class: 'value', text: `${count(row.value)} ${row.unit}` }),
+          // Through the formatter: the API sends the link board in km,
+          // and printing that as it came is the bug Will saw (#291).
+          el('span', { class: 'value', text: SonoranUnits.measure(row.value, row.unit) }),
           el('span', { class: 'muted detail', text: row.detail }))))
       /*
        * "Nothing qualifies" is a measurement. "Not assessed" is an
@@ -6098,7 +6102,7 @@ function healthChecks(gaps, detail) {
   const position = {
     exact: ['ok', 'Shares its position.'],
     coarse: ['ok', deviation
-      ? `Shares its position, rounded to about ${count(Math.round(deviation))} m.`
+      ? `Shares its position, rounded to about ${SonoranUnits.distanceFromM(deviation)}.`
       : 'Shares its position at reduced precision.'],
     none: ['unknown', 'Shares no position. That is optional on this mesh.'],
   }[confidence] || ['unknown', 'Shares no position. That is optional on this mesh.'];
@@ -8231,6 +8235,21 @@ function redrawLiveTable(target, rows, keyOf, build) {
  */
 const firehoseFilter = { type: '', hours: '' };
 
+/*
+ * The "What it said" line, in the reader's units.
+ *
+ * The server sends `summary_parts`: text, and measurements as a number
+ * with an SI unit. It used to send prose only, so a temperature read
+ * "21.5 C" in every mode (#291). `summary` is the same line in SI and is
+ * used only when the parts are missing.
+ */
+function summaryText(row) {
+  if (!Array.isArray(row.summary_parts)) return row.summary;
+  return row.summary_parts
+    .map((part) => (typeof part === 'string' ? part : SonoranUnits.measure(part.value, part.unit)))
+    .join('');
+}
+
 /** The address of the firehose, filtered. */
 function firehoseHref(type, hours) {
   const params = new URLSearchParams();
@@ -8361,7 +8380,13 @@ PAGES.firehose = async (page) => {
    */
   const packetHref = (row) =>
     `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
-  redrawLiveTable(target, rows, (row) => row.packet_key, () => table([
+  /*
+   * The key carries the reader's units as well as the packet. A kept row
+   * keeps its old text, so without this a change of units on the settings
+   * page left every row already on screen in the old units (#291).
+   */
+  const units = `${SonoranUnits.imperial() ? 'i' : 'm'}${SonoranUnits.fahrenheit() ? 'f' : 'c'}`;
+  redrawLiveTable(target, rows, (row) => `${row.packet_key}|${units}`, () => table([
     /*
      * Time first, and it IS the link (Will, 2026-09-26).
      *
@@ -8394,7 +8419,7 @@ PAGES.firehose = async (page) => {
       wrap: true,
       hint: 'A short line from the decoded packet. Node info and routing packets store nothing to show, and neither does a text message while text storage is off.',
       cell: (row) => (row.summary
-        ? el('span', { class: 'summary', text: row.summary })
+        ? el('span', { class: 'summary', text: summaryText(row) })
         : el('span', { class: 'muted', text: '-' })),
     },
     { label: 'Channel', cell: (row) => row.channel || '-' },
@@ -8889,7 +8914,7 @@ const DECODED_LABELS = {
   latitude: ['Latitude', (v) => round(v, 5)],
   longitude: ['Longitude', (v) => round(v, 5)],
   altitude: ['Altitude', (v) => SonoranUnits.heightFromM(v)],
-  ground_speed: ['Ground speed', (v) => `${v} m/s`],
+  ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromMs(v)],
   ground_track: ['Ground track', (v) => `${round(v, 0)} deg`],
   sats_in_view: ['Satellites', (v) => String(v)],
   precision_bits: ['Precision bits', (v) => String(v)],
@@ -9127,7 +9152,7 @@ function positionValues(row) {
       ? 'full'
       : `about ${SonoranUnits.distanceFromM(doubt)} `
         + `(${row.precision_bits} bits). The node chose to send a rounded position.`],
-    row.ground_speed == null ? null : ['Ground speed', `${row.ground_speed} m/s`],
+    row.ground_speed == null ? null : ['Ground speed', SonoranUnits.speedFromMs(row.ground_speed)],
     row.sats_in_view == null ? null : ['Satellites', String(row.sats_in_view)],
   ].filter(Boolean);
   return el('dl', { class: 'kv' }, entries.flatMap(([label, value]) =>

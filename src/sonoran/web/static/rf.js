@@ -28,11 +28,32 @@
    * drawn in the legend, from this one list.
    */
   const ALTITUDE_BANDS = [
-    { below: 1500, colour: '#f4703f', label: 'under 1,500 m' },
-    { below: 5000, colour: '#e0b64a', label: '1,500 to 5,000 m' },
-    { below: 9000, colour: '#b6d94c', label: '5,000 to 9,000 m' },
-    { below: Infinity, colour: '#46b3e6', label: 'above 9,000 m' },
+    { below: 1500, colour: '#f4703f' },
+    { below: 5000, colour: '#e0b64a' },
+    { below: 9000, colour: '#b6d94c' },
+    { below: Infinity, colour: '#46b3e6' },
   ];
+
+  /*
+   * A band's edge in the reader's units, for the legend.
+   *
+   * Feet are rounded to the nearest hundred: 1,500 m is 4,921 ft, and a
+   * legend that says "under 4,900 ft" is read at a glance where "4,921"
+   * asks to be checked. The colour still changes at the metre edge.
+   */
+  function bandEdge(metres) {
+    if (!SonoranUnits.imperial()) return SonoranUnits.heightFromM(metres);
+    const feet = Math.round((metres * SonoranUnits.FEET_PER_METRE) / 100) * 100;
+    return `${feet.toLocaleString()} ${SonoranUnits.heightUnit()}`;
+  }
+
+  function bandLabel(index) {
+    const band = ALTITUDE_BANDS[index];
+    const lower = index ? ALTITUDE_BANDS[index - 1].below : 0;
+    if (!lower) return `under ${bandEdge(band.below)}`;
+    if (band.below === Infinity) return `above ${bandEdge(lower)}`;
+    return `${bandEdge(lower).split(' ')[0]} to ${bandEdge(band.below)}`;
+  }
   const UNKNOWN_ALTITUDE = '#b59c88';
   // A station's heard cells, from quiet to loud. Relative to that one
   // station: receivers read in their own units, not comparable dBm.
@@ -146,7 +167,10 @@
     return el('div', { class: 'rf-tip' },
       el('strong', { text: name }),
       el('div', { text: `${CATEGORY_NAME[String(meta.category || '').toUpperCase()] || 'Aircraft'} · ICAO ${row.id.toUpperCase()} · ${row.kind === 'uat' ? 'UAT' : 'ADS-B'}` }),
-      el('div', { text: row.alt_m == null ? 'altitude not reported' : `${Math.round(row.alt_m).toLocaleString()} m${row.alt_ref === 'geom' ? ' (GNSS)' : ''}` }),
+      // In the reader's units. In imperial mode that is feet, which is
+      // also how aviation states an altitude. Speed stays in knots in both
+      // modes, as aviation reads it.
+      el('div', { text: row.alt_m == null ? 'altitude not reported' : `${SonoranUnits.heightFromM(row.alt_m)}${row.alt_ref === 'geom' ? ' (GNSS)' : ''}` }),
       row.gs_kn == null ? null : el('div', { text: `${Math.round(row.gs_kn)} kn` }),
       el('div', { class: 'muted', text: `heard ${ago(row.t)} by ${row.station}` }));
   }
@@ -228,9 +252,10 @@
   const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
     'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
   const compass = (deg) => COMPASS[Math.round((((Number(deg) % 360) + 360) % 360) / 22.5) % 16];
-  const mph = (knots) => Math.round(Number(knots) * 1.15078);
-  const fahrenheit = (c) => Math.round(Number(c) * 9 / 5 + 32);
-  const celsius = (f) => Math.round((Number(f) - 32) * 5 / 9);
+  const speed = (knots) => SonoranUnits.speedFromKn(knots);
+  // Rain and snow arrive in inches from APRS and in millimetres from
+  // rtl_433. Both go through the formatter, so one tooltip has one unit.
+  const inches = (value) => SonoranUnits.lengthFromMm(Number(value) * 25.4);
 
   /* The readings a weather station or sensor sends, with their units.
      The keys are the agent's, shared by APRS weather and rtl_433 where
@@ -245,27 +270,32 @@
     if (has('wind_kn') || has('wind_dir_deg') || has('gust_kn')) {
       let text = 'Wind';
       if (has('wind_dir_deg')) text += ` from ${compass(meta.wind_dir_deg)} (${Math.round(meta.wind_dir_deg)}°)`;
-      if (has('wind_kn')) text += ` at ${mph(meta.wind_kn)} mph`;
-      if (has('gust_kn')) text += `, gusts ${mph(meta.gust_kn)} mph`;
+      if (has('wind_kn')) text += ` at ${speed(meta.wind_kn)}`;
+      if (has('gust_kn')) text += `, gusts ${speed(meta.gust_kn)}`;
       lines.push(text);
     }
     if (has('wind_avg_kmh') || has('wind_max_kmh')) {
       const parts = [];
-      if (has('wind_avg_kmh')) parts.push(`${round1(meta.wind_avg_kmh)} km/h`);
-      if (has('wind_max_kmh')) parts.push(`gusts ${round1(meta.wind_max_kmh)} km/h`);
+      if (has('wind_avg_kmh')) parts.push(SonoranUnits.speedFromKmh(meta.wind_avg_kmh));
+      if (has('wind_max_kmh')) parts.push(`gusts ${SonoranUnits.speedFromKmh(meta.wind_max_kmh)}`);
       lines.push(`Wind ${parts.join(', ')}`);
     }
-    if (has('temperature_f')) lines.push(`Temperature ${Math.round(meta.temperature_f)} °F (${celsius(meta.temperature_f)} °C)`);
-    else if (has('temperature_c')) lines.push(`Temperature ${round1(meta.temperature_c)} °C (${fahrenheit(meta.temperature_c)} °F)`);
+    // Only the unit the reader chose. A station that sends Fahrenheit is
+    // read in whole degrees, because that is all it sent.
+    if (has('temperature_f')) {
+      lines.push(`Temperature ${SonoranUnits.temperatureFromC((Number(meta.temperature_f) - 32) * 5 / 9, { digits: 0 })}`);
+    } else if (has('temperature_c')) {
+      lines.push(`Temperature ${SonoranUnits.temperatureFromC(meta.temperature_c)}`);
+    }
     if (has('humidity')) lines.push(`Humidity ${Math.round(meta.humidity)} %`);
-    if (has('pressure_hpa')) lines.push(`Pressure ${round1(meta.pressure_hpa)} hPa`);
+    if (has('pressure_hpa')) lines.push(`Pressure ${SonoranUnits.pressureFromHpa(meta.pressure_hpa)}`);
     const rain = [];
-    if (has('rain_1h_in')) rain.push(`${Number(meta.rain_1h_in).toFixed(2)} in in the last hour`);
-    if (has('rain_24h_in')) rain.push(`${Number(meta.rain_24h_in).toFixed(2)} in in 24 hours`);
-    if (has('rain_today_in')) rain.push(`${Number(meta.rain_today_in).toFixed(2)} in since midnight`);
-    if (has('rain_mm')) rain.push(`${round1(meta.rain_mm)} mm total`);
+    if (has('rain_1h_in')) rain.push(`${inches(meta.rain_1h_in)} in the last hour`);
+    if (has('rain_24h_in')) rain.push(`${inches(meta.rain_24h_in)} in 24 hours`);
+    if (has('rain_today_in')) rain.push(`${inches(meta.rain_today_in)} since midnight`);
+    if (has('rain_mm')) rain.push(`${SonoranUnits.lengthFromMm(meta.rain_mm)} total`);
     if (rain.length) lines.push(`Rain ${rain.join(', ')}`);
-    if (has('snow_24h_in')) lines.push(`Snow ${round1(meta.snow_24h_in)} in in 24 hours`);
+    if (has('snow_24h_in')) lines.push(`Snow ${inches(meta.snow_24h_in)} in 24 hours`);
     if (has('luminosity_wm2')) lines.push(`Sunlight ${Math.round(meta.luminosity_wm2)} W/m²`);
     if (has('battery_ok')) lines.push(meta.battery_ok === false || meta.battery_ok === 0 ? 'Battery low' : 'Battery OK');
     if (has('wx_type')) lines.push(`Weather station type ${meta.wx_type}`);
@@ -315,13 +345,13 @@
     const device = meta.device || deviceName(meta.destination);
     const motion = [];
     if (row.gs_kn != null && Number(row.gs_kn) > 0) {
-      motion.push(`Moving ${mph(row.gs_kn)} mph (${Math.round(row.gs_kn)} kn)`
+      motion.push(`Moving ${speed(row.gs_kn)}`
         + (row.track_deg != null ? `, heading ${compass(row.track_deg)} (${Math.round(row.track_deg)}°)` : ''));
     } else if (row.track_deg != null) {
       motion.push(`Heading ${compass(row.track_deg)} (${Math.round(row.track_deg)}°)`);
     }
     if (row.alt_m != null) {
-      motion.push(`Altitude ${Math.round(row.alt_m * 3.28084).toLocaleString()} ft (${Math.round(row.alt_m).toLocaleString()} m)`);
+      motion.push(`Altitude ${SonoranUnits.heightFromM(row.alt_m)}`);
     }
     const others = Object.entries(meta)
       .filter(([key, value]) => !APRS_KEYS.includes(key) && value != null && value !== '')
@@ -591,7 +621,7 @@
     const note = $('[data-rf-selected]');
     if (note) {
       note.textContent = body.cells.length
-        ? `${station} heard aircraft in ${body.cells.length} places of about 2 km in the last 24 h. Brighter is louder, relative to this station only.`
+        ? `${station} heard aircraft in ${body.cells.length} places of about ${SonoranUnits.distanceFromKm(2)} in the last 24 h. Brighter is louder, relative to this station only.`
         : `${station} has heard no aircraft in the last 24 h.`;
     }
   }
@@ -601,9 +631,9 @@
     if (!target) return;
     target.replaceChildren();
     if (state.shown.aircraft) {
-      target.append(...ALTITUDE_BANDS.map((band) =>
+      target.append(...ALTITUDE_BANDS.map((band, index) =>
         el('span', { class: 'legend-note' },
-          el('span', { class: 'swatch', style: `background:${band.colour}` }), `aircraft ${band.label}`)));
+          el('span', { class: 'swatch', style: `background:${band.colour}` }), `aircraft ${bandLabel(index)}`)));
     }
     for (const [kind, style] of Object.entries(KIND_STYLE)) {
       const source = sourceOf(kind);
@@ -940,11 +970,19 @@
      contract field `raw`). The rows are the ones the map drew, so the
      table never disagrees with it. Text only, like the tooltips. */
   const RAW_NOTE = 'Not sent: this source gives the agent decoded data only';
-  const ft = (metres) => (metres == null ? null : Math.round(Number(metres) * 3.28084));
+  // A whole number in the reader's height unit, for a sortable column.
+  const altitude = (metres) => (metres == null
+    ? null
+    : Math.round(Number(metres) * (SonoranUnits.imperial() ? SonoranUnits.FEET_PER_METRE : 1)));
+  const altitudeColumn = {
+    get label() { return `Altitude ${SonoranUnits.heightUnit()}`; },
+    num: true,
+    value: (row) => altitude(row.alt_m),
+  };
   const heardAt = (row) => Date.parse(row.t) || 0;
   const aprsMotion = (row) => {
     if (row.gs_kn != null && Number(row.gs_kn) > 0) {
-      return `${mph(row.gs_kn)} mph${row.track_deg != null ? ` ${compass(row.track_deg)}` : ''}`;
+      return `${speed(row.gs_kn)}${row.track_deg != null ? ` ${compass(row.track_deg)}` : ''}`;
     }
     return '';
   };
@@ -956,7 +994,7 @@
         { label: 'ICAO', value: (row) => row.id.toUpperCase() },
         { label: 'Callsign', value: (row) => (row.meta || {}).callsign || (row.meta || {}).flight || '' },
         { label: 'Type', value: (row) => CATEGORY_NAME[String((row.meta || {}).category || '').toUpperCase()] || '' },
-        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        altitudeColumn,
         { label: 'Speed kn', num: true, value: (row) => (row.gs_kn == null ? null : Math.round(row.gs_kn)) },
         { label: 'Heading', num: true, value: (row) => (row.track_deg == null ? null : Math.round(row.track_deg)) },
         { label: 'Squawk', value: (row) => (row.meta || {}).squawk || '' },
@@ -970,7 +1008,7 @@
         { label: 'Symbol', value: (row) => symbolName((row.meta || {}).symbol) || (row.meta || {}).symbol || '' },
         { label: 'Status', value: (row) => (row.meta || {}).message || '' },
         { label: 'Moving', value: aprsMotion },
-        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        altitudeColumn,
         { label: 'Weather', wrap: true, value: (row) => weatherLines(row.meta || {}).join(' · ') },
         { label: 'Comment', wrap: true, value: (row) => (row.meta || {}).comment || '' },
         { label: 'How heard', wrap: true, value: (row) => hearingLines(row.meta || {}).join(' · ') },
@@ -981,7 +1019,7 @@
       key: 'sonde', label: 'Radiosondes', kinds: ['sonde'],
       columns: [
         { label: 'Serial', value: (row) => row.id.toUpperCase() },
-        { label: 'Altitude ft', num: true, value: (row) => ft(row.alt_m) },
+        altitudeColumn,
         { label: 'Speed kn', num: true, value: (row) => (row.gs_kn == null ? null : Math.round(row.gs_kn)) },
         { label: 'Heading', num: true, value: (row) => (row.track_deg == null ? null : Math.round(row.track_deg)) },
       ],
