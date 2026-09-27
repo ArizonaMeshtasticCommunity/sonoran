@@ -1,0 +1,22 @@
+# Categories for GitHub's own "Generate release notes" button.
+# tools/release.py is the normal way to write a release and does not read
+# this file: most pull requests here carry no label, so it sorts by the
+# conventional commit prefix of the title. Keep the two in the same order.
+# See docs/RELEASING.md.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+  categories:
+    - title: Security
+      labels: [security]
+    - title: New features
+      labels: [enhancement]
+    - title: Fixes
+      labels: [bug]
+    - title: Documentation
+      labels: [documentation]
+    - title: Other
+      labels: ["*"]
