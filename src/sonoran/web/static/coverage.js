@@ -354,25 +354,32 @@
   /* ---------------------------------------------------------- panels */
 
   function drawLayers(page) {
+    /*
+     * One drop-down, not three pills (#299). The pills were a row of
+     * their own above the map; a select sits in the page head beside
+     * the title. The same three layers, the same state, the same redraw.
+     * The pill's `title` for "Usable both ways" moves to the select while
+     * that layer is chosen, so it is no less reachable than it was.
+     */
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
+    const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
     replace(
       host,
       (state.summary.layers || []).map((layer) =>
-        el('button', {
-          type: 'button',
-          'aria-pressed': String(layer.key === state.layer),
-          text: layer.label,
-          title: layer.key === 'usable' ? 'The weaker of the two directions' : null,
-          onclick: () => {
-            state.layer = layer.key;
-            drawLayers(page);
-            drawTiles();
-            drawLegend(page);
-          },
-        }),
-      ),
+        el('option', { value: layer.key, text: layer.label })),
     );
+    host.value = state.layer;
+    host.title = usableTitle();
+    if (!host.dataset.wired) {
+      host.dataset.wired = 'true';
+      host.addEventListener('change', () => {
+        state.layer = host.value;
+        host.title = usableTitle();
+        drawTiles();
+        drawLegend(page);
+      });
+    }
   }
 
   function drawViews(page) {
@@ -389,6 +396,9 @@
         el('button', {
           type: 'button',
           'aria-pressed': String(state[key]),
+          // Every layer starts shown. The Options count (#299) reads this
+          // to say how many choices differ from where they start.
+          'data-option-default': 'true',
           text: label,
           onclick: () => {
             state[key] = !state[key];
@@ -934,6 +944,9 @@
       '[data-coverage-views]',
       '[data-coverage-opacity-wrap]',
       '.coverage-pick',
+      // Options holds the Show toggles and the opacity (#299), so with no
+      // run it would open an empty panel.
+      '[data-coverage-options]',
     ];
     for (const selector of selectors) {
       for (const node of page.querySelectorAll(selector)) {
@@ -942,6 +955,13 @@
         if (node.hasAttribute('data-coverage-siteset-wrap')) continue;
         node.hidden = hidden;
       }
+    }
+    // And an Options panel left open closes with its button.
+    const panel = $('[data-options-panel]', page);
+    const button = $('[data-coverage-options]', page);
+    if (hidden && panel && button) {
+      panel.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
     }
   }
 

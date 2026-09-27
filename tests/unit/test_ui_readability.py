@@ -165,7 +165,7 @@ def test_the_nav_does_not_lead_three_entries_with_the_same_word() -> None:
     text = _client().get("/").text
     assert 'href="#gaps"' in text
     nav = text[text.index("<nav") : text.index("</nav>")]
-    assert ">Gaps</a>" in nav
+    assert ">Gaps</span></a>" in nav
     assert "Coverage gaps" not in nav
     assert "<h2>Coverage gaps</h2>" in text
 

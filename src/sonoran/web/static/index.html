@@ -30,6 +30,15 @@
         document.documentElement.setAttribute('data-theme-mode', mode);
         var tint = document.querySelector('meta[name="theme-color"]');
         if (tint) tint.setAttribute('content', light ? '#f7f2ec' : '#17100b');
+        // The collapsed sidebar (#300), read here for the same reason as
+        // the theme: set before the first paint, so a reader who chose
+        // icons only never sees the wide sidebar flash first. Storage
+        // refused means expanded, which is where a new visitor starts.
+        try {
+          if (localStorage.getItem('sonoran.nav') === 'collapsed') {
+            document.documentElement.setAttribute('data-sidebar', 'collapsed');
+          }
+        } catch (error) {}
       }());
     </script>
     <!--
@@ -138,6 +147,11 @@
     <symbol id="i-search" viewBox="0 0 24 24"><path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/></symbol>
     <!-- The phone nav button. Open, and closed. -->
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/></symbol>
+    <!-- The desktop sidebar's collapse button (#300). Collapse, and
+         expand. Material Design Icons "chevron-double-left" and
+         "chevron-double-right", the same set as the rest. -->
+    <symbol id="i-rail-collapse" viewBox="0 0 24 24"><path d="M18.41,7.41L17,6L11,12L17,18L18.41,16.59L13.83,12L18.41,7.41M12.41,7.41L11,6L5,12L11,18L12.41,16.59L7.83,12L12.41,7.41Z"/></symbol>
+    <symbol id="i-rail-expand" viewBox="0 0 24 24"><path d="M5.59,7.41L7,6L13,12L7,18L5.59,16.59L10.17,12L5.59,7.41M11.59,7.41L13,6L19,12L13,18L11.59,16.59L16.17,12L11.59,7.41Z"/></symbol>
     <symbol id="i-menu-close" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></symbol>
     </svg>
     <!--
@@ -161,6 +175,21 @@
             <h1>Sonoran</h1>
             <span>azmsh.net</span>
           </div>
+          <!--
+            Collapse the sidebar to its icons (#300). Will: it sits at the
+            top, beside the logo, and a new visitor starts expanded.
+
+            Desktop only. It is `hidden` in the markup and shown by
+            `wireSidebarCollapse` above 60rem, so a browser without the
+            script never shows a button that cannot act, and a phone keeps
+            its Menu button alone. The name says what a press will do,
+            and `aria-expanded` says the state.
+          -->
+          <button type="button" class="sidebar-collapse" data-sidebar-collapse hidden
+                  aria-expanded="true" aria-controls="site-menu"
+                  aria-label="Collapse navigation">
+            <svg class="icon" aria-hidden="true"><use href="#i-rail-collapse"/></svg>
+          </button>
         </div>
         <!--
           Thirteen links, and on a phone they were the whole first screen.
@@ -178,6 +207,19 @@
           breakpoint, and that is one line against an attribute and a
           fight against the `details` user-agent rules.
         -->
+        <!--
+          The live dot and its time, in the phone bar (#271).
+
+          The bar is sticky below 60rem, so this is what stays on the
+          screen on a twelve-screen firehose: whether the page is still
+          following the mesh, without opening the menu. It is a plain
+          visible copy with no `role`, like the one in the menu; the
+          `.sr-only` region below is still the only thing that announces.
+          Hidden on a wide screen, where the sidebar shows the card.
+        -->
+        <p class="bar-status" data-status-bar>
+          <span class="dot"></span><span data-status-bar-text>Connecting</span>
+        </p>
         <button type="button" class="nav-toggle" data-nav-toggle hidden
                 aria-expanded="false" aria-controls="site-menu"
                 aria-label="Menu">
@@ -203,20 +245,20 @@
         <p class="sr-only" data-status-live role="status" aria-live="polite"></p>
         <div class="site-menu" id="site-menu">
         <nav id="site-nav" aria-label="Dashboard pages">
-          <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a>
-          <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg>Nodes</a>
-          <a href="#chat" data-nav="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat</a>
-          <a href="#traceroutes" data-nav="traceroutes"><svg class="icon" aria-hidden="true"><use href="#i-traceroutes"/></svg>Traceroutes</a>
-          <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
-          <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg>Graph</a>
-          <a href="#coverage" data-nav="coverage"><svg class="icon" aria-hidden="true"><use href="#i-coverage"/></svg>Coverage</a>
-          <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg>Planner</a>
-          <a href="#gaps" data-nav="gaps"><svg class="icon" aria-hidden="true"><use href="#i-gaps"/></svg>Gaps</a>
-          <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg>Config check</a>
-          <a href="#meshnet" data-nav="meshnet"><svg class="icon" aria-hidden="true"><use href="#i-meshnet"/></svg>Weekly check-in</a>
-          <a href="#firehose" data-nav="firehose"><svg class="icon" aria-hidden="true"><use href="#i-firehose"/></svg>Firehose</a>
-          <a href="#rf" data-nav="rf"><svg class="icon" aria-hidden="true"><use href="#i-rf"/></svg>RF</a>
-          <a href="#stats" data-nav="stats"><svg class="icon" aria-hidden="true"><use href="#i-stats"/></svg>Statistics</a>
+          <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg><span class="nav-label">Dashboard</span></a>
+          <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg><span class="nav-label">Nodes</span></a>
+          <a href="#chat" data-nav="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg><span class="nav-label">Chat</span></a>
+          <a href="#traceroutes" data-nav="traceroutes"><svg class="icon" aria-hidden="true"><use href="#i-traceroutes"/></svg><span class="nav-label">Traceroutes</span></a>
+          <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg><span class="nav-label">Map</span></a>
+          <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg><span class="nav-label">Graph</span></a>
+          <a href="#coverage" data-nav="coverage"><svg class="icon" aria-hidden="true"><use href="#i-coverage"/></svg><span class="nav-label">Coverage</span></a>
+          <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg><span class="nav-label">Planner</span></a>
+          <a href="#gaps" data-nav="gaps"><svg class="icon" aria-hidden="true"><use href="#i-gaps"/></svg><span class="nav-label">Gaps</span></a>
+          <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg><span class="nav-label">Config check</span></a>
+          <a href="#meshnet" data-nav="meshnet"><svg class="icon" aria-hidden="true"><use href="#i-meshnet"/></svg><span class="nav-label">Weekly check-in</span></a>
+          <a href="#firehose" data-nav="firehose"><svg class="icon" aria-hidden="true"><use href="#i-firehose"/></svg><span class="nav-label">Firehose</span></a>
+          <a href="#rf" data-nav="rf"><svg class="icon" aria-hidden="true"><use href="#i-rf"/></svg><span class="nav-label">RF</span></a>
+          <a href="#stats" data-nav="stats"><svg class="icon" aria-hidden="true"><use href="#i-stats"/></svg><span class="nav-label">Statistics</span></a>
           <!--
             Settings is NOT in this list, and that is the point (Will,
             2026-09-26: "there is a duplicate settings button on the
@@ -265,7 +307,7 @@
             `role`, which is why nothing is read twice.
           -->
           <p class="status" data-status>
-            <span class="dot"></span><span data-status-text>Connecting</span>
+            <span class="dot"></span><span class="nav-label" data-status-text>Connecting</span>
           </p>
 
           <!--
@@ -330,7 +372,7 @@
           -->
           <a class="menu-settings-link" href="#settings" data-nav="settings">
             <svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>
-            <span>Settings</span>
+            <span class="nav-label">Settings</span>
           </a>
         </div>
         </div>
@@ -612,23 +654,36 @@
           <div class="page-head">
             <div>
               <h2>RF</h2>
-              <p class="sub">What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors and the 900 MHz band, from stations that run rf-agent beside an SDR.</p>
+              <p class="sub" data-sub-fold>What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors and the 900 MHz band, from stations that run rf-agent beside an SDR.</p>
             </div>
             <div class="controls">
+              <!--
+                On a phone (#275) the controls marked `data-fold` move
+                into the Filters panel below, and Table and Live stay in
+                the head. On an iPhone SE the head was the whole first
+                screen. `wireFolds` moves them, so each is still one
+                control with one set of listeners, never a copy. The
+                button is only shown where it does something.
+              -->
               <!-- One toggle per source that is stored, built by rf.js
                    from /api/rf/kinds, then the receivers. -->
-              <span class="rf-layers" data-rf-layers></span>
+              <span class="rf-layers" data-rf-layers data-fold></span>
               <button type="button" class="toggle" data-rf-table-toggle aria-pressed="false">Table</button>
-              <label class="muted">Window
+              <label class="muted" data-fold>Window
                 <select data-rf-minutes aria-label="How far back to show">
                   <option value="1">1 min</option>
                   <option value="5" selected>5 min</option>
                   <option value="15">15 min</option>
                 </select>
               </label>
+              <button type="button" class="toggle" data-options-open data-fold-only
+                      data-options-word="Filters" aria-expanded="false"
+                      aria-controls="rf-options">Filters<span class="filter-count"
+                      data-options-count hidden></span></button>
               <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
             </div>
           </div>
+          <div class="options-panel" id="rf-options" data-options-panel hidden></div>
           <p class="notice rf-notice">
             This shows what our receivers picked up, and nothing else. Anything
             missing from it was not received by any of our stations. It is not
@@ -699,7 +754,16 @@
         </section>
 
         <section class="page" data-page="coverage">
-          <div class="page-head">
+          <!--
+            One row, like Nodes and the Map (#299). The layer pills, the
+            Show toggles and the opacity slider were three rows OUTSIDE the
+            head, and the map began 205 px below the head's top at every
+            width. The layer is now one drop-down in the head (Will:
+            "Sounds good"), and the Show toggles and the opacity are behind
+            Options. Every moved control keeps the attribute coverage.js
+            finds it by.
+          -->
+          <div class="page-head dense fit">
             <div>
               <h2>Coverage</h2>
               <p class="sub" data-coverage-sub>Where the mesh reaches, predicted from the routers and repeaters that carry it.</p>
@@ -710,22 +774,28 @@
               <label class="coverage-pick" data-coverage-siteset-wrap hidden>Predict from
                 <select data-coverage-siteset aria-label="Which nodes the run predicted from"></select>
               </label>
+              <label class="coverage-pick">Layer
+                <select data-coverage-layers aria-label="Coverage layer"></select>
+              </label>
+              <button type="button" class="toggle" data-options-open data-coverage-options
+                      aria-expanded="false" aria-controls="coverage-options">Options<span
+                      class="filter-count" data-options-count hidden></span></button>
             </div>
           </div>
 
           <p class="notice" data-coverage-notice hidden></p>
 
-          <div class="coverage-layers" role="group" aria-label="Coverage layer" data-coverage-layers></div>
+          <div class="options-panel" id="coverage-options" data-options-panel hidden>
+            <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
 
-          <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
-
-          <!-- Per-viewer control. Restyles the signal tiles already in
-               this browser; changes nothing on the server. -->
-          <label class="coverage-opacity" data-coverage-opacity-wrap>Signal opacity
-            <input type="range" min="0" max="100" step="5" value="100"
-                   data-coverage-opacity aria-label="Signal strength opacity" />
-            <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
-          </label>
+            <!-- Per-viewer control. Restyles the signal tiles already in
+                 this browser; changes nothing on the server. -->
+            <label class="coverage-opacity" data-coverage-opacity-wrap>Signal opacity
+              <input type="range" min="0" max="100" step="5" value="100"
+                     data-coverage-opacity aria-label="Signal strength opacity" />
+              <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
+            </label>
+          </div>
 
           <div class="map-shell">
             <div id="coverage-map"></div>
@@ -776,7 +846,7 @@
           <div class="page-head">
             <div>
               <h2>Coverage gaps</h2>
-              <p class="sub">Which nodes the mesh is not carrying well, measured from the packets we hold. Shows the preset chosen in the menu: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
+              <p class="sub" data-sub-fold>Which nodes the mesh is not carrying well, measured from the packets we hold. Shows the preset chosen in the menu: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
             </div>
           </div>
 
@@ -1441,13 +1511,13 @@
         <!-- Mesh graph -->
         <section class="page" data-page="graph">
           <!-- A dense head: title, subtitle and controls on one row (Will). -->
-          <div class="page-head dense">
+          <div class="page-head dense fit">
             <div>
               <h2>Mesh graph</h2>
               <p class="sub">One graph per channel. Nodes on different presets cannot hear each other.</p>
             </div>
             <div class="controls">
-              <label class="muted">Window
+              <label class="muted" data-fold>Window
                 <select data-graph-hours>
                   <option value="6">6 h</option>
                   <option value="24" selected>24 h</option>
@@ -1459,34 +1529,48 @@
                      aria-label="Find a node in this graph" />
               <!-- What the search found (#223). Hidden until something is typed. -->
               <span class="muted" data-graph-search-note hidden></span>
-              <!--
-                The mesh is a geographic thing. Laying it out on real
-                positions puts the Phoenix and Tucson knots where they
-                belong and holds them there between redraws, instead of
-                solving a different ball of wire every time.
-              -->
-              <label class="muted">Layout
-                <select data-graph-layout>
-                  <option value="spread" selected>On the ground, spread</option>
-                  <option value="ground">On the ground, exact</option>
-                  <option value="force-geo">Geo-seeded force</option>
-                  <option value="free">Free force</option>
-                  <option value="signal">By signal, not geography</option>
-                </select>
-              </label>
-              <label class="muted">View
+              <label class="muted" data-fold>View
                 <select data-graph-view>
                   <option value="all" selected>Whole preset</option>
                   <option value="backbone">Backbone</option>
                   <option value="focus">One node</option>
                 </select>
               </label>
-              <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
-              <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show unjudged links</button>
-              <button type="button" data-graph-reset>Reset layout</button>
+              <!--
+                Layout, the two link toggles and Reset layout are behind
+                this button (#299, Will: "Sounds good"). Seven controls
+                were 1291 px against a 1136 px head at 1440, so they
+                dropped under the title and broke into two ragged rows.
+                The count on the button is how many of them differ from
+                where they start, so a changed option is never hidden
+                without saying so. The pattern is the Nodes Filters button.
+              -->
+              <button type="button" class="toggle" data-options-open aria-expanded="false"
+                      aria-controls="graph-options">Options<span class="filter-count"
+                      data-options-count hidden></span></button>
               <!-- The "Open mesh-graph" link was here. Removed at Will's
                    request, 2026-09-26. -->
             </div>
+          </div>
+          <div class="options-panel" id="graph-options" data-options-panel hidden>
+            <!--
+              The mesh is a geographic thing. Laying it out on real
+              positions puts the Phoenix and Tucson knots where they
+              belong and holds them there between redraws, instead of
+              solving a different ball of wire every time.
+            -->
+            <label class="muted">Layout
+              <select data-graph-layout>
+                <option value="spread" selected>On the ground, spread</option>
+                <option value="ground">On the ground, exact</option>
+                <option value="force-geo">Geo-seeded force</option>
+                <option value="free">Free force</option>
+                <option value="signal">By signal, not geography</option>
+              </select>
+            </label>
+            <button type="button" class="toggle" data-graph-unconfirmed aria-pressed="false">Show unconfirmed links</button>
+            <button type="button" class="toggle" data-graph-weak aria-pressed="true">Show unjudged links</button>
+            <button type="button" data-graph-reset>Reset layout</button>
           </div>
           <!--
             The channel tab strip was here.
@@ -1680,7 +1764,7 @@
                 <h2 data-chat-title>Chat</h2>
                 <span class="chat-count" data-chat-count hidden></span>
               </div>
-              <p class="sub" data-chat-sub>Messages from the last 7 days. One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
+              <p class="sub" data-chat-sub data-sub-fold>Messages from the last 7 days. One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
             </div>
             <div class="controls">
               <!--

@@ -1316,21 +1316,107 @@ async function main() {
       const answer = await fetch(`${base.replace(/\/$/, '')}/api/coverage`);
       return answer.ok ? (await answer.json()).available === true : false;
     });
-    const select = page.locator('[data-coverage-preset]');
-    const options = await select.locator('option').count();
+    /*
+     * The page's own preset picker (`[data-coverage-preset]`) is gone: the
+     * preset is the menu's, for every page (AGENTS.md 9.7). This used to
+     * select the removed element, which only passed because a preview has
+     * no published run (#299). It now drives the menu's switch, and the
+     * layer drop-down that replaced the three pills.
+     */
+    const layer = page.locator('[data-coverage-layers]');
     if (!published) {
-      must(options === 0, `no run is published, yet ${options} presets were offered`);
+      must(!(await layer.isVisible()), 'no run is published, yet a layer is offered');
       const said = await page.locator('[data-page="coverage"]').innerText();
       must(said.trim().length > 40, 'no run, and the page said nothing about it');
       return 'no run published; the page says so';
     }
-    must(options > 0, 'a run is published but no preset was offered');
-    if (options > 1) {
-      await select.selectOption(await select.locator('option').nth(1).getAttribute('value'));
+    const presets = page.locator('[data-preset-switch] [role="radio"]');
+    const count = await presets.count();
+    must(count > 0, 'a run is published but the menu offers no preset');
+    const layers = await layer.locator('option').count();
+    must(layers >= 2, `a run is published but the layer drop-down holds ${layers} options`);
+    const second = await layer.locator('option').nth(1).getAttribute('value');
+    await layer.selectOption(second);
+    await page.waitForTimeout(800);
+    const title = (await page.locator('[data-coverage-legend-title]').textContent()).trim();
+    const chosen = (await layer.locator('option:checked').textContent()).trim();
+    must(title === chosen, `the legend says "${title}" after choosing "${chosen}"`);
+    if (count === 2) {
+      // Switch, then back: the choice is global and outlives this page.
+      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
       await page.waitForTimeout(4000);
+      must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away on a preset switch');
+      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
+      await page.waitForTimeout(1000);
     }
     must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away');
-    return `${options} presets`;
+    return `${count} presets in the menu, ${layers} layers, legend follows the layer`;
+  });
+
+  await journey(context, 'page heads keep their controls on the title row (#299)', async (page) => {
+    /*
+     * Coverage and Graph dropped their controls under the title at laptop
+     * widths; Graph broke them into two ragged rows as well. Measured with
+     * the CI slack (letter-spacing .05em, as the Who hears it journey does),
+     * because the runner's fonts are wider than a Mac's.
+     */
+    const bad = [];
+    let coverageGap = null;
+    await open(page, 'graph', 1500);
+    await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+    for (const width of [1280, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const name of ['graph', 'coverage', 'nodes', 'firehose', 'planner']) {
+        // A hash change routes in the same document, so the spacing stays.
+        await page.evaluate((hash) => { location.hash = hash; }, name);
+        await page.waitForTimeout(2500);
+        const got = await page.evaluate(() => {
+          const head = document.querySelector('.page.active .page-head');
+          const title = head.querySelector('h2').getBoundingClientRect();
+          const controls = head.querySelector('.controls').getBoundingClientRect();
+          const map = document.querySelector('.page.active #coverage-map');
+          return {
+            below: controls.height > 0 && controls.top >= title.bottom,
+            rows: Math.round(controls.height),
+            map: map ? Math.round(map.getBoundingClientRect().top - head.getBoundingClientRect().top) : null,
+          };
+        });
+        if (got.below) bad.push(`${name} at ${width}: controls under the title`);
+        if (got.rows > 60) bad.push(`${name} at ${width}: controls in ${got.rows} px, more than one row`);
+        if (name === 'coverage' && width === 1440) coverageGap = got.map;
+      }
+    }
+    await page.setViewportSize({ width: 1500, height: 1050 });
+    must(bad.length === 0, bad.join('; '));
+    // With a run published the map starts right under the head (was 205).
+    if (coverageGap != null) must(coverageGap <= 90, `the coverage map starts ${coverageGap} px below the head`);
+    return `5 pages at 1280 and 1440 px, one row each${coverageGap != null ? `; coverage map ${coverageGap} px below the head` : ''}`;
+  });
+
+  await journey(context, 'the graph Options button counts what changed (#299)', async (page) => {
+    await open(page, 'graph', 3000);
+    const button = page.locator('[data-page="graph"] [data-options-open]');
+    const panel = page.locator('#graph-options');
+    must(await panel.isHidden(), 'the options panel starts open');
+    must((await button.getAttribute('aria-label')) === 'Options', `starts as "${await button.getAttribute('aria-label')}"`);
+    await button.click();
+    must((await button.getAttribute('aria-expanded')) === 'true', 'the button did not say it opened');
+    must(await panel.isVisible(), 'the panel did not open');
+    await page.locator('[data-graph-unconfirmed]').click();
+    await page.waitForTimeout(300);
+    must((await button.getAttribute('aria-label')) === 'Options, 1 changed',
+      `one toggle changed, the button says "${await button.getAttribute('aria-label')}"`);
+    await page.locator('[data-graph-layout]').selectOption('free');
+    await page.waitForTimeout(300);
+    const two = (await page.locator('[data-page="graph"] [data-options-count]').textContent()).trim();
+    must(two === '2', `two options changed, the badge says "${two}"`);
+    await page.locator('[data-graph-unconfirmed]').click();
+    await page.locator('[data-graph-layout]').selectOption('spread');
+    await page.waitForTimeout(300);
+    must(await page.locator('[data-page="graph"] [data-options-count]').isHidden(), 'back to the start, the badge stayed');
+    await button.click();
+    must(await panel.isHidden(), 'a second press did not close the panel');
+    return 'opens, counts 1 then 2, clears, closes';
   });
 
   await journey(context, 'the embed snippet can be got at', async (page) => {
@@ -1934,6 +2020,176 @@ async function main() {
   });
 
   /*
+   * The sidebar collapsed to icons (#300), in a context of its own: the
+   * choice is kept in localStorage, and a collapsed sidebar must not leak
+   * into the journeys that share `context`.
+   */
+  const railed = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(railed, 'the desktop sidebar collapses to icons and back (#300)', async (page) => {
+    await open(page, 'dashboard', 1500);
+    const button = page.locator('[data-sidebar-collapse]');
+    const state = () => page.evaluate(() => {
+      const b = document.querySelector('[data-sidebar-collapse]');
+      const canvas = document.querySelector('.page.active .chart canvas');
+      return {
+        width: Math.round(document.querySelector('.sidebar').getBoundingClientRect().width),
+        expanded: b.getAttribute('aria-expanded'),
+        name: b.getAttribute('aria-label'),
+        canvas: canvas ? Math.round(canvas.getBoundingClientRect().width) : 0,
+        host: canvas ? Math.round(canvas.closest('.chart').getBoundingClientRect().width) : 0,
+      };
+    });
+    must(await button.isVisible(), 'no collapse button on a wide screen');
+    await waitFor(page, () => !!document.querySelector('.page.active .chart canvas'), 20000);
+    const wide = await state();
+    must(wide.width >= 200, `a new visitor starts at ${wide.width} px, not expanded`);
+    must(wide.expanded === 'true' && /collapse/i.test(wide.name),
+      `expanded, the button says expanded=${wide.expanded} and "${wide.name}"`);
+
+    await button.click();
+    await page.waitForTimeout(800);
+    const rail = await state();
+    must(rail.width <= 80, `collapsed, the sidebar is still ${rail.width} px wide`);
+    must(rail.expanded === 'false' && /expand/i.test(rail.name),
+      `collapsed, the button says expanded=${rail.expanded} and "${rail.name}"`);
+    // The chart follows the new width without a window resize.
+    must(rail.canvas > wide.canvas + 40, `the chart stayed ${rail.canvas} px (was ${wide.canvas}) after the collapse`);
+    must(Math.abs(rail.canvas - rail.host) <= 2, `the chart is ${rail.canvas} px in a ${rail.host} px box`);
+
+    // Every link keeps its name, and the current page still says so.
+    for (const name of ['Dashboard', 'Nodes', 'Statistics', 'Settings']) {
+      must(await page.getByRole('link', { name, exact: true }).isVisible(), `no visible link named ${name} in the rail`);
+    }
+    must((await page.getByRole('link', { name: 'Dashboard', exact: true }).getAttribute('aria-current')) === 'page',
+      'the current page lost aria-current in the rail');
+    const presets = page.getByRole('radio');
+    must((await presets.count()) >= 1 && await presets.first().isVisible(), 'the preset is not in the rail');
+
+    // A label on hover, and on keyboard focus, beside the rail.
+    const label = (nav) => page.evaluate((key) => {
+      const box = document.querySelector(`#site-nav a[data-nav="${key}"] .nav-label`).getBoundingClientRect();
+      return { x: Math.round(box.x), width: Math.round(box.width) };
+    }, nav);
+    await page.hover('#site-nav a[data-nav="nodes"]');
+    await page.waitForTimeout(150);
+    const hovered = await label('nodes');
+    must(hovered.width > 20 && hovered.x >= rail.width, `hovering Nodes shows no label beside the rail (${JSON.stringify(hovered)})`);
+    await page.mouse.move(900, 500);
+    await button.focus();
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(150);
+    const focused = await label('dashboard');
+    must(focused.width > 20 && focused.x >= rail.width, `Tab to Dashboard shows no label (${JSON.stringify(focused)})`);
+
+    /*
+     * A new page load, not a hash change: going from #dashboard to
+     * #planner in the same page is the same document, and would find the
+     * attribute still standing rather than read the stored choice back.
+     * A second tab in this context shares the storage and is a real load.
+     */
+    const fresh = await page.context().newPage();
+    // The planner's sticky column stays flush in this state too (#108).
+    await fresh.goto(`${BASE}/#planner`, { waitUntil: 'load' });
+    await fresh.waitForTimeout(2000);
+    await fresh.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await fresh.waitForTimeout(400);
+    const flush = await fresh.evaluate(() => {
+      const box = document.querySelector('.sidebar').getBoundingClientRect();
+      return { top: box.top, gap: window.innerHeight - box.bottom, width: box.width };
+    });
+    await fresh.close();
+    must(flush.width <= 80, 'the collapse did not survive a new page load');
+    must(flush.top <= 1 && flush.gap <= 1, `the collapsed sidebar left a gap: ${JSON.stringify(flush)}`);
+
+    // Set before the script runs: with app.js served empty, only the boot
+    // script in index.html can have collapsed it, so there is no flash.
+    const bare = await page.context().newPage();
+    await bare.route(/\/static\/app\.js/, (route) => route.fulfill({ contentType: 'application/javascript', body: '' }));
+    await bare.goto(`${BASE}/#dashboard`, { waitUntil: 'load' });
+    const early = Math.round(await bare.evaluate(() => document.querySelector('.sidebar').getBoundingClientRect().width));
+    await bare.close();
+    must(early <= 80, `on a new load, before app.js, the sidebar is ${early} px: it would flash wide`);
+
+    // A second press expands it.
+    await button.click();
+    await page.waitForTimeout(300);
+    const back = await state();
+    must(back.width >= 200 && back.expanded === 'true', `a second press left it at ${back.width} px`);
+    return `${wide.width} -> ${rail.width} px, chart ${wide.canvas} -> ${rail.canvas} px, kept on reload, labels on hover and focus`;
+  });
+  await railed.close();
+
+  /*
+   * Storage refused: the page works and starts expanded. A getter that
+   * throws is what Safari's private mode and a blocked site look like.
+   */
+  const nostore = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await nostore.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', { get() { throw new Error('storage refused'); } });
+  });
+  await journey(nostore, 'the sidebar collapse works with storage refused (#300)', async (page) => {
+    await open(page, 'dashboard', 2000);
+    const width = () => page.evaluate(() => Math.round(document.querySelector('.sidebar').getBoundingClientRect().width));
+    must(await width() >= 200, 'with storage refused the sidebar did not start expanded');
+    await page.locator('[data-sidebar-collapse]').click();
+    await page.waitForTimeout(300);
+    must(await width() <= 80, 'with storage refused the button did nothing');
+    return 'starts expanded, and collapses for the visit';
+  });
+  await nostore.close();
+
+  /*
+   * An iPad on its side (#267). 1112 px is wider than every phone
+   * breakpoint, so this is the device that proves touch sizing follows
+   * the pointer and not the width. `hasTouch` makes Chromium match
+   * `(pointer: coarse)`, which the journey checks before it believes
+   * anything else.
+   */
+  const tablet = await browser.newContext({
+    viewport: { width: 1112, height: 834 }, isMobile: true, hasTouch: true,
+  });
+
+  await journey(tablet, 'a tablet gets finger-sized targets at desktop width (#267)', async (page) => {
+    await open(page, 'dashboard', 1500);
+    // The ? buttons arrive with the data, so wait for them rather than
+    // for a fixed time.
+    await waitFor(page, () => document.querySelectorAll('[data-page="dashboard"] .hint-open').length > 0, 20000);
+    const got = await page.evaluate(() => {
+      const tall = (selector) => [...document.querySelectorAll(selector)]
+        .filter((node) => node.getBoundingClientRect().width > 0)
+        .map((node) => Math.round(node.getBoundingClientRect().height));
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        sidebar: getComputedStyle(document.querySelector('.sidebar')).position,
+        nav: tall('#site-nav a'),
+        hints: tall('[data-page="dashboard"] .hint-open'),
+        preset: tall('.preset-choice'),
+      };
+    });
+    must(got.coarse, 'the tablet context does not match (pointer: coarse), so this proves nothing');
+    must(got.sidebar === 'sticky', `the sidebar is ${got.sidebar}, so this is not the desktop layout`);
+    for (const [name, heights] of [['nav link', got.nav], ['? button', got.hints], ['preset choice', got.preset]]) {
+      must(heights.length > 0, `no ${name} on the page to measure`);
+      const low = Math.min(...heights);
+      must(low >= 44, `a ${name} is ${low} px tall on a touch screen, under 44`);
+    }
+    return `${got.nav.length} nav links, ${got.hints.length} ? buttons, ${got.preset.length} preset choices, all 44 px or more`;
+  });
+
+  await journey(context, 'a mouse keeps the desktop sizes (#267)', async (page) => {
+    // The other half: the change must not reach a mouse on a wide screen.
+    await open(page, 'dashboard', 2500);
+    const got = await page.evaluate(() => ({
+      coarse: matchMedia('(pointer: coarse)').matches,
+      nav: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
+    }));
+    must(!got.coarse, 'the desktop context matches (pointer: coarse)');
+    must(got.nav < 44, `a nav link is ${got.nav} px tall with a mouse; the desktop size changed`);
+    return `nav link ${got.nav} px with a mouse`;
+  });
+  await tablet.close();
+
+  /*
    * A phone, walked as a phone.
    *
    * Everything above runs at 1500 px, where the nav is a list of pages
@@ -2018,6 +2274,132 @@ async function main() {
       'the settings page opened with no controls on it');
 
     return `${links} links + settings in the footer, menu closes on choosing`;
+  });
+
+  await journey(phone, 'the phone bar stays on the screen while scrolling (#271)', async (page) => {
+    /*
+     * The menu button and the live state were both gone after 1,200 px.
+     * The dashboard is the page scrolled here because it is long on every
+     * instance, seeded or live.
+     */
+    await open(page, 'dashboard', 1500);
+    // Wait for the page to be long enough, rather than for a fixed time:
+    // on a loaded runner the feeds arrive late and the page is short.
+    await waitFor(page, () => document.documentElement.scrollHeight > window.innerHeight + 1300, 30000);
+    await page.evaluate(() => window.scrollTo(0, 1200));
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const bar = document.querySelector('.sidebar').getBoundingClientRect();
+      const button = document.querySelector('[data-nav-toggle]').getBoundingClientRect();
+      const status = document.querySelector('[data-status-bar]');
+      return {
+        scrollY: Math.round(window.scrollY),
+        top: Math.round(bar.top),
+        height: Math.round(bar.height),
+        button: [Math.round(button.top), Math.round(button.bottom)],
+        status: status.getBoundingClientRect().width > 0 ? status.textContent.trim() : '',
+        opaque: getComputedStyle(document.querySelector('.sidebar')).backgroundColor,
+      };
+    });
+    must(got.scrollY >= 600, `the dashboard only scrolled to ${got.scrollY}, so this proves nothing`);
+    must(got.top === 0, `the bar is at ${got.top} px after scrolling ${got.scrollY}, not stuck at the top`);
+    must(got.height <= 72, `the bar is ${got.height} px tall; it must stay one compact row`);
+    must(got.button[0] >= 0 && got.button[1] <= got.height, 'the menu button is not inside the bar');
+    must(got.status.length > 0, 'the live state is not shown in the bar');
+    must(!/rgba\(.*, 0\)|transparent/.test(got.opaque), `the bar is see-through: ${got.opaque}`);
+
+    // Open, the menu is taller than the screen. A sticky box never
+    // scrolls its own foot into view, so the bar must scroll inside.
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(250);
+    await page.locator('.menu-settings-link').scrollIntoViewIfNeeded();
+    const settings = await page.locator('.menu-settings-link').boundingBox();
+    const height = page.viewportSize().height;
+    must(settings && settings.y >= 0 && settings.y + settings.height <= height + 1,
+      `with the menu open, Settings cannot be brought on screen (${settings && Math.round(settings.y)} of ${height})`);
+    return `stuck at 0 after ${got.scrollY} px, ${got.height} px tall, shows "${got.status}"`;
+  });
+
+  /*
+   * The drawer on a full iPhone 14 screen (#279). The `phone` context is
+   * 664 px tall, which is that phone with Safari's bars showing; fourteen
+   * 44 px links cannot leave room for the footer there, and the drawer
+   * scrolls inside itself (#271). At 844 nothing should need a scroll.
+   */
+  const tall = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  });
+  await journey(tall, 'the drawer shows the preset and Settings without a scroll (#279)', async (page) => {
+    await open(page, 'dashboard', 2500);
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const bottom = (selector) => {
+        const box = document.querySelector(selector).getBoundingClientRect();
+        return box.height ? Math.round(box.bottom) : null;
+      };
+      return {
+        scrolled: document.querySelector('.sidebar').scrollTop + window.scrollY,
+        preset: bottom('.preset-switch'),
+        settings: bottom('.menu-settings-link'),
+        link: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
+        height: window.innerHeight,
+      };
+    });
+    must(got.scrolled === 0, `the drawer opened scrolled by ${got.scrolled} px`);
+    must(got.link >= 44, `a nav link is ${got.link} px, under 44; the rows were tightened too far`);
+    must(got.preset && got.preset <= got.height, `the preset switch ends at ${got.preset}, under the ${got.height} px screen`);
+    must(got.settings && got.settings <= got.height, `Settings ends at ${got.settings}, under the ${got.height} px screen`);
+    return `preset ends at ${got.preset}, Settings at ${got.settings} of ${got.height}`;
+  });
+  await tall.close();
+
+  await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
+    /*
+     * Each of these has a size of its own, so the general 44 px rule for
+     * buttons (#267) never reached it. Measured one by one, on the page
+     * where it lives, because a missing control would otherwise pass as
+     * "nothing too small".
+     */
+    const measure = (selectors) => page.evaluate((list) => list.map((selector) => {
+      const node = [...document.querySelectorAll(selector)]
+        .find((item) => item.getBoundingClientRect().width > 0);
+      if (!node) return { selector, missing: true };
+      const box = node.getBoundingClientRect();
+      return { selector, width: Math.round(box.width), height: Math.round(box.height) };
+    }), selectors);
+    const seen = [];
+    await open(page, 'dashboard', 1500);
+    await waitFor(page, () => document.querySelector('.chart-expand') && document.querySelector('.reaction > summary'), 20000);
+    seen.push(...await measure(['[data-nav-toggle]', '.page.active .chart-expand', '.page.active .reaction > summary']));
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(250);
+    seen.push(...await measure(['.menu-settings-link']));
+    await open(page, 'map', 4000);
+    seen.push(...await measure(['#map .leaflet-control-zoom-in', '#map .leaflet-control-zoom-out',
+      '.map-key summary', '.watch-control button']));
+    /*
+     * The popup close button exists only while a popup is open, and a
+     * dot is a few pixels on a canvas. The rule is what is under test, so
+     * a close button is put inside the live map's own container and
+     * measured there.
+     */
+    seen.push(...await page.evaluate(() => {
+      const probe = document.createElement('a');
+      probe.className = 'leaflet-popup-close-button';
+      probe.href = '#close';
+      probe.textContent = '×';
+      document.querySelector('#map').append(probe);
+      const box = probe.getBoundingClientRect();
+      probe.remove();
+      return [{ selector: 'popup close', width: Math.round(box.width), height: Math.round(box.height) }];
+    }));
+    const missing = seen.filter((item) => item.missing).map((item) => item.selector);
+    must(missing.length === 0, `not on the page to measure: ${missing.join(', ')}`);
+    const small = seen.filter((item) => item.width < 44 || item.height < 44)
+      .map((item) => `${item.selector} ${item.width}x${item.height}`);
+    must(small.length === 0, `under 44 px on a touch screen: ${small.join(', ')}`);
+    return `${seen.length} controls, all 44 px or more`;
   });
 
   await journey(phone, 'a phone can read what a column means', async (page) => {
@@ -2446,6 +2828,65 @@ async function main() {
       `opening the date range scrolls the page sideways: ${measured.scrollWidth}/${measured.clientWidth}`,
     );
     return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
+  });
+
+  await journey(narrow, 'page-head controls fold behind a button on a phone (#275)', async (page) => {
+    /*
+     * On an iPhone SE the RF head was the whole first screen and the
+     * Graph head three quarters of it. Below 40rem the folded controls
+     * live in the page's Options or Filters panel; Live and one primary
+     * control stay. Measured as where the head ENDS on a 568 px screen,
+     * which includes the 62 px sticky bar above it.
+     */
+    await page.setViewportSize({ width: 320, height: 568 });
+    const facts = [];
+    for (const [name, most] of [['graph', 0.35], ['rf', 0.45], ['chat', 0.5], ['gaps', 0.35]]) {
+      await open(page, name, 2500);
+      const got = await page.evaluate(() => {
+        const head = document.querySelector('.page.active .page-head');
+        const shown = [...head.querySelectorAll('.controls > *')]
+          .filter((node) => node.getBoundingClientRect().width > 0).length;
+        return { bottom: head.getBoundingClientRect().bottom, height: window.innerHeight, shown };
+      });
+      const share = got.bottom / got.height;
+      must(share <= most, `${name}: the head ends at ${Math.round(share * 100)}% of the first screen`);
+      facts.push(`${name} ${Math.round(share * 100)}%`);
+    }
+
+    // RF: the folded Window counts on the Filters button, and it goes
+    // home to the head when the screen widens.
+    await open(page, 'rf', 2500);
+    const filters = page.locator('[data-page="rf"] [data-options-open]');
+    must(await filters.isVisible(), 'RF shows no Filters button on a phone');
+    must(await page.locator('#rf-options [data-rf-minutes]').count() === 1, 'the RF window is not in the Filters panel');
+    await filters.click();
+    await page.locator('[data-rf-minutes]').selectOption('15');
+    await page.waitForTimeout(300);
+    must((await filters.getAttribute('aria-label')) === 'Filters, 1 changed',
+      `after changing the window the button says "${await filters.getAttribute('aria-label')}"`);
+    await page.locator('[data-rf-minutes]').selectOption('5');
+    // The description is one line, and the whole of it is a tap away.
+    const hint = page.locator('[data-page="rf"] [data-sub-fold] > .hint-open');
+    must(await hint.isVisible(), 'the RF description has no ? on a phone');
+    await hint.tap();
+    await page.waitForTimeout(250);
+    const said = await page.locator(`#${await hint.getAttribute('aria-controls')}`).innerText();
+    must(/rf-agent beside an SDR/.test(said), 'the ? does not hold the whole description');
+    await page.keyboard.press('Escape');
+
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.waitForTimeout(300);
+    const home = await page.evaluate(() => ({
+      inHead: !!document.querySelector('[data-page="rf"] .page-head .controls [data-rf-minutes]'),
+      button: document.querySelector('[data-page="rf"] [data-options-open]').getBoundingClientRect().width,
+      panel: document.querySelector('#rf-options').hidden,
+      hint: document.querySelector('[data-page="rf"] [data-sub-fold] > .hint-open').getBoundingClientRect().width,
+    }));
+    await page.setViewportSize({ width: 320, height: 640 });
+    must(home.inHead, 'widened, the RF window did not go back to the head');
+    must(home.button === 0 && home.panel, 'widened, the Filters button or its panel is still there');
+    must(home.hint === 0, 'widened, the description still has its phone ?');
+    return `${facts.join(', ')}; Filters counts and folds back`;
   });
 
   await journey(narrow, 'the mesh-graph link is a link drawn as a button (#258)', async (page) => {

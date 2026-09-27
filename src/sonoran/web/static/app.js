@@ -7777,6 +7777,8 @@ function chatHead(page, channel, sub) {
   const subtitle = $('[data-chat-sub]', page);
   subtitle.textContent = sub || '';
   subtitle.hidden = !sub;
+  // Setting the text took the phone fold's two halves away (#275).
+  foldSub(subtitle);
   $('[data-chat-back]', page).hidden = !channel;
   /*
    * The range is for a channel page only (#295). Will: the overview "is
@@ -9684,6 +9686,13 @@ async function setStatus(state, message) {
   const dot = $('[data-status] .dot');
   dot.className = `dot ${state}`;
   $('[data-status-text]').textContent = message;
+  // The copy in the sticky phone bar (#271), so the state stays on the
+  // screen while the menu is closed and the page is scrolled.
+  const bar = $('[data-status-bar]');
+  if (bar) {
+    $('.dot', bar).className = `dot ${state}`;
+    $('[data-status-bar-text]', bar).textContent = message;
+  }
   // The visible copy is inside the menu, which is `hidden` when a phone
   // closes it; this one is `.sr-only`, always in the tree, and is the
   // only thing that announces (#175).
@@ -10129,6 +10138,12 @@ async function render(name) {
     loading = false;
     markScrollableTables(page);
     revealHints(page);
+    // A render can restore a control from the address, or rewrite a
+    // head's sentence, without an event (#299, #275). Both are
+    // idempotent, and here they also run after a render that was
+    // deferred while another was loading.
+    drawOptionCounts();
+    foldSubs();
   }
   if (pendingRender) {
     const next = pendingRender;
@@ -10403,6 +10418,14 @@ function applyTheme(mode) {
   if (tint && colour) tint.setAttribute('content', colour);
 }
 
+/* "MediumFast" -> "MF", for the collapsed sidebar (#300). A name with
+   no capitals keeps its first two letters rather than becoming one. */
+function presetInitials(name) {
+  const words = SonoranLabels.presetLabel(name).split(/\s+/).filter(Boolean);
+  if (words.length > 1) return words.map((word) => word[0].toUpperCase()).join('').slice(0, 3);
+  return (words[0] || '').slice(0, 2);
+}
+
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
@@ -10433,7 +10456,6 @@ function wirePresetSwitch() {
        * control is got wrong.
        */
       tabindex: name === current ? '0' : '-1',
-      text: SonoranLabels.presetLabel(name),
       onclick: () => { if (SonoranPreset.set(name)) draw(); },
       onkeydown: (event) => {
         const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -10446,7 +10468,17 @@ function wirePresetSwitch() {
         const moved = $(`[data-preset-switch] .preset-choice.active`);
         if (moved) moved.focus();
       },
-    })));
+    },
+    /*
+     * Two spellings (#300). The full name is the button's text and its
+     * accessible name. The initials are for the collapsed sidebar, which
+     * is about 52 px wide: there the full name goes off the screen and
+     * comes back as a label on hover and focus, and the initials are
+     * what shows. `aria-hidden`, so a screen reader hears "Medium Fast"
+     * once and never "M F".
+     */
+    el('span', { class: 'nav-label', text: SonoranLabels.presetLabel(name) }),
+    el('span', { class: 'preset-short', 'aria-hidden': 'true', text: presetInitials(name) }))));
   };
 
   draw();
@@ -10751,6 +10783,10 @@ function wire() {
    */
 
   wireNav();
+  wireSidebarCollapse();
+  wireOptions();
+  wireFolds();
+  foldSubs();
 }
 
 /*
@@ -10781,6 +10817,11 @@ function wireNav() {
     toggle.setAttribute('aria-expanded', String(open));
     menu.hidden = !open;
     $('use', toggle).setAttribute('href', open ? '#i-menu-close' : '#i-menu');
+    // The phone bar is sticky (#271). Open, the menu is taller than a
+    // phone screen, and a sticky box never scrolls its own foot into
+    // view, so the CSS gives the open bar a height and a scroll.
+    const bar = toggle.closest('.sidebar');
+    if (bar) bar.toggleAttribute('data-menu-open', open && narrow.matches);
   };
 
   const apply = () => {
@@ -10829,6 +10870,219 @@ function wireNav() {
   });
   narrow.addEventListener('change', apply);
   apply();
+}
+
+/*
+ * An Options button over a panel of page controls (#299).
+ *
+ * Graph and Coverage had more controls than their page head could hold
+ * on one row. The ones a reader changes least go into a panel under the
+ * head, behind a button, in the same shape as the Nodes Filters button:
+ * `aria-expanded`, `aria-controls`, and a count on it.
+ *
+ * The count is how many controls in the panel differ from where they
+ * start, so a changed option is never out of sight without the button
+ * saying so, and it is in the accessible name too, because a badge is
+ * invisible to a screen reader. "Where they start" is read from the
+ * control itself: a select's `defaultSelected` option, an input's
+ * `defaultValue`, and for a toggle button `data-option-default`, which
+ * is recorded from the markup here or set by whoever builds the button.
+ */
+function optionDiffers(control) {
+  if (control.matches('select')) {
+    const start = [...control.options].find((option) => option.defaultSelected) || control.options[0];
+    return Boolean(start) && control.value !== start.value;
+  }
+  if (control.matches('input[type="checkbox"], input[type="radio"]')) {
+    return control.checked !== control.defaultChecked;
+  }
+  if (control.matches('input')) return control.value !== control.defaultValue;
+  if (control.matches('button[aria-pressed]') && control.dataset.optionDefault != null) {
+    return control.getAttribute('aria-pressed') !== control.dataset.optionDefault;
+  }
+  return false;
+}
+
+function drawOptionCount(button) {
+  const panel = document.getElementById(button.getAttribute('aria-controls'));
+  if (!panel) return;
+  const changed = $$('select, input, button[aria-pressed]', panel)
+    .filter((control) => !control.closest('[hidden]') && optionDiffers(control)).length;
+  const badge = $('[data-options-count]', button);
+  if (badge) {
+    badge.textContent = changed ? String(changed) : '';
+    badge.hidden = !changed;
+  }
+  const word = button.dataset.optionsWord || 'Options';
+  button.setAttribute('aria-label', changed ? `${word}, ${changed} changed` : word);
+}
+
+/* Every Options count on the page, after a render may have restored a
+   control's value from the address without firing an event. */
+function drawOptionCounts() {
+  for (const button of $$('[data-options-open]')) drawOptionCount(button);
+}
+
+function wireOptions() {
+  for (const button of $$('[data-options-open]')) {
+    const panel = document.getElementById(button.getAttribute('aria-controls'));
+    if (!panel) continue;
+    for (const toggle of $$('button[aria-pressed]', panel)) {
+      if (toggle.dataset.optionDefault == null) {
+        toggle.dataset.optionDefault = toggle.getAttribute('aria-pressed');
+      }
+    }
+    button.addEventListener('click', () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    });
+    /*
+     * After the control's own handler, hence the timeout. The observer
+     * catches what no event announces: a toggle's `aria-pressed` set in
+     * code, and coverage.js rebuilding its Show buttons on every press.
+     */
+    const redraw = () => setTimeout(() => drawOptionCount(button), 0);
+    panel.addEventListener('input', redraw);
+    panel.addEventListener('change', redraw);
+    panel.addEventListener('click', redraw);
+    new MutationObserver(redraw).observe(panel, {
+      subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed', 'hidden'],
+    });
+    drawOptionCount(button);
+  }
+}
+
+/*
+ * Page-head controls fold behind the Options or Filters button on a
+ * phone (#275).
+ *
+ * Measured in the mobile review, the controls took 74% of an iPhone SE's
+ * first screen on Graph and all of it on RF. Below 40rem each control
+ * marked `data-fold` moves into its page's Options panel, and Live and
+ * one primary control stay in the head. Moved, not copied: a copy would
+ * be two controls for one value, and every listener and every `$(...,
+ * page)` lookup still finds the one element, because the panel is inside
+ * the same page. A comment marks where each one lives, so it goes back to
+ * exactly its place when the screen widens.
+ *
+ * The count on the button already covers what is in the panel, so a
+ * folded control that is not at its start is never out of sight without
+ * the button saying so. A button marked `data-fold-only` exists only for
+ * this (RF has no Options of its own); it is hidden above 40rem, and its
+ * panel is closed when its controls go home.
+ */
+const PHONE_FOLD = '(max-width: 40rem)';
+
+function wireFolds() {
+  const phone = matchMedia(PHONE_FOLD);
+  const homes = new Map();
+  for (const control of $$('[data-fold]')) {
+    const home = document.createComment(' folds into Options on a phone (#275) ');
+    control.before(home);
+    homes.set(control, home);
+  }
+  const apply = () => {
+    for (const [control, home] of homes) {
+      const panel = $('[data-options-panel]', control.closest('.page'));
+      if (!panel) continue;
+      let slot = $('[data-options-folded]', panel);
+      if (!slot) {
+        slot = el('div', { class: 'options-folded', 'data-options-folded': true });
+        panel.prepend(slot);
+      }
+      if (phone.matches) slot.append(control);
+      else home.after(control);
+    }
+    if (!phone.matches) {
+      for (const button of $$('[data-options-open][data-fold-only]')) {
+        const panel = document.getElementById(button.getAttribute('aria-controls'));
+        if (panel) panel.hidden = true;
+        button.setAttribute('aria-expanded', 'false');
+      }
+    }
+    drawOptionCounts();
+  };
+  phone.addEventListener('change', apply);
+  apply();
+}
+
+/*
+ * A long page description, one line on a phone (#275).
+ *
+ * On RF the description was 102 px of a 568 px iPhone SE screen, before a
+ * single control. Below 40rem a `data-sub-fold` description shows its
+ * first line with an ellipsis, and the whole sentence is behind the same
+ * `?` button every column and figure uses (`fitHint`), which a tap and a
+ * keyboard both reach. Above 40rem the full text shows and the button is
+ * hidden. Safe to run again: chat rewrites its description on a render,
+ * which removes both halves, and this puts them back.
+ */
+function foldSub(sub) {
+  if (!sub || sub.hidden || $('.sub-text', sub)) return;
+  const text = sub.textContent.trim();
+  if (!text) return;
+  const title = $('h2', sub.closest('.page-head'));
+  replace(sub, el('span', { class: 'sub-text', text }));
+  fitHint(sub, 'page', title ? title.textContent.trim() : 'this page', text, []);
+}
+
+function foldSubs() {
+  for (const sub of $$('[data-sub-fold]')) foldSub(sub);
+}
+
+/*
+ * Collapse the desktop sidebar to its icons (#300).
+ *
+ * The state is an attribute on `<html>`, not on the sidebar, because the
+ * boot script in index.html sets it before the first paint and nothing
+ * else exists yet at that moment. `sonoran.nav` is its own key: it is a
+ * per-viewer convenience, so a refused storage only means the page starts
+ * expanded, which is where a new visitor starts anyway (Will).
+ *
+ * Below 60rem the button is hidden and the attribute does nothing: the
+ * phone bar has its Menu button, and the collapsed rules are scoped to
+ * the wide layout in app.css.
+ */
+const SIDEBAR_KEY = 'sonoran.nav';
+
+function wireSidebarCollapse() {
+  const button = $('[data-sidebar-collapse]');
+  if (!button) return;
+  const root = document.documentElement;
+  const narrow = matchMedia('(max-width: 60rem)');
+  const collapsed = () => root.getAttribute('data-sidebar') === 'collapsed';
+
+  const draw = () => {
+    button.hidden = narrow.matches;
+    button.setAttribute('aria-expanded', String(!collapsed()));
+    // The name says what a press will do, not what the state is; the
+    // state is `aria-expanded`.
+    button.setAttribute('aria-label', collapsed() ? 'Expand navigation' : 'Collapse navigation');
+    $('use', button).setAttribute('href', collapsed() ? '#i-rail-expand' : '#i-rail-collapse');
+  };
+
+  button.addEventListener('click', () => {
+    const next = !collapsed();
+    if (next) root.setAttribute('data-sidebar', 'collapsed');
+    else root.removeAttribute('data-sidebar');
+    try {
+      localStorage.setItem(SIDEBAR_KEY, next ? 'collapsed' : 'expanded');
+    } catch {
+      // Storage off. The choice holds for this visit.
+    }
+    draw();
+    /*
+     * The content column changed width and the window did not. ECharts
+     * resizes on the window's `resize` (see the listener near the top of
+     * this file), and so does Leaflet (`trackResize`), so one synthetic
+     * event after the layout settles redraws every chart and map on the
+     * page at the new width.
+     */
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  });
+  narrow.addEventListener('change', draw);
+  draw();
 }
 
 /* The page the nav button says you are on, so the answer does not need

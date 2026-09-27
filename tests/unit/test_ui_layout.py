@@ -6,6 +6,8 @@ Every item below was found in a rendered screenshot or in a keyboard pass,
 not in the markup.
 """
 
+import re
+
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import STATIC_DIR, create_app
@@ -160,9 +162,12 @@ def test_a_finger_gets_a_target_it_can_hit() -> None:
 
     Read from the whole media block rather than its first 600
     characters: the citation above is longer than that window was.
+
+    The block is keyed on the pointer as well as the width (#267): an
+    iPad in landscape is wider than 60 rem and touched with a finger.
     """
     css = _read("app.css")
-    start = css.index("@media (max-width: 60rem) {")
+    start = css.index("@media (max-width: 60rem), (pointer: coarse) {")
     narrow = css[start:].split("\n}\n", 1)[0]
     assert "min-height: 2.75rem;" in narrow
     # The rule has to reach the controls and the nav links, not just one
@@ -313,3 +318,75 @@ def test_no_hint_lives_only_in_a_tooltip() -> None:
     assert "function revealHints(" in script
     # And it is called after every render, not only on first paint.
     assert "revealHints(page);" in script
+
+
+# ------------------------------------------------------ one-row heads (#299)
+
+
+def _page_head(html: str, page: str) -> str:
+    """From the page's head to its Options panel, which follows the head."""
+    start = html.index("page-head", html.index(f'data-page="{page}"'))
+    return html[start : html.index(f'id="{page}-options"', start)]
+
+
+def test_the_graph_head_keeps_four_controls_and_options_holds_the_rest() -> None:
+    """Will approved: Layout, the two link toggles and Reset layout go behind
+    an Options button, so the rest fits on the title row."""
+    html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
+    head = _page_head(html, "graph")
+    for kept in ("data-graph-hours", "data-graph-search", "data-graph-view", "data-options-open"):
+        assert kept in head, f"{kept} left the graph head"
+    panel = html[html.index('id="graph-options"') :]
+    panel = panel[: panel.index("</div>")]
+    for moved in (
+        "data-graph-layout",
+        "data-graph-unconfirmed",
+        "data-graph-weak",
+        "data-graph-reset",
+    ):
+        assert moved not in head, f"{moved} is still in the graph head"
+        assert moved in panel, f"{moved} is not in the Options panel"
+
+
+def test_the_coverage_layer_is_one_drop_down_in_the_head() -> None:
+    """Will approved: the three layer pills become one drop-down."""
+    html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
+    head = _page_head(html, "coverage")
+    assert re.search(r"<select data-coverage-layers\b", head), (
+        "the layer is not a select in the head"
+    )
+    assert "data-options-open" in head
+    panel = html[html.index('id="coverage-options"') :]
+    assert "data-coverage-views" in panel[: panel.index("</label>")]
+    assert "data-coverage-opacity" in panel[: panel.index("</label>")]
+
+
+# ------------------------------------------------- phones fold the head (#275)
+
+
+def test_the_phone_fold_keeps_live_and_one_control_in_the_head() -> None:
+    """Below 40rem the `data-fold` controls move into the page's panel.
+
+    Each folded control needs a panel in its page to land in, or it stays
+    in the head and the phone header is as tall as before. RF has no
+    Options of its own, so it carries a phone-only Filters button.
+    """
+    html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
+    for page, folded in {
+        "graph": ("data-graph-hours", "data-graph-view"),
+        "rf": ("data-rf-layers", "data-rf-minutes"),
+    }.items():
+        head = _page_head(html, page)
+        # Each folded element, whole: a label with its select inside, or
+        # the RF span that rf.js fills with toggles.
+        chunks = "".join(
+            match.group(0)
+            for match in re.finditer(
+                r"<(label|span)\b[^>]*\bdata-fold\b[^>]*>.*?</\1>", head, flags=re.S
+            )
+        )
+        for name in folded:
+            assert name in chunks, f"{page}: {name} does not fold on a phone"
+        assert "data-options-open" in head, f"{page} has no button to fold into"
+    rf = _page_head(html, "rf")
+    assert "data-fold-only" in rf and "data-live" in rf
