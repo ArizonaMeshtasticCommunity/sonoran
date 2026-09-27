@@ -67,6 +67,61 @@ window.SonoranMeshnet = (function build() {
     return `${weeks}${more} weeks in a row`;
   }
 
+  /*
+   * Where a run changes colour (#262).
+   *
+   * Will asked for the pill to use "the full scheme for the site so
+   * it's not just orange". These are lengths, not grades: a run of two
+   * is not worse than a run of twelve, so none of the tiers borrows the
+   * status colours (`--good`, `--warn`, `--bad`), which on every other
+   * page mean fine, look at this and broken. The orange accent is kept
+   * for the longest runs, where it is the one thing on the screen that
+   * the rest of the list is measured against.
+   *
+   * The boundaries are a month and a quarter of weekly nets.
+   */
+  const TIER_STEADY = 4;
+  const TIER_LONG = 12;
+
+  /*
+   * The pill beside a name on one message (#262).
+   *
+   * Will's sketch was `UTOPIA PLANITIA G3 (5 week streak)   5d ago`. The
+   * visible text is the short form ("5 weeks"), and the accessible name
+   * is the long form from `streakWord`, so a screen reader hears "check-in
+   * streak: 5 weeks in a row" rather than a bare number. The colour and
+   * the symbol are never the only signal: every tier has its words.
+   *
+   * The honest states from #243 each keep a form of their own:
+   *
+   * - a run that reaches the floor of the read keeps its `+` ("52+
+   *   weeks"), because the number is a lower bound and not a
+   *   measurement;
+   * - a run of one says whether it is a beginning or a restart;
+   * - a missing run says it is not known, and never prints a 0.
+   *
+   * The "still open" state belongs to a node with no message yet this
+   * week, and a pill only ever sits on a message, so it is worded by
+   * `absenceWord` in the list below the messages rather than here.
+   */
+  function streakPill(entry) {
+    const weeks = counted(entry && entry.streak_weeks);
+    if (weeks == null || weeks < 1) {
+      return { tier: 'unknown', text: 'Streak not known', label: 'Check-in streak not known' };
+    }
+    const more = entry.streak_at_least ? '+' : '';
+    const label = `Check-in streak: ${streakWord(entry)}`;
+    if (weeks === 1 && !more) {
+      return { tier: 'start', text: entry.first_ever ? 'First check-in' : 'Back after a gap', label };
+    }
+    let tier = 'short';
+    if (weeks >= TIER_LONG) tier = 'long';
+    else if (weeks >= TIER_STEADY) tier = 'steady';
+    // A bounded run is always plural, as in `absenceWord`: "1+ week"
+    // would claim a run of exactly one.
+    return { tier, text: `${weeks}${more} weeks`, label };
+  }
+
   /** The longer explanation for the same chip, or null. */
   function streakDetail(entry, floorWeek) {
     const weeks = counted(entry && entry.streak_weeks);
@@ -173,6 +228,6 @@ window.SonoranMeshnet = (function build() {
   }
 
   return {
-    counted, streakWord, streakDetail, absenceWord, weekWord, noAssessmentWord, messagesTruncated,
+    counted, streakWord, streakPill, streakDetail, absenceWord, weekWord, noAssessmentWord, messagesTruncated,
   };
 }());

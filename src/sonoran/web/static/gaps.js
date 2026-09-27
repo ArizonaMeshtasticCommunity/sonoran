@@ -63,21 +63,100 @@
     return response.json();
   }
 
+  /* ---------------------------------------------------------- values */
+
+  /*
+   * A signal's number, written as what it is (#265).
+   *
+   * StarSkream: "New user seeing 'Yes 0.226' doesn't add value at the
+   * surface level." The page printed `String(value)`, and the value is a
+   * share of hours on one signal, a margin in dB on another and a count
+   * of gateways on a third. The unit is decided on the server, beside
+   * the rule that made the number (`UNITS` in `gaps/signals.py`), and
+   * this is the one place that turns a unit into text. It never guesses
+   * a unit from the signal's name: a signal whose unit it does not know
+   * prints no number at all, because a bare number is the bug.
+   *
+   * Three rules, each one a way this has gone wrong before:
+   *
+   * - **Absent is not zero.** `Number(null)` is 0, and five bugs in this
+   *   repository have been a missing figure drawn as a real one. Only a
+   *   finite number of type `number` is formatted; anything else is null
+   *   and the chip shows its word alone.
+   * - **No perfect score that was not measured.** One decimal place
+   *   rounds 0.9996 to "100.0%". Only a value of exactly 1 is "100%";
+   *   anything short of it that rounds up is ">99.9%". The same holds at
+   *   the bottom: only exactly 0 is "0%", and a sliver above it is
+   *   "<0.1%", because "heard in no hour" and "heard in one hour of two
+   *   thousand" are different findings.
+   * - **A fraction out of range is not drawn.** A share above 1 or below
+   *   0 is a fault upstream, and a percentage of 130 would state it.
+   */
+  function formatValue(value, unit) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    if (unit === 'fraction') {
+      if (value < 0 || value > 1) return null;
+      if (value === 1) return '100%';
+      if (value === 0) return '0%';
+      const shown = (value * 100).toFixed(1);
+      if (shown === '100.0') return '>99.9%';
+      if (shown === '0.0') return '<0.1%';
+      return `${shown}%`;
+    }
+    if (unit === 'db') {
+      // Signed: a margin below zero is a real answer and must read as one.
+      const shown = value.toFixed(1);
+      if (shown === '0.0' || shown === '-0.0') return '0.0 dB';
+      return `${value > 0 ? '+' : ''}${shown} dB`;
+    }
+    if (unit === 'gateways') {
+      if (!Number.isInteger(value) || value < 0) return null;
+      return `${value} ${value === 1 ? 'gateway' : 'gateways'}`;
+    }
+    if (unit === 'dbm') return `${Math.round(value)} dBm`;
+    if (unit === 'm') return `${Math.round(value)} m`;
+    return null;
+  }
+
+  /*
+   * A column heading with its unit, as suggested: "Gets out over the air
+   * only sometimes (% of hours heard)".
+   *
+   * Not StarSkream's exact "Gets out over the air? (% seen)". The chip
+   * under it says Yes when the node is intermittent, which is the answer
+   * to THIS heading's question. Under "Gets out over the air?" the same
+   * Yes would say the opposite of what was found, and a healthy node
+   * would read "No (100%)".
+   */
+  function heading(name, labels, units) {
+    const label = labels[name] || name;
+    return units[name] ? `${label} (${units[name]})` : label;
+  }
+
   /* ----------------------------------------------------------- chips */
 
   /*
    * Each signal answers one yes-or-no question about a node, so the chip
-   * says yes, no, or "we cannot tell". The full sentence rides along as
+   * says Yes, No, or "we cannot tell". The full sentence rides along as
    * the tooltip, and the row opens to it.
+   *
+   * "Cannot tell" is the dash, never "No" and never a number: a check
+   * with no evidence has not passed. So the value is drawn only for a
+   * state that was measured.
    */
   function chip(signal) {
     if (!signal) return el('span', { class: 'gap-chip unknown', title: 'Not measured.' },
       el('span', { class: 'gap-word', text: EM_DASH }));
-    const words = { bad: 'yes', ok: 'no', unknown: EM_DASH };
+    const words = { bad: 'Yes', ok: 'No', unknown: EM_DASH };
     const word = words[signal.state] || EM_DASH;
     const parts = [el('span', { class: 'gap-word', text: word })];
-    if (signal.state !== 'unknown' && signal.value != null) {
-      parts.push(el('span', { class: 'gap-value', text: String(signal.value) }));
+    const shown = signal.state === 'unknown' ? null : formatValue(signal.value, signal.unit);
+    if (shown != null) {
+      // The leading space is for the text, not the layout: the chip's
+      // flex gap draws the visible space, and a flex item's leading
+      // white space is not rendered. Without it the chip reads and
+      // copies as "Yes(22.6%)" to a screen reader or a clipboard.
+      parts.push(el('span', { class: 'gap-value', text: ` (${shown})` }));
     }
     return el('span', {
       class: `gap-chip ${signal.state}`,
@@ -210,6 +289,8 @@
   function drawTable(target, rows, summary, emptyMessage) {
     const order = summary.signal_order || [];
     const labels = summary.signal_labels || {};
+    const units = summary.signal_units || {};
+    const key = summary.signal_key || {};
     const sortState = state.sort || { key: null, order: null };
     const onSort = (key, order) => {
       state.sort = { key, order };
@@ -237,7 +318,10 @@
        */
       { label: 'Role', ...sortable('role'), cell: (row) => roleCell(row.role) },
       ...order.map((name) => ({
-        label: labels[name] || name,
+        label: heading(name, labels, units),
+        // The column's own explanation, behind the heading's info button
+        // (`revealHints`). The same sentence as the key above the table.
+        hint: key[name] ? key[name].measures : null,
         ...sortable(name),
         cell: (row) => chip((row.signals || {})[name]),
       })),
@@ -246,6 +330,15 @@
 
     const built = table(columns, rows, emptyMessage);
     replace(target, built);
+    /*
+     * The router turns `data-hint` into an info button after a page
+     * renders, but this table is also redrawn by a tile click, a view
+     * button and every keystroke in the search, none of which pass
+     * through the router. Without this the buttons vanished on the first
+     * redraw. `revealHints` looks for `.table-wrap` inside what it is
+     * given, and `target` IS the wrap, so it is handed the parent.
+     */
+    if (typeof revealHints === 'function') revealHints(target.parentElement || target);
     if (!rows.length || built.tagName !== 'TABLE') return;
 
     const body = built.tBodies[0];
@@ -405,6 +498,33 @@
     if (viewNote) viewNote.textContent = note;
     drawTable($('[data-gaps-table]', page), sortRows(rows), summary,
       state.query ? 'No node here matches that name.' : 'No node on this preset is in this view.');
+  }
+
+  /* ------------------------------------------------------------ key */
+
+  /*
+   * What each column means, for somebody who joined the mesh last week
+   * (#265, suggested by StarSkream).
+   *
+   * The words come from the server (`SIGNAL_KEY` in `gaps/signals.py`,
+   * with this run's thresholds filled in), so the key cannot describe a
+   * limit the assessment did not use. The fixed columns and the three
+   * answers are written in `index.html`, because they are the page's
+   * and not a signal's.
+   */
+  function drawKey(page, summary) {
+    const target = $('[data-gaps-key-signals]', page);
+    if (!target) return;
+    const order = summary.signal_order || [];
+    const labels = summary.signal_labels || {};
+    const units = summary.signal_units || {};
+    const key = summary.signal_key || {};
+    replace(target, order.filter((name) => key[name]).map((name) => el('div', { class: 'gap-key-item' },
+      el('dt', { text: heading(name, labels, units) }),
+      el('dd', {},
+        el('p', { text: key[name].measures }),
+        el('p', {}, el('strong', { text: 'Counts as a problem: ' }), key[name].problem),
+        el('p', {}, el('strong', { text: 'What the owner can do: ' }), key[name].owner)))));
   }
 
   /* ------------------------------------------------------------ map */
@@ -663,6 +783,7 @@
     drawPresetPicker(page, summary);
 
     drawCounts(page, summary);
+    drawKey(page, summary);
 
     let listing;
     try {
@@ -706,6 +827,8 @@
   /*
    * `presetFromAddress` is exposed for the tests: reading it out of the
    * source proves much less than running it against a fake address bar.
+   * `formatValue` and `heading` are exposed for the same reason
+   * (`tests/unit/js/gaps_value_cases.mjs`).
    */
-  window.SonoranGaps = { show, state, presetFromAddress };
+  window.SonoranGaps = { show, state, presetFromAddress, formatValue, heading };
 }());

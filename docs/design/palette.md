@@ -68,6 +68,13 @@ warn a double square, bad a solid square, unknown a dashed circle.
 The word for unknown uses `--muted`, because `--status-unknown` is
 dim by design and is not a text colour.
 
+The node page's Identity and Device panels (#254) colour a value
+`--warn` or `--bad` as text, which both tokens are rated for above. The
+value always has a word beside it ("Busy", "Low", "Not sent") and the
+health cards' glyph, so rule 1 holds. The thresholds are defined once,
+with their sources, above `FIELD_FLAGS` in `app.js`. A value the node
+did not send is never coloured: absent is not bad.
+
 ## 5. Categorical scale: packet families
 
 The family ramp is the categorical scale. Charts that split by packet
@@ -121,6 +128,13 @@ yellows, blues and purples, the TAK family is pinks.
 - A short script at the top of `index.html` sets `data-theme` on
   `<html>` before anything paints. It always sets `light` or `dark`,
   so the CSS holds one block of light values.
+- `html`, `body` and `<meta name="theme-color">` all carry `--bg` in
+  both themes (#253). On an iPad an overscroll past the top shows what
+  lies behind the document and Safari tints its bars with
+  `theme-color`, so any of the three that differs shows as a band. The
+  pre-paint script sets `theme-color` for the chosen theme and
+  `applyTheme` sets it again on a switch.
+  `tests/unit/test_overscroll_background.py` pins all three.
 - Charts and map layers read the palette once at load. A change of
   theme reloads the page, so nothing keeps an old colour.
 - The basemap is a light tile set inverted for the dark theme. The

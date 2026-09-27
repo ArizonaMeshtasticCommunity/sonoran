@@ -19,6 +19,22 @@ window.MeshtasticSerialProto = {
   "nested": {
     "meshtastic": {
       "nested": {
+        "AS3935_config": {
+          "fields": {
+            "setTuningCapPf": {
+              "id": 1,
+              "rule": "optional",
+              "type": "uint32"
+            }
+          },
+          "oneofs": {
+            "_set_tuning_cap_pf": {
+              "oneof": [
+                "setTuningCapPf"
+              ]
+            }
+          }
+        },
         "AddressMode": {
           "values": {
             "DHCP": 0,
@@ -370,6 +386,7 @@ window.MeshtasticSerialProto = {
                 "CANNEDMSG_CONFIG": 6,
                 "DETECTIONSENSOR_CONFIG": 11,
                 "EXTNOTIF_CONFIG": 2,
+                "MESHBEACON_CONFIG": 16,
                 "MQTT_CONFIG": 0,
                 "NEIGHBORINFO_CONFIG": 9,
                 "PAXCOUNTER_CONFIG": 12,
@@ -598,6 +615,36 @@ window.MeshtasticSerialProto = {
             "rssi": {
               "id": 2,
               "type": "int32"
+            }
+          }
+        },
+        "BroadcastTarget": {
+          "fields": {
+            "channelIndex": {
+              "id": 4,
+              "rule": "optional",
+              "type": "uint32"
+            },
+            "preset": {
+              "id": 1,
+              "rule": "optional",
+              "type": "ModemPreset"
+            },
+            "region": {
+              "id": 2,
+              "type": "RegionCode"
+            }
+          },
+          "oneofs": {
+            "_channel_index": {
+              "oneof": [
+                "channelIndex"
+              ]
+            },
+            "_preset": {
+              "oneof": [
+                "preset"
+              ]
             }
           }
         },
@@ -1184,11 +1231,14 @@ window.MeshtasticSerialProto = {
                     "LONG_TURBO": 9,
                     "MEDIUM_FAST": 4,
                     "MEDIUM_SLOW": 3,
+                    "MEDIUM_TURBO": 16,
                     "NARROW_FAST": 12,
                     "NARROW_SLOW": 13,
                     "SHORT_FAST": 6,
                     "SHORT_SLOW": 5,
                     "SHORT_TURBO": 8,
+                    "TINY_FAST": 14,
+                    "TINY_SLOW": 15,
                     "VERY_LONG_SLOW": 2
                   }
                 },
@@ -1206,8 +1256,12 @@ window.MeshtasticSerialProto = {
                     "EU_N_868": 32,
                     "IN": 10,
                     "ITU1_2M": 27,
+                    "ITU1_70CM": 34,
+                    "ITU2_125CM": 37,
                     "ITU2_2M": 28,
+                    "ITU2_70CM": 35,
                     "ITU3_2M": 33,
+                    "ITU3_70CM": 36,
                     "JP": 5,
                     "KR": 7,
                     "KZ_433": 23,
@@ -1449,6 +1503,10 @@ window.MeshtasticSerialProto = {
                   "id": 4,
                   "type": "bool"
                 },
+                "packetSignaturePolicy": {
+                  "id": 9,
+                  "type": "PacketSignaturePolicy"
+                },
                 "privateKey": {
                   "id": 2,
                   "type": "bytes"
@@ -1460,6 +1518,15 @@ window.MeshtasticSerialProto = {
                 "serialEnabled": {
                   "id": 5,
                   "type": "bool"
+                }
+              },
+              "nested": {
+                "PacketSignaturePolicy": {
+                  "values": {
+                    "PACKET_SIGNATURE_POLICY_BALANCED": 1,
+                    "PACKET_SIGNATURE_POLICY_COMPATIBLE": 0,
+                    "PACKET_SIGNATURE_POLICY_STRICT": 2
+                  }
                 }
               }
             },
@@ -1534,6 +1601,22 @@ window.MeshtasticSerialProto = {
             "UNSPECIFIED": 4
           }
         },
+        "DS248X_config": {
+          "fields": {
+            "mainTemperatureChannel": {
+              "id": 1,
+              "rule": "optional",
+              "type": "uint32"
+            }
+          },
+          "oneofs": {
+            "_main_temperature_channel": {
+              "oneof": [
+                "mainTemperatureChannel"
+              ]
+            }
+          }
+        },
         "Data": {
           "fields": {
             "bitfield": {
@@ -1572,6 +1655,10 @@ window.MeshtasticSerialProto = {
             "wantResponse": {
               "id": 3,
               "type": "bool"
+            },
+            "xeddsaSignature": {
+              "id": 10,
+              "type": "bytes"
             }
           },
           "oneofs": {
@@ -1814,6 +1901,10 @@ window.MeshtasticSerialProto = {
             },
             "hasWifi": {
               "id": 4,
+              "type": "bool"
+            },
+            "hasXeddsa": {
+              "id": 14,
               "type": "bool"
             },
             "hwModel": {
@@ -2213,8 +2304,11 @@ window.MeshtasticSerialProto = {
         "FirmwareEdition": {
           "values": {
             "BURNING_MAN": 18,
+            "CCC": 22,
             "DEFCON": 17,
             "DIY_EDITION": 127,
+            "DRAGON_CON": 21,
+            "FAB": 20,
             "HAMVENTION": 19,
             "OPEN_SAUCE": 16,
             "SMART_CITIZEN": 1,
@@ -2307,6 +2401,11 @@ window.MeshtasticSerialProto = {
               "rule": "optional",
               "type": "bool"
             },
+            "regionPresets": {
+              "id": 19,
+              "rule": "optional",
+              "type": "LoRaRegionPresetMap"
+            },
             "xmodemPacket": {
               "id": 12,
               "rule": "optional",
@@ -2332,7 +2431,8 @@ window.MeshtasticSerialProto = {
                 "fileInfo",
                 "clientNotification",
                 "deviceuiConfig",
-                "lockdownStatus"
+                "lockdownStatus",
+                "regionPresets"
               ]
             }
           }
@@ -2381,6 +2481,10 @@ window.MeshtasticSerialProto = {
               "id": 3,
               "type": "float"
             },
+            "longName": {
+              "id": 5,
+              "type": "string"
+            },
             "shortName": {
               "id": 4,
               "type": "string"
@@ -2400,6 +2504,7 @@ window.MeshtasticSerialProto = {
             "CDEBYTE_EORA_S3": 61,
             "CHATTER_2": 56,
             "CROWPANEL": 97,
+            "CROWPANEL_P4": 138,
             "DIY_V1": 39,
             "DR_DEV": 41,
             "EBYTE_ESP32_S3": 54,
@@ -2413,6 +2518,10 @@ window.MeshtasticSerialProto = {
             "HELTEC_MESH_NODE_T114": 69,
             "HELTEC_MESH_POCKET": 94,
             "HELTEC_MESH_SOLAR": 108,
+            "HELTEC_MESH_TOWER_V2": 139,
+            "HELTEC_RC32": 141,
+            "HELTEC_RC52": 142,
+            "HELTEC_RCC6": 143,
             "HELTEC_SENSOR_HUB": 92,
             "HELTEC_V1": 11,
             "HELTEC_V2_0": 5,
@@ -2441,10 +2550,16 @@ window.MeshtasticSerialProto = {
             "M5STACK_COREBASIC": 77,
             "M5STACK_CORES3": 80,
             "M5STACK_RESERVED": 104,
+            "MAKERFABS_RESERVED": 28,
+            "MAKERFABS_TRACKER": 27,
             "ME25LS01_4Y10TD": 75,
             "MESHLINK": 87,
+            "MESHNOLOGY_W10": 140,
+            "MESHNOLOGY_W12": 145,
+            "MESHPAGER_X2": 146,
             "MESHSTICK_1262": 121,
             "MESH_TAB": 86,
+            "MESH_TRACKER_X1": 128,
             "MINI_EPAPER_S3": 125,
             "MS24SF1": 82,
             "MUZI_BASE": 93,
@@ -2478,10 +2593,10 @@ window.MeshtasticSerialProto = {
             "SEEED_SOLAR_NODE": 95,
             "SEEED_WIO_TRACKER_L1": 99,
             "SEEED_WIO_TRACKER_L1_EINK": 100,
+            "SEEED_WIO_TRACKER_L1_PRO_1W": 144,
+            "SEEED_WIO_TRACKER_L2": 137,
             "SEEED_XIAO_S3": 81,
             "SENSECAP_INDICATOR": 70,
-            "SENSELORA_RP2040": 27,
-            "SENSELORA_S3": 28,
             "STATION_G1": 25,
             "STATION_G2": 31,
             "STATION_G3": 134,
@@ -2509,7 +2624,6 @@ window.MeshtasticSerialProto = {
             "TLORA_V2_1_1P6": 3,
             "TLORA_V2_1_1P8": 15,
             "TRACKER_T1000_E": 71,
-            "TRACKER_T1000_E_PRO": 128,
             "TWC_MESH_V4": 62,
             "T_DECK": 50,
             "T_DECK_PRO": 102,
@@ -2818,11 +2932,14 @@ window.MeshtasticSerialProto = {
                 "LONG_TURBO": 9,
                 "MEDIUM_FAST": 4,
                 "MEDIUM_SLOW": 3,
+                "MEDIUM_TURBO": 16,
                 "NARROW_FAST": 12,
                 "NARROW_SLOW": 13,
                 "SHORT_FAST": 6,
                 "SHORT_SLOW": 5,
                 "SHORT_TURBO": 8,
+                "TINY_FAST": 14,
+                "TINY_SLOW": 15,
                 "VERY_LONG_SLOW": 2
               }
             },
@@ -2840,8 +2957,12 @@ window.MeshtasticSerialProto = {
                 "EU_N_868": 32,
                 "IN": 10,
                 "ITU1_2M": 27,
+                "ITU1_70CM": 34,
+                "ITU2_125CM": 37,
                 "ITU2_2M": 28,
+                "ITU2_70CM": 35,
                 "ITU3_2M": 33,
+                "ITU3_70CM": 36,
                 "JP": 5,
                 "KR": 7,
                 "KZ_433": 23,
@@ -2866,6 +2987,49 @@ window.MeshtasticSerialProto = {
             }
           }
         },
+        "LoRaPresetGroup": {
+          "fields": {
+            "defaultPreset": {
+              "id": 2,
+              "type": "ModemPreset"
+            },
+            "licensedOnly": {
+              "id": 3,
+              "type": "bool"
+            },
+            "presets": {
+              "id": 1,
+              "rule": "repeated",
+              "type": "ModemPreset"
+            }
+          }
+        },
+        "LoRaRegionPresetMap": {
+          "fields": {
+            "groups": {
+              "id": 1,
+              "rule": "repeated",
+              "type": "LoRaPresetGroup"
+            },
+            "regionGroups": {
+              "id": 2,
+              "rule": "repeated",
+              "type": "LoRaRegionPresets"
+            }
+          }
+        },
+        "LoRaRegionPresets": {
+          "fields": {
+            "groupIndex": {
+              "id": 2,
+              "type": "uint32"
+            },
+            "region": {
+              "id": 1,
+              "type": "RegionCode"
+            }
+          }
+        },
         "LocSource": {
           "values": {
             "LOC_EXTERNAL": 3,
@@ -2880,9 +3044,17 @@ window.MeshtasticSerialProto = {
               "id": 2,
               "type": "uint32"
             },
+            "disable": {
+              "id": 6,
+              "type": "bool"
+            },
             "lockNow": {
               "id": 4,
               "type": "bool"
+            },
+            "maxSessionSeconds": {
+              "id": 5,
+              "type": "uint32"
             },
             "passphrase": {
               "id": 1,
@@ -2920,6 +3092,7 @@ window.MeshtasticSerialProto = {
           "nested": {
             "State": {
               "values": {
+                "DISABLED": 5,
                 "LOCKED": 2,
                 "NEEDS_PROVISION": 1,
                 "STATE_UNSPECIFIED": 0,
@@ -3058,6 +3231,87 @@ window.MeshtasticSerialProto = {
             "Unspecifed": 0
           }
         },
+        "MeshBeaconConfig": {
+          "fields": {
+            "broadcastIntervalSecs": {
+              "id": 11,
+              "type": "uint32"
+            },
+            "broadcastMessage": {
+              "id": 4,
+              "type": "string"
+            },
+            "broadcastOfferChannel": {
+              "id": 5,
+              "type": "ChannelSettings"
+            },
+            "broadcastOfferPreset": {
+              "id": 7,
+              "rule": "optional",
+              "type": "ModemPreset"
+            },
+            "broadcastOfferRegion": {
+              "id": 6,
+              "type": "RegionCode"
+            },
+            "broadcastTargets": {
+              "id": 13,
+              "rule": "repeated",
+              "type": "BroadcastTarget"
+            },
+            "flags": {
+              "id": 1,
+              "type": "uint32"
+            }
+          },
+          "nested": {
+            "BroadcastTarget": {
+              "fields": {
+                "channelIndex": {
+                  "id": 4,
+                  "rule": "optional",
+                  "type": "uint32"
+                },
+                "preset": {
+                  "id": 1,
+                  "rule": "optional",
+                  "type": "ModemPreset"
+                },
+                "region": {
+                  "id": 2,
+                  "type": "RegionCode"
+                }
+              },
+              "oneofs": {
+                "_channel_index": {
+                  "oneof": [
+                    "channelIndex"
+                  ]
+                },
+                "_preset": {
+                  "oneof": [
+                    "preset"
+                  ]
+                }
+              }
+            },
+            "Flags": {
+              "values": {
+                "FLAG_BROADCAST_ENABLED": 2,
+                "FLAG_LEGACY_SPLIT": 4,
+                "FLAG_LISTEN_ENABLED": 1,
+                "FLAG_NONE": 0
+              }
+            }
+          },
+          "oneofs": {
+            "_broadcast_offer_preset": {
+              "oneof": [
+                "broadcastOfferPreset"
+              ]
+            }
+          }
+        },
         "MeshPacket": {
           "fields": {
             "channel": {
@@ -3116,6 +3370,7 @@ window.MeshtasticSerialProto = {
             },
             "rxRssi": {
               "id": 12,
+              "rule": "optional",
               "type": "int32"
             },
             "rxSnr": {
@@ -3124,6 +3379,7 @@ window.MeshtasticSerialProto = {
             },
             "rxTime": {
               "id": 7,
+              "rule": "optional",
               "type": "fixed32"
             },
             "to": {
@@ -3144,6 +3400,10 @@ window.MeshtasticSerialProto = {
             },
             "wantAck": {
               "id": 10,
+              "type": "bool"
+            },
+            "xeddsaSigned": {
+              "id": 22,
               "type": "bool"
             }
           },
@@ -3178,11 +3438,22 @@ window.MeshtasticSerialProto = {
                 "TRANSPORT_LORA_ALT2": 3,
                 "TRANSPORT_LORA_ALT3": 4,
                 "TRANSPORT_MQTT": 5,
-                "TRANSPORT_MULTICAST_UDP": 6
+                "TRANSPORT_MULTICAST_UDP": 6,
+                "TRANSPORT_UNICAST_UDP": 8
               }
             }
           },
           "oneofs": {
+            "_rx_rssi": {
+              "oneof": [
+                "rxRssi"
+              ]
+            },
+            "_rx_time": {
+              "oneof": [
+                "rxTime"
+              ]
+            },
             "payload_variant": {
               "oneof": [
                 "decoded",
@@ -3209,11 +3480,14 @@ window.MeshtasticSerialProto = {
             "LONG_TURBO": 9,
             "MEDIUM_FAST": 4,
             "MEDIUM_SLOW": 3,
+            "MEDIUM_TURBO": 16,
             "NARROW_FAST": 12,
             "NARROW_SLOW": 13,
             "SHORT_FAST": 6,
             "SHORT_SLOW": 5,
             "SHORT_TURBO": 8,
+            "TINY_FAST": 14,
+            "TINY_SLOW": 15,
             "VERY_LONG_SLOW": 2
           }
         },
@@ -3243,6 +3517,11 @@ window.MeshtasticSerialProto = {
               "id": 3,
               "rule": "optional",
               "type": "ExternalNotificationConfig"
+            },
+            "meshBeacon": {
+              "id": 17,
+              "rule": "optional",
+              "type": "MeshBeaconConfig"
             },
             "mqtt": {
               "id": 1,
@@ -3610,6 +3889,87 @@ window.MeshtasticSerialProto = {
                 }
               }
             },
+            "MeshBeaconConfig": {
+              "fields": {
+                "broadcastIntervalSecs": {
+                  "id": 11,
+                  "type": "uint32"
+                },
+                "broadcastMessage": {
+                  "id": 4,
+                  "type": "string"
+                },
+                "broadcastOfferChannel": {
+                  "id": 5,
+                  "type": "ChannelSettings"
+                },
+                "broadcastOfferPreset": {
+                  "id": 7,
+                  "rule": "optional",
+                  "type": "ModemPreset"
+                },
+                "broadcastOfferRegion": {
+                  "id": 6,
+                  "type": "RegionCode"
+                },
+                "broadcastTargets": {
+                  "id": 13,
+                  "rule": "repeated",
+                  "type": "BroadcastTarget"
+                },
+                "flags": {
+                  "id": 1,
+                  "type": "uint32"
+                }
+              },
+              "nested": {
+                "BroadcastTarget": {
+                  "fields": {
+                    "channelIndex": {
+                      "id": 4,
+                      "rule": "optional",
+                      "type": "uint32"
+                    },
+                    "preset": {
+                      "id": 1,
+                      "rule": "optional",
+                      "type": "ModemPreset"
+                    },
+                    "region": {
+                      "id": 2,
+                      "type": "RegionCode"
+                    }
+                  },
+                  "oneofs": {
+                    "_channel_index": {
+                      "oneof": [
+                        "channelIndex"
+                      ]
+                    },
+                    "_preset": {
+                      "oneof": [
+                        "preset"
+                      ]
+                    }
+                  }
+                },
+                "Flags": {
+                  "values": {
+                    "FLAG_BROADCAST_ENABLED": 2,
+                    "FLAG_LEGACY_SPLIT": 4,
+                    "FLAG_LISTEN_ENABLED": 1,
+                    "FLAG_NONE": 0
+                  }
+                }
+              },
+              "oneofs": {
+                "_broadcast_offer_preset": {
+                  "oneof": [
+                    "broadcastOfferPreset"
+                  ]
+                }
+              }
+            },
             "NeighborInfoConfig": {
               "fields": {
                 "enabled": {
@@ -3870,45 +4230,13 @@ window.MeshtasticSerialProto = {
             },
             "TrafficManagementConfig": {
               "fields": {
-                "dropUnknownEnabled": {
-                  "id": 10,
-                  "type": "bool"
-                },
-                "enabled": {
-                  "id": 1,
-                  "type": "bool"
-                },
-                "exhaustHopPosition": {
-                  "id": 13,
-                  "type": "bool"
-                },
-                "exhaustHopTelemetry": {
-                  "id": 12,
-                  "type": "bool"
-                },
-                "nodeinfoDirectResponse": {
-                  "id": 5,
-                  "type": "bool"
-                },
                 "nodeinfoDirectResponseMaxHops": {
                   "id": 6,
                   "type": "uint32"
                 },
-                "positionDedupEnabled": {
-                  "id": 2,
-                  "type": "bool"
-                },
                 "positionMinIntervalSecs": {
                   "id": 4,
                   "type": "uint32"
-                },
-                "positionPrecisionBits": {
-                  "id": 3,
-                  "type": "uint32"
-                },
-                "rateLimitEnabled": {
-                  "id": 7,
-                  "type": "bool"
                 },
                 "rateLimitMaxPackets": {
                   "id": 9,
@@ -3917,10 +4245,6 @@ window.MeshtasticSerialProto = {
                 "rateLimitWindowSecs": {
                   "id": 8,
                   "type": "uint32"
-                },
-                "routerPreserveHops": {
-                  "id": 14,
-                  "type": "bool"
                 },
                 "unknownPacketThreshold": {
                   "id": 11,
@@ -3947,7 +4271,8 @@ window.MeshtasticSerialProto = {
                 "paxcounter",
                 "statusmessage",
                 "trafficManagement",
-                "tak"
+                "tak",
+                "meshBeacon"
               ]
             }
           }
@@ -3959,6 +4284,7 @@ window.MeshtasticSerialProto = {
             "CANNEDMSG_CONFIG": 6,
             "DETECTIONSENSOR_CONFIG": 11,
             "EXTNOTIF_CONFIG": 2,
+            "MESHBEACON_CONFIG": 16,
             "MQTT_CONFIG": 0,
             "NEIGHBORINFO_CONFIG": 9,
             "PAXCOUNTER_CONFIG": 12,
@@ -4226,6 +4552,10 @@ window.MeshtasticSerialProto = {
               "id": 6,
               "type": "DeviceMetrics"
             },
+            "hasXeddsaSigned": {
+              "id": 14,
+              "type": "bool"
+            },
             "hopsAway": {
               "id": 9,
               "rule": "optional",
@@ -4330,6 +4660,13 @@ window.MeshtasticSerialProto = {
             "OLED_SSD1306": 1
           }
         },
+        "PacketSignaturePolicy": {
+          "values": {
+            "PACKET_SIGNATURE_POLICY_BALANCED": 1,
+            "PACKET_SIGNATURE_POLICY_COMPATIBLE": 0,
+            "PACKET_SIGNATURE_POLICY_STRICT": 2
+          }
+        },
         "PairingMode": {
           "values": {
             "FIXED_PIN": 1,
@@ -4371,8 +4708,10 @@ window.MeshtasticSerialProto = {
             "IP_TUNNEL_APP": 33,
             "KEY_VERIFICATION_APP": 12,
             "LORAWAN_BRIDGE": 75,
+            "LORA_OTA_APP": 79,
             "MAP_REPORT_APP": 73,
             "MAX": 511,
+            "MESH_BEACON_APP": 37,
             "NEIGHBORINFO_APP": 71,
             "NODEINFO_APP": 4,
             "NODE_STATUS_APP": 36,
@@ -4756,8 +5095,12 @@ window.MeshtasticSerialProto = {
             "EU_N_868": 32,
             "IN": 10,
             "ITU1_2M": 27,
+            "ITU1_70CM": 34,
+            "ITU2_125CM": 37,
             "ITU2_2M": 28,
+            "ITU2_70CM": 35,
             "ITU3_2M": 33,
+            "ITU3_70CM": 36,
             "JP": 5,
             "KR": 7,
             "KZ_433": 23,
@@ -4990,6 +5333,11 @@ window.MeshtasticSerialProto = {
               "id": 1,
               "rule": "optional",
               "type": "float"
+            },
+            "startFanCleaning": {
+              "id": 3,
+              "rule": "optional",
+              "type": "bool"
             }
           },
           "oneofs": {
@@ -5001,6 +5349,97 @@ window.MeshtasticSerialProto = {
             "_set_temperature": {
               "oneof": [
                 "setTemperature"
+              ]
+            },
+            "_start_fan_cleaning": {
+              "oneof": [
+                "startFanCleaning"
+              ]
+            }
+          }
+        },
+        "SEN6X_config": {
+          "fields": {
+            "factoryReset": {
+              "id": 8,
+              "rule": "optional",
+              "type": "bool"
+            },
+            "setAltitude": {
+              "id": 6,
+              "rule": "optional",
+              "type": "uint32"
+            },
+            "setAmbientPressure": {
+              "id": 7,
+              "rule": "optional",
+              "type": "uint32"
+            },
+            "setAsc": {
+              "id": 4,
+              "rule": "optional",
+              "type": "bool"
+            },
+            "setOneShotMode": {
+              "id": 2,
+              "rule": "optional",
+              "type": "bool"
+            },
+            "setTargetCo2Conc": {
+              "id": 5,
+              "rule": "optional",
+              "type": "uint32"
+            },
+            "setTemperature": {
+              "id": 1,
+              "rule": "optional",
+              "type": "float"
+            },
+            "startFanCleaning": {
+              "id": 3,
+              "rule": "optional",
+              "type": "bool"
+            }
+          },
+          "oneofs": {
+            "_factory_reset": {
+              "oneof": [
+                "factoryReset"
+              ]
+            },
+            "_set_altitude": {
+              "oneof": [
+                "setAltitude"
+              ]
+            },
+            "_set_ambient_pressure": {
+              "oneof": [
+                "setAmbientPressure"
+              ]
+            },
+            "_set_asc": {
+              "oneof": [
+                "setAsc"
+              ]
+            },
+            "_set_one_shot_mode": {
+              "oneof": [
+                "setOneShotMode"
+              ]
+            },
+            "_set_target_co2_conc": {
+              "oneof": [
+                "setTargetCo2Conc"
+              ]
+            },
+            "_set_temperature": {
+              "oneof": [
+                "setTemperature"
+              ]
+            },
+            "_start_fan_cleaning": {
+              "oneof": [
+                "startFanCleaning"
               ]
             }
           }
@@ -5040,6 +5479,10 @@ window.MeshtasticSerialProto = {
               "id": 4,
               "type": "bool"
             },
+            "packetSignaturePolicy": {
+              "id": 9,
+              "type": "PacketSignaturePolicy"
+            },
             "privateKey": {
               "id": 2,
               "type": "bytes"
@@ -5052,10 +5495,27 @@ window.MeshtasticSerialProto = {
               "id": 5,
               "type": "bool"
             }
+          },
+          "nested": {
+            "PacketSignaturePolicy": {
+              "values": {
+                "PACKET_SIGNATURE_POLICY_BALANCED": 1,
+                "PACKET_SIGNATURE_POLICY_COMPATIBLE": 0,
+                "PACKET_SIGNATURE_POLICY_STRICT": 2
+              }
+            }
           }
         },
         "SensorConfig": {
           "fields": {
+            "as3935Config": {
+              "id": 7,
+              "type": "AS3935_config"
+            },
+            "ds248xConfig": {
+              "id": 5,
+              "type": "DS248X_config"
+            },
             "scd30Config": {
               "id": 3,
               "type": "SCD30_config"
@@ -5067,6 +5527,10 @@ window.MeshtasticSerialProto = {
             "sen5xConfig": {
               "id": 2,
               "type": "SEN5X_config"
+            },
+            "sen6xConfig": {
+              "id": 6,
+              "type": "SEN6X_config"
             },
             "shtxxConfig": {
               "id": 4,
@@ -5219,6 +5683,7 @@ window.MeshtasticSerialProto = {
         },
         "State": {
           "values": {
+            "DISABLED": 5,
             "LOCKED": 2,
             "NEEDS_PROVISION": 1,
             "STATE_UNSPECIFIED": 0,
@@ -5362,6 +5827,7 @@ window.MeshtasticSerialProto = {
             "ADS1X15": 40,
             "ADS1X15_ALT": 41,
             "AHT10": 23,
+            "AS3935": 57,
             "BH1750": 45,
             "BME280": 1,
             "BME680": 2,
@@ -5374,6 +5840,7 @@ window.MeshtasticSerialProto = {
             "DPS310": 36,
             "DS248X": 51,
             "HDC1080": 46,
+            "HM330X": 55,
             "ICM20948": 27,
             "ICM42607P": 53,
             "INA219": 5,
@@ -5402,6 +5869,7 @@ window.MeshtasticSerialProto = {
             "SCD30": 49,
             "SCD4X": 32,
             "SEN5X": 43,
+            "SEN6X": 56,
             "SENSOR_UNSET": 0,
             "SFA30": 42,
             "SHT21": 47,
@@ -5409,6 +5877,7 @@ window.MeshtasticSerialProto = {
             "SHT4X": 17,
             "SHTC3": 7,
             "SHTXX": 50,
+            "SPA06": 54,
             "STC31": 48,
             "TSL2561": 44,
             "TSL25911FN": 22,
@@ -5470,45 +5939,13 @@ window.MeshtasticSerialProto = {
         },
         "TrafficManagementConfig": {
           "fields": {
-            "dropUnknownEnabled": {
-              "id": 10,
-              "type": "bool"
-            },
-            "enabled": {
-              "id": 1,
-              "type": "bool"
-            },
-            "exhaustHopPosition": {
-              "id": 13,
-              "type": "bool"
-            },
-            "exhaustHopTelemetry": {
-              "id": 12,
-              "type": "bool"
-            },
-            "nodeinfoDirectResponse": {
-              "id": 5,
-              "type": "bool"
-            },
             "nodeinfoDirectResponseMaxHops": {
               "id": 6,
               "type": "uint32"
             },
-            "positionDedupEnabled": {
-              "id": 2,
-              "type": "bool"
-            },
             "positionMinIntervalSecs": {
               "id": 4,
               "type": "uint32"
-            },
-            "positionPrecisionBits": {
-              "id": 3,
-              "type": "uint32"
-            },
-            "rateLimitEnabled": {
-              "id": 7,
-              "type": "bool"
             },
             "rateLimitMaxPackets": {
               "id": 9,
@@ -5517,10 +5954,6 @@ window.MeshtasticSerialProto = {
             "rateLimitWindowSecs": {
               "id": 8,
               "type": "uint32"
-            },
-            "routerPreserveHops": {
-              "id": 14,
-              "type": "bool"
             },
             "unknownPacketThreshold": {
               "id": 11,
@@ -5537,7 +5970,8 @@ window.MeshtasticSerialProto = {
             "TRANSPORT_LORA_ALT2": 3,
             "TRANSPORT_LORA_ALT3": 4,
             "TRANSPORT_MQTT": 5,
-            "TRANSPORT_MULTICAST_UDP": 6
+            "TRANSPORT_MULTICAST_UDP": 6,
+            "TRANSPORT_UNICAST_UDP": 8
           }
         },
         "TriggerType": {

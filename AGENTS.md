@@ -78,8 +78,45 @@ A change is complete only when all of these pass:
 6. Alembic migrations apply cleanly.
 7. The matching doc in `docs/` is updated.
 8. Commit messages use conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`).
+9. `npx eslint src/sonoran/web/static` passes. Install it with
+   `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
+   ignored, and nothing is added to the served frontend.
+
+`node --check` is not a substitute for item 9. It parses a file and does
+no scope analysis, so a reference to a deleted name passes it and throws
+in the reader's browser. Six such references were found in one session's
+work before ESLint existed here, and one of them was invisible to a grep
+for the attribute, because the dangling name was the variable the element
+had been assigned to (#248). The classic scripts share one global scope;
+`eslint.config.mjs` derives the shared names from what each file actually
+declares, so deleting a declaration fails every remaining caller in every
+other file. Do not replace that with a hand-kept list: a list keeps the
+deleted name and waves the stale reference through.
 
 See `docs/QA.md` for the full process.
+
+## 6.1 Releases (mandatory)
+
+**After you merge to `main`, you must publish a release.** A merge without
+a release is not finished work: the people who reported the bug are never
+told, and the change log has a hole in it.
+
+1. After your last merge in a session, run `python tools/release.py draft`.
+2. Read the draft. Every "Done" issue must be closed now, and every
+   @handle is a notification to a real person.
+3. Run `python tools/release.py publish`. It makes a tag and a release,
+   no commit, and it starts no CI run.
+4. In your next pull request, run `python tools/release.py changelog`
+   and include `CHANGELOG.md`. Never commit it to `main` by itself: that
+   is one more CI run on self-hosted hardware.
+5. Before you end a session, run `python tools/release.py check`. It
+   exits 1 when merged work is not in a release. If you cannot publish,
+   say so in your report.
+
+Fill in the pull request template: "Release notes", "Issues" and
+"Thanks" become the release. Write "part of #N" for an issue that must
+stay open, never any form of close, fix or resolve beside its number.
+See `docs/RELEASING.md`.
 
 ## 7. Security rules
 
@@ -997,3 +1034,4 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new
   node would help, and what neither of those can say
 - `docs/REVIEW.md` — code review findings, and which are still open
+- `docs/RELEASING.md` — how to publish a release, and what it costs in CI

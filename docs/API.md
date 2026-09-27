@@ -154,6 +154,19 @@ Query parameters:
   `gateways`, `snr`, `rssi`. Nulls sort last, whichever the order.
 - `order` — `desc` (default) or `asc`.
 - `offset`, `limit` — paging. Default limit 100. Maximum 500.
+- `before` — a cursor: the rows after the last row of a previous page,
+  in the same order. Every non-empty answer carries the cursor for its
+  last row in the `X-Next-Before` header. A short page is the end.
+  The cursor is opaque, and it carries the `sort` and `order` it was
+  made under: under any other it returns 422, so a later page cannot
+  come back in a different order. Invalid cursors return 422.
+
+Use `before`, not `offset`, to page (#259). Packets arrive all the
+time, and a packet that arrives between two offset pages moves a row
+from one page to the next, so it is shown twice, or it is skipped.
+A cursor names the last row, so a new packet cannot move it. Ties are
+broken by `first_seen_at`, then `from_node`, then `packet_id`, so the
+order is total.
 
 A sort by `hops`, `gateways`, `snr` or `rssi` has to summarise every
 observation in the window before it can order anything. It needs
@@ -220,26 +233,44 @@ Returns the route and neighbour widgets of the node page (#55).
 
 Query parameters: `hours` — default 24, at most 720.
 
-Response: `window_hours`, `position`, `hears`, `heard_by`,
-`longest_segment`, `furthest_heard_by`, `furthest_heard`,
+Response: `window_hours`, `position`, `position_known`, `hears`,
+`heard_by`, `longest_segment`, `furthest_heard_by`, `furthest_heard`,
+`furthest_heard_by_reason`, `furthest_heard_reason`,
 `coarse_excluded`, `traces_read`, `trace_limit_reached`, `hop_depth`.
 
-- `hears` — nodes this node heard: its own neighbour reports, and
-  traceroute hops that arrived at it. `heard_by` — nodes that heard it:
-  their neighbour reports that name it, and traceroute hops that left
-  it. Item: `node_id`, `display_name`, `count`, `best_snr`, `kinds`,
-  `last`, `distance_km`.
+- `position` — true when the node's own position is exact.
+  `position_known` — true when it has a usable position at all, exact or
+  rounded.
+- `hears` — nodes this node heard: its own neighbour reports, traceroute
+  hops that arrived at it, and packets it uploaded as a gateway with no
+  hop used. `heard_by` — nodes that heard it: their neighbour reports
+  that name it, traceroute hops that left it, and gateways that uploaded
+  its packets with no hop used. Item: `node_id`, `display_name`,
+  `count`, `best_snr`, `kinds` (`neighbor`, `traceroute`, `gateway`),
+  `last`, `distance_km`, `approx_distance_km`, `distance_error_km`.
+  A `gateway` count is distinct packets, not uploads.
 - `longest_segment` — the longest single hop of any traceroute the node
   took part in: `from`, `to`, `distance_km`, `snr`.
 - `furthest_heard_by` and `furthest_heard` — the most distant row of
-  each list.
+  each list, ranked by `distance_km` or, when that is null,
+  `approx_distance_km`.
+- `furthest_heard_by_reason` and `furthest_heard_reason` — null when
+  the tile has a distance. Otherwise one of `quiet` (it sent nothing in
+  the window), `no_link` (no single-hop link on record), `no_position`
+  (it has no usable position) or `partners_no_position` (no node at the
+  other end has one).
 - `hop_depth` — `packets`, `median`, and `counts` of `hops` and
   `packets`: the fewest hops each packet took to the nearest gateway.
   The node's own uploads are left out.
 
-A distance needs an exact position at both ends, by the rule the gaps
-page uses. A pair with a coarse or missing position has no distance and
-is counted in `coarse_excluded`. At most the newest 2000 traceroutes
+`distance_km` needs an exact position at both ends, by the rule the
+gaps page uses. A pair with a coarse or missing position has no
+`distance_km`, and a traceroute segment of that kind is counted in
+`coarse_excluded`. A pair where both positions are usable and at least
+one is rounded has `approx_distance_km` instead, with
+`distance_error_km`: the sum of the two ends' precision deviations from
+the firmware table, which bounds how far the rounding can move the
+distance. The two are never both set on one row. At most the newest 2000 traceroutes
 are read, and `trace_limit_reached` says when that cap was hit.
 
 ### 3.4 `GET /api/nodes/{node_id}/heard-by`
@@ -559,6 +590,14 @@ pessimistic.
 `caveats` is what this feature cannot answer at all. A page shows it
 permanently and never behind a toggle.
 
+`signal_units` names what each numbered signal's value is measured in,
+for a column heading (`rf_intermittent`: `% of hours heard`).
+`signal_key` holds, for each signal, `measures`, `problem` and `owner`:
+what the check looks at, what counts as a problem, and what the node's
+owner can do, with this run's `thresholds` filled in. Both are
+definitions from `gaps/signals.py`, so they are served for an
+assessment written before they existed (#265).
+
 ### 3C.2 `GET /api/gaps/nodes`
 
 Returns the assessed nodes of one preset, worst first.
@@ -601,6 +640,7 @@ know. It is not a score.
           "reason": "no_gateway_heard_it",
           "sentence": "None of the 31 gateways active in this window heard it over the air. ...",
           "value": null,
+          "unit": null,
           "evidence": {"packets": 412, "rf_packets": 0, "gateways_active": 31}
         }
       }
@@ -608,6 +648,20 @@ know. It is not a score.
   ]
 }
 ```
+
+**`value` and `unit` (#265).** A signal's `value` is null unless the
+signal measured a number, and a value always carries a `unit`: the job
+cannot build a signal with a value and no unit. The units are
+`fraction` (0 to 1, `rf_intermittent`: the share of awake hours in which
+something on the air heard the node), `db` (a signed margin,
+`weak_best_link`), `gateways` (a whole count, `sole_observer`), `dbm`
+(the predicted level, `outside_predicted_usable`) and `m` (the position
+error, only on the `unknown` state `position_too_coarse`). The
+`fraction` is not rounded: a share just short of 1 stays short of 1, so a
+reader can show ">99.9%" rather than a perfect score nobody measured.
+A predicted level of nothing at all is `value: null`, never -200 dBm.
+An assessment written before `unit` existed has none, and a reader must
+then show no number rather than guess one.
 
 `position_confidence` is `exact`, `coarse` or `none`. A `coarse` node is
 still listed, with its `position_deviation_m`, and its
@@ -1041,6 +1095,16 @@ Returns messages that carry one hashtag, grouped by week. The weekly
 mesh network check-in uses the `#meshnet` tag. A week starts on Monday
 in UTC.
 
+**One channel only (#262).** The endpoint reads the channel named by the
+`default_preset` setting (MediumFast on this mesh) and no other. The
+scope applies to both reads: the message list and the 52-week aggregate
+that the streaks come from. A tagged message on any other channel is not
+returned and does not count toward a streak. The scope is on the server
+because a caller never sees the rows a streak is counted from, so a
+filter in the caller would leave other channels inside every run. The
+match is exact, not case-folded. The response carries `channel`, the
+name that was read.
+
 Query parameters:
 
 - `tag` — the tag word, with or without the hash sign. Default
@@ -1057,6 +1121,11 @@ a gap is the point of this endpoint, and a week simply absent from the
 list reads as a week that never happened. Weeks older than the earliest
 tagged message the read could find are left out, because there is no
 evidence about them either way.
+
+Each message carries `streak_weeks`, `streak_at_least` and `first_ever`:
+the sender's run as of the week of that message, from the same aggregate
+and the same rules as `check_ins`. `streak_weeks` is null, never 0, when
+no run is known for the message.
 
 `message_count` is measured by an aggregate and `messages` is capped by
 `limit`, so on a busy week the two disagree. `messages_shown` is the

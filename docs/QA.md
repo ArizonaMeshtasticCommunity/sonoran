@@ -40,7 +40,8 @@ pytest
 4. Fix all failures.
 5. Update the documentation.
 6. Commit with a conventional commit message.
-7. Open a pull request.
+7. Open a pull request. Fill in the template.
+8. After the merge, publish a release. See `docs/RELEASING.md`.
 
 ## 3. Continuous integration
 

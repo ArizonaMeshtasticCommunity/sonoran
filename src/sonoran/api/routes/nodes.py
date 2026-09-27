@@ -1,5 +1,8 @@
 """Read-only node endpoints."""
 
+import base64
+import binascii
+import json
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -11,6 +14,7 @@ from sqlalchemy import (
     and_,
     case,
     func,
+    literal,
     not_,
     or_,
     select,
@@ -912,6 +916,73 @@ def _parse_packet_type(value: str) -> int:
         raise HTTPException(status_code=422, detail="invalid portnum") from exc
 
 
+def _packet_cursor(sort: str, order: str, value: object, row: Packet) -> str:
+    """Return the `before` cursor that continues a listing after `row` (#259).
+
+    Opaque to the page, and carrying the sort it was made under, so a
+    second page cannot silently come back in a different order from the
+    first: `_read_packet_cursor` refuses a cursor from another sort.
+
+    The row is named by its sort value and then (`first_seen_at`,
+    `from_node_num`, `packet_id`), which is the listing's whole order and
+    unique: (`from_node_num`, `packet_id`) is the packet's identity
+    (AGENTS.md 9.1).
+    """
+    if isinstance(value, datetime):
+        value = value.isoformat()
+    payload = [sort, order, value, row.first_seen_at.isoformat(), row.from_node_num, row.packet_id]
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+
+
+def _read_packet_cursor(raw: str, sort: str, order: str) -> tuple[Any, datetime, int, int]:
+    """Decode a `before` cursor, or answer 422.
+
+    A cursor made under another sort or order is refused rather than
+    applied. Its sort value means nothing in this order, so applying it
+    would skip or repeat rows with no error at all.
+    """
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        made_sort, made_order, value, moment, sender, packet_id = json.loads(
+            base64.urlsafe_b64decode(padded.encode())
+        )
+        when = datetime.fromisoformat(moment)
+        if sort == "time" and value is not None:
+            value = datetime.fromisoformat(value)
+        sender, packet_id = int(sender), int(packet_id)
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="invalid before cursor") from exc
+    if (made_sort, made_order) != (sort, order):
+        raise HTTPException(
+            status_code=422,
+            detail=f"the before cursor was made for sort={made_sort}&order={made_order}",
+        )
+    return value, when, sender, packet_id
+
+
+def _after_cursor(
+    column: Any, order: str, cursor: tuple[Any, datetime, int, int]
+) -> ColumnElement[bool]:
+    """Return the rows that come after the cursor in the listing's order.
+
+    The order is `column` (nulls last), then `first_seen_at`,
+    `from_node_num` and `packet_id`, all descending. So a row is later
+    when its value is further along, or equal with a later tiebreak --
+    and every NULL comes after every value, because NULLs sort last.
+    """
+    value, when, sender, packet_id = cursor
+    # `literal`, not the bare values: `tuple_` would bind them anyway, but
+    # only its column-typed signature is visible to mypy, which the CI
+    # typecheck job enforces.
+    tail = tuple_(Packet.first_seen_at, Packet.from_node_num, Packet.packet_id) < tuple_(
+        literal(when), literal(sender), literal(packet_id)
+    )
+    if value is None:
+        return and_(column.is_(None), tail)
+    further = column > value if order == "asc" else column < value
+    return or_(further, and_(column == value, tail), column.is_(None))
+
+
 def _observations(keys: Any) -> Any:
     """Return the observation summary of the packets `keys` selects.
 
@@ -961,6 +1032,7 @@ async def node_packets(
     response: Response,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0, le=100_000),
+    before: str | None = Query(default=None, max_length=1024),
     hours: int | None = Query(default=None, ge=1, le=720),
     portnum: str | None = None,
     channel: str | None = None,
@@ -996,6 +1068,17 @@ async def node_packets(
     sort by one of those columns has to summarise the whole window
     first, so it needs `hours` of `SEEN_SORT_MAX_HOURS` or less. That
     keeps a 30 day sort off a shared database.
+
+    **Paging is by cursor (#259).** Each answer carries `X-Next-Before`,
+    and passing it back as `before` returns the rows after the last one
+    served, in the same order. `offset` still works and is not what the
+    page uses: packets arrive all the time, and a new one landing
+    between two offset pages pushes a row from the first page onto the
+    second (a repeat) -- or, in an ascending sort, past the reader
+    entirely (a gap, which nothing can detect). A cursor names the last
+    row itself, so what arrived since cannot move it. The cursor carries
+    its sort and order and is refused under any other, so the sort
+    travels to the server with every page.
     """
     if sort not in PACKET_SORTS:
         raise HTTPException(
@@ -1006,6 +1089,7 @@ async def node_packets(
             status_code=422,
             detail=f"sorting by {sort} needs hours of {SEEN_SORT_MAX_HOURS} or less",
         )
+    cursor = None if before is None else _read_packet_cursor(before, sort, order)
     if direction == "heard":
         hours = min(hours or HEARD_DEFAULT_HOURS, HEARD_MAX_HOURS)
     node_num = require_node_num(node_id)
@@ -1073,7 +1157,7 @@ async def node_packets(
             "rssi": seen.c.direct_rssi,
         }[sort]
         statement = (
-            select(Packet)
+            select(Packet, column)
             .outerjoin(
                 seen,
                 and_(
@@ -1085,20 +1169,32 @@ async def node_packets(
         )
     else:
         column = packet_columns[sort]
-        statement = select(Packet).where(*filters)
+        statement = select(Packet, column).where(*filters)
+    if cursor is not None:
+        statement = statement.where(_after_cursor(column, order, cursor))
 
     ordered = column.asc() if order == "asc" else column.desc()
-    # Nulls last and a total order, exactly as the node list does, so a
-    # row never lands on two pages or on none.
-    page = (
-        await session.scalars(
-            statement.order_by(ordered.nullslast(), Packet.first_seen_at.desc(), Packet.id.desc())
+    # Nulls last and a total order, so a row never lands on two pages or
+    # on none. The tiebreak is the packet's identity rather than the
+    # surrogate `id` it used to be, because a cursor has to be able to
+    # name it and the API never shows `id` (AGENTS.md 9.1).
+    served = (
+        await session.execute(
+            statement.order_by(
+                ordered.nullslast(),
+                Packet.first_seen_at.desc(),
+                Packet.from_node_num.desc(),
+                Packet.packet_id.desc(),
+            )
             .offset(offset)
             .limit(limit)
         )
     ).all()
-    if not page:
+    if not served:
         return []
+    page = [item for item, _value in served]
+    last, last_value = served[-1]
+    response.headers["X-Next-Before"] = _packet_cursor(sort, order, last_value, last)
 
     keys = [(item.from_node_num, item.packet_id) for item in page]
     summary = _observations(

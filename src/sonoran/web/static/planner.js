@@ -744,8 +744,16 @@ function drawNodes() {
         el('div', { class: 'muted', style: 'font-size:.8rem' }, node.node_id),
         // The colour on the map means nothing without the word for it,
         // and it is the same word the other pages use.
+        /*
+         * `SonoranLabels.roleLabel`, not the bare `roleLabel`. The bare name
+         * is a top-level `const` that app.js destructures -- and app.js loads
+         * AFTER this file. It only worked because a popup opens on a click,
+         * by which time app.js has run. ESLint's `no-undef` surfaced it
+         * (#248). labels.js loads before this file, so this is correct at any
+         * moment rather than correct by timing.
+         */
         el('div', { class: 'muted', style: 'font-size:.8rem' },
-          roleLabel(node.role) + (node.is_mqtt_gateway ? ', gateway' : '')),
+          SonoranLabels.roleLabel(node.role) + (node.is_mqtt_gateway ? ', gateway' : '')),
       ];
       if (reached != null) {
         lines.push(

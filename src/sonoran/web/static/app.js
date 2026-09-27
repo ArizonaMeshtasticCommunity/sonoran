@@ -739,6 +739,10 @@ function messageItem(message, options = {}) {
         onclick: () => openNode(message.from_node),
         text: message.from_name || message.from_node,
       }),
+      // Something the page wants beside the name, such as the check-in
+      // page's streak pill (#262). It sits after the name and before the
+      // time, which is where Will's sketch put it.
+      options.badge || null,
       options.showChannel && message.channel
         ? el('span', { class: 'channel-label', text: message.channel }) : null,
       message.packet_id == null
@@ -1863,7 +1867,9 @@ function ensureMap() {
    */
   map.on('zoomend', () => {
     const level = map.getZoom();
-    for (const [marker, row] of mapState.marks || []) marker.setStyle(nodeStyle(row, level));
+    for (const { marker, row } of (mapState.marks || new Map()).values()) {
+      marker.setStyle(nodeStyle(row, level));
+    }
   });
   if (CONFIG.tileUrl) {
     L.tileLayer(CONFIG.tileUrl, {
@@ -1902,29 +1908,77 @@ function ensureMap() {
   return map;
 }
 
+/** What a node's bubble on the map says. Built when it is opened. */
+function mapNodePopup(row) {
+  return el('div', {},
+    el('div', { style: 'font-weight:650' }, row.display_name || row.node_id),
+    el('div', { class: 'muted', style: 'font-size:.8rem' },
+      `${row.node_id} - heard ${ago(row.last_heard)} ago`),
+    el('div', { style: `font-size:.8rem;color:${nodeColour(row)}` },
+      roleLabel(row.role) + (row.is_mqtt_gateway ? ', MQTT gateway' : '')),
+    row.hw_model ? el('div', { class: 'muted', style: 'font-size:.8rem', text: row.hw_model }) : null,
+    el('button', { class: 'linky', type: 'button', text: 'Open node detail', onclick: () => openNode(row.node_id) }));
+}
+
+/*
+ * Bring the node dots up to date with `rows`, in place (#264).
+ *
+ * This used to start with `mapState.nodes.clearLayers()` and build every
+ * marker again. The live timer calls it every fifteen seconds through
+ * `render('map')`, and a Leaflet popup belongs to its marker, so a
+ * reader who had opened a node's bubble lost it at the next refresh --
+ * reported by StarSkream as "the bubble auto-closes". It is the chat's
+ * bug again (see `chatAppendNew`): a live refresh that REDRAWS instead
+ * of UPDATING throws away whatever the reader had open.
+ *
+ * So `mapState.marks` holds one marker per node id across refreshes:
+ *
+ * - a node still present keeps its marker. It moves only if its
+ *   position changed (`setLatLng` fires `move`, and Leaflet carries an
+ *   open popup along with it) and is restyled, because its role, its
+ *   age and the focus mark can all change between polls;
+ * - a node that is new gets a marker;
+ * - a node that is gone, or that the role filter now hides, loses its
+ *   marker. If its bubble was the open one, the bubble closes because
+ *   the node really went away, not as a side effect of redrawing.
+ *
+ * The popup content is a function, so it is built when opened (see
+ * `test_popups_are_built_on_open.py`) and reads the entry's CURRENT row:
+ * a bubble opened after a refresh says what that refresh said. A bubble
+ * already open is not rebuilt, because rebuilding it would drop the
+ * keyboard focus of a reader tabbed onto "Open node detail".
+ */
 function drawMapNodes(rows) {
-  mapState.nodes.clearLayers();
   const bounds = [];
   const zoom = mapState.map ? mapState.map.getZoom() : undefined;
-  // Every marker drawn this pass, so a zoom change can restyle them
-  // without refetching or rebuilding the layer (#196).
-  mapState.marks = [];
+  // One entry per node id, kept between refreshes. A zoom change also
+  // restyles through it, without refetching or rebuilding (#196).
+  if (!(mapState.marks instanceof Map)) mapState.marks = new Map();
+  const marks = mapState.marks;
+  const seen = new Set();
   for (const row of rows) {
     if (row.lat == null || row.lon == null) continue;
     if (!passesRoleFilter(row)) continue;
     bounds.push([row.lat, row.lon]);
-    const marker = L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom));
-    mapState.marks.push([marker, row]);
-    const popup = el('div', {},
-      el('div', { style: 'font-weight:650' }, row.display_name || row.node_id),
-      el('div', { class: 'muted', style: 'font-size:.8rem' },
-        `${row.node_id} - heard ${ago(row.last_heard)} ago`),
-      el('div', { style: `font-size:.8rem;color:${nodeColour(row)}` },
-        roleLabel(row.role) + (row.is_mqtt_gateway ? ', MQTT gateway' : '')),
-      row.hw_model ? el('div', { class: 'muted', style: 'font-size:.8rem', text: row.hw_model }) : null,
-      el('button', { class: 'linky', type: 'button', text: 'Open node detail', onclick: () => openNode(row.node_id) }));
-    marker.bindPopup(popup);
-    marker.addTo(mapState.nodes);
+    seen.add(row.node_id);
+    const held = marks.get(row.node_id);
+    if (held) {
+      held.row = row;
+      const at = held.marker.getLatLng();
+      if (at.lat !== row.lat || at.lng !== row.lon) held.marker.setLatLng([row.lat, row.lon]);
+      held.marker.setStyle(nodeStyle(row, zoom));
+      continue;
+    }
+    const entry = { marker: L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom)), row };
+    entry.marker.bindPopup(() => mapNodePopup(entry.row));
+    entry.marker.addTo(mapState.nodes);
+    marks.set(row.node_id, entry);
+  }
+  for (const [nodeId, entry] of marks) {
+    if (seen.has(nodeId)) continue;
+    // `removeLayer` fires `remove`, which closes this marker's popup.
+    mapState.nodes.removeLayer(entry.marker);
+    marks.delete(nodeId);
   }
   return bounds;
 }
@@ -3133,7 +3187,7 @@ PAGES.map = async (page) => {
   if (mapFocus) {
     const wanted = mapFocus.nodeId;
     const found = nodes.find((row) => row.node_id === wanted);
-    const target = (mapState.marks || []).find(([, row]) => row.node_id === wanted);
+    const target = mapState.marks ? mapState.marks.get(wanted) : null;
     if (found && found.lat != null && found.lon != null) {
       map.setView([found.lat, found.lon], MAP_FOCUS_ZOOM);
       /*
@@ -3142,7 +3196,10 @@ PAGES.map = async (page) => {
        * A popup was the obvious choice and does not survive. The live
        * map polls, `drawMapNodes` clears the layer, and the popup goes
        * with it -- measured, it was already closed six seconds after
-       * the link was followed.
+       * the link was followed. Since #264 the layer is updated in
+       * place and a popup would survive, but the mark is still the
+       * better answer: it needs no click to dismiss, hides no
+       * neighbour, and holds through every zoom.
        *
        * `focusNodeId` is read by `nodeStyle`, so the mark is reapplied
        * on every redraw and on every zoom change. A thicker ring in the
@@ -3151,7 +3208,7 @@ PAGES.map = async (page) => {
        * follow).
        */
       mapState.focusNodeId = found.node_id;
-      if (target) target[0].setStyle(nodeStyle(found, map.getZoom()));
+      if (target) target.marker.setStyle(nodeStyle(found, map.getZoom()));
       mapState.fitted = true;
     } else {
       /*
@@ -5392,8 +5449,50 @@ function weatherPanel(detail) {
     list || telemetryEmpty('This node sends no environment telemetry.'));
 }
 
+/*
+ * The Device readings as rows, each with its flag (#254).
+ *
+ * Not through `definitionList`, which the Weather panel and the packet
+ * page share and which has no idea what "bad" is. Same filter as it,
+ * though: a reading the node did not send is not a row, so a missing
+ * value cannot be drawn at all, let alone drawn red.
+ *
+ * A battery above 100 % is the firmware saying "external power"
+ * (`telemetry.proto`: "0-100 (>100 means powered)"). "101 %" read as a
+ * battery charged past full to somebody new to this, so it says so.
+ */
+function deviceRows(device) {
+  return Object.entries(device || {})
+    .filter(([key, value]) => value != null && DEVICE_LABELS[key])
+    .map(([key, value]) => {
+      const [label, format] = DEVICE_LABELS[key];
+      const text = key === 'battery_level' && batteryState(value) === 'mains'
+        ? 'External power' : format(value);
+      return { key, label, text, flag: fieldFlag(key, value) };
+    });
+}
+
+/**
+ * Rows as a definition list, the flag on the value it is about.
+ *
+ * The hint rides on the `dt` as `data-hint`, and `revealHints` turns it
+ * into the same button and popover as a column heading (#256): it opens
+ * on click, tap, Enter and Space, never on hover alone. It is revealed
+ * here, on the list itself, so the buttons are there as soon as the
+ * panel is, and not only after the slowest chart on the page loads.
+ */
+function fieldList(rows) {
+  const list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text, flag }) => [
+    el('dt', { 'data-label': label, 'data-hint': FIELD_HINTS[key] || null }, label),
+    fieldValue(text, flag),
+  ]));
+  revealHints(list);
+  return list;
+}
+
 function devicePanel(detail) {
-  const list = definitionList(detail.device, DEVICE_LABELS);
+  const rows = deviceRows(detail.device);
+  const list = rows.length ? fieldList(rows) : null;
   return el('div', { class: 'panel' },
     el('h3', {
       'data-label': 'Device',
@@ -5419,40 +5518,96 @@ function messagesPanel(detail) {
       : empty('This node sent no stored messages in the window.'));
 }
 
-function identityPanel(node) {
+/*
+ * The Identity rows (#254).
+ *
+ * Placeholders are capitalised: "Unknown", "Not reported", "Never".
+ * They are values in a list, and the list's other values -- "Yes",
+ * "No", a name -- are capitalised, so a lower-case "unknown" read as a
+ * sentence that had lost its start. #193.4 did the same for Yes and No.
+ *
+ * `ago()` is not used for the placeholder: it answers "never" and
+ * "unknown" in lower case for every page on the site, and here it is
+ * only reached once `last_heard` is known.
+ */
+function identityRows(node) {
   const rows = [
-    ['Node ID', node.node_id],
-    ['Long name', node.long_name || 'not reported'],
-    ['Short name', node.short_name || 'not reported'],
-    ['Hardware', node.hw_model || 'unknown'],
-    ['Role', node.role ? `${roleLabel(node.role)} (${node.role})` : 'unknown'],
+    { key: 'node_id', label: 'Node ID', text: node.node_id },
+    { key: 'long_name', label: 'Long name', text: node.long_name || 'Not reported' },
+    { key: 'short_name', label: 'Short name', text: node.short_name || 'Not reported' },
+    { key: 'hw_model', label: 'Hardware', text: node.hw_model || 'Unknown' },
+    { key: 'role', label: 'Role', text: node.role ? `${roleLabel(node.role)} (${node.role})` : 'Unknown' },
     // Through `yesNo`, not inlined. These two were the reason #193.4
     // could be "fixed" in the helper and still show lower case here.
-    ['Licensed', yesNo(node.is_licensed)],
-    ['MQTT gateway', yesNo(node.is_mqtt_gateway)],
-    ['Channel', node.last_channel || 'unknown'],
-    ['First seen', stamp(node.first_seen)],
-    ['Last heard', node.last_heard ? `${stamp(node.last_heard)} (${ago(node.last_heard)} ago)` : 'never'],
+    // The API always sends a boolean; were it ever absent, the row says
+    // Unknown rather than drawing an empty cell or, worse, "No".
+    { key: 'is_licensed', label: 'Licensed', text: yesNo(node.is_licensed) ?? 'Unknown' },
+    { key: 'is_mqtt_gateway', label: 'MQTT gateway', text: yesNo(node.is_mqtt_gateway) ?? 'Unknown' },
+    { key: 'last_channel', label: 'Channel', text: node.last_channel || 'Unknown' },
+    { key: 'first_seen', label: 'First seen', text: stamp(node.first_seen) },
+    {
+      key: 'last_heard',
+      label: 'Last heard',
+      text: node.last_heard ? `${stamp(node.last_heard)} (${ago(node.last_heard)} ago)` : 'Never',
+    },
   ];
   if (node.position) {
-    rows.push(['Position', `${round(node.position.lat, 5)}, ${round(node.position.lon, 5)}`]);
-    rows.push([
-      'Altitude',
-      node.position.altitude == null ? 'unknown' : SonoranUnits.heightFromM(node.position.altitude),
-    ]);
+    rows.push({
+      key: 'position',
+      label: 'Position',
+      text: `${round(node.position.lat, 5)}, ${round(node.position.lon, 5)}`,
+    });
+    rows.push({
+      key: 'altitude',
+      label: 'Altitude',
+      text: node.position.altitude == null ? 'Unknown' : SonoranUnits.heightFromM(node.position.altitude),
+      flag: altitudeFlag(node),
+    });
   }
-  return el('div', { class: 'panel' },
-    el('h3', {}, 'Identity'),
-    el('dl', { class: 'kv' }, rows.flatMap(([label, value]) =>
-      [el('dt', { text: label }), el('dd', { text: value })])));
+  return rows;
 }
 
+function identityPanel(node) {
+  return el('div', { class: 'panel' },
+    el('h3', {}, 'Identity'),
+    fieldList(identityRows(node)));
+}
+
+/*
+ * What the node sent, by type (#255).
+ *
+ * The table scrolled sideways inside its own panel. The panel is one of
+ * four in `.summary-row`, whose tracks go down to 15 rem, so at 1440 px
+ * the table has about 238 px to live in. Every cell was `nowrap`, and
+ * the labels are long: "Unreadable, reason not recorded" alone is wider
+ * than that at this font size. `.table-wrap` did exactly its job and
+ * scrolled, for a two-column table that has no business scrolling.
+ *
+ * Three changes, and each one is needed:
+ *
+ * - The type column WRAPS (`wrap: true`, which `td.wrap` turns into
+ *   `white-space: normal`), so a label takes two lines rather than the
+ *   panel's width. Every label has spaces to break at: `portnumLabel`
+ *   turns the underscores of a port name it does not know into spaces.
+ * - The heading is "Type", not "Packet type". A `nowrap` heading sets
+ *   a floor under its column, and the panel is already titled
+ *   "Activity". The exact wire values still reach the reader through
+ *   the heading's hint button, which `revealHints` builds from each
+ *   cell's `data-exact`.
+ * - The count stays `nowrap` and right-aligned with tabular figures.
+ *   A number broken over two lines reads as two numbers.
+ *
+ * Asserted at 320, 768, 1024 and 1440 px by the e2e journey "the node
+ * page tables fit their panels", which measures the table against its
+ * wrapper. The reflow journey could not catch this: it measures the
+ * document, and a table scrolling inside `.table-wrap` never widens it.
+ */
 function activityPanel(detail) {
   return el('div', { class: 'panel' },
     el('h3', {}, 'Activity',
       el('span', { class: 'muted', text: `${count(detail.activity.packet_count)} packets in ${detail.window_hours} h` })),
     el('div', { class: 'table-wrap' }, table([
-      { label: 'Packet type', cell: (row) => portnumCell(row.portnum) },
+      { label: 'Type', wrap: true, cell: (row) => portnumCell(row.portnum) },
       { label: 'Count', num: true, cell: (row) => count(row.count) },
     ], detail.activity.by_portnum, 'This node sent no packets in the window.')));
 }
@@ -5503,6 +5658,328 @@ const HEALTH_STATES = {
 const BATTERY_LOW = 5;
 const BATTERY_WEAK = 35;
 const ON_MAINS_ABOVE = 100;
+
+/*
+ * The one reading of a battery level, for the Power card and the Device
+ * panel both (#254).
+ *
+ * The two used to hold their own comparison, and a red Device row
+ * beside a green Power card is the page contradicting itself. `mains`
+ * is its own answer and not `ok`: the firmware sends 101 for "no
+ * battery, or charging" (`MAGIC_USB_BATTERY_LEVEL` in
+ * src/modules/Telemetry/DeviceTelemetry.cpp), which is not a charge.
+ * No level at all is `unknown`, never `bad` -- see `reading` below.
+ */
+function batteryState(level) {
+  const value = reading(level);
+  if (value == null) return 'unknown';
+  if (value > ON_MAINS_ABOVE) return 'mains';
+  return value > BATTERY_WEAK ? 'ok' : value >= BATTERY_LOW ? 'warn' : 'bad';
+}
+
+/* --- What is bad in Identity and Device (#254) ------------------- */
+
+/*
+ * A value as a number, or null. Refuses null BEFORE any comparison.
+ *
+ * `Number(null)` is 0, and `null < 5` is true, so a node that sent no
+ * battery level would read as a flat battery. That shape has caused
+ * five bugs in this repository. A value we do not have is never a bad
+ * measurement: absent is `null`, and every threshold below starts here.
+ */
+function reading(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/*
+ * Channel use: the firmware's own two lines, not ours.
+ *
+ * meshtastic/firmware src/airtime.h (master at 6d41e27, 2026-08-20):
+ *
+ *     uint8_t max_channel_util_percent = 40;
+ *     uint8_t polite_channel_util_percent = 25;
+ *
+ * `isTxAllowedChannelUtil` in src/airtime.cpp allows a send only while
+ * utilisation is BELOW the figure, so the figure itself is the first
+ * value at which the node holds back. Hence `>=` in `FIELD_FLAGS`.
+ *
+ * - At 25 % most nodes skip their own routine broadcasts: position
+ *   (PositionModule), device telemetry (DeviceTelemetry) and neighbour
+ *   info (NeighborInfoModule) all ask with `polite = true`. Some roles
+ *   are let off one check each: TRACKER and TAK_TRACKER for position,
+ *   sensor and router roles for device telemetry (`isSensorOrRouterRole`).
+ * - At 40 % a node also stops sending NodeInfo (NodeInfoModule asks
+ *   with `polite = false`), which is how its name and hardware reach
+ *   everybody else.
+ *
+ * The figure is the node's own measure of the last minute -- six ten
+ * second slots, `CHANNEL_UTILIZATION_PERIODS` -- of every packet it
+ * sent or heard and of LoRa noise, as `telemetry.proto` says. So it is
+ * mostly a fact about the node's neighbourhood.
+ */
+const CHANNEL_USE_POLITE = 25;
+const CHANNEL_USE_MAX = 40;
+
+/*
+ * Air time sending: OUR judgement, stated as one.
+ *
+ * The firmware sets no limit on it in the US. `isTxAllowedAirUtil`
+ * applies only where the region has a duty cycle below 100 %, and US
+ * is `RDEF(US, 902.0f, 928.0f, 100, ...)` in src/mesh/RadioInterface.cpp.
+ * (EU_868 is 10 %, and there the node stops its metadata at half that.)
+ * A search of the meshtastic/meshtastic documentation repository found
+ * no figure for it either. So:
+ *
+ * - `AIR_TX_HIGH` is tied to the channel line above. A node that sends
+ *   for a quarter of the hour fills, on its own, the share of air at
+ *   which every node that hears it starts skipping its own broadcasts.
+ *   It is the same constant, so the two cannot drift.
+ * - `AIR_TX_CHECK` is a judgement and nothing firmer: one node taking
+ *   two fifths of that shared quarter is worth a look.
+ */
+const AIR_TX_CHECK = 10;
+const AIR_TX_HIGH = CHANNEL_USE_POLITE;
+
+/*
+ * The fields that can be bad, and what each state is called.
+ *
+ * Every flag carries a word as well as a colour and a shape (WCAG
+ * 1.4.1): red alone tells a colour-blind reader nothing, and it tells a
+ * screen reader nothing at all. The glyphs are the health cards', so a
+ * red row and a red card mean the same thing.
+ *
+ * Deliberately NOT here:
+ * - Voltage. The cut-off depends on the cell. The firmware's own table
+ *   (`OCV_ARRAY` in src/power.h) runs 4.19 V to 3.10 V for a Li-ion
+ *   cell and 3.65 V to 2.50 V for LiFePO4, and a two-cell board such as
+ *   the T-Beam 1W reads 6 to 8 V. One figure would be wrong for one of
+ *   them. The battery level is the firmware's own conversion for that
+ *   board, so the page judges the level instead.
+ * - Hardware "Unknown". This page cannot tell a node that never sent a
+ *   NodeInfo from one on a board newer than our vendored protobufs:
+ *   `_enum_name` in ingest/handlers/nodeinfo.py stores both as NULL.
+ *   Red would blame the owner for our own gap.
+ * - Role, firmware and last heard. Role is a judgement about where a
+ *   node stands, not a number. Firmware is not on this page. How old a
+ *   "last heard" may be depends on intervals the owner chose and the
+ *   page cannot see.
+ */
+const FIELD_FLAGS = {
+  channel_utilization(value) {
+    if (value >= CHANNEL_USE_MAX) return { state: 'bad', word: 'Very busy' };
+    if (value >= CHANNEL_USE_POLITE) return { state: 'warn', word: 'Busy' };
+    return null;
+  },
+  air_util_tx(value) {
+    if (value >= AIR_TX_HIGH) return { state: 'bad', word: 'Very chatty' };
+    if (value >= AIR_TX_CHECK) return { state: 'warn', word: 'Chatty' };
+    return null;
+  },
+  battery_level(value) {
+    const state = batteryState(value);
+    if (state === 'bad') return { state, word: 'Nearly flat' };
+    if (state === 'warn') return { state, word: 'Low' };
+    return null;
+  },
+};
+
+/** The flag for one device reading, or null. Null in, null out. */
+function fieldFlag(key, value) {
+  const number = reading(value);
+  if (number == null || !FIELD_FLAGS[key]) return null;
+  return FIELD_FLAGS[key](number);
+}
+
+/*
+ * The one case where a missing value IS the finding (#254).
+ *
+ * Will: "if someone is reporting their position but not Altitude we
+ * should show Unknown as red." A node with no position at all is a
+ * different state -- it is not reporting where it is -- and must not be
+ * red for altitude. Red needs both coordinates AND no altitude.
+ *
+ * Not for TAK and TAK_TRACKER. The firmware gives those roles position
+ * flags without `ALTITUDE_MSL` (`installRoleDefaults` in
+ * src/mesh/NodeDB.cpp), so they send `altitude_hae` in place of
+ * `altitude` (PositionModule.cpp), and ingest keeps only `altitude`.
+ * They DID send a height; red would blame them for what this site
+ * throws away.
+ *
+ * Ingest also stores an altitude of exactly 0 as NULL
+ * (`position.altitude or None`), so a node at sea level reads Unknown.
+ * The lowest ground in Arizona is about 20 m, so on this mesh that
+ * costs nothing, and it is noted here rather than hidden.
+ */
+const ALTITUDE_NOT_OURS = new Set(['TAK', 'TAK_TRACKER']);
+
+function altitudeFlag(node) {
+  const position = node.position;
+  if (!position || reading(position.lat) == null || reading(position.lon) == null) return null;
+  if (position.altitude != null) return null;
+  if (ALTITUDE_NOT_OURS.has(node.role)) return null;
+  return { state: 'bad', word: 'Not sent' };
+}
+
+/**
+ * One value in a definition list, with its flag when it has one.
+ *
+ * The word is visible text, not a `title` or an `aria-label`, so the
+ * accessible name and what a sighted reader sees are the same thing.
+ */
+function fieldValue(text, flag) {
+  if (!flag) return el('dd', { text });
+  const look = HEALTH_STATES[flag.state];
+  return el('dd', { class: `field-flag state-${flag.state}` },
+    el('span', { class: 'field-value', text }), ' ',
+    el('span', { class: 'field-note' },
+      el('span', { class: 'field-glyph', 'aria-hidden': 'true', text: look.glyph }),
+      ` ${flag.word}`));
+}
+
+/* --- What each Identity and Device field means (#256) ------------ */
+
+/*
+ * One sentence or three for every field, for somebody who got their
+ * first node last week. Each says what the field is, why it matters,
+ * and -- where it can be bad -- what to change on the node.
+ *
+ * **The numbers are the constants above, never typed again.** A hint
+ * that says "40 %" beside a row that turns red at 45 % is the page
+ * contradicting itself, and a second copy of a number is how that
+ * happens. `test_node_fields.py` puts a different figure in a constant
+ * and checks the hint follows it.
+ *
+ * Every fact is from the firmware or the protobufs, with the source
+ * beside it; meshtastic/firmware master 6d41e27 (2026-08-20) and the
+ * protobufs at `proto/UPSTREAM_REV.txt`. Setting names are the
+ * protobuf's, because each app words its menus differently and a menu
+ * path that is right in one app is wrong in the next.
+ *
+ * `fieldList` reads this by row key. A row with no entry here gets no
+ * hint, and the cases fail naming the row, so a new field cannot
+ * arrive without one.
+ */
+const FIELD_HINTS = {
+  // NodeDB.cpp builds the number from the last four bytes of the MAC.
+  node_id: 'The node\'s own number, written in hexadecimal after a "!". '
+    + 'The radio makes it from its hardware address, so renaming the node does not change it. '
+    + 'Use it to tell apart two nodes with the same name.',
+  // mesh.proto User.long_name; ingest writes it only from NodeInfo.
+  long_name: 'The full name the owner typed into the Meshtastic app. '
+    + 'It arrives in the node\'s NodeInfo broadcast, with the short name and the hardware. '
+    + '"Not reported" means no NodeInfo from this node has reached this site yet: '
+    + 'see Hardware for when one is sent.',
+  // mesh.proto: "A VERY short name, ideally two characters."
+  short_name: 'A very short name, ideally two characters, for small screens and the map. '
+    + 'The owner sets it next to the long name, and it arrives in the same NodeInfo broadcast, '
+    + 'so it is missing for the same reasons.',
+  // NodeInfoModule.cpp: sent ~30 s after start, then every
+  // node_info_broadcast_secs (Default.h: 3 hours -- config.proto's
+  // comment still says 900 seconds, and the firmware wins); skipped at
+  // max channel use and for CLIENT_HIDDEN. `_enum_name` in
+  // ingest/handlers/nodeinfo.py stores an unknown board as NULL.
+  hw_model: 'The model of the board. The node announces it in its NodeInfo broadcast, '
+    + 'about 30 seconds after it starts and then every 3 hours by default '
+    + '(the node_info_broadcast_secs setting). '
+    + '"Unknown" usually means none of those broadcasts has reached a gateway yet: '
+    + 'restart the node to send one now, or wait. '
+    + `It also stays Unknown when the role is CLIENT_HIDDEN, which does not announce itself; `
+    + `while channel use is ${CHANNEL_USE_MAX} % or more, because the firmware then skips NodeInfo; `
+    + 'or for a board newer than this site knows about.',
+  // config.proto Role; Meshtastic blog, "Choosing the right device
+  // role" (2024-11-10) for where ROUTER belongs and CLIENT_MUTE.
+  role: 'The job the node does in the mesh. Most nodes should be CLIENT, the default, '
+    + 'and clients relay messages for others too. '
+    + 'ROUTER is only for a fixed node on a high, clear site such as a hilltop: '
+    + 'the mesh lets a router relay first, so one in a poor spot uses up hops and makes the mesh worse. '
+    + 'CLIENT_MUTE does not relay at all, and suits a second node in the same place. '
+    + 'REPEATER is deprecated in current firmware. Change it in the device settings.',
+  // Channels::ensureLicensedOperation removes every channel key;
+  // Router.cpp: "Don't use PKC with Ham mode"; NodeInfoModule strips
+  // the public key; NodeDB.cpp forces rebroadcast_mode LOCAL_ONLY
+  // ("Don't let licensed users to rebroadcast encrypted packets");
+  // RadioInterface.cpp lifts the regional power limit. A keyless
+  // channel hashes differently (LongFast: 10, not 8), so it is a
+  // different channel from the default-key one. The rule on encryption
+  // is 47 CFR 97.113(a)(4) in the US: no messages "encoded for the
+  // purpose of obscuring their meaning".
+  is_licensed: 'Licensed (ham) mode, for owners who hold an amateur radio licence. '
+    + 'It lets the node transmit above the normal power limit. '
+    + 'The cost is that amateur rules forbid encryption, so the firmware removes the key from every channel, '
+    + 'sends direct messages without encryption, and stops relaying encrypted packets for other nodes. '
+    + 'Most traffic on this mesh, including the default channel, uses a key, '
+    + 'so a licensed node can neither read nor relay most of what it hears, and can look poorly connected. '
+    + 'Turn it on only if you are licensed and want that trade. Your call sign goes in the long name.',
+  // ingest/handlers/presence.py `store_gateway`: set when a node
+  // publishes to the broker, never cleared. module_config.proto
+  // MQTTConfig (`enabled`, `proxy_to_client_enabled`), channel.proto
+  // `uplink_enabled`.
+  is_mqtt_gateway: 'A gateway is a node with an internet connection that copies what it hears on the radio '
+    + 'up to the MQTT server. It is the only way this site sees the mesh: a packet reaches us only if '
+    + 'some gateway heard it. "Yes" means this site has seen this node upload, and it stays Yes after it stops. '
+    + 'To make a node a gateway: connect it to the internet (Wi-Fi, Ethernet, or through the phone app '
+    + 'with proxy_to_client_enabled), turn on the MQTT module, and turn on uplink for the channel.',
+  // ingest/pipeline.py passes the MQTT topic's channel to store_heard.
+  last_channel: 'The channel this site last saw the node\'s traffic on, from the MQTT topic the gateway used. '
+    + 'On this mesh it is usually the name of the radio preset, such as LongFast or MediumFast. '
+    + 'Nodes on different presets cannot hear each other at all.',
+  first_seen: 'When this site first stored a packet from this node, by this site\'s clock. '
+    + 'That is when we first heard it, not when it was switched on.',
+  // AGENTS.md 9.4: node clocks are wrong, so this is our receive time.
+  last_heard: 'When this site last received any packet from this node, through any gateway, '
+    + 'by this site\'s clock (node clocks are often wrong). '
+    + 'A working node can look quiet here when no gateway is in range of it.',
+  // config.proto ChannelSettings/ModuleSettings position_precision.
+  position: 'The last position the node shared. Owners can round it on purpose, '
+    + 'to keep their home off a public map, so the node may be some distance from this point. '
+    + 'Sharing a position is optional.',
+  // config.proto PositionFlags ALTITUDE and ALTITUDE_MSL;
+  // PositionModule.cpp sends `altitude` only with both; fixed_position.
+  altitude: 'Height above sea level, from the same position report. '
+    + 'It shows Unknown in red when the node sends a position without a height. '
+    + 'To fix it, turn on the Altitude and Altitude-is-MSL position flags. '
+    + 'If they are on, the GPS may have no 3D fix yet: it needs a clearer view of the sky '
+    + 'to measure height than position. A node with a fixed position can have its height entered by hand. '
+    + 'TAK roles send a different kind of height that this site does not store, so they are never red here.',
+  // telemetry.proto DeviceMetrics.battery_level: "0-100 (>100 means
+  // powered)". Bands: `batteryState`, and stats.py's brownout band.
+  battery_level: 'How full the battery is, as the node measures it. '
+    + '"External power" means the node reports no battery, or that it is charging. '
+    + `Yellow from ${BATTERY_LOW} to ${BATTERY_WEAK} %: low enough that the node can restart `
+    + 'when it transmits, then start again and repeat. '
+    + `Red below ${BATTERY_LOW} %: it is about to go quiet. `
+    + 'Fix: charge it, or give it a bigger battery or a solar panel.',
+  // src/power.h OCV_ARRAY: the level is derived per board.
+  voltage: 'The battery voltage the node measures. The battery level is worked out from it, '
+    + 'with a table for that board\'s kind of battery, so this page judges the level and not the voltage: '
+    + 'a voltage that is healthy for one kind of battery is flat for another.',
+  // telemetry.proto: "including well formed TX, RX and malformed RX
+  // (aka noise)"; src/airtime.cpp: the last minute. Thresholds above.
+  channel_utilization: 'How busy the radio channel is around this node: the share of the last minute '
+    + 'it spent sending or hearing anything, including other nodes\' packets and noise. '
+    + `Yellow at ${CHANNEL_USE_POLITE} %: the firmware starts skipping this node's own position, `
+    + 'telemetry and neighbour reports to leave room. '
+    + `Red at ${CHANNEL_USE_MAX} %: it also stops sending its NodeInfo. `
+    + 'It is mostly caused by the neighbourhood, not by this node. What helps: longer broadcast '
+    + 'intervals on your nodes (position, telemetry, NodeInfo), no ROUTER role unless the site calls for it, '
+    + 'and CLIENT_MUTE on a second node in the same place.',
+  // telemetry.proto: "Percent of airtime for transmission used within
+  // the last hour"; RadioLibInterface::completeSending logs every
+  // transmission, relayed ones included.
+  air_util_tx: 'The share of the last hour this node spent transmitting: its own packets and the ones it '
+    + 'relays for others. While it transmits, the channel is busy for every node in range, '
+    + 'so this adds to each neighbour\'s channel use. '
+    + `Yellow at ${AIR_TX_CHECK} %: this site's own line, worth a look; the firmware sets no limit in the US. `
+    + `Red at ${AIR_TX_HIGH} %: on its own it fills the ${CHANNEL_USE_POLITE} % at which the nodes that hear it `
+    + 'start skipping their own broadcasts. '
+    + 'Fix: longer position and telemetry intervals, turn off modules you do not use, '
+    + 'and no ROUTER role unless the site calls for it.',
+  // telemetry.proto: "How long the device has been running since the
+  // last reboot".
+  uptime_seconds: 'How long the node has run since it last restarted. '
+    + 'A node that keeps restarting shows a short uptime every time: '
+    + 'a low battery or a poor power supply is the usual cause.',
+};
 
 /** Scroll to the potential issues panel, which holds every card's evidence. */
 function showIssues() {
@@ -5582,12 +6059,14 @@ function healthChecks(gaps, detail) {
   const battery = device.battery_level;
   let powerState = 'unknown';
   let powerMeasure = 'This node sends no device telemetry.';
-  if (battery != null) {
-    if (battery > ON_MAINS_ABOVE) {
+  const band = batteryState(battery);
+  if (band !== 'unknown') {
+    if (band === 'mains') {
       powerState = 'ok';
       powerMeasure = 'On external power.';
     } else {
-      powerState = battery > BATTERY_WEAK ? 'ok' : battery >= BATTERY_LOW ? 'warn' : 'bad';
+      // The Device panel reads the same function, so the two agree.
+      powerState = band;
       powerMeasure = `Battery ${round(battery, 0)} %`
         + (device.voltage != null ? `, ${round(device.voltage, 2)} V` : '')
         + (powerState === 'warn' ? '. Low enough to restart under load.' : '.');
@@ -6178,6 +6657,93 @@ const km = (value) => (
   value == null ? '-' : SonoranUnits.distanceFromKm(value, { digits: value < 10 ? 1 : 0 })
 );
 
+/*
+ * A distance measured from a rounded position, said as one (#257).
+ *
+ * The API gives the straight-line distance between the two positions it
+ * holds and the most the rounding can move it (`distance_error_km`, the
+ * two ends' firmware deviations added). Printing the first as "179 mi"
+ * would be the exact false precision the #55 rule exists to stop, so it
+ * never goes out without the second.
+ *
+ * The estimate is also ROUNDED TO ITS OWN ERROR. "about 179.3 mi ± 1.8"
+ * still claims a tenth of a mile it does not have; the step is the power
+ * of ten under the error, so a 2.9 km error rounds to whole kilometres
+ * and a 23 km one to tens. When the error is as large as the distance
+ * itself, the estimate says nothing about where in that range the node
+ * is, and the only true statement is an upper bound: "under 50 mi".
+ *
+ * Returns `{ value, bar }`, both in the reader's units. Never called with
+ * a missing number: `Number(null)` is 0, and a missing estimate printed
+ * as "about 0 ft" would claim two nodes stand on the same spot.
+ */
+function roughKm(estimate, error) {
+  if (!(error > 0) || estimate == null) return null;
+  if (error >= estimate) {
+    return { value: `under ${km(estimate + error)}`, bar: `rounded by up to ${km(error)}` };
+  }
+  const step = 10 ** Math.floor(Math.log10(error));
+  const shown = Math.round(estimate / step) * step;
+  return {
+    value: `about ${SonoranUnits.distanceFromKm(shown, { digits: step < 1 ? 1 : 0 })}`,
+    bar: `± ${km(error)}`,
+  };
+}
+
+/*
+ * One row's distance: exact, estimated with its range, or "-".
+ *
+ * The estimate may break across lines in a narrow column, but never
+ * inside a measurement: "about 174 mi ± 1.8" over a lone "mi" reads as
+ * two measurements. So a number keeps its unit, and "±" keeps its
+ * number, with no-break spaces.
+ *
+ * The words before a number ("about", "under") may break off. Binding
+ * them too made "about 90 mi" one unbreakable piece, which set the
+ * Distance column's floor in "Who hears it" once its heading could wrap
+ * (#260, and `.route-list th` in app.css).
+ */
+function reachText(row) {
+  if (row.distance_km != null) return km(row.distance_km);
+  const rough = roughKm(row.approx_distance_km, row.distance_error_km);
+  if (!rough) return '-';
+  const keep = (text) => text.replace(/± /g, '±\u00a0').replace(/ (\S+)$/, '\u00a0$1');
+  return `${keep(rough.value)} ${keep(rough.bar)}`;
+}
+
+/*
+ * Why a furthest-node tile has no distance, and what would give it one
+ * (#257). The API names the cause (`_no_distance_reason` in
+ * node_page.py); the words are here. Each says what the owner, or the
+ * reader, can do -- a bare "-" told them neither.
+ *
+ * Measured on the seeded mesh before this change, 13 of 24 nodes had no
+ * "furthest node that heard it": 4 had a rounded position of their own,
+ * 1 had none, and 8 had no single-hop link on record -- one of those
+ * heard directly by nine gateways that the page did not count. After
+ * it, 8 remain, and every one says why.
+ */
+const NO_DISTANCE = {
+  heardBy: {
+    quiet: ['It sent nothing in this window.', 'Choose a longer window at the top of the page.'],
+    no_link: ['No other node recorded hearing it directly: no neighbor report names it, no traceroute hop leaves it, and no gateway uploaded its packets without a relay.',
+      'A gateway, or a node with the NeighborInfo module on, within radio range of it would record the link.'],
+    no_position: ['It shares no position, so no distance can be measured.',
+      'Its owner can turn on position sharing. A rounded position is enough for an estimate.'],
+    partners_no_position: ['None of the nodes that heard it shares a position.',
+      'Any one of them sharing a position, even a rounded one, would give a distance.'],
+  },
+  heard: {
+    quiet: ['It sent nothing in this window.', 'Choose a longer window at the top of the page.'],
+    no_link: ['It recorded hearing no node directly: it sent no neighbor report, no traceroute hop reached it, and it uploaded no packet heard without a relay.',
+      'Turning on its NeighborInfo module, or MQTT uploading, would record what it hears.'],
+    no_position: ['It shares no position, so no distance can be measured.',
+      'Its owner can turn on position sharing. A rounded position is enough for an estimate.'],
+    partners_no_position: ['None of the nodes it heard shares a position.',
+      'Any one of them sharing a position, even a rounded one, would give a distance.'],
+  },
+};
+
 function routesPanel(routes) {
   if (!routes) return el('div', { class: 'panel span-2' }, failure(new Error('Cannot load the routes.')));
   /*
@@ -6215,135 +6781,414 @@ function routesPanel(routes) {
    * setting, not somebody else's. The rule itself does not change --
    * a distance is still never measured from a rounded position.
    */
-  const noDistance = routes.position === false
-    ? 'Its own position is rounded, so no distance can be measured.'
-    : 'None with an exact position.';
+  /*
+   * #257 keeps that rule and stops it emptying the tile. A rounded pair
+   * now gives an estimate with its range ("about 180 mi", "± 1.8 mi,
+   * from a rounded position"), and a tile with no distance of either kind
+   * says why and what would fix it, from `NO_DISTANCE`. What is gone is
+   * the sentence above: with the estimate, a rounded position of its own
+   * no longer leaves the tile empty.
+   */
+  const furthestTile = (label, row, reason, words) => {
+    const hint = 'The most distant node on this list. Marked "about" with a ± range when either position is rounded: the range is how far the rounding can move it.';
+    // The tile with a second muted line: the estimate's range, or what
+    // would give a tile with no distance one.
+    const twoLine = (value, first, second) => el('div', { class: 'route-tile' },
+      el('span', { class: 'label', text: label, 'data-label': label, 'data-hint': hint }),
+      el('span', { class: 'value', text: value }),
+      el('span', { class: 'muted', text: first }),
+      second ? el('span', { class: 'muted', text: second }) : null);
+    if (!row) {
+      const [why, fix] = words[reason] || ['No distance is known.', ''];
+      return twoLine('Not known', why, fix);
+    }
+    const who = `${row.display_name}${row.best_snr != null ? `, ${round(row.best_snr, 1)} dB` : ''}`;
+    if (row.distance_km != null) return tile(label, km(row.distance_km), who, hint);
+    const rough = roughKm(row.approx_distance_km, row.distance_error_km);
+    // The API sends the two together; without the range there is no
+    // honest figure to print, so it says so rather than guessing.
+    if (!rough) return twoLine('Not known', who, 'Its distance came without a range, so it is not shown.');
+    return twoLine(rough.value, who, `${rough.bar}: a position is rounded, so this is an estimate.`);
+  };
   const depth = routes.hop_depth || { packets: 0, counts: [] };
+  /*
+   * Three columns, not five (#260).
+   *
+   * "Who hears it" scrolled sideways at every width, desktop included:
+   * at 1440 px the table was 633 px in a 543 px half-panel, and at
+   * 320 px 633 in 254. Five `nowrap` columns -- Node, Reports, Best SNR,
+   * From, Distance -- cannot fit half of a panel, and no amount of
+   * padding would change that.
+   *
+   * The question the table answers is "who hears this node, and how
+   * well?", which is a name, a signal and a distance. The other two
+   * columns are evidence FOR the row, not answers of their own, so they
+   * moved under the name as one muted line: "3 reports: neighbor report,
+   * traceroute". Nothing was dropped, and the count keeps its own words
+   * rather than becoming a bare number in a narrow cell.
+   *
+   * The name wraps as well (`.route-list` in app.css). `.node-name .long`
+   * is `nowrap` with an ellipsis everywhere else, and inside a table cell
+   * that is not a cut but a floor: the cell grows to the whole name first.
+   * Long names are ordinary on this mesh ("UTOPIA PLANITIA G3"), and some
+   * have no space in them at all, so it breaks anywhere.
+   *
+   * The headings are short and carry their meaning in hints, and the
+   * numbers stay right-aligned with tabular figures (`num: true`), so a
+   * narrower column still lines up.
+   *
+   * Asserted at 320, 768, 1024 and 1440 px on the node heard by the most
+   * nodes, by the e2e journey "the Who hears it table fits its panel".
+   */
+  // `gateway` is an upload with no hop used (#257): the gateway heard
+  // the sender itself. See `_direct_links` in node_page.py.
+  const KIND_WORDS = { neighbor: 'neighbor report', traceroute: 'traceroute', gateway: 'direct upload' };
+  const evidence = (row) => {
+    const kinds = row.kinds.map((kind) => KIND_WORDS[kind] || kind).join(', ');
+    // `count` prints an absent number as "-", never as 0.
+    return `${count(row.count)} ${row.count === 1 ? 'report' : 'reports'}: ${kinds}`;
+  };
   const columns = [
-    { label: 'Node', cell: (row) => nodeChip(row) },
-    { label: 'Reports', num: true, hint: 'Neighbor reports and traceroute hops that show the link in this direction.', cell: (row) => count(row.count) },
-    { label: 'Best SNR', num: true, cell: (row) => snrCell(row.best_snr) },
-    { label: 'From', cell: (row) => row.kinds.map((kind) => (kind === 'neighbor' ? 'neighbor report' : 'traceroute')).join(', ') },
-    { label: 'Distance', num: true, hint: 'Only where both nodes share an exact position.', cell: (row) => km(row.distance_km) },
+    { label: 'Node', wrap: true,
+      hint: 'Under each name: how many reports show the link in this direction, and what kind. A direct upload is a gateway uploading a packet it heard with no relay in between.',
+      cell: (row) => el('div', { class: 'route-who' },
+        nodeChip(row), el('span', { class: 'muted', text: evidence(row) })) },
+    { label: 'SNR', num: true, hint: 'The best signal-to-noise ratio any of those reports measured on the link.', cell: (row) => snrCell(row.best_snr) },
+    { label: 'Distance', num: true, wrap: true,
+      hint: 'Straight-line distance. Marked "about", with a ± range, when either position is rounded: the range is how far the rounding can move it.',
+      cell: (row) => reachText(row) },
   ];
   return el('div', { class: 'panel span-2' },
     el('h3', {}, 'Links and routes',
-      el('span', { class: 'muted', text: `from neighbor reports and traceroutes, last ${routes.window_hours} h` })),
+      el('span', { class: 'muted', text: `from neighbor reports, traceroutes and direct uploads, last ${routes.window_hours} h` })),
     el('div', { class: 'route-tiles' },
       tile('Longest route segment',
         longest ? km(longest.distance_km) : '-',
         longest ? `${longest.from.display_name} to ${longest.to.display_name}` : 'No traceroute segment with two exact positions.',
         'The longest single hop of any traceroute this node took part in.'),
-      tile('Furthest node that heard it', heardBy ? km(heardBy.distance_km) : '-',
-        heardBy ? `${heardBy.display_name}${heardBy.best_snr != null ? `, ${round(heardBy.best_snr, 1)} dB` : ''}` : noDistance),
-      tile('Furthest node it heard', heard ? km(heard.distance_km) : '-',
-        heard ? `${heard.display_name}${heard.best_snr != null ? `, ${round(heard.best_snr, 1)} dB` : ''}` : noDistance),
+      furthestTile('Furthest node that heard it', heardBy, routes.furthest_heard_by_reason, NO_DISTANCE.heardBy),
+      furthestTile('Furthest node it heard', heard, routes.furthest_heard_reason, NO_DISTANCE.heard),
       tile('Hops to the nearest gateway', depth.median == null ? '-' : String(depth.median),
         depth.packets
           ? `typical, over ${count(depth.packets)} packets: ${depth.counts.map((item) => `${item.hops} hop${item.hops === 1 ? '' : 's'} ${count(item.packets)}`).join(', ')}`
           : 'No other gateway heard it in the window.',
         'The fewest hops any gateway saw each packet use. Its own uploads are left out.')),
     el('p', { class: 'muted' },
-      'Distances need an exact position at both ends. A rounded position can be kilometres out, so such pairs are left out'
+      'A rounded position can be kilometres out, so a distance from one is marked "about" with the range the rounding allows. '
+      + 'The longest route segment needs an exact position at both ends, and rounded pairs are left out of it'
       + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')
       + (routes.trace_limit_reached ? ` Only the newest ${count(routes.traces_read)} traceroutes were read.` : '')),
     el('div', { class: 'grid two' },
-      el('div', {},
+      el('div', { class: 'route-list' },
         el('h4', { text: `Who hears it (${count(routes.heard_by.length)})` }),
         expandingTable(columns, routes.heard_by, 'No node reports hearing it in the window.', { noun: 'nodes' })),
-      el('div', {},
+      el('div', { class: 'route-list' },
         el('h4', { text: `Who it hears (${count(routes.hears.length)})` }),
         expandingTable(columns, routes.hears, 'It reports hearing no node in the window.', { noun: 'nodes' }))));
 }
 
-/* --- Packet timeline (#54) ---------------------------------------- */
+/* --- Packet timeline (#54, #259) ---------------------------------- */
 
 const TIMELINE_STEP = 50;
 /* The observation sorts need a window of a week or less. See
  * `node_packets` in routes/nodes.py. */
 const TIMELINE_SEEN_SORTS = new Set(['hops', 'gateways', 'snr', 'rssi']);
 const TIMELINE_SEEN_MAX_HOURS = 168;
+/* A gateway's uploads are read over a week at most, whatever is asked
+ * (`HEARD_MAX_HOURS` in routes/nodes.py). */
+const TIMELINE_HEARD_MAX_HOURS = 168;
+const TIMELINE_WINDOWS = [[6, '6 h'], [24, '24 h'], [168, '7 days'], [720, '30 days']];
+/*
+ * What the panel title's hint says (#259).
+ *
+ * Will: "Move 'A packet is one transmission: …' on the node detail to a
+ * tool tip next to the title." MOVED, not deleted: this is the same
+ * sentence, word for word, apart from where "choose one" now points --
+ * the window control is in this panel's own heading, top right, rather
+ * than at the top of the page.
+ */
+const TIMELINE_HINT = 'A packet is one transmission: a position, a reading, a message, or a routine announcement. '
+  + 'Open a row to see what it carried and which gateways heard it. '
+  + 'Sorting by hops, gateways or signal needs a window of 7 days or less: choose one with the window control of this panel.';
+
 let timeline = null;
+/*
+ * The rows held, and where the next page starts.
+ *
+ * Module state, like the chat's `chatRows`, because the observer that asks
+ * for the next page outlives any one draw. `seq` is bumped by every fresh
+ * draw, so a page that was in flight when the reader changed a filter is
+ * dropped on arrival instead of being appended to a list it does not
+ * belong to.
+ */
+let timelinePaging = { seq: 0, rows: [], before: null, exhausted: true, busy: false, total: null };
+/* The observer watching the foot of the list. One at a time: a new draw
+   disconnects the last one. */
+let timelineWatch = null;
 
 function resetTimeline(nodeId) {
-  timeline = { nodeId, sort: 'time', order: 'desc', offset: 0, direction: 'sent', portnum: '', channel: '' };
+  timeline = { nodeId, sort: 'time', order: 'desc', direction: 'sent', portnum: '', channel: '', hours: null, pageHours: null };
 }
 
-async function drawTimeline(target, nodeId, hours, types) {
-  if (!timeline || timeline.nodeId !== nodeId) resetTimeline(nodeId);
-  const state = timeline;
-  const seenSortable = Number(hours) <= TIMELINE_SEEN_MAX_HOURS;
-  if (!seenSortable && TIMELINE_SEEN_SORTS.has(state.sort)) Object.assign(state, { sort: 'time', order: 'desc' });
+/** A packet row's identity: (sender, packet id), AGENTS.md 9.1. */
+function packetRowKey(row) {
+  return `${row.from_node ?? ''}|${row.packet_id ?? ''}`;
+}
+
+/**
+ * Add the next page of packets to the rows already held.
+ *
+ * Pure, for the same reason `mergeNodePage` is: the two decisions that
+ * infinite scroll gets wrong quietly live here, and pure code can be run
+ * in a test rather than read.
+ *
+ * **Cursor, not offset, so there is no offset to advance.** The nodes
+ * list pages by offset, and its comment is honest that a row which moves
+ * forward a page is never seen. Packets arrive all the time -- a busy
+ * gateway uploads several a minute -- so that is the ordinary case here,
+ * not the rare one. The server answers each page with `X-Next-Before`,
+ * which names the last row served; the next page starts after THAT row,
+ * so whatever arrived in between cannot shift it.
+ *
+ * **A duplicate is still dropped by identity,** as `chatLoadOlder` drops
+ * one by `chatRowKey`. The cursor makes a repeat impossible in principle;
+ * this makes it harmless in practice, and costs one Set.
+ *
+ * **A short page is the end, a full page is not.** The next request may
+ * come back empty, which is this same test one page later.
+ */
+function mergePacketPage(held, incoming, pageSize) {
+  const served = Array.isArray(incoming) ? incoming : [];
+  const seen = new Set((held || []).map(packetRowKey));
+  const added = [];
+  for (const row of served) {
+    if (!row || seen.has(packetRowKey(row))) continue;
+    seen.add(packetRowKey(row));
+    added.push(row);
+  }
+  return { rows: (held || []).concat(added), added, exhausted: served.length < pageSize };
+}
+
+/** The query for one page. The sort goes with every page: the cursor is
+ * refused by the server under any other sort, so it cannot be dropped. */
+function timelineQuery(state, hours, before) {
   const params = new URLSearchParams({
-    hours: String(hours), limit: String(TIMELINE_STEP), offset: String(state.offset),
-    sort: state.sort, order: state.order, direction: state.direction,
+    hours: String(hours), limit: String(TIMELINE_STEP), sort: state.sort, order: state.order, direction: state.direction,
   });
   if (state.portnum) params.set('portnum', state.portnum);
   if (state.channel) params.set('channel', state.channel);
+  if (before) params.set('before', before);
+  return `api/nodes/${encodeURIComponent(state.nodeId)}/packets?${params}`;
+}
 
-  const redraw = () => drawTimeline(target, nodeId, hours, types);
-  const response = await fetch(`api/nodes/${encodeURIComponent(nodeId)}/packets?${params}`)
-    .catch((error) => error);
-  const body = el('div', {});
-  let rows = [];
-  let total = 0;
-  if (response instanceof Error || !response.ok) {
-    body.append(failure(new Error('Cannot load the packets.')));
-  } else {
-    rows = await response.json();
-    total = Number(response.headers.get('X-Total-Count') || rows.length);
+/** One page, with the total and the cursor the headers carry. */
+async function fetchTimelinePage(state, hours, before) {
+  const response = await fetch(timelineQuery(state, hours, before));
+  if (!response.ok) throw new Error('Cannot load the packets.');
+  const rows = await response.json();
+  // An absent header is an unknown total, never 0 (`Number(null)` is 0).
+  const header = response.headers.get('X-Total-Count');
+  return {
+    rows,
+    total: header == null || header === '' ? null : Number(header),
+    before: response.headers.get('X-Next-Before'),
+  };
+}
+
+/*
+ * The foot of the list: the button, and the line that says how much is
+ * loaded. The nodes list's `drawNodeMore`, for this panel, and for the
+ * same reasons: `aria-disabled` rather than `disabled` while a page is in
+ * flight, so a keyboard reader standing on the button keeps their place;
+ * focus moved to the status line when the last page lands and the button
+ * goes; and the button kept beside the scroll, because infinite scroll
+ * gives a keyboard reader nothing to operate.
+ */
+function drawTimelineFoot(foot, error) {
+  const paging = timelinePaging;
+  const button = $('button', foot);
+  const status = $('[role="status"]', foot);
+  foot.hidden = !paging.rows.length;
+  if (foot.hidden) return;
+  button.setAttribute('aria-disabled', String(paging.busy));
+  const hadFocus = document.activeElement === button;
+  button.hidden = paging.exhausted;
+  if (paging.exhausted && hadFocus) {
+    foot.setAttribute('tabindex', '-1');
+    foot.focus();
+  }
+  if (error) {
+    button.hidden = false;
+    button.setAttribute('aria-disabled', 'false');
+    button.textContent = 'Try again';
+    status.textContent = error.message || String(error);
+    return;
+  }
+  button.textContent = 'Show more packets';
+  status.textContent = paging.busy
+    ? 'Loading more packets'
+    : nodeProgressWords(paging.rows.length, paging.total, paging.exhausted);
+}
+
+async function drawTimeline(target, nodeId, pageHours, types) {
+  if (!timeline || timeline.nodeId !== nodeId) resetTimeline(nodeId);
+  const state = timeline;
+  /*
+   * The panel has its own window now (#259), and it starts at the page's.
+   * When the page's window changes the panel follows it; choosing a
+   * window in the panel changes only the panel. That is what lets a
+   * reader on the page's 30-day default sort by signal without changing
+   * every chart on the page.
+   */
+  if (state.pageHours !== String(pageHours)) Object.assign(state, { pageHours: String(pageHours), hours: Number(pageHours) });
+  const heard = state.direction === 'heard';
+  // Said, not silently applied: the window control shows a gateway's
+  // uploads are a week at most, and the listing is asked for exactly that.
+  const hours = heard ? Math.min(state.hours, TIMELINE_HEARD_MAX_HOURS) : state.hours;
+  const seenSortable = hours <= TIMELINE_SEEN_MAX_HOURS;
+  if (!seenSortable && TIMELINE_SEEN_SORTS.has(state.sort)) Object.assign(state, { sort: 'time', order: 'desc' });
+
+  const seq = timelinePaging.seq + 1;
+  timelinePaging = { seq, rows: [], before: null, exhausted: true, busy: false, total: null };
+  if (timelineWatch) timelineWatch.disconnect();
+  timelineWatch = null;
+
+  const redraw = () => drawTimeline(target, nodeId, pageHours, types);
+  let failed = null;
+  try {
+    const first = await fetchTimelinePage(state, hours, null);
+    if (timelinePaging.seq !== seq) return;
+    const merged = mergePacketPage([], first.rows, TIMELINE_STEP);
+    Object.assign(timelinePaging, {
+      rows: merged.rows, exhausted: merged.exhausted, before: first.before, total: first.total,
+    });
+  } catch (error) {
+    if (timelinePaging.seq !== seq) return;
+    failed = error;
   }
 
   const sortState = { key: state.sort, order: state.order };
-  const onSort = (key, order) => { Object.assign(state, { sort: key, order, offset: 0 }); redraw(); };
-  const sortable = (key) => (TIMELINE_SEEN_SORTS.has(key) && !seenSortable
-    ? {} : { sort: key, sortState, onSort });
-  const heard = state.direction === 'heard';
+  const onSort = (key, order) => { Object.assign(state, { sort: key, order }); redraw(); };
+  /*
+   * An observation sort over more than a week is not silently missing.
+   * The heading stays, loses its sort button, and its hint says why and
+   * what to do -- the "control should say why an option is unavailable"
+   * half of #259. The server refuses such a sort as well (422), so this
+   * is the explanation of a rule, not the rule.
+   */
+  const unavailable = ' Sorting by it needs a window of 7 days or less: choose one with the window control of this panel.';
+  const sortable = (key, hint) => (TIMELINE_SEEN_SORTS.has(key) && !seenSortable
+    ? { hint: `${hint || ''}${unavailable}`.trim() }
+    : { sort: key, sortState, onSort, hint: hint || null });
   const packetHref = (row) => `#packet/${encodeURIComponent(row.from_node)}/${row.packet_id}`;
   const columns = [
     { label: 'Time', ...sortable('time'), cell: (row) => el('a', { class: 'linky', href: packetHref(row), title: stamp(row.seen_at), text: stamp(row.seen_at) }) },
     heard ? { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) } : null,
-    { label: 'Type', ...sortable('type'), hint: 'What the packet carried: a position, telemetry, a message, and so on.', cell: (row) => portnumCell(row.portnum) },
-    { label: 'To', ...sortable('to'), hint: 'Everyone for a broadcast, or the one node it was addressed to.', cell: (row) => toLabel(row) },
+    { label: 'Type', ...sortable('type', 'What the packet carried: a position, telemetry, a message, and so on.'), cell: (row) => portnumCell(row.portnum) },
+    { label: 'To', ...sortable('to', 'Everyone for a broadcast, or the one node it was addressed to.'), cell: (row) => toLabel(row) },
     { label: 'Channel', ...sortable('channel'), cell: (row) => row.channel || '-' },
-    { label: 'Hops', num: true, ...sortable('hops'), hint: 'The fewest relays any gateway saw it use before it was uploaded.', cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
-    { label: 'Gateways', num: true, ...sortable('gateways'), hint: 'How many different gateways uploaded it, not counting the sender uploading its own packet.', cell: (row) => count(row.gateways) },
-    { label: 'SNR', num: true, ...sortable('snr'), hint: 'The best signal at a gateway that heard it with no hop used. A relayed reading belongs to the last relay, so it is not shown.', cell: (row) => snrCell(row.direct_snr) },
+    { label: 'Hops', num: true, ...sortable('hops', 'The fewest relays any gateway saw it use before it was uploaded.'), cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
+    { label: 'Gateways', num: true, ...sortable('gateways', 'How many different gateways uploaded it, not counting the sender uploading its own packet.'), cell: (row) => count(row.gateways) },
+    { label: 'SNR', num: true, ...sortable('snr', 'The best signal at a gateway that heard it with no hop used. A relayed reading belongs to the last relay, so it is not shown.'), cell: (row) => snrCell(row.direct_snr) },
     { label: 'RSSI', num: true, ...sortable('rssi'), cell: (row) => (row.direct_rssi == null ? '-' : `${row.direct_rssi} dBm`) },
     { label: 'Size', num: true, ...sortable('size'), cell: (row) => (row.size_bytes == null ? '-' : `${row.size_bytes} B`) },
   ].filter(Boolean);
 
-  const typeSelect = el('select', { 'aria-label': 'Packet type', onchange: (event) => { Object.assign(state, { portnum: event.target.value, offset: 0 }); redraw(); } },
+  /*
+   * The window, top right (#259). "LAST 720 H" is gone from the title:
+   * the control shows the window, so the label only repeated it.
+   *
+   * An option that cannot do everything says so in its own label rather
+   * than failing quietly after it is chosen. Over 7 days the signal sorts
+   * are off; a gateway's uploads are read over 7 days at most, so the
+   * longer window is disabled on that listing.
+   */
+  const windowSelect = el('select', { 'aria-label': 'Packet window', 'data-timeline-hours': '',
+    onchange: (event) => { state.hours = Number(event.target.value); redraw(); } },
+  TIMELINE_WINDOWS.map(([value, label]) => el('option', {
+    value: String(value),
+    selected: value === hours,
+    disabled: heard && value > TIMELINE_HEARD_MAX_HOURS,
+    text: heard && value > TIMELINE_HEARD_MAX_HOURS
+      ? `${label}, uploads: 7 days at most`
+      : value > TIMELINE_SEEN_MAX_HOURS ? `${label}, hop and signal sorts off` : label,
+  })));
+  const typeSelect = el('select', { 'aria-label': 'Packet type', onchange: (event) => { state.portnum = event.target.value; redraw(); } },
     el('option', { value: '', text: 'Every type' }),
     types.map((type) => el('option', { value: type, text: portnumLabel(type), selected: type === state.portnum })));
-  const directionSelect = el('select', { 'aria-label': 'Direction', onchange: (event) => { Object.assign(state, { direction: event.target.value, offset: 0 }); redraw(); } },
+  const directionSelect = el('select', { 'aria-label': 'Direction', onchange: (event) => { state.direction = event.target.value; redraw(); } },
     el('option', { value: 'sent', text: 'Sent by this node', selected: !heard }),
     el('option', { value: 'heard', text: 'Heard by it, as a gateway', selected: heard }));
   const channelInput = el('input', { type: 'search', placeholder: 'Channel', 'aria-label': 'Channel', value: state.channel,
-    onchange: (event) => { Object.assign(state, { channel: event.target.value.trim(), offset: 0 }); redraw(); } });
+    onchange: (event) => { state.channel = event.target.value.trim(); redraw(); } });
 
-  const first = total ? state.offset + 1 : 0;
-  const last = state.offset + rows.length;
-  const pager = el('p', { class: 'more-wrap' },
-    el('span', { class: 'muted', text: total ? `${count(first)} to ${count(last)} of ${count(total)}` : '' }),
-    state.offset > 0 ? el('button', { class: 'more', type: 'button', text: 'Newer', onclick: () => { state.offset = Math.max(0, state.offset - TIMELINE_STEP); redraw(); } }) : null,
-    last < total ? el('button', { class: 'more', type: 'button', text: 'Older', onclick: () => { state.offset += TIMELINE_STEP; redraw(); } }) : null);
-
-  if (!body.childNodes.length) {
-    body.append(el('div', { class: 'table-wrap' }, table(columns, rows,
+  const wrap = el('div', { class: 'table-wrap' });
+  const drawRows = () => {
+    replace(wrap, table(columns, timelinePaging.rows,
       heard ? 'It uploaded no packet from another node in the window.' : 'It sent no packet in the window that matches.',
-      { rowHref: packetHref })));
-  }
+      { rowHref: packetHref }));
+    markScrollableTables(target);
+    revealHints(wrap);
+  };
+  // Built once, before its text changes, so a screen reader announces
+  // every update (see `drawNodeMore`).
+  const foot = el('p', { class: 'more-wrap timeline-more', 'data-timeline-more': '', hidden: true },
+    el('button', { type: 'button', class: 'more', text: 'Show more packets' }),
+    el('span', { class: 'muted', role: 'status' }));
+
+  /*
+   * The next page, if there is one and nothing is already asking. The
+   * observer and the button both call this, so they cannot disagree.
+   */
+  const more = async () => {
+    const paging = timelinePaging;
+    if (paging.seq !== seq || paging.busy || paging.exhausted || !paging.before) return;
+    paging.busy = true;
+    drawTimelineFoot(foot);
+    let error = null;
+    try {
+      const next = await fetchTimelinePage(state, hours, paging.before);
+      if (timelinePaging.seq !== seq) return;
+      const merged = mergePacketPage(paging.rows, next.rows, TIMELINE_STEP);
+      Object.assign(paging, { rows: merged.rows, exhausted: merged.exhausted, before: next.before || paging.before });
+      if (next.total != null) paging.total = next.total;
+      drawRows();
+    } catch (caught) {
+      if (timelinePaging.seq !== seq) return;
+      error = caught;
+    } finally {
+      if (timelinePaging.seq === seq) paging.busy = false;
+    }
+    if (timelinePaging.seq !== seq) return;
+    drawTimelineFoot(foot, error);
+    // Re-armed after every page, as the nodes list is (`rearmNodeScroll`):
+    // on a tall screen one page may not push the foot out of view, the
+    // intersection state never changes, and nothing else would ask again.
+    if (timelineWatch && !paging.exhausted) {
+      timelineWatch.unobserve(foot);
+      timelineWatch.observe(foot);
+    }
+  };
+  $('button', foot).addEventListener('click', () => {
+    if ($('button', foot).getAttribute('aria-disabled') === 'true') return;
+    more();
+  });
+
   replace(target,
-    el('h3', {}, 'Packet timeline', el('span', { class: 'muted', text: `last ${heard ? Math.min(Number(hours), TIMELINE_SEEN_MAX_HOURS) : hours} h` })),
-    el('p', { class: 'muted' },
-      'A packet is one transmission: a position, a reading, a message, or a routine announcement. '
-      + 'Open a row to see what it carried and which gateways heard it.'
-      + (seenSortable ? '' : ' Sorting by hops, gateways or signal needs a window of 7 days or less: choose one above.')),
-    el('div', { class: 'controls' }, directionSelect, typeSelect, channelInput),
-    body, pager);
-  markScrollableTables(target);
+    el('div', { class: 'timeline-head' },
+      el('h3', { 'data-label': 'Packet timeline', 'data-hint': TIMELINE_HINT }, 'Packet timeline'),
+      el('div', { class: 'controls' }, directionSelect, typeSelect, channelInput, windowSelect)),
+    failed ? failure(failed) : wrap,
+    foot);
+  if (!failed) drawRows();
+  drawTimelineFoot(foot);
   revealHints(target);
+  if (typeof IntersectionObserver === 'function' && !timelinePaging.exhausted) {
+    timelineWatch = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) more();
+    }, { rootMargin: '400px 0px' });
+    timelineWatch.observe(foot);
+  }
 }
 
 async function loadNodeDetail(nodeId) {
@@ -7106,28 +7951,32 @@ const WEEK_LOCAL = new Intl.DateTimeFormat(undefined, {
   weekday: 'long', hour: '2-digit', minute: '2-digit', timeZone: TZ,
 });
 
-/** One check-in: who, and how many weeks running. */
-function checkInRow(entry, streaks) {
-  const floor = streaks && streaks.floor_week
-    ? WEEK_DATE.format(new Date(streaks.floor_week)) : null;
-  return el('li', { class: 'check-in' },
-    nodeChip(entry),
-    el('span', {
-      class: `streak${entry.streak_at_least ? ' bounded' : ''}`,
-      title: MESHNET.streakDetail(entry, floor),
-      text: MESHNET.streakWord(entry),
-    }),
-    /*
-     * The message count, and only when it is more than one.
-     *
-     * Two messages in a week are still one check-in -- the unit is the
-     * week -- so this sits well away from the streak chip. An earlier
-     * sketch put them side by side and "2 messages / 1 week in a row"
-     * read as a contradiction.
-     */
-    MESHNET.counted(entry.message_count) > 1
-      ? el('span', { class: 'muted small', text: `${count(entry.message_count)} messages` })
-      : null);
+/*
+ * The streak pill beside a sender's name (#262).
+ *
+ * This replaced a roster row per node -- name, then a chip reading "5
+ * weeks in a row" -- which Will did not like: "next to their name they
+ * should have a small badge ... showing what streak they are on with
+ * that one specific message." So the run now rides on each message, as
+ * of that message's week, and the server sends it there
+ * (`_message_streak`) so the pill and the arithmetic cannot disagree.
+ *
+ * `role="img"` is what lets the pill HAVE an accessible name: a plain
+ * span is `generic`, and ARIA prohibits naming a generic element, so an
+ * `aria-label` on it is dropped by some screen readers and read by
+ * others. The visible words stay in the pill as well, so colour and
+ * symbol are never the only signal.
+ */
+function streakPill(entry, floor) {
+  const pill = MESHNET.streakPill(entry);
+  return el('span', {
+    class: `streak-pill ${pill.tier}${entry && entry.streak_at_least ? ' bounded' : ''}`,
+    role: 'img',
+    'aria-label': pill.label,
+    title: MESHNET.streakDetail(entry, floor),
+  },
+  icon(pill.tier === 'start' ? '#i-streak-start' : '#i-streak'),
+  el('span', { text: pill.text }));
 }
 
 /** One node that took part last week and not in this one. */
@@ -7143,6 +7992,8 @@ function absenceRow(entry, inProgress) {
 }
 
 function meshnetWeek(week, streaks, index) {
+  const floor = streaks && streaks.floor_week
+    ? WEEK_DATE.format(new Date(streaks.floor_week)) : null;
   const ends = new Date(new Date(week.week_end).getTime() - 1);
   const range = `${WEEK_DATE.format(new Date(week.week_start))} - ${WEEK_DATE.format(ends)}`;
   const messages = week.messages || [];
@@ -7152,15 +8003,6 @@ function meshnetWeek(week, streaks, index) {
       week.in_progress ? el('span', { class: 'in-progress', text: 'in progress' }) : null,
       el('span', { class: 'count', text: MESHNET.weekWord(week) })),
     el('div', {},
-      (week.check_ins || []).length
-        ? el('ul', { class: 'check-ins' },
-            week.check_ins.map((entry) => checkInRow(entry, streaks)))
-        : null,
-      (week.not_seen || []).length
-        ? el('div', { class: 'absences' },
-            el('h4', { text: week.in_progress ? 'Checked in last week, not yet this week' : 'Checked in the week before, no message found in this one' }),
-            el('ul', {}, week.not_seen.map((entry) => absenceRow(entry, week.in_progress))))
-        : null,
       /*
        * A week with nobody in it says so here as well as in its heading.
        * These weeks are drawn at all because a gap that is simply absent
@@ -7168,9 +8010,30 @@ function meshnetWeek(week, streaks, index) {
        */
       !(week.check_ins || []).length && !(week.not_seen || []).length
         ? empty('No message carrying the tag was found in this week.') : null,
+      /*
+       * Each message: sender, streak pill, time, and the words (#262).
+       *
+       * No channel label. Every check-in on this page is on one channel
+       * now, so a label on each line would repeat the page description
+       * forty times and say nothing.
+       */
       messages.length
-        ? el('ul', { class: 'messages' },
-            messages.map((message) => messageItem(message, { showChannel: true })))
+        ? el('ul', { class: 'messages meshnet-messages' },
+            messages.map((message) => messageItem(message, { badge: streakPill(message, floor) })))
+        : null,
+      /*
+       * Who took part the week before and has no message in this one.
+       *
+       * Kept after #262, below the messages rather than above them. The
+       * messages are what the page is for now; this list is the one place
+       * the page says "still open" for the week in progress, which is the
+       * honest state a pill on a message cannot carry -- there is no
+       * message to hang it on.
+       */
+      (week.not_seen || []).length
+        ? el('div', { class: 'absences' },
+            el('h4', { text: week.in_progress ? 'Checked in last week, not yet this week' : 'Checked in the week before, no message found in this one' }),
+            el('ul', {}, week.not_seen.map((entry) => absenceRow(entry, week.in_progress))))
         : null,
       // The message list is capped by the endpoint's `limit` and the
       // count beside it is measured, so on a busy week they disagree.
@@ -7193,6 +8056,16 @@ PAGES.meshnet = async (page) => {
     return replace(body, failure(data));
   }
 
+  /*
+   * The channel, from the answer rather than from the markup (#262).
+   *
+   * The server decides which channel counts (`default_preset`), and the
+   * description says what the server read. Written into the HTML it
+   * would go on saying MediumFast on a deployment whose net is not.
+   */
+  for (const holder of $$('[data-meshnet-channel]', page)) {
+    if (data.channel) holder.textContent = data.channel;
+  }
   /*
    * "Nothing to compute from" and "nobody checked in" are two different
    * sentences, and the plan named this as its own risk: message text
@@ -8668,6 +9541,17 @@ function revealHints(root = document) {
     fitHint(heading, 'panel', heading.dataset.label || heading.firstChild?.textContent?.trim()
       || heading.textContent.trim(), heading.dataset.hint, []);
   }
+  /*
+   * And the fields of a definition list (#256): the node page's
+   * Identity and Device. The same button, so a field is explained the
+   * way a column is -- by click, tap or keyboard, never hover only.
+   * `data-label` is required reading here rather than a fallback,
+   * because once the button is in the `dt` its text includes the
+   * button's "i".
+   */
+  for (const term of $$('dt[data-hint]', root)) {
+    fitHint(term, 'field', term.dataset.label || term.textContent.trim(), term.dataset.hint, []);
+  }
 }
 
 /** Every distinct exact value one column holds, in the order first seen. */
@@ -9154,6 +10038,16 @@ function applyTheme(mode) {
   } else {
     root.setAttribute('data-theme', mode);
   }
+  /*
+   * Safari tints its status bar and tab bar with `theme-color` (#253).
+   * The pre-paint script in index.html sets it on load; a switch made
+   * here has to set it again, or a reader who picks light keeps the dark
+   * strip above the page until the next reload. Read back from --bg
+   * rather than written as a literal, so app.css stays the one source.
+   */
+  const tint = document.querySelector('meta[name="theme-color"]');
+  const colour = getComputedStyle(root).getPropertyValue('--bg').trim();
+  if (tint && colour) tint.setAttribute('content', colour);
 }
 
 function wirePresetSwitch() {

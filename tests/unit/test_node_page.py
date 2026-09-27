@@ -133,6 +133,33 @@ def test_an_observation_sort_needs_a_bounded_window(tmp_path: Path) -> None:
             assert response.status_code == 422, query
 
 
+def test_a_cursor_that_is_not_one_is_refused(tmp_path: Path) -> None:
+    """#259: a malformed `before` is a 422, never an unfiltered listing."""
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        for cursor in ("garbage!!", "e30", "WyJ0aW1lIl0"):
+            response = client.get(f"/api/nodes/{NODE}/packets?before={cursor}")
+            assert response.status_code == 422, cursor
+
+
+def test_a_cursor_carries_its_sort_and_is_refused_under_another() -> None:
+    """The sort travels with every page, so page two cannot reorder."""
+    from datetime import UTC, datetime
+
+    import pytest
+    from fastapi import HTTPException
+
+    from sonoran.api.routes import nodes
+    from sonoran.db.models import Packet
+
+    row = Packet(from_node_num=5, packet_id=9, first_seen_at=datetime(2026, 9, 1, tzinfo=UTC))
+    cursor = nodes._packet_cursor("snr", "asc", -3.25, row)
+    value, when, sender, packet_id = nodes._read_packet_cursor(cursor, "snr", "asc")
+    assert (value, when, sender, packet_id) == (-3.25, row.first_seen_at, 5, 9)
+    with pytest.raises(HTTPException) as refused:
+        nodes._read_packet_cursor(cursor, "snr", "desc")
+    assert "sort=snr&order=asc" in str(refused.value.detail)
+
+
 def test_the_packet_direction_is_sent_or_heard(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
         response = client.get(f"/api/nodes/{NODE}/packets?direction=to")
