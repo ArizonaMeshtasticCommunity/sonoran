@@ -1580,6 +1580,67 @@ async function main() {
     return `${await buttons.count()} columns explained, hints and exact values both reachable`;
   });
 
+  await journey(context, 'a hint panel wraps its sentence at every width (#298)', async (page) => {
+    /*
+     * The journey above checks that the panel BOX is on the screen and
+     * that `innerText` holds the sentence. Both passed while the
+     * sentence ran on one line inside a 350 px panel and scrolled
+     * sideways out of sight: `innerText` includes overflowed text. So
+     * this opens every hint on the four pages that carry column hints
+     * and asks the panel itself whether it scrolls.
+     *
+     * `letter-spacing` is widened as the "Who hears it" journey does, so
+     * the wider Linux fonts of the CI runner are covered too.
+     */
+    const out = [];
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      let opened = 0;
+      for (const name of ['nodes', 'firehose', 'dashboard', 'stats']) {
+        await open(page, name, 1500);
+        // The firehose draws its table only once rows arrive.
+        await page.locator(`[data-page="${name}"] .hint-open`).first()
+          .waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
+        await page.addStyleTag({ content: '.hint-pop { letter-spacing: .05em !important; }' });
+        const buttons = page.locator(`[data-page="${name}"] .hint-open`);
+        const total = await buttons.count();
+        must(total > 0, `${name} has no hint control at ${width} px`);
+        for (let index = 0; index < total; index += 1) {
+          const button = buttons.nth(index);
+          if (!(await button.isVisible())) continue;
+          await button.click();
+          await page.waitForTimeout(120);
+          const size = await page.evaluate((id) => {
+            const panel = document.getElementById(id);
+            const box = panel.getBoundingClientRect();
+            return {
+              label: panel.querySelector('.hint-name')?.textContent || id,
+              scroll: panel.scrollWidth,
+              client: panel.clientWidth,
+              wrap: getComputedStyle(panel).whiteSpace,
+              left: box.left,
+              right: box.right,
+              page: document.documentElement.scrollWidth,
+              view: document.documentElement.clientWidth,
+            };
+          }, await button.getAttribute('aria-controls'));
+          must(size.scroll <= size.client + 1,
+            `${name} ${size.label} scrolls sideways at ${width} px: ${size.scroll}/${size.client}`);
+          must(size.wrap === 'normal', `${name} ${size.label}: white-space is ${size.wrap}`);
+          must(size.left >= -1 && size.right <= size.view + 1,
+            `${name} ${size.label} runs off the screen at ${width} px`);
+          must(size.page <= size.view + 1,
+            `${name} ${size.label} widens the page at ${width} px: ${size.page}/${size.view}`);
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(60);
+          opened += 1;
+        }
+      }
+      out.push(`${width}:${opened}`);
+    }
+    return `panels opened and measured at ${out.join(' ')}`;
+  });
+
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
     /*
      * Every Identity and Device field carries the same hint button as a
