@@ -543,6 +543,36 @@ button:disabled:hover { border-color: var(--line); background: none; }
 }
 .linky:hover { text-decoration: underline; }
 
+/*
+ * A link drawn as a button (#258).
+ *
+ * For an `<a>` that opens another application: it must stay a link so
+ * middle-click and "Open in new tab" work, and it must read as an
+ * action beside the node page's time window rather than as body text.
+ * The box copies `input, select, button` above, so it measures the
+ * same as a real icon button: 37 px tall at 1440 px, both measured.
+ *
+ * `[hidden]` is restated because `display: inline-flex` here outranks
+ * the browser's own `[hidden] { display: none }`, and the node page
+ * keeps this link hidden until it has a URL to give it. Without the
+ * rule a link to nowhere is on screen while the page loads.
+ *
+ * The icon rule is a copy of `button .icon`, which matches only inside
+ * a `<button>`. An unsized `<svg>` is 300x150 and takes the page
+ * sideways at 320 px (see that rule).
+ */
+a.button-link {
+  display: inline-flex; align-items: center;
+  font: inherit; color: var(--text); text-decoration: none; white-space: nowrap;
+  background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: .4rem;
+  padding: .4rem .6rem;
+}
+a.button-link[hidden] { display: none; }
+a.button-link:hover { border-color: var(--accent); }
+a.button-link .icon { width: 1.05rem; height: 1.05rem; fill: currentColor; flex: 0 0 auto; }
+a.button-link .icon + span { margin-left: .4rem; }
+
 /* Panels */
 
 /*

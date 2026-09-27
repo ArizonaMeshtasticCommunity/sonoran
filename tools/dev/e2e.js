@@ -1226,6 +1226,40 @@ async function main() {
     return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
   });
 
+  await journey(narrow, 'the mesh-graph link is a link drawn as a button (#258)', async (page) => {
+    /*
+     * The node page is not in the sweep below, because it needs a node
+     * id, so its one new control is walked here. Three claims, each of
+     * which a plausible edit breaks: it is still an `<a>` that opens a
+     * new tab (turning it into a `<button>` loses middle-click), its
+     * icon is sized (an unsized `<svg>` is 300x150), and the page does
+     * not scroll sideways at 320 px with it on screen.
+     */
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    must(nodes.length, 'no node to open');
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(3500);
+    const link = await page.evaluate(() => {
+      const a = document.querySelector('[data-node-graph-link]');
+      const icon = a && a.querySelector('svg.icon');
+      const box = icon ? icon.getBoundingClientRect() : null;
+      return a && {
+        tag: a.tagName, target: a.target, rel: a.rel, href: a.getAttribute('href'),
+        visible: !a.hidden && a.getBoundingClientRect().width > 0,
+        icon: box ? [Math.round(box.width), Math.round(box.height)] : null,
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+      };
+    });
+    must(link, 'the node page has no mesh-graph link');
+    must(link.tag === 'A', `it is a <${link.tag.toLowerCase()}>, and only a link opens in a new tab on middle-click`);
+    must(link.target === '_blank' && /noopener/.test(link.rel), `target=${link.target} rel=${link.rel}`);
+    must(link.visible && link.href, 'the link is hidden or has nowhere to go');
+    must(link.icon && link.icon[0] <= 24 && link.icon[1] <= 24, `the icon is unsized: ${link.icon}`);
+    must(link.scroll <= link.client + 1, `the node page scrolls sideways: ${link.scroll}/${link.client}`);
+    return `an <a> with a ${link.icon.join('x')} icon, ${link.scroll}/${link.client} px`;
+  });
+
   await journey(narrow, 'every page reflows at 320 CSS px', async (page) => {
     const bad = [];
     // Every page, and the list is hardcoded on purpose so that adding a
