@@ -9407,6 +9407,13 @@ async function setStatus(state, message) {
   const dot = $('[data-status] .dot');
   dot.className = `dot ${state}`;
   $('[data-status-text]').textContent = message;
+  // The copy in the sticky phone bar (#271), so the state stays on the
+  // screen while the menu is closed and the page is scrolled.
+  const bar = $('[data-status-bar]');
+  if (bar) {
+    $('.dot', bar).className = `dot ${state}`;
+    $('[data-status-bar-text]', bar).textContent = message;
+  }
   // The visible copy is inside the menu, which is `hidden` when a phone
   // closes it; this one is `.sr-only`, always in the tree, and is the
   // only thing that announces (#175).
@@ -10415,6 +10422,11 @@ function wireNav() {
     toggle.setAttribute('aria-expanded', String(open));
     menu.hidden = !open;
     $('use', toggle).setAttribute('href', open ? '#i-menu-close' : '#i-menu');
+    // The phone bar is sticky (#271). Open, the menu is taller than a
+    // phone screen, and a sticky box never scrolls its own foot into
+    // view, so the CSS gives the open bar a height and a scroll.
+    const bar = toggle.closest('.sidebar');
+    if (bar) bar.toggleAttribute('data-menu-open', open && narrow.matches);
   };
 
   const apply = () => {

@@ -1582,6 +1582,50 @@ async function main() {
     return `${links} links + settings in the footer, menu closes on choosing`;
   });
 
+  await journey(phone, 'the phone bar stays on the screen while scrolling (#271)', async (page) => {
+    /*
+     * The menu button and the live state were both gone after 1,200 px.
+     * The dashboard is the page scrolled here because it is long on every
+     * instance, seeded or live.
+     */
+    await open(page, 'dashboard', 1500);
+    // Wait for the page to be long enough, rather than for a fixed time:
+    // on a loaded runner the feeds arrive late and the page is short.
+    await waitFor(page, () => document.documentElement.scrollHeight > window.innerHeight + 1300, 30000);
+    await page.evaluate(() => window.scrollTo(0, 1200));
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const bar = document.querySelector('.sidebar').getBoundingClientRect();
+      const button = document.querySelector('[data-nav-toggle]').getBoundingClientRect();
+      const status = document.querySelector('[data-status-bar]');
+      return {
+        scrollY: Math.round(window.scrollY),
+        top: Math.round(bar.top),
+        height: Math.round(bar.height),
+        button: [Math.round(button.top), Math.round(button.bottom)],
+        status: status.getBoundingClientRect().width > 0 ? status.textContent.trim() : '',
+        opaque: getComputedStyle(document.querySelector('.sidebar')).backgroundColor,
+      };
+    });
+    must(got.scrollY >= 600, `the dashboard only scrolled to ${got.scrollY}, so this proves nothing`);
+    must(got.top === 0, `the bar is at ${got.top} px after scrolling ${got.scrollY}, not stuck at the top`);
+    must(got.height <= 72, `the bar is ${got.height} px tall; it must stay one compact row`);
+    must(got.button[0] >= 0 && got.button[1] <= got.height, 'the menu button is not inside the bar');
+    must(got.status.length > 0, 'the live state is not shown in the bar');
+    must(!/rgba\(.*, 0\)|transparent/.test(got.opaque), `the bar is see-through: ${got.opaque}`);
+
+    // Open, the menu is taller than the screen. A sticky box never
+    // scrolls its own foot into view, so the bar must scroll inside.
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(250);
+    await page.locator('.menu-settings-link').scrollIntoViewIfNeeded();
+    const settings = await page.locator('.menu-settings-link').boundingBox();
+    const height = page.viewportSize().height;
+    must(settings && settings.y >= 0 && settings.y + settings.height <= height + 1,
+      `with the menu open, Settings cannot be brought on screen (${settings && Math.round(settings.y)} of ${height})`);
+    return `stuck at 0 after ${got.scrollY} px, ${got.height} px tall, shows "${got.status}"`;
+  });
+
   await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
     /*
      * Each of these has a size of its own, so the general 44 px rule for

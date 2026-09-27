@@ -2223,7 +2223,78 @@ a.more { text-decoration: none; display: inline-block; }
   .site-menu { flex: 1 1 100%; }
   .site-menu .status,
   .sidebar .status { font-size: .78rem; }
+
+  /*
+   * The bar stays on the screen (#271).
+   *
+   * Nothing was sticky. After 1,200 px of the dashboard, the firehose,
+   * chat or RF, the menu button and the live state had both scrolled
+   * away, and the firehose is twelve screens long on an iPhone 14. The
+   * bar is one row of about 57 px, opaque, and holds the menu button and
+   * the live dot with its time. The page-head controls stay in the page:
+   * a sticky Live and filter row would rebuild the tall header the
+   * review measured on every screen (section 4.4).
+   *
+   * Not hide-on-scroll-down. That is "moderately" better by NN/g and
+   * costs a scroll listener on every page; it can come later.
+   *
+   * `z-index` above Leaflet's controls (1000), which share the root
+   * stacking context and would otherwise draw over the bar as a map
+   * scrolls under it.
+   */
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 1100;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  /* Open, the menu is taller than a phone: the bar takes the screen and
+     scrolls inside itself, so the preset and Settings can be reached. */
+  .sidebar[data-menu-open] {
+    max-height: 100svh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* A link to a fragment, or focus moved into the page, must not land
+     under the bar. */
+  html { scroll-padding-top: 4.5rem; }
+  /* Watch mode fills the screen under the bar's z-index; the bar steps
+     back rather than sitting on top of the fullscreen map. */
+  body.watch-mode .sidebar { position: static; z-index: auto; }
+
+  .sidebar .bar-status {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .4rem;
+    /* A zero basis, so the row never wraps for the sake of the time: it
+       takes what the mark and the button leave, and the words give way
+       with an ellipsis. At 320 px an `auto` basis pushed it and the
+       button onto a second row and the bar was 110 px tall. */
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+    font-size: .75rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .bar-status > span:last-child {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bar-status .dot {
+    flex: 0 0 auto;
+    width: .5rem; height: .5rem; border-radius: 50%;
+    background: var(--good);
+  }
+  .bar-status .dot.stale { background: var(--warn); }
+  .bar-status .dot.down { background: var(--bad); }
+  /* The status now carries the push to the right, so the button sits
+     beside it rather than being pushed away from it. */
+  .bar-status + .nav-toggle { margin-left: .25rem; }
 }
+/* The bar copy is for the phone bar only; the sidebar has the card. */
+.bar-status { display: none; }
 
 @media (max-width: 60rem) and (max-height: 32rem) {
   .sidebar {

@@ -178,6 +178,19 @@
           breakpoint, and that is one line against an attribute and a
           fight against the `details` user-agent rules.
         -->
+        <!--
+          The live dot and its time, in the phone bar (#271).
+
+          The bar is sticky below 60rem, so this is what stays on the
+          screen on a twelve-screen firehose: whether the page is still
+          following the mesh, without opening the menu. It is a plain
+          visible copy with no `role`, like the one in the menu; the
+          `.sr-only` region below is still the only thing that announces.
+          Hidden on a wide screen, where the sidebar shows the card.
+        -->
+        <p class="bar-status" data-status-bar>
+          <span class="dot"></span><span data-status-bar-text>Connecting</span>
+        </p>
         <button type="button" class="nav-toggle" data-nav-toggle hidden
                 aria-expanded="false" aria-controls="site-menu"
                 aria-label="Menu">
