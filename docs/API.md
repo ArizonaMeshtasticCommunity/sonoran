@@ -154,6 +154,19 @@ Query parameters:
   `gateways`, `snr`, `rssi`. Nulls sort last, whichever the order.
 - `order` — `desc` (default) or `asc`.
 - `offset`, `limit` — paging. Default limit 100. Maximum 500.
+- `before` — a cursor: the rows after the last row of a previous page,
+  in the same order. Every non-empty answer carries the cursor for its
+  last row in the `X-Next-Before` header. A short page is the end.
+  The cursor is opaque, and it carries the `sort` and `order` it was
+  made under: under any other it returns 422, so a later page cannot
+  come back in a different order. Invalid cursors return 422.
+
+Use `before`, not `offset`, to page (#259). Packets arrive all the
+time, and a packet that arrives between two offset pages moves a row
+from one page to the next, so it is shown twice, or it is skipped.
+A cursor names the last row, so a new packet cannot move it. Ties are
+broken by `first_seen_at`, then `from_node`, then `packet_id`, so the
+order is total.
 
 A sort by `hops`, `gateways`, `snr` or `rssi` has to summarise every
 observation in the window before it can order anything. It needs

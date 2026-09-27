@@ -6432,94 +6432,308 @@ function routesPanel(routes) {
         expandingTable(columns, routes.hears, 'It reports hearing no node in the window.', { noun: 'nodes' }))));
 }
 
-/* --- Packet timeline (#54) ---------------------------------------- */
+/* --- Packet timeline (#54, #259) ---------------------------------- */
 
 const TIMELINE_STEP = 50;
 /* The observation sorts need a window of a week or less. See
  * `node_packets` in routes/nodes.py. */
 const TIMELINE_SEEN_SORTS = new Set(['hops', 'gateways', 'snr', 'rssi']);
 const TIMELINE_SEEN_MAX_HOURS = 168;
+/* A gateway's uploads are read over a week at most, whatever is asked
+ * (`HEARD_MAX_HOURS` in routes/nodes.py). */
+const TIMELINE_HEARD_MAX_HOURS = 168;
+const TIMELINE_WINDOWS = [[6, '6 h'], [24, '24 h'], [168, '7 days'], [720, '30 days']];
+/*
+ * What the panel title's hint says (#259).
+ *
+ * Will: "Move 'A packet is one transmission: …' on the node detail to a
+ * tool tip next to the title." MOVED, not deleted: this is the same
+ * sentence, word for word, apart from where "choose one" now points --
+ * the window control is in this panel's own heading, top right, rather
+ * than at the top of the page.
+ */
+const TIMELINE_HINT = 'A packet is one transmission: a position, a reading, a message, or a routine announcement. '
+  + 'Open a row to see what it carried and which gateways heard it. '
+  + 'Sorting by hops, gateways or signal needs a window of 7 days or less: choose one with the window control of this panel.';
+
 let timeline = null;
+/*
+ * The rows held, and where the next page starts.
+ *
+ * Module state, like the chat's `chatRows`, because the observer that asks
+ * for the next page outlives any one draw. `seq` is bumped by every fresh
+ * draw, so a page that was in flight when the reader changed a filter is
+ * dropped on arrival instead of being appended to a list it does not
+ * belong to.
+ */
+let timelinePaging = { seq: 0, rows: [], before: null, exhausted: true, busy: false, total: null };
+/* The observer watching the foot of the list. One at a time: a new draw
+   disconnects the last one. */
+let timelineWatch = null;
 
 function resetTimeline(nodeId) {
-  timeline = { nodeId, sort: 'time', order: 'desc', offset: 0, direction: 'sent', portnum: '', channel: '' };
+  timeline = { nodeId, sort: 'time', order: 'desc', direction: 'sent', portnum: '', channel: '', hours: null, pageHours: null };
 }
 
-async function drawTimeline(target, nodeId, hours, types) {
-  if (!timeline || timeline.nodeId !== nodeId) resetTimeline(nodeId);
-  const state = timeline;
-  const seenSortable = Number(hours) <= TIMELINE_SEEN_MAX_HOURS;
-  if (!seenSortable && TIMELINE_SEEN_SORTS.has(state.sort)) Object.assign(state, { sort: 'time', order: 'desc' });
+/** A packet row's identity: (sender, packet id), AGENTS.md 9.1. */
+function packetRowKey(row) {
+  return `${row.from_node ?? ''}|${row.packet_id ?? ''}`;
+}
+
+/**
+ * Add the next page of packets to the rows already held.
+ *
+ * Pure, for the same reason `mergeNodePage` is: the two decisions that
+ * infinite scroll gets wrong quietly live here, and pure code can be run
+ * in a test rather than read.
+ *
+ * **Cursor, not offset, so there is no offset to advance.** The nodes
+ * list pages by offset, and its comment is honest that a row which moves
+ * forward a page is never seen. Packets arrive all the time -- a busy
+ * gateway uploads several a minute -- so that is the ordinary case here,
+ * not the rare one. The server answers each page with `X-Next-Before`,
+ * which names the last row served; the next page starts after THAT row,
+ * so whatever arrived in between cannot shift it.
+ *
+ * **A duplicate is still dropped by identity,** as `chatLoadOlder` drops
+ * one by `chatRowKey`. The cursor makes a repeat impossible in principle;
+ * this makes it harmless in practice, and costs one Set.
+ *
+ * **A short page is the end, a full page is not.** The next request may
+ * come back empty, which is this same test one page later.
+ */
+function mergePacketPage(held, incoming, pageSize) {
+  const served = Array.isArray(incoming) ? incoming : [];
+  const seen = new Set((held || []).map(packetRowKey));
+  const added = [];
+  for (const row of served) {
+    if (!row || seen.has(packetRowKey(row))) continue;
+    seen.add(packetRowKey(row));
+    added.push(row);
+  }
+  return { rows: (held || []).concat(added), added, exhausted: served.length < pageSize };
+}
+
+/** The query for one page. The sort goes with every page: the cursor is
+ * refused by the server under any other sort, so it cannot be dropped. */
+function timelineQuery(state, hours, before) {
   const params = new URLSearchParams({
-    hours: String(hours), limit: String(TIMELINE_STEP), offset: String(state.offset),
-    sort: state.sort, order: state.order, direction: state.direction,
+    hours: String(hours), limit: String(TIMELINE_STEP), sort: state.sort, order: state.order, direction: state.direction,
   });
   if (state.portnum) params.set('portnum', state.portnum);
   if (state.channel) params.set('channel', state.channel);
+  if (before) params.set('before', before);
+  return `api/nodes/${encodeURIComponent(state.nodeId)}/packets?${params}`;
+}
 
-  const redraw = () => drawTimeline(target, nodeId, hours, types);
-  const response = await fetch(`api/nodes/${encodeURIComponent(nodeId)}/packets?${params}`)
-    .catch((error) => error);
-  const body = el('div', {});
-  let rows = [];
-  let total = 0;
-  if (response instanceof Error || !response.ok) {
-    body.append(failure(new Error('Cannot load the packets.')));
-  } else {
-    rows = await response.json();
-    total = Number(response.headers.get('X-Total-Count') || rows.length);
+/** One page, with the total and the cursor the headers carry. */
+async function fetchTimelinePage(state, hours, before) {
+  const response = await fetch(timelineQuery(state, hours, before));
+  if (!response.ok) throw new Error('Cannot load the packets.');
+  const rows = await response.json();
+  // An absent header is an unknown total, never 0 (`Number(null)` is 0).
+  const header = response.headers.get('X-Total-Count');
+  return {
+    rows,
+    total: header == null || header === '' ? null : Number(header),
+    before: response.headers.get('X-Next-Before'),
+  };
+}
+
+/*
+ * The foot of the list: the button, and the line that says how much is
+ * loaded. The nodes list's `drawNodeMore`, for this panel, and for the
+ * same reasons: `aria-disabled` rather than `disabled` while a page is in
+ * flight, so a keyboard reader standing on the button keeps their place;
+ * focus moved to the status line when the last page lands and the button
+ * goes; and the button kept beside the scroll, because infinite scroll
+ * gives a keyboard reader nothing to operate.
+ */
+function drawTimelineFoot(foot, error) {
+  const paging = timelinePaging;
+  const button = $('button', foot);
+  const status = $('[role="status"]', foot);
+  foot.hidden = !paging.rows.length;
+  if (foot.hidden) return;
+  button.setAttribute('aria-disabled', String(paging.busy));
+  const hadFocus = document.activeElement === button;
+  button.hidden = paging.exhausted;
+  if (paging.exhausted && hadFocus) {
+    foot.setAttribute('tabindex', '-1');
+    foot.focus();
+  }
+  if (error) {
+    button.hidden = false;
+    button.setAttribute('aria-disabled', 'false');
+    button.textContent = 'Try again';
+    status.textContent = error.message || String(error);
+    return;
+  }
+  button.textContent = 'Show more packets';
+  status.textContent = paging.busy
+    ? 'Loading more packets'
+    : nodeProgressWords(paging.rows.length, paging.total, paging.exhausted);
+}
+
+async function drawTimeline(target, nodeId, pageHours, types) {
+  if (!timeline || timeline.nodeId !== nodeId) resetTimeline(nodeId);
+  const state = timeline;
+  /*
+   * The panel has its own window now (#259), and it starts at the page's.
+   * When the page's window changes the panel follows it; choosing a
+   * window in the panel changes only the panel. That is what lets a
+   * reader on the page's 30-day default sort by signal without changing
+   * every chart on the page.
+   */
+  if (state.pageHours !== String(pageHours)) Object.assign(state, { pageHours: String(pageHours), hours: Number(pageHours) });
+  const heard = state.direction === 'heard';
+  // Said, not silently applied: the window control shows a gateway's
+  // uploads are a week at most, and the listing is asked for exactly that.
+  const hours = heard ? Math.min(state.hours, TIMELINE_HEARD_MAX_HOURS) : state.hours;
+  const seenSortable = hours <= TIMELINE_SEEN_MAX_HOURS;
+  if (!seenSortable && TIMELINE_SEEN_SORTS.has(state.sort)) Object.assign(state, { sort: 'time', order: 'desc' });
+
+  const seq = timelinePaging.seq + 1;
+  timelinePaging = { seq, rows: [], before: null, exhausted: true, busy: false, total: null };
+  if (timelineWatch) timelineWatch.disconnect();
+  timelineWatch = null;
+
+  const redraw = () => drawTimeline(target, nodeId, pageHours, types);
+  let failed = null;
+  try {
+    const first = await fetchTimelinePage(state, hours, null);
+    if (timelinePaging.seq !== seq) return;
+    const merged = mergePacketPage([], first.rows, TIMELINE_STEP);
+    Object.assign(timelinePaging, {
+      rows: merged.rows, exhausted: merged.exhausted, before: first.before, total: first.total,
+    });
+  } catch (error) {
+    if (timelinePaging.seq !== seq) return;
+    failed = error;
   }
 
   const sortState = { key: state.sort, order: state.order };
-  const onSort = (key, order) => { Object.assign(state, { sort: key, order, offset: 0 }); redraw(); };
-  const sortable = (key) => (TIMELINE_SEEN_SORTS.has(key) && !seenSortable
-    ? {} : { sort: key, sortState, onSort });
-  const heard = state.direction === 'heard';
+  const onSort = (key, order) => { Object.assign(state, { sort: key, order }); redraw(); };
+  /*
+   * An observation sort over more than a week is not silently missing.
+   * The heading stays, loses its sort button, and its hint says why and
+   * what to do -- the "control should say why an option is unavailable"
+   * half of #259. The server refuses such a sort as well (422), so this
+   * is the explanation of a rule, not the rule.
+   */
+  const unavailable = ' Sorting by it needs a window of 7 days or less: choose one with the window control of this panel.';
+  const sortable = (key, hint) => (TIMELINE_SEEN_SORTS.has(key) && !seenSortable
+    ? { hint: `${hint || ''}${unavailable}`.trim() }
+    : { sort: key, sortState, onSort, hint: hint || null });
   const packetHref = (row) => `#packet/${encodeURIComponent(row.from_node)}/${row.packet_id}`;
   const columns = [
     { label: 'Time', ...sortable('time'), cell: (row) => el('a', { class: 'linky', href: packetHref(row), title: stamp(row.seen_at), text: stamp(row.seen_at) }) },
     heard ? { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) } : null,
-    { label: 'Type', ...sortable('type'), hint: 'What the packet carried: a position, telemetry, a message, and so on.', cell: (row) => portnumCell(row.portnum) },
-    { label: 'To', ...sortable('to'), hint: 'Everyone for a broadcast, or the one node it was addressed to.', cell: (row) => toLabel(row) },
+    { label: 'Type', ...sortable('type', 'What the packet carried: a position, telemetry, a message, and so on.'), cell: (row) => portnumCell(row.portnum) },
+    { label: 'To', ...sortable('to', 'Everyone for a broadcast, or the one node it was addressed to.'), cell: (row) => toLabel(row) },
     { label: 'Channel', ...sortable('channel'), cell: (row) => row.channel || '-' },
-    { label: 'Hops', num: true, ...sortable('hops'), hint: 'The fewest relays any gateway saw it use before it was uploaded.', cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
-    { label: 'Gateways', num: true, ...sortable('gateways'), hint: 'How many different gateways uploaded it, not counting the sender uploading its own packet.', cell: (row) => count(row.gateways) },
-    { label: 'SNR', num: true, ...sortable('snr'), hint: 'The best signal at a gateway that heard it with no hop used. A relayed reading belongs to the last relay, so it is not shown.', cell: (row) => snrCell(row.direct_snr) },
+    { label: 'Hops', num: true, ...sortable('hops', 'The fewest relays any gateway saw it use before it was uploaded.'), cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
+    { label: 'Gateways', num: true, ...sortable('gateways', 'How many different gateways uploaded it, not counting the sender uploading its own packet.'), cell: (row) => count(row.gateways) },
+    { label: 'SNR', num: true, ...sortable('snr', 'The best signal at a gateway that heard it with no hop used. A relayed reading belongs to the last relay, so it is not shown.'), cell: (row) => snrCell(row.direct_snr) },
     { label: 'RSSI', num: true, ...sortable('rssi'), cell: (row) => (row.direct_rssi == null ? '-' : `${row.direct_rssi} dBm`) },
     { label: 'Size', num: true, ...sortable('size'), cell: (row) => (row.size_bytes == null ? '-' : `${row.size_bytes} B`) },
   ].filter(Boolean);
 
-  const typeSelect = el('select', { 'aria-label': 'Packet type', onchange: (event) => { Object.assign(state, { portnum: event.target.value, offset: 0 }); redraw(); } },
+  /*
+   * The window, top right (#259). "LAST 720 H" is gone from the title:
+   * the control shows the window, so the label only repeated it.
+   *
+   * An option that cannot do everything says so in its own label rather
+   * than failing quietly after it is chosen. Over 7 days the signal sorts
+   * are off; a gateway's uploads are read over 7 days at most, so the
+   * longer window is disabled on that listing.
+   */
+  const windowSelect = el('select', { 'aria-label': 'Packet window', 'data-timeline-hours': '',
+    onchange: (event) => { state.hours = Number(event.target.value); redraw(); } },
+  TIMELINE_WINDOWS.map(([value, label]) => el('option', {
+    value: String(value),
+    selected: value === hours,
+    disabled: heard && value > TIMELINE_HEARD_MAX_HOURS,
+    text: heard && value > TIMELINE_HEARD_MAX_HOURS
+      ? `${label}, uploads: 7 days at most`
+      : value > TIMELINE_SEEN_MAX_HOURS ? `${label}, hop and signal sorts off` : label,
+  })));
+  const typeSelect = el('select', { 'aria-label': 'Packet type', onchange: (event) => { state.portnum = event.target.value; redraw(); } },
     el('option', { value: '', text: 'Every type' }),
     types.map((type) => el('option', { value: type, text: portnumLabel(type), selected: type === state.portnum })));
-  const directionSelect = el('select', { 'aria-label': 'Direction', onchange: (event) => { Object.assign(state, { direction: event.target.value, offset: 0 }); redraw(); } },
+  const directionSelect = el('select', { 'aria-label': 'Direction', onchange: (event) => { state.direction = event.target.value; redraw(); } },
     el('option', { value: 'sent', text: 'Sent by this node', selected: !heard }),
     el('option', { value: 'heard', text: 'Heard by it, as a gateway', selected: heard }));
   const channelInput = el('input', { type: 'search', placeholder: 'Channel', 'aria-label': 'Channel', value: state.channel,
-    onchange: (event) => { Object.assign(state, { channel: event.target.value.trim(), offset: 0 }); redraw(); } });
+    onchange: (event) => { state.channel = event.target.value.trim(); redraw(); } });
 
-  const first = total ? state.offset + 1 : 0;
-  const last = state.offset + rows.length;
-  const pager = el('p', { class: 'more-wrap' },
-    el('span', { class: 'muted', text: total ? `${count(first)} to ${count(last)} of ${count(total)}` : '' }),
-    state.offset > 0 ? el('button', { class: 'more', type: 'button', text: 'Newer', onclick: () => { state.offset = Math.max(0, state.offset - TIMELINE_STEP); redraw(); } }) : null,
-    last < total ? el('button', { class: 'more', type: 'button', text: 'Older', onclick: () => { state.offset += TIMELINE_STEP; redraw(); } }) : null);
-
-  if (!body.childNodes.length) {
-    body.append(el('div', { class: 'table-wrap' }, table(columns, rows,
+  const wrap = el('div', { class: 'table-wrap' });
+  const drawRows = () => {
+    replace(wrap, table(columns, timelinePaging.rows,
       heard ? 'It uploaded no packet from another node in the window.' : 'It sent no packet in the window that matches.',
-      { rowHref: packetHref })));
-  }
+      { rowHref: packetHref }));
+    markScrollableTables(target);
+    revealHints(wrap);
+  };
+  // Built once, before its text changes, so a screen reader announces
+  // every update (see `drawNodeMore`).
+  const foot = el('p', { class: 'more-wrap timeline-more', 'data-timeline-more': '', hidden: true },
+    el('button', { type: 'button', class: 'more', text: 'Show more packets' }),
+    el('span', { class: 'muted', role: 'status' }));
+
+  /*
+   * The next page, if there is one and nothing is already asking. The
+   * observer and the button both call this, so they cannot disagree.
+   */
+  const more = async () => {
+    const paging = timelinePaging;
+    if (paging.seq !== seq || paging.busy || paging.exhausted || !paging.before) return;
+    paging.busy = true;
+    drawTimelineFoot(foot);
+    let error = null;
+    try {
+      const next = await fetchTimelinePage(state, hours, paging.before);
+      if (timelinePaging.seq !== seq) return;
+      const merged = mergePacketPage(paging.rows, next.rows, TIMELINE_STEP);
+      Object.assign(paging, { rows: merged.rows, exhausted: merged.exhausted, before: next.before || paging.before });
+      if (next.total != null) paging.total = next.total;
+      drawRows();
+    } catch (caught) {
+      if (timelinePaging.seq !== seq) return;
+      error = caught;
+    } finally {
+      if (timelinePaging.seq === seq) paging.busy = false;
+    }
+    if (timelinePaging.seq !== seq) return;
+    drawTimelineFoot(foot, error);
+    // Re-armed after every page, as the nodes list is (`rearmNodeScroll`):
+    // on a tall screen one page may not push the foot out of view, the
+    // intersection state never changes, and nothing else would ask again.
+    if (timelineWatch && !paging.exhausted) {
+      timelineWatch.unobserve(foot);
+      timelineWatch.observe(foot);
+    }
+  };
+  $('button', foot).addEventListener('click', () => {
+    if ($('button', foot).getAttribute('aria-disabled') === 'true') return;
+    more();
+  });
+
   replace(target,
-    el('h3', {}, 'Packet timeline', el('span', { class: 'muted', text: `last ${heard ? Math.min(Number(hours), TIMELINE_SEEN_MAX_HOURS) : hours} h` })),
-    el('p', { class: 'muted' },
-      'A packet is one transmission: a position, a reading, a message, or a routine announcement. '
-      + 'Open a row to see what it carried and which gateways heard it.'
-      + (seenSortable ? '' : ' Sorting by hops, gateways or signal needs a window of 7 days or less: choose one above.')),
-    el('div', { class: 'controls' }, directionSelect, typeSelect, channelInput),
-    body, pager);
-  markScrollableTables(target);
+    el('div', { class: 'timeline-head' },
+      el('h3', { 'data-label': 'Packet timeline', 'data-hint': TIMELINE_HINT }, 'Packet timeline'),
+      el('div', { class: 'controls' }, directionSelect, typeSelect, channelInput, windowSelect)),
+    failed ? failure(failed) : wrap,
+    foot);
+  if (!failed) drawRows();
+  drawTimelineFoot(foot);
   revealHints(target);
+  if (typeof IntersectionObserver === 'function' && !timelinePaging.exhausted) {
+    timelineWatch = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) more();
+    }, { rootMargin: '400px 0px' });
+    timelineWatch.observe(foot);
+  }
 }
 
 async function loadNodeDetail(nodeId) {

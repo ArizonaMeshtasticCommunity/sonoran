@@ -471,6 +471,92 @@ async function main() {
     return seen.join('; ');
   });
 
+  await journey(context, 'the packet timeline scrolls on by cursor', async (page) => {
+    /*
+     * #259. Four claims, each checked on the running page:
+     *   1. the explanation is behind an info control on the title, and
+     *      "LAST 720 H" is gone;
+     *   2. the window control is on the title's row, at its right;
+     *   3. scrolling to the foot loads the next page with `before=`, never
+     *      `offset=`, and carries the sort -- watched on the requests, the
+     *      only place a client-side shortcut cannot hide;
+     *   4. the 7-day rule is still enforced and says so.
+     * The node with the most packets is used, so that there IS a second
+     * page to scroll to; the journey says so when no node has one.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=40`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    let busiest = null;
+    for (const node of nodes) {
+      const answer = await page.request.get(
+        `${BASE}/api/nodes/${encodeURIComponent(node.node_id)}/packets?hours=720&limit=1`);
+      const total = Number(answer.headers()['x-total-count'] || 0);
+      if (!busiest || total > busiest.total) busiest = { id: node.node_id, total };
+    }
+    must(busiest.total > 50, `no node has more than one page of packets (most: ${busiest.total}), so paging cannot be seen`);
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/nodes\/[^/]+\/packets\?/.test(request.url())) asked.push(request.url());
+    });
+    await page.goto(`${BASE}/#node/${encodeURIComponent(busiest.id)}`, { waitUntil: 'load' });
+    const panel = page.locator('[data-page="node"] .timeline');
+    must(await waitFor(page, () => document.querySelectorAll('[data-page="node"] .timeline tbody tr').length > 0, 20000),
+      'the packet timeline drew no rows');
+
+    // 1. The sentence moved, not deleted, and the window label is gone.
+    const hint = await panel.locator('h3').getAttribute('data-hint');
+    must(/^A packet is one transmission/.test(hint || ''), `the title carries no explanation: ${hint}`);
+    must(/7 days or less/.test(hint), 'the 7-day rule is no longer explained on the title');
+    must(await panel.locator('h3 .hint-open').count() === 1, 'the title has no info control to open it');
+    const text = await panel.innerText();
+    must(!/A packet is one transmission/.test(text), 'the explanation is still printed in the panel');
+    must(!/last \d+ h/i.test(text), 'the "LAST 720 H" label is still there');
+
+    // 2. The window control on the title's row, right-aligned.
+    const title = await panel.locator('h3').boundingBox();
+    const control = await panel.locator('[data-timeline-hours]').boundingBox();
+    const box = await panel.boundingBox();
+    must(control, 'there is no window control in the panel');
+    must(Math.abs((control.y + control.height / 2) - (title.y + title.height / 2)) < 20,
+      `the window control is not on the title's row (title y=${Math.round(title.y)}, control y=${Math.round(control.y)})`);
+    const gap = (box.x + box.width) - (control.x + control.width);
+    must(gap < 40, `the window control is not at the right of the panel: ${Math.round(gap)} px from its edge`);
+
+    // 4, first half: at 30 days the observation sorts are refused and say why.
+    const hops = panel.locator('th[data-label="Hops"]');
+    must(await hops.locator('.sort-button').count() === 0, 'Hops is sortable over 30 days');
+    must(/7 days or less/.test(await hops.getAttribute('data-hint') || ''), 'Hops says nothing about why it cannot sort');
+
+    // 3. Sort, then scroll, and read the requests.
+    await panel.locator('th[data-label="Type"] .sort-button').click();
+    // The redraw is asynchronous, so wait for the NEW heading: the old
+    // rows are still there for a moment and would satisfy "rows > 0".
+    must(await waitFor(page, () => {
+      const th = document.querySelector('[data-page="node"] .timeline th[data-label="Type"]');
+      return th && th.getAttribute('aria-sort') !== 'none'
+        && document.querySelectorAll('[data-page="node"] .timeline tbody tr').length > 0;
+    }, 15000), 'sorting by type drew nothing');
+    const before = await panel.locator('tbody tr').count();
+    asked.length = 0;
+    await panel.locator('[data-timeline-more]').scrollIntoViewIfNeeded();
+    must(await waitFor(page, () => document.querySelectorAll('[data-page="node"] .timeline tbody tr').length > 50, 15000),
+      `scrolling to the foot loaded nothing more (${before} rows)`);
+    const after = await panel.locator('tbody tr').count();
+    const paged = asked.filter((url) => /[?&]before=/.test(url));
+    must(paged.length > 0, `no request carried before=: ${asked.join(' ') || 'no request at all'}`);
+    must(paged.every((url) => /[?&]sort=type\b/.test(url)), `a page lost the sort: ${paged.join(' ')}`);
+    must(!asked.some((url) => /[?&]offset=/.test(url)), `a page was asked for by offset: ${asked.join(' ')}`);
+    const hrefs = await panel.locator('tbody tr a.linky').evaluateAll((links) => links.map((a) => a.getAttribute('href')));
+    must(new Set(hrefs).size === hrefs.length, 'a packet appears twice after paging');
+    const status = await panel.locator('[data-timeline-more] [role="status"]').innerText();
+
+    // 4, second half: choosing 7 days in the panel brings the sort back.
+    await panel.locator('[data-timeline-hours]').selectOption('168');
+    must(await waitFor(page, () => !!document.querySelector('[data-page="node"] .timeline th[data-label="Hops"] .sort-button'), 15000),
+      'Hops is still not sortable at 7 days');
+    return `${busiest.id}: ${before} -> ${after} rows by scrolling, ${paged.length} page(s) by cursor with the sort; "${status}"`;
+  });
+
   await journey(context, 'the nodes search narrows the list', async (page) => {
     await open(page, 'nodes');
     const count = () => page.locator('[data-page="nodes"] tbody tr').count();
