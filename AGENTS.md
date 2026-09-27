@@ -862,15 +862,20 @@ no endpoint for it and there must never be one. A test asserts that.
 Five things keep it working, and each fails quietly:
 
 1. The logic modules read `protobuf`, `jsyaml` and `MeshtasticProto` off
-   `window`. Sonoran's `index.html` loads those three as classic scripts
-   before `config-check.js`. Miss them and every parse dies with
-   "jsyaml is not defined", while building a config from scratch still
-   works, because that path parses nothing. Test with a real file, not
-   with the build button.
+   `window`. Sonoran's `index.html` holds those three, then
+   `config-check.js`, inside `<template data-lazy-scripts="config">`,
+   and `PAGES.config` loads them with `loadScripts('config')` on the
+   first visit (#277): the classic scripts in order, the module after
+   them. Miss them and every parse dies with "jsyaml is not defined",
+   while building a config from scratch still works, because that path
+   parses nothing. Test with a real file, not with the build button.
 2. `config-check.js` is a module, so it runs after `app.js`. `app.js`
    holds a `configReady` promise that the module resolves, and
    `PAGES.config` waits on it. Without that a reload on `#config` finds
-   nothing registered and falls back to the dashboard.
+   nothing registered and falls back to the dashboard. The template is
+   after `app.js` in the page, so `loadScripts` waits for the document
+   to be parsed before it looks for it; without that wait a reload on
+   `#config` found no template and waited for ever.
 3. `connect-src` must hold `https://api.github.com`. It is the only
    outbound request the dashboard makes, and it asks which firmware
    release is current. It carries no user data.

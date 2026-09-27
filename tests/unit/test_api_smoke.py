@@ -340,6 +340,10 @@ def test_the_checker_globals_are_loaded_before_the_module() -> None:
     Its own page loads them as classic scripts. Without them every parse
     fails with "jsyaml is not defined", and only the build-from-scratch
     path works, which is the one path that parses nothing.
+
+    Since #277 all of them sit in the "config" template and are loaded on
+    the first visit to #config, in the order written there, so the order
+    in the text is still the load order.
     """
     text = _client().get("/").text
     for name in ("protobuf.min.js", "js-yaml.min.js", "meshtastic-proto.js"):

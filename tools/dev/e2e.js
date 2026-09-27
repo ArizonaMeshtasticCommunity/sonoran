@@ -1556,6 +1556,8 @@ async function main() {
     // Every DOM reading below waits past that fade first.
     const FADE_MS = 600;
     must(await page.evaluate(BUBBLE), 'opening a node did not show its bubble');
+    // A mouse gets the bubble, never the phone's sheet (#281).
+    must(await page.evaluate(() => !window.SonoranSheet.current()), 'a desktop opened the phone sheet');
 
     // One refresh from the Live timer itself, unprompted: wait for the
     // map's traffic request that only the timer's `render('map')` sends.
@@ -1575,6 +1577,12 @@ async function main() {
     edits.move = picked.moved;
     for (let refresh = 0; refresh < 3; refresh += 1) {
       await page.evaluate(async () => {
+        // `render` returns at once while another render is running, and
+        // the timer's own poll can still be running here on a slow
+        // server. "A node that moved stayed where it was" failed two
+        // runs in five on a loaded machine without this wait, and none
+        // in three with it.
+        while (loading) await new Promise((done) => setTimeout(done, 100));
         nodeCache.at = 0;
         await render('map');
       });
@@ -1614,6 +1622,7 @@ async function main() {
     // A node that really went away takes its open bubble with it.
     edits.drop = picked.open;
     await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
       nodeCache.at = 0;
       await render('map');
     });
@@ -1626,6 +1635,76 @@ async function main() {
     must(!(await page.evaluate(BUBBLE)), 'the bubble of a node that went away is still open');
     return `bubble held through ${timed} timer + 3 forced refreshes; moved node moved; `
       + `zoom radius ${radii.before} -> ${radii.after}; gone node closed its bubble`;
+  });
+
+  await journey(context, 'a mouse keeps the exact dot target (#266)', async (page) => {
+    // The control for the phone journey: the wider target is for touch.
+    await open(page, 'map', 3000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 20000), 'the map drew no nodes');
+    const got = await page.evaluate(() => {
+      const { map, nodes } = window.SonoranMap;
+      const layer = nodes.getLayers()[0];
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        tolerance: layer ? map.getRenderer(layer).options.tolerance || 0 : null,
+      };
+    });
+    must(!got.coarse, 'this context reports a coarse pointer, so it cannot be the control');
+    must(got.tolerance === 0, `a mouse gets a canvas tolerance of ${got.tolerance}`);
+    return 'fine pointer, tolerance 0';
+  });
+
+  await journey(context, 'chart and checker libraries load only where used (#277)', async (page) => {
+    /*
+     * ECharts and the config checker's libraries sit in <template>s and
+     * are fetched by the first page that needs them. Nodes needs neither
+     * and must fetch neither. Every page that draws a chart is then
+     * opened COLD, each in a fresh load, because a page reached by a
+     * hash change would find the library the last page loaded.
+     */
+    const fetched = [];
+    page.on('request', (request) => fetched.push(new URL(request.url()).pathname));
+    const heavy = /echarts\.min\.js|protobuf\.min\.js|js-yaml\.min\.js|config-check\.js/;
+    await open(page, 'nodes', 3000);
+    const early = fetched.filter((path) => heavy.test(path));
+    must(early.length === 0, `the nodes page fetched ${early.join(', ')}`);
+    must(!(await page.evaluate(() => Boolean(window.echarts))), 'echarts is defined on the nodes page');
+
+    const drew = [];
+    for (const name of ['dashboard', 'stats', 'graph']) {
+      await page.goto('about:blank');
+      await open(page, name, 500);
+      const drawn = (want) => [...document.querySelectorAll(`[data-page="${want}"] canvas`)]
+        .some((canvas) => canvas.width > 0);
+      let ok = false;
+      for (let tries = 0; tries < 60 && !ok; tries += 1) {
+        ok = await page.evaluate(drawn, name);
+        if (!ok) await page.waitForTimeout(500);
+      }
+      must(ok, `a cold load of #${name} drew no chart`);
+      drew.push(name);
+      // Let the page's other requests land before leaving it, or the
+      // navigation aborts them and each one is counted as an error.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    }
+    // The node page draws its charts once its panels arrive.
+    const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
+    must(nodes.length > 0, 'no node to open');
+    await page.goto('about:blank');
+    await open(page, `node/${encodeURIComponent(nodes[0].node_id)}`, 500);
+    must(await waitFor(page, () => [...document.querySelectorAll('[data-page="node"] canvas')]
+      .some((canvas) => canvas.width > 0), 30000), `a cold load of node ${nodes[0].node_id} drew no chart`);
+    drew.push('node');
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+    await page.goto('about:blank');
+    await open(page, 'config', 500);
+    must(await waitFor(page, () => Boolean(window.SonoranConfigCheck && window.jsyaml && window.protobuf), 30000),
+      'the config page did not load its checker and libraries');
+    must(await waitFor(page, () => document.querySelector('[data-page="config"]').innerText.trim().length > 0, 10000),
+      'the config page is empty');
+    return `nodes fetched neither; cold charts on ${drew.join(', ')}; config loaded its checker`;
   });
 
   await journey(context, 'a traceroute opens', async (page) => {
@@ -2411,13 +2490,22 @@ async function main() {
      * exact wire value, and neither is on the screen until it is asked
      * for. A `title` tooltip could pass neither check on a touch
      * screen.
+     *
+     * Since #273 a phone reads the firehose as cards, and Uploads is one
+     * of the three columns a card leaves to the packet page, so its
+     * heading is not on a phone's screen. The sentence checked here is
+     * "What it said", which a card does show; the Uploads sentence is
+     * the same code on the same kind of heading.
      */
     await open(page, 'firehose', 4500);
+    // The fixed pause alone lost to a slow first query on a loaded
+    // machine, one run in two here: wait for the headings' controls.
+    await waitFor(page, () => document.querySelectorAll('[data-page="firehose"] .hint-open').length > 0, 30000);
     const table = page.locator('[data-page="firehose"] .table-wrap').first();
     const buttons = table.locator('.hint-open');
     must((await buttons.count()) > 0, 'no column carries a hint control');
-    const uploads = table.locator('th[data-label="Uploads"] .hint-open');
-    must((await uploads.count()) > 0, 'the Uploads column has no hint control');
+    const uploads = table.locator('th[data-label="What it said"] .hint-open');
+    must((await uploads.count()) > 0, 'the What it said column has no hint control');
     must((await uploads.getAttribute('aria-expanded')) === 'false', 'the hint starts open');
     const panel = page.locator(`#${await uploads.getAttribute('aria-controls')}`);
     must(!(await panel.isVisible()), 'the sentence is on the screen before it is asked for');
@@ -2426,8 +2514,8 @@ async function main() {
     await page.waitForTimeout(250);
     must((await uploads.getAttribute('aria-expanded')) === 'true', 'tapping did not open it');
     must(await panel.isVisible(), 'the panel did not appear');
-    must(/uploaded this packet to MQTT/.test(await panel.innerText()),
-      'the Uploads sentence is not in the panel');
+    must(/A short line from the decoded packet/.test(await panel.innerText()),
+      'the What it said sentence is not in the panel');
     // It must fit the screen, which is what `.table-wrap` would have
     // taken away from a panel drawn inside the table.
     const box = await panel.boundingBox();
@@ -2726,6 +2814,279 @@ async function main() {
     return 'every control is 16 px or larger';
   });
 
+  await journey(phone, 'a finger can hit a map dot (#266)', async (page) => {
+    /*
+     * A dot was 5 to 13 px across and the canvas counted only the dot.
+     * Two test dots are put on the live map 16 px apart, well away from
+     * the real ones, so the result does not depend on the seed. Each
+     * tap is a real touch through `page.touchscreen`, and a hit is read
+     * off the marker's own `click` event, which is what opens a node.
+     */
+    await open(page, 'map', 3000);
+    // The first draw fits the view to the nodes. Measuring before it
+    // lands would put the taps where the test dots used to be.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 20000), 'the map drew no nodes');
+    await page.waitForTimeout(500);
+    const at = await page.evaluate(() => {
+      const { map, nodes } = window.SonoranMap;
+      // No live refresh in the middle of the taps.
+      document.querySelector('[data-page="map"] [data-live]').setAttribute('aria-pressed', 'false');
+      map.setZoom(6, { animate: false });
+      map.getContainer().scrollIntoView({ block: 'start' });
+      const box = map.getContainer().getBoundingClientRect();
+      // A spot in the map's upper left, away from Arizona's dots.
+      const middle = L.point(box.width * 0.25, Math.min(box.height, window.innerHeight - box.top) * 0.3);
+      window.__e2eHits = [];
+      const make = (name, dx) => {
+        const marker = L.circleMarker(map.containerPointToLatLng(middle.add([dx, 0])), { radius: 2.5 });
+        marker.on('click', () => window.__e2eHits.push(name));
+        marker.addTo(nodes);
+        return name;
+      };
+      make('left', 0);
+      make('right', 16);
+      return {
+        x: box.left + middle.x,
+        y: box.top + middle.y,
+        tolerance: map.getRenderer(nodes.getLayers()[0]).options.tolerance,
+      };
+    });
+    must(at.tolerance >= 19.5, `the canvas tolerance is ${at.tolerance}, so a 2.5 px dot is a ${2 * (2.5 + at.tolerance)} px target`);
+    await page.waitForTimeout(300);
+    const tap = async (dx, dy) => {
+      await page.evaluate(() => { window.__e2eHits = []; });
+      await page.touchscreen.tap(at.x + dx, at.y + dy);
+      // Well past the double-tap window, so no two taps read as one.
+      await page.waitForTimeout(800);
+      return page.evaluate(() => window.__e2eHits.slice());
+    };
+    // 18 px above the left dot: outside the dot, inside the target.
+    const near = await tap(0, -18);
+    must(near.join() === 'left', `a tap 18 px from a dot hit ${JSON.stringify(near)}`);
+    // Square on the right dot, whose neighbour's target also reaches.
+    const onRight = await tap(16, 0);
+    must(onRight.join() === 'right', `a tap on the right dot hit ${JSON.stringify(onRight)}, not the dot under the finger`);
+    const onLeft = await tap(0, 0);
+    must(onLeft.join() === 'left', `a tap on the left dot hit ${JSON.stringify(onLeft)}`);
+    // The negative control, in the same page: far outside any target.
+    const far = await tap(0, -40);
+    must(far.length === 0, `a tap 40 px from any dot still hit ${JSON.stringify(far)}`);
+    return `tolerance ${at.tolerance} px, a 2.5 px dot is a ${2 * (2.5 + at.tolerance)} px target; `
+      + 'nearest dot wins a shared tap; 40 px away hits nothing';
+  });
+
+  await journey(phone, 'the firehose says how many packets arrived above you (#280)', async (page) => {
+    /*
+     * New packets are put in through a route, so the count is known
+     * without writing to a shared database. `render('firehose')` is the
+     * call the Live timer makes; Live is switched off so no timer poll
+     * lands in the middle.
+     */
+    let extra = 0;
+    await page.route(/\/api\/packets\?/, async (route) => {
+      const response = await route.fetch();
+      const rows = await response.json();
+      if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+      const made = [];
+      for (let n = extra; n > 0; n -= 1) {
+        const [node] = rows[0].packet_key.split(':');
+        made.push({ ...rows[0], packet_key: `${node}:${990000000 + n}`, first_seen_at: new Date().toISOString() });
+      }
+      return route.fulfill({ response, json: [...made, ...rows].slice(0, rows.length) });
+    });
+    await open(page, 'firehose', 1000);
+    must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
+      'the firehose drew too few rows to scroll');
+    await page.evaluate(() => document.querySelector('[data-page="firehose"] [data-live]').setAttribute('aria-pressed', 'false'));
+    const poll = () => page.evaluate(async () => {
+      await render('firehose');
+    });
+    const pill = () => page.evaluate(() => {
+      const one = document.querySelector('[data-page="firehose"] .new-pill');
+      if (!one || one.hidden) return null;
+      const box = one.getBoundingClientRect();
+      return { text: one.textContent, top: Math.round(box.top), height: Math.round(box.height) };
+    });
+
+    // The control: at the top, new packets are in plain sight.
+    extra = 2;
+    await poll();
+    must((await pill()) === null, 'the pill showed for a reader already at the newest packets');
+
+    // Two screens down.
+    await page.evaluate(() => window.scrollTo(0, window.innerHeight * 2.5));
+    await page.waitForTimeout(300);
+    const y0 = await page.evaluate(() => window.scrollY);
+    const row0 = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-firehose-table] tbody tr')];
+      const seen = rows.find((row) => row.getBoundingClientRect().top > 0);
+      return { key: seen.dataset.rowKey, top: Math.round(seen.getBoundingClientRect().top) };
+    });
+    extra = 5;
+    await poll();
+    let shown = await pill();
+    must(shown && /^3 new/.test(shown.text), `after 3 new packets the pill says ${JSON.stringify(shown)}`);
+    must(shown.top >= 0 && shown.top < 80 && shown.height >= 44, `the pill is not at the top of the screen: ${JSON.stringify(shown)}`);
+    const held = await page.evaluate((key) => Math.round(
+      document.querySelector(`[data-firehose-table] tbody tr[data-row-key="${key}"]`).getBoundingClientRect().top), row0.key);
+    must(Math.abs(held - row0.top) <= 2, `the row being read moved from ${row0.top} to ${held} px`);
+    extra = 6;
+    await poll();
+    shown = await pill();
+    must(shown && /^4 new/.test(shown.text), `after one more the pill says ${JSON.stringify(shown)}`);
+
+    await page.click('[data-page="firehose"] .new-pill');
+    await page.waitForTimeout(1200);
+    const after = await page.evaluate(() => {
+      const top = document.querySelector('[data-firehose-table] tbody tr').getBoundingClientRect().top;
+      return { y: window.scrollY, first: Math.round(top), inView: top >= -1 && top < window.innerHeight };
+    });
+    must(after.y < y0 && after.inView, `the pill did not go back to the newest: ${JSON.stringify(after)}`);
+    must((await pill()) === null, 'the pill stayed after going back to the top');
+    return `pill "4 new" at y ${shown.top}, reader's row held to ${Math.abs(held - row0.top)} px, tap went back`;
+  });
+
+  await journey(phone, 'a node opens in a sheet on a phone, and survives live refreshes (#281)', async (page) => {
+    /*
+     * Below 40rem a tap on a node opens its summary in a sheet at the
+     * foot of the screen instead of a bubble. The node list goes through
+     * a route, as in the bubble journey, so a node can vanish without
+     * writing to a shared database.
+     */
+    const edits = { drop: null };
+    await page.route(/\/api\/map\/nodes(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      let rows = await response.json();
+      if (edits.drop) rows = rows.filter((row) => row.node_id !== edits.drop);
+      return route.fulfill({ response, json: rows });
+    });
+    await open(page, 'map', 3000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size >= 2, 20000), 'the map drew fewer than two nodes');
+    // No timer poll in the middle; the refreshes below are forced.
+    await page.evaluate(() => document.querySelector('[data-page="map"] [data-live]').setAttribute('aria-pressed', 'false'));
+    const at = await page.evaluate(() => {
+      const { map, marks } = window.SonoranMap;
+      const [id, entry] = [...marks.entries()][0];
+      map.setView(entry.marker.getLatLng(), 12, { animate: false });
+      map.getContainer().scrollIntoView({ block: 'start' });
+      const point = map.latLngToContainerPoint(entry.marker.getLatLng());
+      const box = map.getContainer().getBoundingClientRect();
+      return { id, x: box.left + point.x, y: box.top + point.y, name: entry.row.display_name || id };
+    });
+    await page.waitForTimeout(300);
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    const SHEET = () => {
+      const sheet = document.querySelector('.node-sheet');
+      if (!sheet || sheet.hidden) return null;
+      const close = sheet.querySelector('.node-sheet-close').getBoundingClientRect();
+      const box = sheet.getBoundingClientRect();
+      return {
+        node: window.SonoranSheet.current(),
+        text: sheet.textContent,
+        height: Math.round(box.height),
+        top: Math.round(box.top),
+        close: [Math.round(close.width), Math.round(close.height)],
+        state: sheet.dataset.state,
+        bubble: Boolean(document.querySelector('[data-page="map"] .leaflet-popup')),
+      };
+    };
+    let sheet = await page.evaluate(SHEET);
+    must(sheet, 'a tap on a node opened no sheet');
+    must(sheet.node === at.id && sheet.text.includes(at.name), `the sheet shows ${sheet.node}, the tap was on ${at.id}`);
+    must(!sheet.bubble, 'a bubble opened on the map as well as the sheet');
+    must(/Open node detail/.test(sheet.text), 'the sheet has no way to the node page');
+    must(sheet.close[0] >= 44 && sheet.close[1] >= 44, `the close button is ${sheet.close.join(' x ')}`);
+    const viewport = page.viewportSize();
+    must(sheet.height <= viewport.height / 2 + 1, `the sheet is ${sheet.height} px of a ${viewport.height} px screen`);
+    const peek = sheet.height;
+
+    // Non-modal: the map above the sheet is still the map, and still pans.
+    const free = await page.evaluate((top) => {
+      const { map } = window.SonoranMap;
+      const box = map.getContainer().getBoundingClientRect();
+      const y = Math.max(box.top + 20, Math.min(top - 40, box.bottom - 20));
+      const hit = document.elementFromPoint(box.left + box.width / 2, y);
+      return { onMap: Boolean(hit && map.getContainer().contains(hit)), dragging: map.dragging.enabled() };
+    }, sheet.top);
+    must(free.onMap && free.dragging, `the sheet blocks the map: ${JSON.stringify(free)}`);
+
+    // Two live refreshes through the call the timer makes.
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      await page.evaluate(async () => {
+        while (loading) await new Promise((done) => setTimeout(done, 100));
+        nodeCache.at = 0;
+        await render('map');
+      });
+    }
+    sheet = await page.evaluate(SHEET);
+    must(sheet && sheet.node === at.id, 'the sheet closed when the map refreshed');
+
+    // The grabber opens it to half height when there is more to show.
+    const more = await page.evaluate(() => !document.querySelector('.node-sheet-grab').hidden);
+    if (more) {
+      await page.click('.node-sheet-grab');
+      const half = await page.evaluate(SHEET);
+      must(half.state === 'half' && half.height > peek, `the grabber did not open it further (${peek} -> ${half.height})`);
+    }
+
+    // Back takes the sheet away and leaves the reader on the map.
+    await page.goBack();
+    await page.waitForTimeout(500);
+    must((await page.evaluate(SHEET)) === null, 'Back did not close the sheet');
+    must(/#map$/.test(page.url()), `Back left the map: ${page.url()}`);
+
+    // The close button, and a node that goes away takes its sheet with it.
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    must(await page.evaluate(SHEET), 'a second tap opened no sheet');
+    await page.click('.node-sheet-close');
+    await page.waitForTimeout(300);
+    must((await page.evaluate(SHEET)) === null, 'the close button did not close the sheet');
+    must(await page.evaluate(() => !(history.state && history.state.sonoranSheet)), 'closing left its history entry behind');
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    edits.drop = at.id;
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
+      nodeCache.at = 0;
+      await render('map');
+    });
+    must((await page.evaluate(SHEET)) === null, 'the sheet of a node that went away is still open');
+    return `sheet ${peek} px high, close ${sheet.close.join('x')}, map free above it; `
+      + `held through 2 refreshes${more ? ', grabber opens it further' : ''}; Back, close and a gone node all close it`;
+  });
+
+  await journey(phone, 'the map page opens at its top (#270)', async (page) => {
+    /*
+     * The map's box was `<div id="map">`, and `#map` is also the page's
+     * address, so the browser scrolled to the box on every load: 277 px
+     * at 390 px in WebKit, with the Live control and the other six map
+     * controls above the top of the screen. `about:blank` between widths
+     * so each `goto` is a real load and not a same-document hash change,
+     * which does not scroll to a fragment the same way.
+     */
+    const out = [];
+    for (const width of TABLE_WIDTHS) {
+      // Let the last load's requests land first, or leaving aborts them
+      // and each one is counted as an error.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await page.goto('about:blank');
+      await page.setViewportSize({ width, height: 800 });
+      await open(page, 'map', 2500);
+      const got = await page.evaluate(() => ({
+        y: Math.round(window.scrollY),
+        live: Math.round(document.querySelector('[data-page="map"] [data-live]').getBoundingClientRect().top),
+      }));
+      must(got.y === 0, `at ${width} px the map page scrolled itself ${got.y} px on load`);
+      must(got.live >= 0, `at ${width} px the Live control starts ${-got.live} px above the screen`);
+      out.push(`${width}:${got.y}`);
+    }
+    return `scrollY after load ${out.join(' ')}`;
+  });
+
   await phone.close();
 
   /*
@@ -2781,6 +3142,94 @@ async function main() {
     });
     await themed.close();
   }
+
+  /*
+   * #284: charts and map zooms move on a canvas and a transform, where
+   * the CSS reduced-motion rule does not reach. Read in a context that
+   * asks for less motion, and in one that does not, as the control.
+   */
+  for (const motion of ['reduce', 'no-preference']) {
+    const moving = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: motion });
+    await journey(moving, `charts and map zoom follow reduced motion (${motion}) (#284)`, async (page) => {
+      const want = motion === 'reduce';
+      await open(page, 'stats', 1000);
+      must(await waitFor(page, () => document.querySelectorAll('[data-page="stats"] canvas').length > 0, 30000),
+        'statistics drew no chart');
+      // `charts` inside the page is app.js's own map of instances.
+      const animations = await page.evaluate(() => [...charts.values()]
+        .filter((one) => !one.isDisposed())
+        .map((one) => one.getOption().animation));
+      must(animations.length > 0, 'no chart instance to read');
+      // ECharts' own default reads back as 'auto', which animates.
+      must(animations.every((on) => (on === false) === want),
+        `chart animation ${JSON.stringify(animations)}, expected ${want ? 'false' : 'on'}`);
+      // Let the page's requests land before leaving, or they abort as errors.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await page.goto('about:blank');
+      await open(page, 'map', 2500);
+      const map = await page.evaluate(() => {
+        const { options } = window.SonoranMap.map;
+        return { zoom: options.zoomAnimation, fade: options.fadeAnimation, marker: options.markerZoomAnimation };
+      });
+      must(map.zoom === !want && map.fade === !want && map.marker === !want,
+        `map animation ${JSON.stringify(map)}, expected ${!want}`);
+      return `${animations.length} charts animation ${JSON.stringify(animations[0])}; map zoom/fade/marker ${!want}`;
+    });
+    await moving.close();
+  }
+
+  await journey(context, 'more contrast reaches the page (#285)', async (page) => {
+    /*
+     * Playwright 1.49 has no `contrast` option, so the media feature is
+     * set through the DevTools protocol. The same page is read before
+     * and after, so the "before" is the control.
+     */
+    await open(page, 'nodes', 3000);
+    await waitFor(page, () => Boolean(document.querySelector('[data-page="nodes"] th')), 20000);
+    const read = () => page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      const th = document.querySelector('[data-page="nodes"] th');
+      return {
+        more: matchMedia('(prefers-contrast: more)').matches,
+        muted: root.getPropertyValue('--muted').trim(),
+        text: getComputedStyle(document.body).color,
+        th: th ? getComputedStyle(th).color : null,
+      };
+    });
+    const before = await read();
+    must(!before.more && before.th && before.th !== before.text, `the control is not ordinary: ${JSON.stringify(before)}`);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-contrast', value: 'more' }] });
+    const after = await read();
+    must(after.more, 'the browser did not take prefers-contrast: more');
+    must(after.muted !== before.muted, `--muted stayed ${after.muted}`);
+    must(after.th === after.text, `a table heading is ${after.th}, the body text is ${after.text}`);
+    await cdp.send('Emulation.setEmulatedMedia', { features: [] });
+
+    // Forced colours: a legend swatch keeps the colour it stands for.
+    // The nodes page's requests land first, or leaving aborts them.
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await page.goto('about:blank');
+    await page.emulateMedia({ forcedColors: 'active' });
+    await open(page, 'map', 3000);
+    await waitFor(page, () => Boolean(document.querySelector('[data-map-legend] .legend-key .swatch')), 20000);
+    const swatch = await page.evaluate(() => {
+      const one = document.querySelector('[data-map-legend] .legend-key .swatch');
+      if (!one) return null;
+      const probe = document.createElement('i');
+      // The probe opts out as well, or its own colour is forced.
+      probe.style.forcedColorAdjust = 'none';
+      probe.style.color = one.style.background;
+      document.body.append(probe);
+      const meant = getComputedStyle(probe).color;
+      probe.remove();
+      return { forced: matchMedia('(forced-colors: active)').matches, meant, drawn: getComputedStyle(one).backgroundColor };
+    });
+    must(swatch, 'the map legend drew no swatch');
+    must(swatch.forced, 'the browser did not take forced-colors: active');
+    must(swatch.drawn === swatch.meant, `under forced colours a swatch drew ${swatch.drawn}, it stands for ${swatch.meant}`);
+    return `--muted ${before.muted} -> ${after.muted}; th takes the text colour; forced swatch ${swatch.drawn}`;
+  });
 
   /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
@@ -2942,6 +3391,60 @@ async function main() {
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
     return 'all 14 pages, no sideways document scroll';
+  });
+  await journey(narrow, 'the firehose reads as cards on a phone (#273)', async (page) => {
+    /*
+     * Eight columns hid 64% of the firehose sideways on a phone. Below
+     * 40rem each packet is two lines: time, from, to; then type and what
+     * it said. Measured with letter-spacing added, because the CI
+     * runner's fonts are wider than a Mac's.
+     */
+    await open(page, 'firehose', 3000);
+    must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 0, 20000),
+      'the firehose drew no rows');
+    await page.addStyleTag({ content: '[data-firehose-table] * { letter-spacing: .05em !important; }' });
+    const out = [];
+    for (const width of [320, 390, ...TABLE_WIDTHS.slice(1)]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(400);
+      const got = await page.evaluate(() => {
+        const wrap = document.querySelector('[data-firehose-table]');
+        const rows = [...wrap.querySelectorAll('tbody tr')];
+        const box = wrap.getBoundingClientRect();
+        const bad = [];
+        for (const row of rows) {
+          const cell = (n) => row.children[n].getBoundingClientRect();
+          const [time, from, type, what] = [cell(0), cell(1), cell(3), cell(4)];
+          for (const [name, r] of [['time', time], ['from', from], ['type', type], ['what', what]]) {
+            if (!r.width || r.right > box.right + 1 || r.left < box.left - 1) bad.push(name);
+          }
+          if (!(type.top >= time.bottom - 1)) bad.push('one line');
+        }
+        const heads = [...wrap.querySelectorAll('thead th')];
+        return {
+          scroll: wrap.scrollWidth,
+          client: wrap.clientWidth,
+          head: document.querySelector('[data-firehose-table] thead').getBoundingClientRect().height,
+          // The headings a reader can see, and whether each fits the panel.
+          shown: heads.filter((th) => th.getBoundingClientRect().width > 0).map((th) => th.dataset.label),
+          headsFit: heads.every((th) => th.getBoundingClientRect().right <= box.right + 1),
+          rows: rows.length,
+          bad: [...new Set(bad)],
+        };
+      });
+      if (width <= 640) {
+        must(got.scroll <= got.client + 1, `at ${width} px the firehose scrolls sideways: ${got.scroll} in ${got.client}`);
+        must(got.bad.length === 0, `at ${width} px a card is wrong: ${got.bad.join(', ')}`);
+        // The headings stay, as one line of words that carries the hints.
+        must(got.shown.join() === 'Time,From,To,Type,What it said',
+          `at ${width} px the headings shown are ${got.shown.join(', ')}`);
+        must(got.headsFit, `at ${width} px a heading runs out of the panel`);
+      } else {
+        must(got.head > 10, `at ${width} px the firehose is not a table any more`);
+      }
+      out.push(`${width}:${got.scroll}/${got.client}`);
+    }
+    return `cards to 640 px, a table above; ${out.join(' ')}`;
   });
   await narrow.close();
 

@@ -788,6 +788,83 @@ function messageItem(message, options = {}) {
     reactionChips(message.reactions, message.channel));
 }
 
+/*
+ * Load a set of scripts the page holds back until it needs them (#277).
+ *
+ * ECharts was a third of every page's download (327 kB of 885 kB
+ * gzipped), and every script was synchronous, so Nodes and Chat, which
+ * draw no chart, waited for it before they showed a row. The config
+ * checker's libraries were the same on every page but one.
+ *
+ * index.html keeps each set inside `<template data-lazy-scripts="…">`.
+ * A script inside a template never runs, and the server still writes
+ * the asset version into its address. This copies each one into the
+ * page: classic scripts first, with `async = false` so they run in
+ * their written order while they download together, then any module
+ * after the last of them, because a module reads their globals. The
+ * integrity hash and `crossorigin` are copied as well.
+ *
+ * One promise per set, so a second caller waits on the same load. A
+ * failed load is forgotten, so the next visit tries again.
+ */
+const lazyScripts = new Map();
+
+function loadScript(from) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    for (const name of ['type', 'integrity', 'crossorigin']) {
+      if (from.hasAttribute(name)) script.setAttribute(name, from.getAttribute(name));
+    }
+    script.async = false;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`Could not load ${from.getAttribute('src')}`));
+    script.src = from.getAttribute('src');
+    document.body.append(script);
+  });
+}
+
+/*
+ * The router runs at the end of app.js, and the config template comes
+ * after app.js in the page, so on a reload of `#config` it has not been
+ * parsed yet. Found by the e2e: the set came back empty, resolved at
+ * once, and the page waited for a checker that was never fetched.
+ */
+const pageParsed = () => (document.readyState === 'loading'
+  ? new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+  : Promise.resolve());
+
+function loadScripts(name) {
+  if (lazyScripts.has(name)) return lazyScripts.get(name);
+  const loading = pageParsed()
+    .then(() => {
+      const template = document.querySelector(`template[data-lazy-scripts="${name}"]`);
+      if (!template) throw new Error(`No scripts are held back as "${name}"`);
+      const all = [...template.content.querySelectorAll('script[src]')];
+      const modules = all.filter((script) => script.type === 'module');
+      const classic = all.filter((script) => script.type !== 'module');
+      return Promise.all(classic.map(loadScript)).then(() => Promise.all(modules.map(loadScript)));
+    })
+    .catch((error) => {
+      lazyScripts.delete(name);
+      throw error;
+    });
+  lazyScripts.set(name, loading);
+  return loading;
+}
+
+/*
+ * The pages that draw an ECharts chart. `render` loads the library
+ * before it draws one of them. A page that starts drawing charts must
+ * be added here, or it throws "echarts is not defined" on a cold load;
+ * the e2e opens each of these cold and asserts a chart was drawn.
+ */
+const CHART_PAGES = new Set(['dashboard', 'graph', 'node', 'stats', 'planner', 'rf']);
+
+/** Resolves once `echarts` exists. Already there costs nothing. */
+function chartsReady() {
+  return window.echarts ? Promise.resolve() : loadScripts('charts');
+}
+
 /* ECharts instances are kept so a redraw does not leak canvases. */
 const charts = new Map();
 /*
@@ -888,8 +965,18 @@ function widenGraphRoam(instance) {
   return true;
 }
 
+/*
+ * `chart` turns off ECharts' entry and update animation when the reader
+ * asks for less motion (#284). The CSS already honours
+ * `prefers-reduced-motion`, but a chart animates on its canvas, where no
+ * CSS reaches. It is set in `chart` rather than only in CHART_BASE so
+ * that every chart gets it, the ones that build their option without
+ * CHART_BASE included. The stored option carries it too, so a
+ * full-screen redraw stays still.
+ */
 function chart(target, option) {
   if (!target) return null;
+  if (REDUCED_MOTION.matches) option = { ...option, animation: false };
   // The box collapses while it holds a sentence instead of a chart, and
   // ECharts measures the box when it starts, so the height comes back
   // before the instance is made. See `chartEmpty`.
@@ -1894,8 +1981,14 @@ function ensureMap() {
    * zoom, which on a wide short box left Arizona filling under a third
    * of the width -- the same complaint the integer `mapZoom` produced.
    * A quarter step costs nothing and lets the fit land where it means.
+   *
+   * The box is `#live-map`, not `#map` (#270). `#map` is also the page's
+   * address, and a browser that loads an address with a fragment scrolls
+   * to the element whose id is that fragment. So every visit to the map
+   * page scrolled the page down to the map box: 235 px on an iPhone,
+   * with every map control above the top of the screen.
    */
-  const map = L.map('map', { preferCanvas: true, worldCopyJump: true, zoomSnap: 0.25 });
+  const map = L.map('live-map', { preferCanvas: true, worldCopyJump: true, zoomSnap: 0.25 });
   const home = homeBounds();
   if (home) {
     // The deployment's own statement of what it is about, fitted to
@@ -2016,14 +2109,17 @@ function drawMapNodes(rows) {
       continue;
     }
     const entry = { marker: L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom)), row };
-    entry.marker.bindPopup(() => mapNodePopup(entry.row));
+    // A bubble for a mouse, a sheet at the foot of a phone (#281).
+    SonoranSheet.bind(entry.marker, () => mapNodePopup(entry.row), row.node_id);
     entry.marker.addTo(mapState.nodes);
     marks.set(row.node_id, entry);
   }
   for (const [nodeId, entry] of marks) {
     if (seen.has(nodeId)) continue;
     // `removeLayer` fires `remove`, which closes this marker's popup.
+    // The phone's sheet is outside the map, so it is told separately.
     mapState.nodes.removeLayer(entry.marker);
+    SonoranSheet.closeIf(nodeId);
     marks.delete(nodeId);
   }
   return bounds;
@@ -3990,6 +4086,8 @@ const configReady = new Promise((resolve) => {
 });
 
 PAGES.config = async (page) => {
+  // The checker and its libraries are fetched on the first visit (#277).
+  await loadScripts('config');
   await configReady;
   await window.SonoranConfigCheck.show(page);
 };
@@ -8557,6 +8655,84 @@ async function fillFirehoseTypes(page) {
     .map((row) => el('option', { value: portnumLabel(row.name || row.portnum) })));
 }
 
+/*
+ * "3 new ↑": what arrived above a reader who has scrolled down (#280).
+ *
+ * The firehose is newest first and refreshes every 15 s. A reader two
+ * screens down keeps their place, because the browser anchors the
+ * scroll when rows are put in above them (see `redrawLiveTable`), and so
+ * they cannot see that anything arrived. The pill counts the packets put
+ * in above them since they scrolled away, and a tap goes back to the
+ * newest.
+ *
+ * It counts only what a poll ADDED to a page already drawn. A first draw,
+ * a new filter and a return to the page all change the address, and a
+ * change of address starts the count again, so a filter never reads as
+ * 150 new packets.
+ *
+ * Pull to refresh was considered and is not recommended by the review
+ * (§4.5): the page already refreshes itself.
+ */
+const firehoseNew = { count: 0, pill: null, address: null };
+
+/** True when the newest row is above the top of the screen. */
+function firehoseAway(target) {
+  const first = target && target.querySelector('tbody tr');
+  return Boolean(first) && first.getBoundingClientRect().bottom < 0;
+}
+
+function drawFirehosePill() {
+  const pill = firehoseNew.pill;
+  if (!pill) return;
+  pill.hidden = firehoseNew.count === 0;
+  const n = count(firehoseNew.count);
+  pill.textContent = `${n} new ↑`;
+  pill.setAttribute('aria-label', `${n} new packet${firehoseNew.count === 1 ? '' : 's'}. Go to the newest.`);
+}
+
+function resetFirehosePill() {
+  firehoseNew.count = 0;
+  drawFirehosePill();
+}
+
+/*
+ * The pill sits in a sticky holder of no height, so showing it moves no
+ * row: a pill that pushed the table down would move the very row the
+ * reader was reading.
+ */
+function firehosePill(target) {
+  if (firehoseNew.pill && firehoseNew.pill.isConnected) return firehoseNew.pill;
+  const pill = el('button', { type: 'button', class: 'new-pill', hidden: true });
+  pill.addEventListener('click', () => {
+    resetFirehosePill();
+    const behavior = REDUCED_MOTION.matches ? 'auto' : 'smooth';
+    target.scrollIntoView({ block: 'start', behavior });
+  });
+  target.before(el('div', { class: 'new-pill-anchor' }, pill));
+  firehoseNew.pill = pill;
+  window.addEventListener('scroll', () => {
+    if (firehoseNew.count && !firehoseAway(target)) resetFirehosePill();
+  }, { passive: true });
+  window.addEventListener('hashchange', () => {
+    firehoseNew.address = null;
+    resetFirehosePill();
+  });
+  return pill;
+}
+
+/** Count what the poll put in above the reader, from the keys before it. */
+function countFirehoseNew(target, before, rows) {
+  firehosePill(target);
+  // The first draw at an address is the page, not news. The rows left
+  // from another filter or another visit are not the ones it replaces.
+  const address = location.hash;
+  const moved = address !== firehoseNew.address;
+  firehoseNew.address = address;
+  if (moved || !before.size || !firehoseAway(target)) return resetFirehosePill();
+  firehoseNew.count += rows.filter((row) => !before.has(String(row.packet_key))).length;
+  drawFirehosePill();
+}
+
 PAGES.firehose = async (page) => {
   fillFirehoseTypes(page);
   /*
@@ -8637,6 +8813,8 @@ PAGES.firehose = async (page) => {
    */
   const packetHref = (row) =>
     `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
+  // The rows on screen before this poll, for the "N new" pill (#280).
+  const before = new Set(Array.from(target.querySelectorAll('tbody tr'), (row) => row.dataset.rowKey));
   redrawLiveTable(target, rows, (row) => row.packet_key, () => table([
     /*
      * Time first, and it IS the link (Will, 2026-09-26).
@@ -8699,6 +8877,7 @@ PAGES.firehose = async (page) => {
       cell: (row) => count(row.seen_count),
     },
   ], rows, nothing, { rowHref: packetHref }));
+  countFirehoseNew(target, before, rows);
 };
 
 /* --- Traceroutes ------------------------------------------------ */
@@ -10129,6 +10308,7 @@ async function render(name) {
   drawPresetScope(name);
   loading = true;
   try {
+    if (CHART_PAGES.has(name)) await chartsReady();
     await PAGES[name](page);
     setStatus('', `Updated ${clock(new Date())}`);
   } catch (error) {

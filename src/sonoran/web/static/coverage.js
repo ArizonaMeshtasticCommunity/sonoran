@@ -341,12 +341,12 @@
 
     for (const node of shown) {
       if (node.lat == null || node.lon == null) continue;
-      L.circleMarker([node.lat, node.lon], nodeStyle(node))
-        /* Built on open, not on draw. Leaflet calls this when the popup
-           opens, so a map of nodes no longer pays for a popup and a
-           listener per node that nobody clicked. */
-        .bindPopup(() => nodePopup(node))
-        .addTo(state.nodes);
+      const marker = L.circleMarker([node.lat, node.lon], nodeStyle(node));
+      /* Built on open, not on draw. Leaflet calls this when the popup
+         opens, so a map of nodes no longer pays for a popup and a
+         listener per node that nobody clicked. On a phone the same
+         summary opens in the sheet at the foot of the screen (#281). */
+      SonoranSheet.bind(marker, () => nodePopup(node), node.node_id).addTo(state.nodes);
     }
     if (!map.hasLayer(state.nodes)) state.nodes.addTo(map);
   }

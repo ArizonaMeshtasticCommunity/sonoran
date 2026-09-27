@@ -33,7 +33,7 @@ SHEETS = {name: (STATIC / name).read_text(encoding="utf-8") for name in ("app.cs
 
 # Every map container the pages mount a Leaflet map into. `#i-map` is an
 # SVG icon symbol, not a map, and is deliberately not here.
-MAPS = ("#map", "#planner-map", "#coverage-map", "#rf-map", "#gaps-map")
+MAPS = ("#live-map", "#planner-map", "#coverage-map", "#rf-map", "#gaps-map")
 
 
 def _height_rule(selector: str) -> str:
