@@ -3543,6 +3543,42 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 }
 
 /*
+ * The fixed-size controls, at finger size on a touch screen (#268).
+ *
+ * The general 44 px rule (`input, select, button`, #267) is an element
+ * rule, so every control below out-specifies it with a size of its own,
+ * and Leaflet draws anchors rather than buttons. Measured on an iPhone
+ * 14 in the mobile review (section 2.3): the zoom buttons 30 x 30 on five
+ * pages, the popup close 24 x 24, Full screen 30 tall, the map Key 29
+ * tall, Watch mode 30 wide, the reaction pill 24 tall, the menu button
+ * 40 wide and the drawer's Settings link 37 tall. 2.75 rem is 44 px,
+ * Apple's figure; see the note on the 60rem block.
+ *
+ * `(pointer: coarse)` and not a width, for the reason #267 gives: an iPad
+ * in landscape is desktop-wide and touched with a finger. A mouse keeps
+ * every size it had.
+ *
+ * It sits here, after every rule it overrides, so that the order and not
+ * a raised specificity decides it.
+ */
+@media (pointer: coarse) {
+  .leaflet-touch .leaflet-bar a {
+    width: 2.75rem; height: 2.75rem; line-height: 2.75rem;
+  }
+  .leaflet-container a.leaflet-popup-close-button {
+    width: 2.75rem; height: 2.75rem; line-height: 2.75rem;
+  }
+  .watch-control button { width: 2.75rem; height: 2.75rem; }
+  .chart-expand { min-height: 2.75rem; }
+  /* Padding rather than flex: a flex `summary` loses its disclosure
+     triangle, which is the only sign the Key opens. */
+  .map-key summary { min-height: 2.75rem; padding-block: .75rem; box-sizing: border-box; }
+  .reaction > summary { min-height: 2.75rem; }
+  .nav-toggle { min-width: 2.75rem; justify-content: center; }
+  .menu-settings-link { min-height: 2.75rem; }
+}
+
+/*
  * The Filters button, carrying how many are in force.
  *
  * A number on the control rather than a sentence beside the table, so the

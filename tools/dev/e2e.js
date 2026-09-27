@@ -1582,6 +1582,54 @@ async function main() {
     return `${links} links + settings in the footer, menu closes on choosing`;
   });
 
+  await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
+    /*
+     * Each of these has a size of its own, so the general 44 px rule for
+     * buttons (#267) never reached it. Measured one by one, on the page
+     * where it lives, because a missing control would otherwise pass as
+     * "nothing too small".
+     */
+    const measure = (selectors) => page.evaluate((list) => list.map((selector) => {
+      const node = [...document.querySelectorAll(selector)]
+        .find((item) => item.getBoundingClientRect().width > 0);
+      if (!node) return { selector, missing: true };
+      const box = node.getBoundingClientRect();
+      return { selector, width: Math.round(box.width), height: Math.round(box.height) };
+    }), selectors);
+    const seen = [];
+    await open(page, 'dashboard', 1500);
+    await waitFor(page, () => document.querySelector('.chart-expand') && document.querySelector('.reaction > summary'), 20000);
+    seen.push(...await measure(['[data-nav-toggle]', '.page.active .chart-expand', '.page.active .reaction > summary']));
+    await page.locator('[data-nav-toggle]').click();
+    await page.waitForTimeout(250);
+    seen.push(...await measure(['.menu-settings-link']));
+    await open(page, 'map', 4000);
+    seen.push(...await measure(['#map .leaflet-control-zoom-in', '#map .leaflet-control-zoom-out',
+      '.map-key summary', '.watch-control button']));
+    /*
+     * The popup close button exists only while a popup is open, and a
+     * dot is a few pixels on a canvas. The rule is what is under test, so
+     * a close button is put inside the live map's own container and
+     * measured there.
+     */
+    seen.push(...await page.evaluate(() => {
+      const probe = document.createElement('a');
+      probe.className = 'leaflet-popup-close-button';
+      probe.href = '#close';
+      probe.textContent = '×';
+      document.querySelector('#map').append(probe);
+      const box = probe.getBoundingClientRect();
+      probe.remove();
+      return [{ selector: 'popup close', width: Math.round(box.width), height: Math.round(box.height) }];
+    }));
+    const missing = seen.filter((item) => item.missing).map((item) => item.selector);
+    must(missing.length === 0, `not on the page to measure: ${missing.join(', ')}`);
+    const small = seen.filter((item) => item.width < 44 || item.height < 44)
+      .map((item) => `${item.selector} ${item.width}x${item.height}`);
+    must(small.length === 0, `under 44 px on a touch screen: ${small.join(', ')}`);
+    return `${seen.length} controls, all 44 px or more`;
+  });
+
   await journey(phone, 'a phone can read what a column means', async (page) => {
     /*
      * The same journey as before #99, walked over the control that
