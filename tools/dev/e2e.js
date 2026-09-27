@@ -3481,9 +3481,19 @@ async function main() {
     must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
       'the firehose drew too few rows to scroll');
     await page.evaluate(() => document.querySelector('[data-page="firehose"] [data-live]').setAttribute('aria-pressed', 'false'));
-    const poll = () => page.evaluate(async () => {
-      await render('firehose');
-    });
+    /*
+     * `render` does nothing while another render is loading, and the page
+     * opened with Live on: on a cold first load a timer render could still
+     * be running when Live was switched off. The forced poll then did
+     * nothing and that render's packets were counted instead -- "7 new"
+     * for 4, or the reader's row moved 59 px. Wait it out, both sides.
+     */
+    const idle = () => waitFor(page, () => !loading, 20000);
+    const poll = async () => {
+      await idle();
+      await page.evaluate(async () => { await render('firehose'); });
+      await idle();
+    };
     const pill = () => page.evaluate(() => {
       const one = document.querySelector('[data-page="firehose"] .new-pill');
       if (!one || one.hidden) return null;
