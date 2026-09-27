@@ -392,10 +392,35 @@ async function main() {
       const text = await page.evaluate(() => document.body.innerText);
       return [...text.matchAll(MEASURED)].map((hit) => hit[0]);
     };
+    /*
+     * A node that HAS something to convert, found by asking rather than by
+     * taking the first row.
+     *
+     * This used to click the nodes list's first link. That is whichever
+     * node was heard most recently, which is a fact about the traffic, not
+     * about the node: during one run it was a test node inserted with no
+     * altitude on purpose, and in another a node whose position is too
+     * coarse to measure from. The journey then reported "no measurement at
+     * all" -- a data accident read as a units regression. So it asks the
+     * API for a node with a usable position and an altitude, and says so
+     * when there is none rather than failing on the wrong question.
+     */
+    // The site is loaded first so these are same-origin requests. From
+    // about:blank a fetch has no base to resolve against, and an absolute
+    // one comes from origin `null` and is refused by CORS.
+    await open(page, 'dashboard', 1500);
+    const nodeId = await page.evaluate(async (base) => {
+      const list = await (await fetch(`${base}/api/nodes?limit=200`)).json();
+      for (const row of list.filter((n) => n.has_position)) {
+        const detail = await (await fetch(`${base}/api/nodes/${encodeURIComponent(row.node_id)}/detail?hours=720`)).json();
+        const position = detail && (detail.position || (detail.node && detail.node.position));
+        if (position && position.altitude != null) return row.node_id;
+      }
+      return null;
+    }, BASE);
+    if (!nodeId) return 'no node on this instance has a position with an altitude to convert';
     const openANode = async () => {
-      await open(page, 'nodes');
-      await page.locator('[data-page="nodes"] .linky').first().click();
-      await page.waitForTimeout(4500);
+      await open(page, `node/${encodeURIComponent(nodeId)}`, 4500);
       must(/#node/.test(page.url()), 'did not reach a node page');
     };
 
