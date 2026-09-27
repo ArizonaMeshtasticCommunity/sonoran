@@ -1473,7 +1473,22 @@ async function main() {
           return {
             below: controls.height > 0 && controls.top >= title.bottom,
             rows: Math.round(controls.height),
-            map: map ? Math.round(map.getBoundingClientRect().top - head.getBoundingClientRect().top) : null,
+            /*
+             * Less the "no coverage map has been made yet" notice. It is
+             * there only on an instance with no published run, like a
+             * fresh test database, and it is a sentence, not a row of
+             * controls. With letters as wide as CI's fonts it wraps to two
+             * lines, and counting it failed this at 92 px.
+             */
+            map: map ? Math.round(map.getBoundingClientRect().top - head.getBoundingClientRect().top
+              - [...document.querySelectorAll('.page.active .notice')]
+                .filter((node) => node.getBoundingClientRect().height > 0
+                  && node.getBoundingClientRect().bottom <= map.getBoundingClientRect().top + 1)
+                .reduce((sum, node) => {
+                  const style = getComputedStyle(node);
+                  return sum + node.getBoundingClientRect().height
+                    + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+                }, 0)) : null,
           };
         });
         if (got.below) bad.push(`${name} at ${width}: controls under the title`);
