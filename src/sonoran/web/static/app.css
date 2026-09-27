@@ -1047,7 +1047,7 @@ dl.kv.fields { align-items: baseline; }
    viewport, so on a phone with the address bar showing it is taller
    than the screen. https://www.w3.org/TR/css-values-4/#large-viewport-size */
 /* No rem ceiling, for the same reason as #planner-map (#70). */
-#map { height: max(20rem, 70svh); background: var(--panel-2); }
+#live-map { height: max(20rem, 70svh); background: var(--panel-2); }
 /*
  * A panel that floats over the map.
  *
@@ -1177,7 +1177,7 @@ body.watch-mode .map-shell.watch {
 }
 body.watch-mode { overflow: hidden; }
 .map-shell.watch { height: 100%; background: var(--bg); }
-.map-shell.watch #map { height: 100%; }
+.map-shell.watch #live-map { height: 100%; }
 
 /*
  * One strip across the top, holding the two things that may never hide:
@@ -1191,7 +1191,7 @@ body.watch-mode { overflow: hidden; }
  * The watch chrome sits above the animation canvas, and the numbers
  * below say why the numbers are what they are.
  *
- * `#map` is `position: relative` with `z-index: auto`, so it does not
+ * `#live-map` is `position: relative` with `z-index: auto`, so it does not
  * open a stacking context and the Leaflet panes inside it compete
  * directly with the chrome beside it. The animation pane is at 620,
  * which is where it has to be to clear Leaflet's own marker pane at
@@ -1200,7 +1200,7 @@ body.watch-mode { overflow: hidden; }
  * screenshot of the expanded panel: a gold halo sitting on top of a
  * row's SNR cell.
  *
- * Giving `#map` a stacking context would fix it and would also put
+ * Giving `#live-map` a stacking context would fix it and would also put
  * Leaflet's own controls under the panel, and one of those controls is
  * the button out of watch mode. So the chrome is raised instead:
  * everything above 620, and still below Leaflet's control container at

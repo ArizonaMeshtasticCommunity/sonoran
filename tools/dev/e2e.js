@@ -1644,6 +1644,34 @@ async function main() {
     return 'every control is 16 px or larger';
   });
 
+  await journey(phone, 'the map page opens at its top (#270)', async (page) => {
+    /*
+     * The map's box was `<div id="map">`, and `#map` is also the page's
+     * address, so the browser scrolled to the box on every load: 277 px
+     * at 390 px in WebKit, with the Live control and the other six map
+     * controls above the top of the screen. `about:blank` between widths
+     * so each `goto` is a real load and not a same-document hash change,
+     * which does not scroll to a fragment the same way.
+     */
+    const out = [];
+    for (const width of TABLE_WIDTHS) {
+      // Let the last load's requests land first, or leaving aborts them
+      // and each one is counted as an error.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await page.goto('about:blank');
+      await page.setViewportSize({ width, height: 800 });
+      await open(page, 'map', 2500);
+      const got = await page.evaluate(() => ({
+        y: Math.round(window.scrollY),
+        live: Math.round(document.querySelector('[data-page="map"] [data-live]').getBoundingClientRect().top),
+      }));
+      must(got.y === 0, `at ${width} px the map page scrolled itself ${got.y} px on load`);
+      must(got.live >= 0, `at ${width} px the Live control starts ${-got.live} px above the screen`);
+      out.push(`${width}:${got.y}`);
+    }
+    return `scrollY after load ${out.join(' ')}`;
+  });
+
   await phone.close();
 
   /*

@@ -775,7 +775,7 @@ def test_the_feed_is_updated_in_place_and_coalesced() -> None:
 
 
 def test_the_watch_chrome_sits_above_the_animation_canvas() -> None:
-    """`#map` does not open a stacking context, so the panes inside it
+    """`#live-map` does not open a stacking context, so the panes inside it
     compete with the chrome beside it.
 
     The animation pane is at 620, which is where it has to be to clear

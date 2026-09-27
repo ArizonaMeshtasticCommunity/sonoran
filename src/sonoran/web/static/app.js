@@ -1848,8 +1848,14 @@ function ensureMap() {
    * zoom, which on a wide short box left Arizona filling under a third
    * of the width -- the same complaint the integer `mapZoom` produced.
    * A quarter step costs nothing and lets the fit land where it means.
+   *
+   * The box is `#live-map`, not `#map` (#270). `#map` is also the page's
+   * address, and a browser that loads an address with a fragment scrolls
+   * to the element whose id is that fragment. So every visit to the map
+   * page scrolled the page down to the map box: 235 px on an iPhone,
+   * with every map control above the top of the screen.
    */
-  const map = L.map('map', { preferCanvas: true, worldCopyJump: true, zoomSnap: 0.25 });
+  const map = L.map('live-map', { preferCanvas: true, worldCopyJump: true, zoomSnap: 0.25 });
   const home = homeBounds();
   if (home) {
     // The deployment's own statement of what it is about, fitted to
