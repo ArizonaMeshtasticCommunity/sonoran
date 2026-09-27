@@ -1,5 +1,6 @@
 /*
- * Behaviour cases for the node page's Identity and Device fields (#254).
+ * Behaviour cases for the node page's Identity and Device fields (#254,
+ * #256): what turns red, and what every field's hint says.
  *
  * Run by `tests/unit/test_node_fields.py`, which shells out to node.
  *
@@ -51,16 +52,18 @@ const stubs = {
   stamp: (value) => (value ? 'STAMP' : '-'),
   ago: () => '1h',
   SonoranUnits: { heightFromM: (m) => `${m} m` },
+  // The DOM half of the hints is the browser's; e2e.js walks it.
+  revealHints: () => {},
 };
 
 const names = [
   'BATTERY_LOW', 'BATTERY_WEAK', 'ON_MAINS_ABOVE',
   'CHANNEL_USE_POLITE', 'CHANNEL_USE_MAX', 'AIR_TX_CHECK', 'AIR_TX_HIGH',
-  'ALTITUDE_NOT_OURS', 'HEALTH_STATES', 'DEVICE_LABELS', 'FIELD_FLAGS',
+  'ALTITUDE_NOT_OURS', 'HEALTH_STATES', 'DEVICE_LABELS', 'FIELD_FLAGS', 'FIELD_HINTS',
 ];
 const functions = [
   'reading', 'batteryState', 'fieldFlag', 'altitudeFlag', 'fieldValue',
-  'deviceRows', 'identityRows',
+  'deviceRows', 'identityRows', 'fieldList',
 ];
 const api = new Function(...Object.keys(stubs), [
   ...names.map(constant),
@@ -170,8 +173,64 @@ check('ONE BAND: the Power card asks batteryState, as the Device row does',
 check('ONE BAND: the Power card holds no comparison of its own against the battery constants',
   !/BATTERY_WEAK \?|BATTERY_LOW \?|>= BATTERY_LOW/.test(health));
 
+/* --- Every field has a hint (#256) ------------------------------- */
+
+/*
+ * Every row either panel can draw: identity with a position, and every
+ * device reading there is a label for. A new row in either function,
+ * or a new key in DEVICE_LABELS, lands here without anybody listing it.
+ */
+const fullDevice = Object.fromEntries(Object.keys(api.DEVICE_LABELS).map((key) => [key, 1]));
+const everyRow = [
+  ...api.identityRows({ node_id: '!1', position: { lat: 33.4, lon: -112, altitude: null } }),
+  ...api.deviceRows(fullDevice),
+];
+check('HINT: the full set of rows is what the panels draw (control)', everyRow.length >= 17,
+  `only ${everyRow.length} rows`);
+for (const row of everyRow) {
+  const hint = api.FIELD_HINTS[row.key];
+  check(`HINT: ${row.label} has a hint`, typeof hint === 'string' && hint.length > 40,
+    `FIELD_HINTS.${row.key} is ${JSON.stringify(hint)}`);
+}
+const drawn = api.fieldList(everyRow);
+const terms = drawn.kids.filter((node) => node.tag === 'dt');
+check('HINT: every dt the list draws carries its hint and its label',
+  terms.length === everyRow.length
+    && terms.every((dt, i) => dt.attrs['data-hint'] === api.FIELD_HINTS[everyRow[i].key]
+      && dt.attrs['data-label'] === everyRow[i].label),
+  `${terms.filter((dt) => !dt.attrs['data-hint']).map((dt) => dt.attrs['data-label']).join(', ')}`);
+check('HINT: no hint is left over for a field that no longer exists',
+  Object.keys(api.FIELD_HINTS).every((key) => everyRow.some((row) => row.key === key)),
+  Object.keys(api.FIELD_HINTS).filter((key) => !everyRow.some((row) => row.key === key)).join(', '));
+
+/*
+ * The hints quote the thresholds, and must quote the SAME constants.
+ * Checked against the value the constant holds now, so a hint typed as
+ * "40 %" passes today and fails the day the constant moves.
+ */
+const H = api.FIELD_HINTS;
+const says = (key, value) => H[key].includes(`${value} %`);
+for (const [key, value, what] of [
+  ['channel_utilization', POLITE, 'CHANNEL_USE_POLITE'],
+  ['channel_utilization', MAX, 'CHANNEL_USE_MAX'],
+  ['air_util_tx', TX_CHECK, 'AIR_TX_CHECK'],
+  ['air_util_tx', TX_HIGH, 'AIR_TX_HIGH'],
+  ['battery_level', api.BATTERY_LOW, 'BATTERY_LOW'],
+  ['battery_level', api.BATTERY_WEAK, 'BATTERY_WEAK'],
+  ['hw_model', MAX, 'CHANNEL_USE_MAX'],
+]) {
+  check(`SAME NUMBER: the ${key} hint states ${what} as it is now (${value} %)`, says(key, value),
+    `the hint says: ${H[key]}`);
+}
+for (const [key, words] of [
+  ['is_mqtt_gateway', /internet/], ['is_licensed', /encrypt/], ['is_licensed', /relay/],
+  ['hw_model', /NodeInfo/], ['hw_model', /restart/], ['altitude', /Altitude/],
+]) {
+  check(`SAYS: the ${key} hint answers what Will asked of it (${words})`, words.test(H[key]));
+}
+
 /* The harness guard: a harness that found nothing to check passes. */
-if (ran < 40) {
+if (ran < 80) {
   console.error(`FAIL the harness ran only ${ran} checks; the extraction is broken`);
   failed += 1;
 }

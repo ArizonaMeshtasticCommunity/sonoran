@@ -982,6 +982,14 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
  * are the tokens the health cards use, and each theme sets them for its
  * own contrast, so nothing here picks a colour.
  */
+/*
+ * Each label carries a hint button (#256), 24 px on a desktop and 44 px
+ * under 60 rem, where every button is a 44 px tap target on purpose.
+ * The row grows to hold it, and a grid aligned to the top then drew the
+ * value half a line above its own label. Baseline puts the two words
+ * on one line again, whatever height the button gives the row.
+ */
+dl.kv.fields { align-items: baseline; }
 .field-flag.state-bad { color: var(--bad); }
 .field-flag.state-warn { color: var(--warn); }
 .field-flag .field-note { font-size: .8rem; font-weight: 650; white-space: nowrap; }

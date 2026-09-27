@@ -1155,6 +1155,49 @@ async function main() {
     return `${await buttons.count()} columns explained, hints and exact values both reachable`;
   });
 
+  await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
+    /*
+     * Every Identity and Device field carries the same hint button as a
+     * column heading. The unit cases prove each field HAS a sentence;
+     * only a browser proves `revealHints` turned it into something a
+     * finger and a keyboard can open. So: every `dt` has a button, a tap
+     * opens one and it fits the screen, Escape shuts it, and Enter opens
+     * it again from the keyboard.
+     */
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    must(nodes.length, 'no node to open');
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(3500);
+    const fields = page.locator('[data-page="node"] .summary-row dl.fields dt');
+    const count = await fields.count();
+    must(count >= 10, `only ${count} Identity and Device fields drawn`);
+    const bare = await page.evaluate(() => [...document.querySelectorAll(
+      '[data-page="node"] .summary-row dl.fields dt')]
+      .filter((dt) => !dt.querySelector('.hint-open')).map((dt) => dt.dataset.label || dt.textContent));
+    must(bare.length === 0, `fields with no hint button: ${bare.join(', ')}`);
+
+    const gateway = page.locator('[data-page="node"] dt[data-label="MQTT gateway"] .hint-open');
+    const panel = page.locator(`#${await gateway.getAttribute('aria-controls')}`);
+    must(!(await panel.isVisible()), 'the sentence is on the screen before it is asked for');
+    await gateway.tap();
+    await page.waitForTimeout(250);
+    must(await panel.isVisible(), 'tapping the MQTT gateway hint did not open it');
+    must(/internet/.test(await panel.innerText()), 'the MQTT gateway sentence is not in the panel');
+    const box = await panel.boundingBox();
+    const width = page.viewportSize().width;
+    must(box.x >= -1 && box.x + box.width <= width + 1,
+      `the panel runs off the screen: ${Math.round(box.x)}..${Math.round(box.x + box.width)} of ${width}`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    must(!(await panel.isVisible()), 'Escape did not close it');
+    await gateway.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+    must((await gateway.getAttribute('aria-expanded')) === 'true', 'Enter did not open it');
+    await page.keyboard.press('Escape');
+    return `${count} fields, every one explained; tap, Escape and Enter all work`;
+  });
+
   await journey(phone, 'no form control invites the iOS zoom', async (page) => {
     // Under 16 px, Safari on iOS zooms the page in on focus and does
     // not zoom back out. The planner is the worst case: 21 fields.
