@@ -4994,11 +4994,51 @@ function drawNodeChips(page) {
 
 let nodeFacets = null;
 
-/** How many filters are narrowing the list, for the summary line. */
-function nodeFilterCount(page) {
-  const query = new URLSearchParams(nodeQuery(page).split('?')[1]);
-  for (const key of ['limit', 'offset', 'sort', 'order']) query.delete(key);
-  return [...query.keys()].length;
+/** How many filters the reader has changed, for the badge on Filters.
+ *
+ * It counted every key of the list query, so a first visit showed "2"
+ * with nothing chosen: the toolbar's default "Last 24 h", and the preset
+ * channel from the sidebar (#301). Will (2026-09-27): count only what the
+ * reader changed. A toolbar control counts when it differs from its
+ * default, a panel filter counts when it is set, and the preset never
+ * counts, because the sidebar is where the preset shows.
+ *
+ * Counted by query key, so a filter that both the toolbar and the panel
+ * can set ("Heard within", role, gateway) counts once. `gaps_preset`
+ * travels with `gaps` and is not a second filter.
+ *
+ * Pure, so the cases in `tests/unit/js` run it rather than read it.
+ */
+function nodeFilterCount(toolbar, defaults, panel) {
+  const changed = new Set();
+  for (const [key, value] of Object.entries(toolbar)) {
+    if (value !== defaults[key]) changed.add(key);
+  }
+  for (const key of panel.keys()) {
+    if (key !== 'gaps_preset') changed.add(key);
+  }
+  return changed.size;
+}
+
+/** The toolbar as `nodeFilterCount` reads it: what it holds now, and what
+ * it held when the page loaded. The default comes from the markup (the
+ * `selected` option), so it cannot drift from `index.html`. */
+function nodeToolbar(page) {
+  const active = $('[data-node-active]', page);
+  const role = $('[data-node-role]', page);
+  const first = (select) => {
+    const chosen = select ? [...select.options].find((option) => option.defaultSelected) : null;
+    return chosen ? chosen.value : (select && select.options[0] ? select.options[0].value : '');
+  };
+  return {
+    toolbar: {
+      q: $('[data-node-search]', page).value.trim(),
+      active_hours: active ? active.value : '',
+      role: role ? role.value : '',
+      gateway: $('[data-node-gateway]', page).getAttribute('aria-pressed') === 'true',
+    },
+    defaults: { q: '', active_hours: first(active), role: first(role), gateway: false },
+  };
 }
 
 /*
@@ -5319,7 +5359,8 @@ function rearmNodeScroll() {
  * of 2,372 nodes said "300 nodes match" and meant "here are 300".
  */
 function describeNodeList(page) {
-  const filters = nodeFilterCount(page);
+  const { toolbar, defaults } = nodeToolbar(page);
+  const filters = nodeFilterCount(toolbar, defaults, nodeFilters);
   /*
    * No longer says how it is sorted or how many filters are on (Will,
    * 2026-09-26). The column heading already carries the sort -- it is

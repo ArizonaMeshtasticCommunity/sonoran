@@ -729,6 +729,58 @@ async function main() {
     return 'Apply closes the panel and focus stays on Filters';
   });
 
+  await journey(context, 'the Filters badge counts only what the reader changed (#301)', async (page) => {
+    /*
+     * A first visit showed "2" with every group at "Any": the badge
+     * counted the toolbar's default 24 hours and the sidebar's preset.
+     * Will (2026-09-27): count what the reader changed, toolbar or panel,
+     * and never the preset. What is SENT must not change.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/nodes\?/.test(request.url())) asked.push(request.url());
+    });
+    await open(page, 'nodes');
+    await page.locator('[data-page="nodes"] tbody tr').first().waitFor({ timeout: 15000 });
+    const toggle = page.locator('[data-page="nodes"] [data-node-filter-open]');
+    const badge = page.locator('[data-page="nodes"] [data-node-filter-count]');
+    const state = async () => ({
+      hidden: await badge.isHidden(),
+      text: (await badge.textContent()).trim(),
+      name: await toggle.getAttribute('aria-label'),
+    });
+    const first = await state();
+    must(first.hidden && first.name === 'Filters',
+      `a first visit shows a badge: "${first.text}", named "${first.name}"`);
+    must(asked.length && /[?&]active_hours=24\b/.test(asked[0]) && /[?&]channel=/.test(asked[0]),
+      `the first request lost its window or preset: ${asked[0]}`);
+
+    // One panel choice, applied, is one.
+    await toggle.click();
+    const none = page.locator('[data-node-filters] .filter-option', { hasText: 'None reported' }).first();
+    await none.waitFor({ timeout: 15000 });
+    await none.click();
+    await page.locator('[data-node-filter-apply]').click();
+    await page.waitForTimeout(2500);
+    const one = await state();
+    must(!one.hidden && one.text === '1', `one panel choice shows "${one.text}"`);
+    must(await page.locator('[data-node-chips] .chip-drop').count() === 1, 'no chip for the one choice');
+
+    // Clear all takes it away.
+    await toggle.click();
+    await page.waitForTimeout(400);
+    await page.locator('[data-node-filter-clear]').click();
+    await page.waitForTimeout(2500);
+    must((await state()).hidden, 'Clear all left the badge up');
+
+    // A toolbar control away from its default counts too.
+    await page.locator('[data-page="nodes"] [data-node-active]').selectOption('');
+    await page.waitForTimeout(2500);
+    const toolbar = await state();
+    must(!toolbar.hidden && toolbar.text === '1', `"Any time" in the toolbar shows "${toolbar.text}"`);
+    return 'no badge on a first visit, 1 for a panel choice, none after Clear all, 1 for the toolbar';
+  });
+
   await journey(context, 'the units setting reaches the pages', async (page) => {
     /*
      * The setting has to change what is ON SCREEN, which is a different
