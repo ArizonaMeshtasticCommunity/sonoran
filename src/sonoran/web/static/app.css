@@ -1031,6 +1031,19 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
   box-shadow: 0 .5rem 1.5rem var(--scroll-shadow);
 }
 .hint-pop[hidden] { display: none; }
+/* A `tapTip` panel is built of spans, because its button can sit inside
+   phrasing content such as a tag in a table cell (#276). */
+.hint-pop .hint-name, .hint-pop .hint-line { display: block; margin: 0 0 .4rem; }
+.hint-pop .hint-line:last-child { margin-bottom: 0; }
+/* A value that opens its own meaning (#276). A tag keeps its look; any
+   other value reads as text with a dotted line under it, which says
+   "there is more here" without looking like a link somewhere else. */
+.tip-open { font-family: inherit; line-height: inherit; background: none; cursor: pointer; }
+.tip-open:not(.tag) {
+  border: 0; padding: 0; color: inherit; font-size: inherit;
+  text-decoration: underline dotted; text-underline-offset: .2em;
+}
+.tip-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hint-pop p { margin: 0 0 .4rem; }
 .hint-pop p:last-child { margin-bottom: 0; }
 .hint-pop .hint-name {
@@ -2979,14 +2992,18 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    `.health-cards`, so only the summary half needs anything new. */
 .health-headline { font-weight: 650; margin: 0 0 .4rem; }
 .health-dots { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .6rem; }
+/* The row of dots is one button that lists the checks (#276). Tall
+   enough to hit with a finger, with no underline under a row of dots. */
+.health-dots-row { margin: 0 0 .6rem; }
+.health-dots.tip-open { margin: 0; min-height: 1.5rem; align-items: center; text-decoration: none; }
 .health-dot {
   width: .7rem;
   height: .7rem;
   border-radius: 50%;
   /* A dot carries state by colour, so it needs a non-colour cue too
-     (WCAG 1.4.1). The ring differs in width per state, and each dot has
-     a `title`; the row as a whole is labelled with the sentence above
-     it, which is what a screen reader actually reads. */
+     (WCAG 1.4.1). The ring differs in width per state, and the row is a
+     button that lists each check by name (#276); it is labelled with the
+     sentence above it, which is what a screen reader actually reads. */
   background: var(--muted);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / .35);
 }

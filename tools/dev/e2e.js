@@ -1782,6 +1782,94 @@ async function main() {
     return out.join(', ');
   });
 
+  await journey(phone, 'a phone can tap what used to be a title (#276)', async (page) => {
+    /*
+     * A touch screen never shows a `title`. Four kinds of meaning lived
+     * only there: the gateway tag, the send-rate tags and uptime notes on
+     * Statistics, the node page's health dots, and the exact time of a
+     * message. Each is now a button that opens a panel. For each kind:
+     * the value carries no `title`, a tap opens the panel with the
+     * sentence in it, the panel fits the screen, and Escape shuts it.
+     */
+    const done = [];
+    const tapAndRead = async (button, pattern, label) => {
+      must((await button.getAttribute('title')) === null, `${label} still carries a title`);
+      await button.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {
+        throw new Error(`${label} cannot be scrolled into view, so it cannot be tapped`);
+      });
+      await button.tap();
+      await page.waitForTimeout(250);
+      must((await button.getAttribute('aria-expanded')) === 'true', `tapping ${label} did not open it`);
+      const panel = page.locator(`#${await button.getAttribute('aria-controls')}`);
+      must(await panel.isVisible(), `${label}: the panel did not appear`);
+      const text = await panel.innerText();
+      must(pattern.test(text), `${label}: the panel says ${JSON.stringify(text.slice(0, 80))}`);
+      const box = await panel.boundingBox();
+      const width = page.viewportSize().width;
+      must(box.x >= -1 && box.x + box.width <= width + 1, `${label}: the panel runs off the screen`);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
+      must(!(await panel.isVisible()), `${label}: Escape did not close it`);
+      done.push(label);
+      return text;
+    };
+
+    /*
+     * A message whose packet is known links to the packet page, which
+     * prints the exact time. One with no packet has only the time, and
+     * the seed has none of those, so the feed is served with the packet
+     * taken off each message.
+     */
+    await page.route(/\/api\/chat\?/, async (route) => {
+      try {
+        const response = await route.fetch();
+        const rows = await response.json();
+        const bare = Array.isArray(rows) ? rows.map((row) => ({ ...row, packet_id: null })) : rows;
+        await route.fulfill({ response, json: bare });
+      } catch {
+        // The page closed with a live refresh in flight.
+      }
+    });
+    try {
+      await open(page, 'dashboard', 3500);
+      const when = page.locator('[data-recent-chat] button.when').first();
+      await when.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+      must(await when.count(), 'no message time to tap on the dashboard feed');
+      await tapAndRead(when, /\d:\d\d/, 'a message time');
+    } finally {
+      // The dashboard refreshes itself, so a request can still be on its
+      // way through the route when the next page opens.
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+
+    await open(page, 'nodes', 3500);
+    const gateway = page.locator('[data-page="nodes"] tbody .tip-open.gateway').first();
+    await gateway.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await gateway.count(), 'no gateway tag on the nodes list');
+    await tapAndRead(gateway, /uploads packets it hears to MQTT/, 'the gateway tag');
+
+    await open(page, 'stats', 4500);
+    const rate = page.locator('[data-page="stats"] [data-broadcast-table] .tip-open.tag').first();
+    await rate.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await rate.count(), 'no send-rate tag on Statistics');
+    await tapAndRead(rate, /The default is every/, 'a send-rate tag');
+    const uptime = page.locator('[data-page="stats"] [data-broadcast-table] .tip-open:not(.tag)').first();
+    if (await uptime.count()) await tapAndRead(uptime, /running since it last restarted/, 'an uptime note');
+
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(3500);
+    const dots = page.locator('[data-page="node"] .tip-open.health-dots');
+    await dots.first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await dots.count() === 1, 'the health dots are not one button');
+    const dotCount = await dots.locator('.health-dot').count();
+    const listed = await tapAndRead(dots, /: /, 'the health dots');
+    const lines = listed.split('\n').filter((line) => /: /.test(line)).length;
+    must(lines === dotCount, `${dotCount} dots but ${lines} checks named`);
+
+    return done.join(', ');
+  });
+
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
     /*
      * Every Identity and Device field carries the same hint button as a

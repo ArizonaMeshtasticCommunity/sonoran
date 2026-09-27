@@ -745,9 +745,14 @@ function messageItem(message, options = {}) {
       options.badge || null,
       options.showChannel && message.channel
         ? el('span', { class: 'channel-label', text: message.channel }) : null,
+      /*
+       * The exact time behind "1h ago" was a `title`, which a phone never
+       * shows (#276). A tap now opens it. A time that links to its packet
+       * keeps the link: the packet page prints the exact time.
+       */
       message.packet_id == null
-        ? el('time', { class: 'when', datetime: message.seen_at || '',
-            title: stamp(message.seen_at), text: `${ago(message.seen_at)} ago` })
+        ? tapTip('when', el('time', { datetime: message.seen_at || '', text: `${ago(message.seen_at)} ago` }),
+          'Received', [stamp(message.seen_at)])
         : el('a', {
             class: 'when', title: `Open packet ${message.packet_id}`,
             href: `#packet/${encodeURIComponent(message.from_node)}/${message.packet_id}`,
@@ -5165,12 +5170,10 @@ function nodeColumns(onSort) {
       hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is. '
         + 'Sorting this column orders by how exactly the position is known.',
       cell: (row) => el('span', {},
+        // A tap opens what the tag means; a `title` was hover only (#276).
         row.is_mqtt_gateway
-          ? el('span', {
-              class: 'tag gateway',
-              title: 'This node uploads packets it hears to MQTT. It is not a device role.',
-              text: 'gateway',
-            })
+          ? tapTip('tag gateway', 'gateway', 'Gateway',
+            ['This node uploads packets it hears to MQTT. It is not a device role.'])
           : null,
         row.has_position ? el('span', { class: 'tag', text: 'position' }) : null),
     }),
@@ -6411,12 +6414,21 @@ function healthPanel(gaps, detail, evidencePanel) {
     cannotTell.length ? `${count(cannotTell.length)} can't tell yet` : null,
   ].filter(Boolean).join(' · ');
 
-  const dots = el('p', { class: 'health-dots', role: 'img', 'aria-label': sentence },
-    ...judged.map((check) => el('span', {
-      class: `health-dot state-${check.state}`,
-      'aria-hidden': 'true',
-      title: `${check.name}: ${(HEALTH_STATES[check.state] || HEALTH_STATES.unknown).word}`,
-    })));
+  /*
+   * Which check each dot is used to be in a `title` on the dot, which a
+   * phone never shows (#276). The row is now one button, and a tap opens
+   * the list of checks in the order of the dots. The accessible name is
+   * still the sentence, with what the button does after it.
+   */
+  const dotWords = (check) => `${check.name}: ${(HEALTH_STATES[check.state] || HEALTH_STATES.unknown).word}`;
+  const dots = el('p', { class: 'health-dots-row' },
+    tapTip('health-dots',
+      judged.map((check) => el('span', {
+        class: `health-dot state-${check.state}`, 'aria-hidden': 'true',
+      })),
+      'Each dot, in order',
+      judged.map(dotWords),
+      { 'aria-label': `${sentence}. Show each check.` }));
 
   const full = el('div', { class: 'health-full', hidden: true },
     ...HEALTH_GROUPS.map((group) => {
@@ -8547,22 +8559,23 @@ function drawBroadcastTable(page, data) {
     } else if (h.restarted) {
       parts.push(el('span', { class: 'tag', text: 'restarted' }));
     }
+    /*
+     * The meaning of each of these was a `title`, which a phone never
+     * shows (#276). Each value is now the button that opens it.
+     */
     if (h.battery_level != null) {
       const mains = h.battery_level > 100;
-      parts.push(el('span', {
-        class: h.brownout_risk ? 'tag bad' : 'tag',
-        title: mains
+      parts.push(tapTip(h.brownout_risk ? 'tag bad' : 'tag',
+        mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
+        mains ? 'On mains' : 'Battery',
+        [mains
           ? 'The node reports a battery level above 100%, which the firmware uses for mains power.'
-          : 'Battery level the node last reported.',
-        text: mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
-      }));
+          : 'Battery level the node last reported.']));
     }
     if (h.uptime_seconds != null) {
-      parts.push(el('span', {
-        class: 'muted',
-        title: 'How long the node says it has been running since it last restarted.',
-        text: `up ${everySeconds(h.uptime_seconds)}`,
-      }));
+      parts.push(el('span', { class: 'muted' },
+        tapTip('', `up ${everySeconds(h.uptime_seconds)}`, 'Uptime',
+          ['How long the node says it has been running since it last restarted.'])));
     }
     return el('span', { class: 'tags' }, parts.length ? parts : el('span', { text: 'ok' }));
   };
@@ -8572,12 +8585,14 @@ function drawBroadcastTable(page, data) {
       Object.entries(row.families)
         .sort((a, b) => b[1].ratio - a[1].ratio)
         .slice(0, 3)
-        .map(([name, rate]) => el('span', {
-          class: rate.notable ? 'tag bad' : rate.faster_than_default ? 'tag' : 'tag muted',
-          title: `every ${everySeconds(rate.interval_seconds)}, ` +
-                 `default ${everySeconds(rate.default_seconds)}`,
-          text: `${portnumLabel(name)} ${rate.ratio}x`,
-        })));
+        // "2.5x" says how much faster, and only the panel says what
+        // that is in time (#276): the `title` was hover only.
+        .map(([name, rate]) => tapTip(
+          rate.notable ? 'tag bad' : rate.faster_than_default ? 'tag' : 'tag muted',
+          `${portnumLabel(name)} ${rate.ratio}x`,
+          portnumLabel(name),
+          [`Sends every ${everySeconds(rate.interval_seconds)}. `
+            + `The default is every ${everySeconds(rate.default_seconds)}.`])));
 
   replace(target, table(
     [
@@ -9658,6 +9673,17 @@ function fitHint(host, noun, label, hint, exact) {
     'aria-expanded': 'false',
     'aria-controls': id,
   }, el('span', { class: 'hint-mark', 'aria-hidden': 'true', text: 'i' }));
+  wireHint(button, panel);
+  host.append(button, panel);
+}
+
+/**
+ * Make `button` open and close `panel`, the way every hint does.
+ *
+ * Shared by `fitHint` and `tapTip`, so the popover path and the fallback
+ * path cannot drift between the two.
+ */
+function wireHint(button, panel) {
   /*
    * The browser drives it where it can. `popovertarget` toggles the
    * panel, closes it on Escape and on a tap outside, and — the part a
@@ -9666,7 +9692,7 @@ function fitHint(host, noun, label, hint, exact) {
    * it in the same gesture.
    */
   if (POPOVER) {
-    button.setAttribute('popovertarget', id);
+    button.setAttribute('popovertarget', panel.id);
     /*
      * An auto popover closes any other one as it opens, so nothing here
      * has to track which panel is up. `toggle` is the first moment the
@@ -9688,7 +9714,38 @@ function fitHint(host, noun, label, hint, exact) {
       placeHint(button, panel);
     });
   }
-  host.append(button, panel);
+}
+
+/**
+ * A short value whose meaning used to live only in a `title` (#276).
+ *
+ * A touch screen never shows a `title`, so the meaning of a gateway tag,
+ * a send-rate tag, an uptime note or a health dot could not be read on a
+ * phone at all (mobile review, section 2.7). Here the value itself is
+ * the button, and a tap, a click or Enter opens the same panel as a
+ * column hint. It closes the same way: Escape, a tap outside, or a
+ * second press.
+ *
+ * Returns the button and its panel side by side, in a fragment. The panel
+ * stays next to its button in the document for a screen reader, as a
+ * column hint's does. Spans, not paragraphs, because a tag sits inside
+ * phrasing content such as a table cell's span.
+ */
+function tapTip(className, content, label, lines, extra = {}) {
+  const id = `hint-${++hintSeq}`;
+  const panel = el('span', { class: 'hint-pop', id, hidden: !POPOVER },
+    el('span', { class: 'hint-name', text: label }),
+    ...lines.filter(Boolean).map((line) => el('span', { class: 'hint-line', text: line })));
+  if (POPOVER) panel.setAttribute('popover', 'auto');
+  const button = el('button', {
+    type: 'button', class: `tip-open ${className}`.trim(),
+    'aria-expanded': 'false', 'aria-controls': id, ...extra,
+  }, content);
+  wireHint(button, panel);
+  // A fragment, so it drops into `el()` wherever one element would.
+  const pair = document.createDocumentFragment();
+  pair.append(button, panel);
+  return pair;
 }
 
 /**
