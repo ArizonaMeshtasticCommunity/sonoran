@@ -417,8 +417,18 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
    * Reflow excepts, so it is the one place extra width costs a reader
    * the most.
    */
+  /*
+   * Two more column options, for a table that compares rows and is too
+   * wide for a phone (mobile review item 9, #274).
+   *
+   * `stick` keeps the column in place while the rest scrolls under it,
+   * so a reader who scrolls sideways still knows which row they read.
+   * `low` marks a column a phone can do without: below 40rem it is not
+   * drawn, and the reader gets it from wherever the row leads.
+   */
+  const place = (column) => [column.stick ? 'stick' : '', column.low ? 'low' : ''];
   const head = el('tr', {}, columns.map((column) => {
-    const classes = [column.num ? 'num' : ''];
+    const classes = [column.num ? 'num' : '', ...place(column)];
     /*
      * A column may also carry `sort`: the name the server knows the
      * column by. The heading then becomes a button that asks the
@@ -470,7 +480,8 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
     };
     return el('tr', href ? { class: 'row-link', onclick: open } : {}, columns.map((column) => {
       const value = column.cell(row);
-      return el('td', { class: [column.num ? 'num' : '', column.wrap ? 'wrap' : ''].join(' ').trim() || null },
+      const classes = [column.num ? 'num' : '', column.wrap ? 'wrap' : '', ...place(column)];
+      return el('td', { class: classes.filter(Boolean).join(' ') || null },
         value && value.nodeType ? value : el('span', { text: value == null ? '-' : String(value) }));
     }));
   });
@@ -8431,9 +8442,16 @@ PAGES.traceroutes = async (page) => {
   const target = $('[data-traceroute-table]', page);
   const rows = await get('api/traceroutes?limit=100').catch((error) => error);
   if (rows instanceof Error) return replace(target, failure(rows));
+  /*
+   * On a phone 57% of this table was off to the side (#274). The Time
+   * column stays put while the rest scrolls, because it is the link to
+   * the trace. Hops and Signal measured are not drawn below 40rem: both
+   * are on the trace page, one tap away, with each hop spelled out.
+   */
   replace(target, table([
     {
       label: 'Time',
+      stick: true,
       cell: (row) => el('a', {
         class: 'linky', href: `#traceroute/${row.id}`, text: stamp(row.seen_at),
       }),
@@ -8441,10 +8459,11 @@ PAGES.traceroutes = async (page) => {
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => nodeChip({ node_id: row.to_node, display_name: row.to_name }) },
     { label: 'Path', wrap: true, cell: (row) => (row.route_names || []).join(' \u2192 ') || 'direct' },
-    { label: 'Hops', num: true, cell: (row) => (row.hops || []).length },
+    { label: 'Hops', num: true, low: true, cell: (row) => (row.hops || []).length },
     {
       label: 'Signal measured',
       num: true,
+      low: true,
       hint: 'How many hops came back with a signal reading. The firmware reports no reading for a hop it could not measure, and often sends fewer readings than hops.',
       cell: (row) =>
         `${(row.hops || []).filter((hop) => hop.snr != null).length} of ${(row.hops || []).length}`,
@@ -8547,10 +8566,14 @@ function drawBroadcastTable(page, data) {
           text: `${portnumLabel(name)} ${rate.ratio}x`,
         })));
 
+  // As on the traceroutes page (#274): the node stays put while the
+  // rest scrolls, and the raw packet count gives way on a phone. The
+  // rates beside it are the point of the table, and they already carry
+  // what the count would say.
   replace(target, table(
     [
-      { label: 'Node', cell: (row) => nodeChip(row) },
-      { label: 'Packets', num: true, cell: (row) => count(row.packet_count) },
+      { label: 'Node', stick: true, cell: (row) => nodeChip(row) },
+      { label: 'Packets', num: true, low: true, cell: (row) => count(row.packet_count) },
       { label: 'Send rate against default', cell: rates },
       { label: 'Health', cell: health },
     ],

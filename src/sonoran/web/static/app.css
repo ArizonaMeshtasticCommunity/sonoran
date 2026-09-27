@@ -980,6 +980,22 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
    not push the panel past the edge of a 320 px screen. */
 .hint-pop .hint-exact { font: var(--mono); overflow-wrap: anywhere; }
 tbody tr:hover { background: var(--panel-2); }
+/*
+ * A column that stays put while the rest of a wide table scrolls under
+ * it (#274). It needs a background of its own, or the cells that pass
+ * beneath show through, and that background must follow the row's
+ * hover. The rule on its right edge stands in for the scroll shadow,
+ * which the stuck cell now covers.
+ */
+th.stick, td.stick {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--panel); box-shadow: inset -1px 0 var(--line);
+}
+tbody tr:hover td.stick { background: var(--panel-2); }
+/* A column a phone can do without. The row leads to the rest (#274). */
+@media (max-width: 40rem) {
+  th.low, td.low { display: none; }
+}
 td.wrap { white-space: normal; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 

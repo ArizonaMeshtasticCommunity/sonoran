@@ -184,10 +184,10 @@ const open = async (page, hash, settle = 3500) => {
  * `Runtime.callFunctionOn` and is not subject to the policy, which is
  * why every journey in this file uses it.
  */
-async function waitFor(page, condition, timeout = 240000, step = 500) {
+async function waitFor(page, condition, timeout = 240000, step = 500, arg = undefined) {
   const until = Date.now() + timeout;
   for (;;) {
-    if (await page.evaluate(condition)) return true;
+    if (await page.evaluate(condition, arg)) return true;
     if (Date.now() >= until) return false;
     await page.waitForTimeout(step);
   }
@@ -1578,6 +1578,64 @@ async function main() {
     await page.waitForTimeout(250);
     must((await type.getAttribute('aria-expanded')) === 'false', 'Escape did not close it');
     return `${await buttons.count()} columns explained, hints and exact values both reachable`;
+  });
+
+  await journey(phone, 'a wide comparison table keeps its first column on a phone (#274)', async (page) => {
+    /*
+     * The traceroutes table had 57% of its width off to the side at
+     * 390 px, and the stats "Nodes worth a look" table 45%. Two claims
+     * each: the columns a phone can do without are not drawn, and the
+     * first column is still where it was after the rest has scrolled
+     * all the way to the end. Then the same page at desktop width must
+     * draw every column again, so a rule that hid them everywhere
+     * fails too.
+     */
+    const measure = (spec) => {
+      const wrap = document.querySelector(spec.wrap);
+      const table = wrap && wrap.querySelector('table');
+      const first = table && table.querySelector('tbody td');
+      if (!first) return null;
+      wrap.scrollLeft = wrap.scrollWidth;
+      const held = Math.round(first.getBoundingClientRect().left - wrap.getBoundingClientRect().left);
+      const scrolled = wrap.scrollLeft;
+      wrap.scrollLeft = 0;
+      return {
+        shown: [...table.querySelectorAll('thead th')]
+          .filter((th) => th.getBoundingClientRect().width > 0).map((th) => th.dataset.label),
+        held, scrolled, scroll: table.scrollWidth, client: wrap.clientWidth,
+      };
+    };
+    const specs = [
+      { hash: 'traceroutes', wrap: '[data-traceroute-table]', first: 'Time', low: ['Hops', 'Signal measured'] },
+      { hash: 'stats', wrap: '[data-broadcast-table]', first: 'Node', low: ['Packets'] },
+    ];
+    const out = [];
+    for (const spec of specs) {
+      await page.setViewportSize({ width: 390, height: 664 });
+      await page.goto(`${BASE}/?${spec.hash}#${spec.hash}`, { waitUntil: 'load' });
+      if (!(await waitFor(page, measure, 15000, 500, spec))) {
+        out.push(`${spec.hash}: no rows on this instance`);
+        continue;
+      }
+      const phoneSize = await page.evaluate(measure, spec);
+      must(phoneSize.shown[0] === spec.first, `${spec.hash}: the first column is ${phoneSize.shown[0]}`);
+      for (const label of spec.low) {
+        must(!phoneSize.shown.includes(label), `${spec.hash}: ${label} is still drawn at 390 px`);
+      }
+      // Only a table that really scrolled can show the column held.
+      if (phoneSize.scrolled > 0) {
+        must(Math.abs(phoneSize.held) <= 1,
+          `${spec.hash}: the ${spec.first} column moved ${phoneSize.held} px when the table scrolled ${phoneSize.scrolled} px`);
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.waitForTimeout(400);
+      const wide = await page.evaluate(measure, spec);
+      for (const label of spec.low) {
+        must(wide.shown.includes(label), `${spec.hash}: ${label} is gone at 1440 px as well`);
+      }
+      out.push(`${spec.hash} ${phoneSize.scroll}/${phoneSize.client}, held ${phoneSize.held} after ${phoneSize.scrolled} px`);
+    }
+    return out.join('; ');
   });
 
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
