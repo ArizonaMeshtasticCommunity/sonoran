@@ -2130,6 +2130,65 @@ async function main() {
     return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
   });
 
+  await journey(narrow, 'page-head controls fold behind a button on a phone (#275)', async (page) => {
+    /*
+     * On an iPhone SE the RF head was the whole first screen and the
+     * Graph head three quarters of it. Below 40rem the folded controls
+     * live in the page's Options or Filters panel; Live and one primary
+     * control stay. Measured as where the head ENDS on a 568 px screen,
+     * which includes the 62 px sticky bar above it.
+     */
+    await page.setViewportSize({ width: 320, height: 568 });
+    const facts = [];
+    for (const [name, most] of [['graph', 0.35], ['rf', 0.45], ['chat', 0.5], ['gaps', 0.35]]) {
+      await open(page, name, 2500);
+      const got = await page.evaluate(() => {
+        const head = document.querySelector('.page.active .page-head');
+        const shown = [...head.querySelectorAll('.controls > *')]
+          .filter((node) => node.getBoundingClientRect().width > 0).length;
+        return { bottom: head.getBoundingClientRect().bottom, height: window.innerHeight, shown };
+      });
+      const share = got.bottom / got.height;
+      must(share <= most, `${name}: the head ends at ${Math.round(share * 100)}% of the first screen`);
+      facts.push(`${name} ${Math.round(share * 100)}%`);
+    }
+
+    // RF: the folded Window counts on the Filters button, and it goes
+    // home to the head when the screen widens.
+    await open(page, 'rf', 2500);
+    const filters = page.locator('[data-page="rf"] [data-options-open]');
+    must(await filters.isVisible(), 'RF shows no Filters button on a phone');
+    must(await page.locator('#rf-options [data-rf-minutes]').count() === 1, 'the RF window is not in the Filters panel');
+    await filters.click();
+    await page.locator('[data-rf-minutes]').selectOption('15');
+    await page.waitForTimeout(300);
+    must((await filters.getAttribute('aria-label')) === 'Filters, 1 changed',
+      `after changing the window the button says "${await filters.getAttribute('aria-label')}"`);
+    await page.locator('[data-rf-minutes]').selectOption('5');
+    // The description is one line, and the whole of it is a tap away.
+    const hint = page.locator('[data-page="rf"] [data-sub-fold] > .hint-open');
+    must(await hint.isVisible(), 'the RF description has no ? on a phone');
+    await hint.tap();
+    await page.waitForTimeout(250);
+    const said = await page.locator(`#${await hint.getAttribute('aria-controls')}`).innerText();
+    must(/rf-agent beside an SDR/.test(said), 'the ? does not hold the whole description');
+    await page.keyboard.press('Escape');
+
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.waitForTimeout(300);
+    const home = await page.evaluate(() => ({
+      inHead: !!document.querySelector('[data-page="rf"] .page-head .controls [data-rf-minutes]'),
+      button: document.querySelector('[data-page="rf"] [data-options-open]').getBoundingClientRect().width,
+      panel: document.querySelector('#rf-options').hidden,
+      hint: document.querySelector('[data-page="rf"] [data-sub-fold] > .hint-open').getBoundingClientRect().width,
+    }));
+    await page.setViewportSize({ width: 320, height: 640 });
+    must(home.inHead, 'widened, the RF window did not go back to the head');
+    must(home.button === 0 && home.panel, 'widened, the Filters button or its panel is still there');
+    must(home.hint === 0, 'widened, the description still has its phone ?');
+    return `${facts.join(', ')}; Filters counts and folds back`;
+  });
+
   await journey(narrow, 'the mesh-graph link is a link drawn as a button (#258)', async (page) => {
     /*
      * The node page is not in the sweep below, because it needs a node

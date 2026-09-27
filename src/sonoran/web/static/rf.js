@@ -629,6 +629,9 @@
       if (!(layer.key in state.shown)) state.shown[layer.key] = true;
       const button = el('button', {
         type: 'button', class: 'toggle', 'aria-pressed': String(state.shown[layer.key]), text: layer.label,
+        // Every source starts shown. On a phone these sit in the Filters
+        // panel (#275), and its count reads this.
+        'data-option-default': 'true',
       });
       button.addEventListener('click', () => {
         state.shown[layer.key] = !state.shown[layer.key];

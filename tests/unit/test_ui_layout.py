@@ -329,3 +329,34 @@ def test_the_coverage_layer_is_one_drop_down_in_the_head() -> None:
     panel = html[html.index('id="coverage-options"') :]
     assert "data-coverage-views" in panel[: panel.index("</label>")]
     assert "data-coverage-opacity" in panel[: panel.index("</label>")]
+
+
+# ------------------------------------------------- phones fold the head (#275)
+
+
+def test_the_phone_fold_keeps_live_and_one_control_in_the_head() -> None:
+    """Below 40rem the `data-fold` controls move into the page's panel.
+
+    Each folded control needs a panel in its page to land in, or it stays
+    in the head and the phone header is as tall as before. RF has no
+    Options of its own, so it carries a phone-only Filters button.
+    """
+    html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
+    for page, folded in {
+        "graph": ("data-graph-hours", "data-graph-view"),
+        "rf": ("data-rf-layers", "data-rf-minutes"),
+    }.items():
+        head = _page_head(html, page)
+        # Each folded element, whole: a label with its select inside, or
+        # the RF span that rf.js fills with toggles.
+        chunks = "".join(
+            match.group(0)
+            for match in re.finditer(
+                r"<(label|span)\b[^>]*\bdata-fold\b[^>]*>.*?</\1>", head, flags=re.S
+            )
+        )
+        for name in folded:
+            assert name in chunks, f"{page}: {name} does not fold on a phone"
+        assert "data-options-open" in head, f"{page} has no button to fold into"
+    rf = _page_head(html, "rf")
+    assert "data-fold-only" in rf and "data-live" in rf

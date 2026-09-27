@@ -1891,8 +1891,18 @@ body.chart-staged { overflow: hidden; }
  * count is a second row that says nothing the channel name has not.
  */
 @media (max-width: 40rem) {
-  .chat-range { width: 100%; }
-  .chat-range .range-quick { flex: 1 1 auto; }
+  /*
+   * The range's parts join the head's own row (#275). `width: 100%`
+   * here made the range a full row with the quick ranges stretched
+   * across it, "Dates..." pushed to the far right with a gap, and Live
+   * on a row of its own. As `contents` the quick ranges, Dates and Live
+   * wrap as one row of controls: one row on a 390 px phone, and Live
+   * starts the second at 320. The date fields keep their full-width
+   * line when opened.
+   */
+  .chat-range { display: contents; }
+  .chat-range .range-quick { flex: 0 0 auto; }
+  .range-custom { align-items: center; }
   .chat-range input[type="datetime-local"] { flex: 1 1 8rem; min-width: 0; }
   .range-custom { display: inline-flex; }
   .range-custom-fields { display: none; flex: 1 1 100%; }
@@ -2842,6 +2852,32 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* The coverage controls carried margins for their old rows above the map. */
 .options-panel .coverage-view-controls,
 .options-panel .coverage-opacity { margin: 0; }
+
+/*
+ * Folding on a phone (#275). See `wireFolds` and `foldSub` in app.js.
+ *
+ * The slot the folded controls land in takes no box of its own, so they
+ * wrap in the panel's row like the controls already there.
+ */
+.options-folded { display: contents; }
+/* A Filters button that exists only to hold folded controls. */
+@media (min-width: 40.01rem) {
+  button[data-fold-only] { display: none; }
+}
+/* The description's `?` is for the one-line phone form only. */
+[data-sub-fold] > .hint-open { display: none; }
+@media (max-width: 40rem) {
+  /* One unwrapped line is as wide as the whole sentence, and a flex item
+     will not shrink under its content unless told it may. Without this
+     the page scrolled sideways by up to 1010 px at 320. */
+  .page-head > div:first-child { min-width: 0; max-width: 100%; }
+  [data-sub-fold] { display: flex; align-items: center; gap: .15rem; }
+  [data-sub-fold] > .sub-text {
+    flex: 0 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  [data-sub-fold] > .hint-open { display: inline-flex; flex: 0 0 auto; }
+}
 .filter-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
 .filter-group { border: 0; margin: 0; padding: 0; min-width: 0; }
 .filter-group > legend {

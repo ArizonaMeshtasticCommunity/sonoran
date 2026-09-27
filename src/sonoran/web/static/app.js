@@ -7609,6 +7609,8 @@ function chatHead(page, channel, sub) {
   const subtitle = $('[data-chat-sub]', page);
   subtitle.textContent = sub || '';
   subtitle.hidden = !sub;
+  // Setting the text took the phone fold's two halves away (#275).
+  foldSub(subtitle);
   $('[data-chat-back]', page).hidden = !channel;
   const views = $('[data-chat-view]', page);
   views.hidden = !channel;
@@ -9943,6 +9945,7 @@ async function route() {
   await render(known);
   // A render can restore a control from the address without an event.
   drawOptionCounts();
+  foldSubs();
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
 }
@@ -10413,6 +10416,8 @@ function wire() {
   wireNav();
   wireSidebarCollapse();
   wireOptions();
+  wireFolds();
+  foldSubs();
 }
 
 /*
@@ -10577,6 +10582,84 @@ function wireOptions() {
     });
     drawOptionCount(button);
   }
+}
+
+/*
+ * Page-head controls fold behind the Options or Filters button on a
+ * phone (#275).
+ *
+ * Measured in the mobile review, the controls took 74% of an iPhone SE's
+ * first screen on Graph and all of it on RF. Below 40rem each control
+ * marked `data-fold` moves into its page's Options panel, and Live and
+ * one primary control stay in the head. Moved, not copied: a copy would
+ * be two controls for one value, and every listener and every `$(...,
+ * page)` lookup still finds the one element, because the panel is inside
+ * the same page. A comment marks where each one lives, so it goes back to
+ * exactly its place when the screen widens.
+ *
+ * The count on the button already covers what is in the panel, so a
+ * folded control that is not at its start is never out of sight without
+ * the button saying so. A button marked `data-fold-only` exists only for
+ * this (RF has no Options of its own); it is hidden above 40rem, and its
+ * panel is closed when its controls go home.
+ */
+const PHONE_FOLD = '(max-width: 40rem)';
+
+function wireFolds() {
+  const phone = matchMedia(PHONE_FOLD);
+  const homes = new Map();
+  for (const control of $$('[data-fold]')) {
+    const home = document.createComment(' folds into Options on a phone (#275) ');
+    control.before(home);
+    homes.set(control, home);
+  }
+  const apply = () => {
+    for (const [control, home] of homes) {
+      const panel = $('[data-options-panel]', control.closest('.page'));
+      if (!panel) continue;
+      let slot = $('[data-options-folded]', panel);
+      if (!slot) {
+        slot = el('div', { class: 'options-folded', 'data-options-folded': true });
+        panel.prepend(slot);
+      }
+      if (phone.matches) slot.append(control);
+      else home.after(control);
+    }
+    if (!phone.matches) {
+      for (const button of $$('[data-options-open][data-fold-only]')) {
+        const panel = document.getElementById(button.getAttribute('aria-controls'));
+        if (panel) panel.hidden = true;
+        button.setAttribute('aria-expanded', 'false');
+      }
+    }
+    drawOptionCounts();
+  };
+  phone.addEventListener('change', apply);
+  apply();
+}
+
+/*
+ * A long page description, one line on a phone (#275).
+ *
+ * On RF the description was 102 px of a 568 px iPhone SE screen, before a
+ * single control. Below 40rem a `data-sub-fold` description shows its
+ * first line with an ellipsis, and the whole sentence is behind the same
+ * `?` button every column and figure uses (`fitHint`), which a tap and a
+ * keyboard both reach. Above 40rem the full text shows and the button is
+ * hidden. Safe to run again: chat rewrites its description on a render,
+ * which removes both halves, and this puts them back.
+ */
+function foldSub(sub) {
+  if (!sub || sub.hidden || $('.sub-text', sub)) return;
+  const text = sub.textContent.trim();
+  if (!text) return;
+  const title = $('h2', sub.closest('.page-head'));
+  replace(sub, el('span', { class: 'sub-text', text }));
+  fitHint(sub, 'page', title ? title.textContent.trim() : 'this page', text, []);
+}
+
+function foldSubs() {
+  for (const sub of $$('[data-sub-fold]')) foldSub(sub);
 }
 
 /*

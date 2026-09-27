@@ -647,23 +647,36 @@
           <div class="page-head">
             <div>
               <h2>RF</h2>
-              <p class="sub">What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors and the 900 MHz band, from stations that run rf-agent beside an SDR.</p>
+              <p class="sub" data-sub-fold>What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors and the 900 MHz band, from stations that run rf-agent beside an SDR.</p>
             </div>
             <div class="controls">
+              <!--
+                On a phone (#275) the controls marked `data-fold` move
+                into the Filters panel below, and Table and Live stay in
+                the head. On an iPhone SE the head was the whole first
+                screen. `wireFolds` moves them, so each is still one
+                control with one set of listeners, never a copy. The
+                button is only shown where it does something.
+              -->
               <!-- One toggle per source that is stored, built by rf.js
                    from /api/rf/kinds, then the receivers. -->
-              <span class="rf-layers" data-rf-layers></span>
+              <span class="rf-layers" data-rf-layers data-fold></span>
               <button type="button" class="toggle" data-rf-table-toggle aria-pressed="false">Table</button>
-              <label class="muted">Window
+              <label class="muted" data-fold>Window
                 <select data-rf-minutes aria-label="How far back to show">
                   <option value="1">1 min</option>
                   <option value="5" selected>5 min</option>
                   <option value="15">15 min</option>
                 </select>
               </label>
+              <button type="button" class="toggle" data-options-open data-fold-only
+                      data-options-word="Filters" aria-expanded="false"
+                      aria-controls="rf-options">Filters<span class="filter-count"
+                      data-options-count hidden></span></button>
               <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
             </div>
           </div>
+          <div class="options-panel" id="rf-options" data-options-panel hidden></div>
           <p class="notice rf-notice">
             This shows what our receivers picked up, and nothing else. Anything
             missing from it was not received by any of our stations. It is not
@@ -826,7 +839,7 @@
           <div class="page-head">
             <div>
               <h2>Coverage gaps</h2>
-              <p class="sub">Which nodes the mesh is not carrying well, measured from the packets we hold. Shows the preset chosen in the menu: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
+              <p class="sub" data-sub-fold>Which nodes the mesh is not carrying well, measured from the packets we hold. Shows the preset chosen in the menu: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
             </div>
           </div>
 
@@ -1499,7 +1512,7 @@
               <p class="sub">One graph per channel. Nodes on different presets cannot hear each other.</p>
             </div>
             <div class="controls">
-              <label class="muted">Window
+              <label class="muted" data-fold>Window
                 <select data-graph-hours>
                   <option value="6">6 h</option>
                   <option value="24" selected>24 h</option>
@@ -1511,7 +1524,7 @@
                      aria-label="Find a node in this graph" />
               <!-- What the search found (#223). Hidden until something is typed. -->
               <span class="muted" data-graph-search-note hidden></span>
-              <label class="muted">View
+              <label class="muted" data-fold>View
                 <select data-graph-view>
                   <option value="all" selected>Whole preset</option>
                   <option value="backbone">Backbone</option>
@@ -1746,7 +1759,7 @@
                 <h2 data-chat-title>Chat</h2>
                 <span class="chat-count" data-chat-count hidden></span>
               </div>
-              <p class="sub" data-chat-sub>One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
+              <p class="sub" data-chat-sub data-sub-fold>One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
             </div>
             <div class="controls">
               <!--
