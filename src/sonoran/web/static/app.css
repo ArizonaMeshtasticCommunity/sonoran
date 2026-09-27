@@ -201,6 +201,21 @@ html {
    */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /*
+   * The page colour belongs to the root, not only to `body` (#253).
+   *
+   * On an iPad, scrolling up past the top rubber-bands the page and
+   * shows what lies behind the document. `html` had no background, so
+   * that area got its colour only by the canvas borrowing `body`'s --
+   * a rule of CSS propagation that Safari's overscroll and status-bar
+   * areas are not bound to follow -- and the report was a ~25 px band
+   * across the top of every page. Measured in WebKit with iPad
+   * descriptors before this line: `html` was transparent in both
+   * themes while `body` was --bg. The same token here, so there is one
+   * colour behind the page whichever element paints it.
+   * `test_the_root_carries_the_page_colour` pins the two together.
+   */
+  background: var(--bg);
 }
 
 body {

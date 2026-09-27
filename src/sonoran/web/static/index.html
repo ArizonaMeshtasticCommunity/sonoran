@@ -8,7 +8,18 @@
       browser. Storage can be refused, and then the system decides.
       The attribute is always set to light or dark, so app.css needs one
       block of light values and not a second copy inside a media query.
+
+      `theme-color` follows the theme too (#253). Safari tints the status
+      bar and the tab bar with it, and on an iPad that strip sits right
+      above the page. It was a fixed dark #17100b, so on a light page
+      that strip was the dark theme's colour -- one of the two measured
+      mismatches behind the reported band. It stands before the script so the
+      script can set it before anything paints. The two literals are the
+      two themes' --bg in app.css; `test_the_theme_colour_is_the_page_colour`
+      fails if either drifts. `applyTheme` in app.js reads --bg back when
+      the reader switches.
     -->
+    <meta name="theme-color" content="#17100b" />
     <script nonce="__SONORAN_NONCE__">
       (function () {
         var mode = 'system';
@@ -17,6 +28,8 @@
           || (mode === 'system' && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches);
         document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
         document.documentElement.setAttribute('data-theme-mode', mode);
+        var tint = document.querySelector('meta[name="theme-color"]');
+        if (tint) tint.setAttribute('content', light ? '#f7f2ec' : '#17100b');
       }());
     </script>
     <!--
@@ -39,7 +52,6 @@
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sonoran</title>
-    <meta name="theme-color" content="#17100b" />
     <!--
       The tab icon keeps its transparent background so it suits light and
       dark browser chrome. iOS ignores transparency and composites onto
