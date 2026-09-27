@@ -10057,6 +10057,14 @@ function applyTheme(mode) {
   if (tint && colour) tint.setAttribute('content', colour);
 }
 
+/* "MediumFast" -> "MF", for the collapsed sidebar (#300). A name with
+   no capitals keeps its first two letters rather than becoming one. */
+function presetInitials(name) {
+  const words = SonoranLabels.presetLabel(name).split(/\s+/).filter(Boolean);
+  if (words.length > 1) return words.map((word) => word[0].toUpperCase()).join('').slice(0, 3);
+  return (words[0] || '').slice(0, 2);
+}
+
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
@@ -10087,7 +10095,6 @@ function wirePresetSwitch() {
        * control is got wrong.
        */
       tabindex: name === current ? '0' : '-1',
-      text: SonoranLabels.presetLabel(name),
       onclick: () => { if (SonoranPreset.set(name)) draw(); },
       onkeydown: (event) => {
         const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -10100,7 +10107,17 @@ function wirePresetSwitch() {
         const moved = $(`[data-preset-switch] .preset-choice.active`);
         if (moved) moved.focus();
       },
-    })));
+    },
+    /*
+     * Two spellings (#300). The full name is the button's text and its
+     * accessible name. The initials are for the collapsed sidebar, which
+     * is about 52 px wide: there the full name goes off the screen and
+     * comes back as a label on hover and focus, and the initials are
+     * what shows. `aria-hidden`, so a screen reader hears "Medium Fast"
+     * once and never "M F".
+     */
+    el('span', { class: 'nav-label', text: SonoranLabels.presetLabel(name) }),
+    el('span', { class: 'preset-short', 'aria-hidden': 'true', text: presetInitials(name) }))));
   };
 
   draw();
@@ -10392,6 +10409,7 @@ function wire() {
    */
 
   wireNav();
+  wireSidebarCollapse();
 }
 
 /*
@@ -10475,6 +10493,60 @@ function wireNav() {
   });
   narrow.addEventListener('change', apply);
   apply();
+}
+
+/*
+ * Collapse the desktop sidebar to its icons (#300).
+ *
+ * The state is an attribute on `<html>`, not on the sidebar, because the
+ * boot script in index.html sets it before the first paint and nothing
+ * else exists yet at that moment. `sonoran.nav` is its own key: it is a
+ * per-viewer convenience, so a refused storage only means the page starts
+ * expanded, which is where a new visitor starts anyway (Will).
+ *
+ * Below 60rem the button is hidden and the attribute does nothing: the
+ * phone bar has its Menu button, and the collapsed rules are scoped to
+ * the wide layout in app.css.
+ */
+const SIDEBAR_KEY = 'sonoran.nav';
+
+function wireSidebarCollapse() {
+  const button = $('[data-sidebar-collapse]');
+  if (!button) return;
+  const root = document.documentElement;
+  const narrow = matchMedia('(max-width: 60rem)');
+  const collapsed = () => root.getAttribute('data-sidebar') === 'collapsed';
+
+  const draw = () => {
+    button.hidden = narrow.matches;
+    button.setAttribute('aria-expanded', String(!collapsed()));
+    // The name says what a press will do, not what the state is; the
+    // state is `aria-expanded`.
+    button.setAttribute('aria-label', collapsed() ? 'Expand navigation' : 'Collapse navigation');
+    $('use', button).setAttribute('href', collapsed() ? '#i-rail-expand' : '#i-rail-collapse');
+  };
+
+  button.addEventListener('click', () => {
+    const next = !collapsed();
+    if (next) root.setAttribute('data-sidebar', 'collapsed');
+    else root.removeAttribute('data-sidebar');
+    try {
+      localStorage.setItem(SIDEBAR_KEY, next ? 'collapsed' : 'expanded');
+    } catch {
+      // Storage off. The choice holds for this visit.
+    }
+    draw();
+    /*
+     * The content column changed width and the window did not. ECharts
+     * resizes on the window's `resize` (see the listener near the top of
+     * this file), and so does Leaflet (`trackResize`), so one synthetic
+     * event after the layout settles redraws every chart and map on the
+     * page at the new width.
+     */
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  });
+  narrow.addEventListener('change', draw);
+  draw();
 }
 
 /* The page the nav button says you are on, so the answer does not need

@@ -3635,6 +3635,118 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 }
 
 /*
+ * The sidebar collapsed to its icons (#300).
+ *
+ * The button sits beside the logo at the top of the sidebar, and a new
+ * visitor starts expanded (Will). `data-sidebar="collapsed"` on `<html>`
+ * is set by the boot script before the first paint and by
+ * `wireSidebarCollapse` after, and every rule here is scoped to the wide
+ * layout: below 60rem the sidebar is the phone bar and none of this
+ * applies.
+ *
+ * Every name stays in the tree. A label goes off the screen the
+ * `.sr-only` way, never `display: none`, so a screen reader still reads
+ * "Nodes" and `markNavHere` still reads the link's text. A `title` does
+ * not reach a keyboard or a finger (#191), so the same label comes back
+ * on the screen beside the rail on hover and on keyboard focus.
+ */
+.sidebar-collapse {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+.sidebar-collapse:hover { color: var(--text); border-color: var(--line); }
+.sidebar-collapse .icon { width: 1.15rem; height: 1.15rem; fill: currentColor; vertical-align: 0; }
+/* `display: grid` above beats the user agent's `[hidden]`. */
+.sidebar-collapse[hidden] { display: none; }
+/* The short preset names exist only for the collapsed rail. */
+.preset-short { display: none; }
+
+@media (min-width: 60.01rem) {
+  html[data-sidebar="collapsed"] .sidebar {
+    width: 4.25rem;
+    flex-basis: 4.25rem;
+    padding-right: .5rem;
+    padding-left: calc(.5rem + var(--safe-left));
+    gap: .9rem;
+  }
+  html[data-sidebar="collapsed"] .sidebar-collapse { margin: 0 auto; }
+  html[data-sidebar="collapsed"] .brand { justify-content: center; }
+  /* The mark and the wordmark leave the screen, and the h1 stays in the
+     tree. The mark carries an inline `display`, so this cannot be
+     `display: none` either. */
+  html[data-sidebar="collapsed"] .brand-mark,
+  html[data-sidebar="collapsed"] .brand-text,
+  html[data-sidebar="collapsed"] .sidebar .nav-label,
+  html[data-sidebar="collapsed"] .menu-field-label,
+  html[data-sidebar="collapsed"] .preset-scope {
+    position: absolute; width: 1px; height: 1px; margin: -1px;
+    padding: 0; border: 0; overflow: hidden; clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  html[data-sidebar="collapsed"] .sidebar nav a,
+  html[data-sidebar="collapsed"] .menu-settings-link {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  /* The status is its dot; the words come back on hover. */
+  html[data-sidebar="collapsed"] .menu-foot .status {
+    justify-content: center;
+    padding-inline: 0;
+    min-height: 2.25rem;
+  }
+  /* The preset stays in the rail as its initials, one above the other.
+     Both are still radios with their full names, so the choice is one
+     press and not a menu to open first. */
+  html[data-sidebar="collapsed"] .preset-switch { grid-auto-flow: row; grid-auto-rows: 1fr; }
+  html[data-sidebar="collapsed"] .preset-switch::before {
+    right: .2rem;
+    width: auto;
+    bottom: auto;
+    height: calc((100% - .4rem) / var(--preset-count, 2));
+    transform: translateY(calc(var(--preset-index, 0) * 100%));
+  }
+  html[data-sidebar="collapsed"] .preset-choice { padding-inline: 0; }
+  html[data-sidebar="collapsed"] .preset-short { display: inline; }
+
+  /*
+   * The label beside the rail, on hover and on keyboard focus.
+   *
+   * `position: fixed` because the sidebar scrolls (`overflow-y: auto`),
+   * and an absolutely placed label would be clipped by it. `top` is left
+   * at `auto`, so the label keeps its static position: centred on the
+   * row it names, wherever the sidebar has scrolled to. Only `left` is
+   * set, to just past the rail.
+   */
+  html[data-sidebar="collapsed"] .sidebar :is(a, button, .status):is(:hover, :focus-visible) > .nav-label {
+    position: fixed;
+    left: calc(4.25rem + .5rem + var(--safe-left));
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+    padding: .35rem .6rem;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: .4rem;
+    font-size: .82rem;
+    font-weight: 600;
+    z-index: 1300;
+    pointer-events: none;
+  }
+}
+
+/*
  * The fixed-size controls, at finger size on a touch screen (#268).
  *
  * The general 44 px rule (`input, select, button`, #267) is an element
@@ -3668,6 +3780,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   .reaction > summary { min-height: 2.75rem; }
   .nav-toggle { min-width: 2.75rem; justify-content: center; }
   .menu-settings-link { min-height: 2.75rem; }
+  .sidebar-collapse { width: 2.75rem; height: 2.75rem; }
 }
 
 /*

@@ -1445,6 +1445,125 @@ async function main() {
   });
 
   /*
+   * The sidebar collapsed to icons (#300), in a context of its own: the
+   * choice is kept in localStorage, and a collapsed sidebar must not leak
+   * into the journeys that share `context`.
+   */
+  const railed = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(railed, 'the desktop sidebar collapses to icons and back (#300)', async (page) => {
+    await open(page, 'dashboard', 1500);
+    const button = page.locator('[data-sidebar-collapse]');
+    const state = () => page.evaluate(() => {
+      const b = document.querySelector('[data-sidebar-collapse]');
+      const canvas = document.querySelector('.page.active .chart canvas');
+      return {
+        width: Math.round(document.querySelector('.sidebar').getBoundingClientRect().width),
+        expanded: b.getAttribute('aria-expanded'),
+        name: b.getAttribute('aria-label'),
+        canvas: canvas ? Math.round(canvas.getBoundingClientRect().width) : 0,
+        host: canvas ? Math.round(canvas.closest('.chart').getBoundingClientRect().width) : 0,
+      };
+    });
+    must(await button.isVisible(), 'no collapse button on a wide screen');
+    await waitFor(page, () => !!document.querySelector('.page.active .chart canvas'), 20000);
+    const wide = await state();
+    must(wide.width >= 200, `a new visitor starts at ${wide.width} px, not expanded`);
+    must(wide.expanded === 'true' && /collapse/i.test(wide.name),
+      `expanded, the button says expanded=${wide.expanded} and "${wide.name}"`);
+
+    await button.click();
+    await page.waitForTimeout(800);
+    const rail = await state();
+    must(rail.width <= 80, `collapsed, the sidebar is still ${rail.width} px wide`);
+    must(rail.expanded === 'false' && /expand/i.test(rail.name),
+      `collapsed, the button says expanded=${rail.expanded} and "${rail.name}"`);
+    // The chart follows the new width without a window resize.
+    must(rail.canvas > wide.canvas + 40, `the chart stayed ${rail.canvas} px (was ${wide.canvas}) after the collapse`);
+    must(Math.abs(rail.canvas - rail.host) <= 2, `the chart is ${rail.canvas} px in a ${rail.host} px box`);
+
+    // Every link keeps its name, and the current page still says so.
+    for (const name of ['Dashboard', 'Nodes', 'Statistics', 'Settings']) {
+      must(await page.getByRole('link', { name, exact: true }).isVisible(), `no visible link named ${name} in the rail`);
+    }
+    must((await page.getByRole('link', { name: 'Dashboard', exact: true }).getAttribute('aria-current')) === 'page',
+      'the current page lost aria-current in the rail');
+    const presets = page.getByRole('radio');
+    must((await presets.count()) >= 1 && await presets.first().isVisible(), 'the preset is not in the rail');
+
+    // A label on hover, and on keyboard focus, beside the rail.
+    const label = (nav) => page.evaluate((key) => {
+      const box = document.querySelector(`#site-nav a[data-nav="${key}"] .nav-label`).getBoundingClientRect();
+      return { x: Math.round(box.x), width: Math.round(box.width) };
+    }, nav);
+    await page.hover('#site-nav a[data-nav="nodes"]');
+    await page.waitForTimeout(150);
+    const hovered = await label('nodes');
+    must(hovered.width > 20 && hovered.x >= rail.width, `hovering Nodes shows no label beside the rail (${JSON.stringify(hovered)})`);
+    await page.mouse.move(900, 500);
+    await button.focus();
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(150);
+    const focused = await label('dashboard');
+    must(focused.width > 20 && focused.x >= rail.width, `Tab to Dashboard shows no label (${JSON.stringify(focused)})`);
+
+    /*
+     * A new page load, not a hash change: going from #dashboard to
+     * #planner in the same page is the same document, and would find the
+     * attribute still standing rather than read the stored choice back.
+     * A second tab in this context shares the storage and is a real load.
+     */
+    const fresh = await page.context().newPage();
+    // The planner's sticky column stays flush in this state too (#108).
+    await fresh.goto(`${BASE}/#planner`, { waitUntil: 'load' });
+    await fresh.waitForTimeout(2000);
+    await fresh.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await fresh.waitForTimeout(400);
+    const flush = await fresh.evaluate(() => {
+      const box = document.querySelector('.sidebar').getBoundingClientRect();
+      return { top: box.top, gap: window.innerHeight - box.bottom, width: box.width };
+    });
+    await fresh.close();
+    must(flush.width <= 80, 'the collapse did not survive a new page load');
+    must(flush.top <= 1 && flush.gap <= 1, `the collapsed sidebar left a gap: ${JSON.stringify(flush)}`);
+
+    // Set before the script runs: with app.js served empty, only the boot
+    // script in index.html can have collapsed it, so there is no flash.
+    const bare = await page.context().newPage();
+    await bare.route(/\/static\/app\.js/, (route) => route.fulfill({ contentType: 'application/javascript', body: '' }));
+    await bare.goto(`${BASE}/#dashboard`, { waitUntil: 'load' });
+    const early = Math.round(await bare.evaluate(() => document.querySelector('.sidebar').getBoundingClientRect().width));
+    await bare.close();
+    must(early <= 80, `on a new load, before app.js, the sidebar is ${early} px: it would flash wide`);
+
+    // A second press expands it.
+    await button.click();
+    await page.waitForTimeout(300);
+    const back = await state();
+    must(back.width >= 200 && back.expanded === 'true', `a second press left it at ${back.width} px`);
+    return `${wide.width} -> ${rail.width} px, chart ${wide.canvas} -> ${rail.canvas} px, kept on reload, labels on hover and focus`;
+  });
+  await railed.close();
+
+  /*
+   * Storage refused: the page works and starts expanded. A getter that
+   * throws is what Safari's private mode and a blocked site look like.
+   */
+  const nostore = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await nostore.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', { get() { throw new Error('storage refused'); } });
+  });
+  await journey(nostore, 'the sidebar collapse works with storage refused (#300)', async (page) => {
+    await open(page, 'dashboard', 2000);
+    const width = () => page.evaluate(() => Math.round(document.querySelector('.sidebar').getBoundingClientRect().width));
+    must(await width() >= 200, 'with storage refused the sidebar did not start expanded');
+    await page.locator('[data-sidebar-collapse]').click();
+    await page.waitForTimeout(300);
+    must(await width() <= 80, 'with storage refused the button did nothing');
+    return 'starts expanded, and collapses for the visit';
+  });
+  await nostore.close();
+
+  /*
    * An iPad on its side (#267). 1112 px is wider than every phone
    * breakpoint, so this is the device that proves touch sizing follows
    * the pointer and not the width. `hasTouch` makes Chromium match

@@ -30,6 +30,15 @@
         document.documentElement.setAttribute('data-theme-mode', mode);
         var tint = document.querySelector('meta[name="theme-color"]');
         if (tint) tint.setAttribute('content', light ? '#f7f2ec' : '#17100b');
+        // The collapsed sidebar (#300), read here for the same reason as
+        // the theme: set before the first paint, so a reader who chose
+        // icons only never sees the wide sidebar flash first. Storage
+        // refused means expanded, which is where a new visitor starts.
+        try {
+          if (localStorage.getItem('sonoran.nav') === 'collapsed') {
+            document.documentElement.setAttribute('data-sidebar', 'collapsed');
+          }
+        } catch (error) {}
       }());
     </script>
     <!--
@@ -138,6 +147,11 @@
     <symbol id="i-search" viewBox="0 0 24 24"><path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/></symbol>
     <!-- The phone nav button. Open, and closed. -->
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/></symbol>
+    <!-- The desktop sidebar's collapse button (#300). Collapse, and
+         expand. Material Design Icons "chevron-double-left" and
+         "chevron-double-right", the same set as the rest. -->
+    <symbol id="i-rail-collapse" viewBox="0 0 24 24"><path d="M18.41,7.41L17,6L11,12L17,18L18.41,16.59L13.83,12L18.41,7.41M12.41,7.41L11,6L5,12L11,18L12.41,16.59L7.83,12L12.41,7.41Z"/></symbol>
+    <symbol id="i-rail-expand" viewBox="0 0 24 24"><path d="M5.59,7.41L7,6L13,12L7,18L5.59,16.59L10.17,12L5.59,7.41M11.59,7.41L13,6L19,12L13,18L11.59,16.59L16.17,12L11.59,7.41Z"/></symbol>
     <symbol id="i-menu-close" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></symbol>
     </svg>
     <!--
@@ -161,6 +175,21 @@
             <h1>Sonoran</h1>
             <span>azmsh.net</span>
           </div>
+          <!--
+            Collapse the sidebar to its icons (#300). Will: it sits at the
+            top, beside the logo, and a new visitor starts expanded.
+
+            Desktop only. It is `hidden` in the markup and shown by
+            `wireSidebarCollapse` above 60rem, so a browser without the
+            script never shows a button that cannot act, and a phone keeps
+            its Menu button alone. The name says what a press will do,
+            and `aria-expanded` says the state.
+          -->
+          <button type="button" class="sidebar-collapse" data-sidebar-collapse hidden
+                  aria-expanded="true" aria-controls="site-menu"
+                  aria-label="Collapse navigation">
+            <svg class="icon" aria-hidden="true"><use href="#i-rail-collapse"/></svg>
+          </button>
         </div>
         <!--
           Thirteen links, and on a phone they were the whole first screen.
@@ -216,20 +245,20 @@
         <p class="sr-only" data-status-live role="status" aria-live="polite"></p>
         <div class="site-menu" id="site-menu">
         <nav id="site-nav" aria-label="Dashboard pages">
-          <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg>Dashboard</a>
-          <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg>Nodes</a>
-          <a href="#chat" data-nav="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat</a>
-          <a href="#traceroutes" data-nav="traceroutes"><svg class="icon" aria-hidden="true"><use href="#i-traceroutes"/></svg>Traceroutes</a>
-          <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg>Map</a>
-          <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg>Graph</a>
-          <a href="#coverage" data-nav="coverage"><svg class="icon" aria-hidden="true"><use href="#i-coverage"/></svg>Coverage</a>
-          <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg>Planner</a>
-          <a href="#gaps" data-nav="gaps"><svg class="icon" aria-hidden="true"><use href="#i-gaps"/></svg>Gaps</a>
-          <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg>Config check</a>
-          <a href="#meshnet" data-nav="meshnet"><svg class="icon" aria-hidden="true"><use href="#i-meshnet"/></svg>Weekly check-in</a>
-          <a href="#firehose" data-nav="firehose"><svg class="icon" aria-hidden="true"><use href="#i-firehose"/></svg>Firehose</a>
-          <a href="#rf" data-nav="rf"><svg class="icon" aria-hidden="true"><use href="#i-rf"/></svg>RF</a>
-          <a href="#stats" data-nav="stats"><svg class="icon" aria-hidden="true"><use href="#i-stats"/></svg>Statistics</a>
+          <a href="#dashboard" data-nav="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-dashboard"/></svg><span class="nav-label">Dashboard</span></a>
+          <a href="#nodes" data-nav="nodes"><svg class="icon" aria-hidden="true"><use href="#i-nodes"/></svg><span class="nav-label">Nodes</span></a>
+          <a href="#chat" data-nav="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg><span class="nav-label">Chat</span></a>
+          <a href="#traceroutes" data-nav="traceroutes"><svg class="icon" aria-hidden="true"><use href="#i-traceroutes"/></svg><span class="nav-label">Traceroutes</span></a>
+          <a href="#map" data-nav="map"><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg><span class="nav-label">Map</span></a>
+          <a href="#graph" data-nav="graph"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg><span class="nav-label">Graph</span></a>
+          <a href="#coverage" data-nav="coverage"><svg class="icon" aria-hidden="true"><use href="#i-coverage"/></svg><span class="nav-label">Coverage</span></a>
+          <a href="#planner" data-nav="planner"><svg class="icon" aria-hidden="true"><use href="#i-planner"/></svg><span class="nav-label">Planner</span></a>
+          <a href="#gaps" data-nav="gaps"><svg class="icon" aria-hidden="true"><use href="#i-gaps"/></svg><span class="nav-label">Gaps</span></a>
+          <a href="#config" data-nav="config"><svg class="icon" aria-hidden="true"><use href="#i-config"/></svg><span class="nav-label">Config check</span></a>
+          <a href="#meshnet" data-nav="meshnet"><svg class="icon" aria-hidden="true"><use href="#i-meshnet"/></svg><span class="nav-label">Weekly check-in</span></a>
+          <a href="#firehose" data-nav="firehose"><svg class="icon" aria-hidden="true"><use href="#i-firehose"/></svg><span class="nav-label">Firehose</span></a>
+          <a href="#rf" data-nav="rf"><svg class="icon" aria-hidden="true"><use href="#i-rf"/></svg><span class="nav-label">RF</span></a>
+          <a href="#stats" data-nav="stats"><svg class="icon" aria-hidden="true"><use href="#i-stats"/></svg><span class="nav-label">Statistics</span></a>
           <!--
             Settings is NOT in this list, and that is the point (Will,
             2026-09-26: "there is a duplicate settings button on the
@@ -278,7 +307,7 @@
             `role`, which is why nothing is read twice.
           -->
           <p class="status" data-status>
-            <span class="dot"></span><span data-status-text>Connecting</span>
+            <span class="dot"></span><span class="nav-label" data-status-text>Connecting</span>
           </p>
 
           <!--
@@ -343,7 +372,7 @@
           -->
           <a class="menu-settings-link" href="#settings" data-nav="settings">
             <svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>
-            <span>Settings</span>
+            <span class="nav-label">Settings</span>
           </a>
         </div>
         </div>

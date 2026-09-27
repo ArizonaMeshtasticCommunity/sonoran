@@ -83,7 +83,9 @@ def test_the_comment_stripper_works() -> None:
 def test_the_navigation_is_in_the_order_that_was_asked_for() -> None:
     nav = _html()
     nav = nav[nav.index('<nav id="site-nav"') : nav.index("</nav>")]
-    assert re.findall(r"</svg>([^<]+)</a>", nav) == REQUESTED_ORDER
+    # Each label is in a span, so the collapsed sidebar (#300) can take it
+    # off the screen and keep it in the tree.
+    assert re.findall(r"</svg><span class=\"nav-label\">([^<]+)</span></a>", nav) == REQUESTED_ORDER
 
 
 def test_every_nav_entry_points_at_a_page_that_exists() -> None:
@@ -675,3 +677,39 @@ def test_the_switch_publishes_what_the_css_cannot_work_out() -> None:
     assert "Math.max(1," in body, (
         "the count is not floored at 1, so an empty option list divides by zero"
     )
+
+
+# --- the collapsed sidebar (#300) -----------------------------------
+
+
+def test_the_collapse_button_sits_beside_the_logo_and_names_its_action() -> None:
+    """Will: the button is at the top of the sidebar, beside the logo.
+
+    It is a real button, so Enter and Space work, and its name says what a
+    press will do while `aria-expanded` says the state.
+    """
+    html = _html()
+    brand = html[html.index('<div class="brand">') : html.index("</aside>")]
+    brand = brand[: brand.index('class="nav-toggle"')]
+    assert "data-sidebar-collapse" in brand, "the collapse button is not in the brand row"
+    button = brand[brand.index("<button") : brand.index("</button>")]
+    assert 'aria-expanded="true"' in button, "a new visitor must start expanded"
+    assert 'aria-label="Collapse navigation"' in button
+    assert "hidden" in button, "without the script the button must not show"
+
+
+def test_the_collapsed_state_is_read_before_the_first_paint() -> None:
+    """No wide-then-narrow flash, and a refused storage starts expanded."""
+    html = _html()
+    boot = html[html.index("<script nonce=") : html.index("</script>")]
+    assert "sonoran.nav" in boot, "the boot script does not read the stored choice"
+    read = boot[boot.index("sonoran.nav") - 200 : boot.index("sonoran.nav")]
+    assert "try {" in read, "a refused storage would throw before the page paints"
+
+
+def test_a_collapsed_label_leaves_the_screen_but_not_the_tree() -> None:
+    """`display: none` would take "Nodes" from a screen reader."""
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    start = css.index('html[data-sidebar="collapsed"] .sidebar .nav-label')
+    rule = css[start : css.index("}", start)]
+    assert "clip-path: inset(50%)" in rule and "display: none" not in rule
