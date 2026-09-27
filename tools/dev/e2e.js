@@ -1311,6 +1311,110 @@ async function main() {
     return `${imperialLink} / ${metricLink}; "${imperialLine}"`;
   });
 
+  await journey(context, 'the statistics range reaches every widget (#294)', async (page) => {
+    /*
+     * Will: "all the stats, widgets, etc should adjust to them. Default is
+     * last 30 days rolling." So this checks the requests every widget
+     * makes, not only the chips: a chip that changes while its widget still
+     * asks for 24 hours is the failure this journey is for.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (/\/api\/stats(\/(top|leaderboards|daily|hardware|activity|broadcast))?\?/.test(url)) asked.push(url);
+    });
+    const WIDGETS = ['stats?', 'top?', 'leaderboards?', 'daily?', 'hardware?', 'activity?', 'broadcast?'];
+    const everyWidgetAsked = (needle) => WIDGETS.filter((path) =>
+      !asked.some((url) => url.includes(`/api/${path === 'stats?' ? '' : 'stats/'}${path}`) && url.includes(needle)));
+    const settled = () => waitFor(page, () => !loading, 60000);
+    const chips = () => page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] [data-range-chip]')]
+      .map((chip) => chip.textContent));
+    const pressed = () => page.evaluate(() => [...document.querySelectorAll('[data-stats-quick][aria-pressed="true"]')]
+      .map((button) => button.dataset.statsQuick));
+
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    await settled();
+    must(JSON.stringify(await pressed()) === '["30d"]', `the default is not 30 d: ${await pressed()}`);
+    let missing = everyWidgetAsked('hours=720');
+    must(!missing.length, `these widgets did not ask for 30 days: ${missing.join(', ')}`);
+    const defaultChips = await chips();
+    must(defaultChips.length >= 5 && defaultChips.every((text) => text.startsWith('last 30 d')),
+      `a widget does not name the range: ${defaultChips.join(' | ')}`);
+
+    // A quick range: every widget again, the address, and no history entry.
+    const depth = await page.evaluate(() => history.length);
+    asked.length = 0;
+    await page.click('[data-stats-quick="7d"]');
+    await settled();
+    must(page.url().endsWith('#stats?range=7d'), `the address is ${page.url()}`);
+    must(await page.evaluate(() => history.length) === depth, 'the range added a history entry');
+    missing = everyWidgetAsked('hours=168');
+    must(!missing.length, `these widgets did not follow 7 d: ${missing.join(', ')}`);
+    must((await chips()).every((text) => text.startsWith('last 7 d')), 'a chip still names another range');
+
+    /*
+     * The gaps-backed boards cannot follow the range, and say so. The link
+     * board does follow it.
+     */
+    const boards = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+      .map((h) => [h.dataset.label, (h.querySelector('span.muted') || {}).textContent || '']));
+    if (boards.length) {
+      const link = boards.find(([title]) => /Longest reliable link/.test(title));
+      must(link && link[1] === 'last 7 d', `the link board chip reads ${link && link[1]}`);
+      const fixed = boards.filter(([title]) => !/Longest reliable link/.test(title));
+      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
+        `a gaps board does not say it keeps its own window: ${JSON.stringify(fixed)}`);
+    }
+
+    // A reload keeps it.
+    await page.reload({ waitUntil: 'load' });
+    await settled();
+    must(JSON.stringify(await pressed()) === '["7d"]', 'a reload lost the range');
+
+    // 24 h draws its charts, by hour.
+    await page.goto(`${BASE}/#stats?range=24h`, { waitUntil: 'load' });
+    await settled();
+    const drawn = await waitFor(page, () => [...document.querySelectorAll('[data-page="stats"] canvas')]
+      .filter((canvas) => canvas.width > 0 && canvas.height > 0).length > 0, 30000);
+    must(drawn, 'no chart was drawn at 24 h');
+    const title = await page.evaluate(() => document.querySelector('[data-activity-title]').textContent);
+    must(/by hour$/.test(title), `at 24 h the activity chart says "${title}"`);
+
+    /*
+     * A custom range that starts before what is kept: every packet widget
+     * says where it really counts from. 26 days, so the API accepts it.
+     */
+    const day = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
+    asked.length = 0;
+    await page.goto(`${BASE}/#stats?from=${day(40)}&to=${day(15)}`, { waitUntil: 'load' });
+    await settled();
+    missing = everyWidgetAsked(`since=${day(40)}`);
+    must(!missing.length, `these widgets did not follow the dates: ${missing.join(', ')}`);
+    const capped = await chips();
+    must(capped.every((text) => /counted from/.test(text)),
+      `a widget does not say retention cuts the range short: ${capped.join(' | ')}`);
+    const packetTile = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .stat')]
+      .map((tile) => tile.innerText).find((text) => /PACKETS|Packets/.test(text)) || '');
+    must(/counted from/.test(packetTile), `the packets tile compares a part with a whole: ${packetTile}`);
+
+    // Longer than retention is refused beside the boxes, and nothing moves.
+    const before = page.url();
+    await page.evaluate(() => {
+      const range = document.querySelector('[data-stats-range]');
+      range.classList.add('show-custom');
+    });
+    await page.fill('[data-stats-from]', day(45));
+    await page.fill('[data-stats-to]', day(1));
+    await page.dispatchEvent('[data-stats-to]', 'change');
+    const refusal = await page.evaluate(() => {
+      const note = document.querySelector('[data-stats-range-note]');
+      return note.hidden ? '' : note.textContent;
+    });
+    must(/at most 30 days/.test(refusal), `a 45 day range was not refused in words: "${refusal}"`);
+    must(page.url() === before, 'a refused range still changed the address');
+    return `${WIDGETS.length} widgets follow 30 d, 7 d, 24 h and a custom range; capped ranges say so`;
+  });
+
   await journey(context, 'the planner offers its control', async (page) => {
     await open(page, 'planner', 5000);
     must((await page.locator('[data-planner-run]').count()) > 0, 'no run control');

@@ -367,6 +367,9 @@ channel, Data message metadata, and receive time.
 - `dependencies.py` gives database session access to route handlers.
 - `channels.py` groups channel names into families for the UI.
 - `names.py` resolves node display names from the database.
+- `window.py` turns the statistics query (`hours`, or `since` and
+  `until`) into one window. It is the only place that does, so the
+  widgets on the Statistics page cannot disagree about a range (#294).
 - `traces.py` turns one stored traceroute row into a path. It is the
   only place that decides what a row proves. `graph.py`, `map.py`, and
   `traceroutes.py` all read rows through it, so that the pages cannot

@@ -58,7 +58,10 @@ def test_the_dashboard_asks_for_the_rolling_day() -> None:
     assert "loadSummary(page, { hours: DASHBOARD_SUMMARY_HOURS })" in dashboard
     assert re.search(r"const DASHBOARD_SUMMARY_HOURS = 24;", APP)
     summary = _function("loadSummary")
-    assert "`api/stats?hours=${hours}`" in summary
+    # The Statistics page passes its own range as `query` (#294); the
+    # dashboard's `hours` becomes the same query.
+    assert "hours ? `hours=${hours}` : null" in summary
+    assert "`api/stats?${asked}`" in summary
 
 
 def test_the_delta_compares_with_the_window_before() -> None:

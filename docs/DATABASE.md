@@ -334,6 +334,14 @@ The migration service applies `RETENTION_DAYS_*` environment overrides.
 Run the migration service after a retention setting change.
 `daily_snapshot` and `node` have no retention.
 
+The Statistics page reads no window longer than 720 hours, the default
+`packet` retention (#294). A window can still start before the oldest
+row kept; the API then returns `retained_from` and the page says on each
+widget that it counts from there. If `RETENTION_DAYS_PACKET` is lowered,
+the 30 day button counts less than 30 days and each widget says so. If it
+is raised, the 720 hour cap in `sonoran/api/window.py` and the page's
+`STATS_RANGES` stay where they are until they are changed with it.
+
 ## 7. Indexes
 
 Keep indexes minimal. Each index slows inserts.

@@ -25,7 +25,8 @@ def test_the_leaderboard_cache_is_keyed_on_the_resolved_preset() -> None:
         "the preset is still taken from the caller's spelling, so the "
         "cache key and the reported preset are both attacker-chosen"
     )
-    key = source.index("_link_caches.setdefault(")
+    # A KeyedCache now (#294), keyed on the preset and the window.
+    key = source.index("_link_caches.get(")
     resolved = source.index("preset = modem.name")
     assert resolved < key, "the cache is keyed before the preset is resolved"
 

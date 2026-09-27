@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.api.cache import TimedCache
+from sonoran.api.cache import KeyedCache
 from sonoran.api.dependencies import get_session
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.routes.gaps import read_assessment
@@ -38,6 +38,7 @@ from sonoran.api.routes.graph import (
     _traceroute_edges,
 )
 from sonoran.api.routes.node_page import exact_positions
+from sonoran.api.window import Window, optional_window
 from sonoran.config import Settings
 from sonoran.gaps import store as gaps_store
 from sonoran.gaps.siting import distance_km
@@ -68,13 +69,18 @@ LINK_CACHE_SECONDS = 900.0
 # was awake for one lucky hour off the top of the board.
 MIN_AWAKE_HOURS = 24
 
-_link_caches: dict[str, TimedCache[dict[str, object]]] = {}
+#: One link board for each preset and window. Keyed and capped: the
+#: preset is already normalised below, and the window comes from the
+#: Statistics range (#294), so a caller varying it cannot grow this
+#: without limit.
+_link_caches: KeyedCache[dict[str, object]] = KeyedCache(capacity=32)
 
 
 @router.get("/leaderboards")
 async def leaderboards(
     request: Request,
     channel: str | None = None,
+    span: Window | None = Depends(optional_window),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return the boards for one modem preset.
@@ -82,6 +88,11 @@ async def leaderboards(
     One preset at a time, as everywhere else: a node on one preset
     cannot hear a node on another (AGENTS.md 9.7). Without `channel` the
     first preset the gaps job assessed is used.
+
+    A window (`hours`, or `since` and `until`) moves the link board to
+    it (#294). The two boards read from the gaps assessment keep the
+    gaps job's own window, and each board states its window, so the
+    page can say which boards follow its range and which do not.
     """
     settings: Settings = request.app.state.settings
     presets = _assessed_presets(settings)
@@ -112,10 +123,11 @@ async def leaderboards(
         _reachable_board(rows, window),
         _direct_board(rows, window),
     ]
-    cache = _link_caches.setdefault(preset, TimedCache())
     boards.append(
-        await cache.get(
-            LINK_CACHE_SECONDS, lambda: _link_board(session, preset, settings.gaps_margin_bad_db)
+        await _link_caches.get(
+            f"{preset}:{span.key if span else ''}",
+            LINK_CACHE_SECONDS,
+            lambda: _link_board(session, preset, settings.gaps_margin_bad_db, span),
         )
     )
     return {
@@ -209,17 +221,25 @@ def _direct_board(rows: list[dict[str, object]], window: object) -> dict[str, ob
     }
 
 
-async def _link_board(session: AsyncSession, preset: str, margin_db: float) -> dict[str, object]:
+async def _link_board(
+    session: AsyncSession, preset: str, margin_db: float, window: Window | None = None
+) -> dict[str, object]:
     """The longest links measured both ways with a healthy margin.
 
     The link evidence is the graph page's, read through the graph's own
     functions, so a link on this board is one the graph draws solid.
+    Without a window it reads the last `LINK_WINDOW_HOURS`.
     """
     modem = preset_for_channel(preset)
     required = required_snr_db(modem) if modem else 0.0
-    since = datetime.now(UTC) - timedelta(hours=LINK_WINDOW_HOURS)
-    edges = await _traceroute_edges(session, since, preset)
-    neighbours = await _neighbor_edges(session, since, preset)
+    if window is None:
+        since = datetime.now(UTC) - timedelta(hours=LINK_WINDOW_HOURS)
+        until = None
+        window_hours: float = LINK_WINDOW_HOURS
+    else:
+        since, until, window_hours = window.start, window.end, round(window.hours, 2)
+    edges = await _traceroute_edges(session, since, preset, until)
+    neighbours = await _neighbor_edges(session, since, preset, until)
     for edge in neighbours.values():
         _merge(edges, edge)
 
@@ -248,7 +268,9 @@ async def _link_board(session: AsyncSession, preset: str, margin_db: float) -> d
             f"Distance between two nodes that heard each other both ways, with a signal at "
             f"least {margin_db:g} dB above what {preset} needs."
         ),
-        "window_hours": LINK_WINDOW_HOURS,
+        "window_hours": window_hours,
+        # Says that this board follows the range the page asked for.
+        "follows_window": window is not None,
         "cannot_know": (
             "Both ends need an exact position, and a link needs reports in both directions, "
             "so a real long link that only one side reports is missing."

@@ -4,12 +4,18 @@
 and Uploads become a rolling last 24 hours, and that Nodes and Gateways
 stay totals of every node ever seen.
 
+#294: every widget on the Statistics page reads the range chosen at the
+top of the page, and says where packet retention cuts it short.
+
 The database is shared by the whole integration session, so each test
 measures the change its own rows make rather than an absolute count.
 """
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -17,6 +23,26 @@ from sonoran.api.app import create_app
 from sonoran.api.cache import clear_all
 from sonoran.config import Settings
 from tests.integration.conftest import role_url
+
+# Every node these tests add is numbered in this range, so they can be
+# taken out again. Left behind, they change the counts of tests that run
+# later in the same session: run first, they broke two in test_api.py.
+OWN_NODES = (292000, 294999)
+
+
+@pytest.fixture(autouse=True)
+def _remove_own_rows(migrated_engine) -> Iterator[None]:  # type: ignore[no-untyped-def]
+    yield
+    with migrated_engine.begin() as connection:
+        for table, column in (
+            ("packet_seen", "from_node_num"),
+            ("packet", "from_node_num"),
+            ("node", "node_num"),
+        ):
+            connection.execute(
+                text(f"DELETE FROM {table} WHERE {column} BETWEEN :low AND :high"),
+                {"low": OWN_NODES[0], "high": OWN_NODES[1]},
+            )
 
 
 def _client(timescale_url: str) -> TestClient:
@@ -126,3 +152,123 @@ def test_a_window_outside_the_allowed_range_is_refused(  # type: ignore[no-untyp
     with _client(timescale_url) as client:
         for hours in (0, -1, 721):
             assert client.get(f"/api/stats?hours={hours}").status_code == 422, hours
+
+
+# --- #294: every widget on the Statistics page reads one range -------
+
+
+PHOENIX = ZoneInfo("America/Phoenix")
+
+
+def test_the_daily_chart_counts_each_local_day(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """Packets on three Arizona days, one a minute either side of midnight.
+
+    A UTC day would put the minute before local midnight and the minute
+    after it into the same day. Arizona is UTC-7 all year.
+    """
+    node = 294001
+    midnight = datetime.now(PHOENIX).replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight -= timedelta(days=3)
+    days = [(midnight + timedelta(days=offset)).date().isoformat() for offset in (-1, 0, 1)]
+    until = (midnight + timedelta(days=2)).date().isoformat()
+    query = f"/api/stats/daily?since={days[0]}&until={until}"
+    with _client(timescale_url) as client:
+        before = _read(client, query)
+        with migrated_engine.begin() as connection:
+            _node(connection, node, gateway=False)
+            _packet(connection, node, 1, midnight - timedelta(minutes=1))
+            _packet(connection, node, 2, midnight + timedelta(minutes=1))
+            _packet(connection, node, 3, midnight + timedelta(minutes=2))
+            _packet(connection, node, 4, midnight + timedelta(days=1, hours=1))
+        after = _read(client, query)
+
+    def by_day(body: dict[str, object]) -> dict[str, dict[str, int]]:
+        listed = body["days"]
+        assert isinstance(listed, list)
+        return {row["day"]: row for row in listed}
+
+    old, new = by_day(before), by_day(after)
+    assert list(new) == days
+    change = {day: new[day]["packet_count"] - old[day]["packet_count"] for day in days}
+    assert change == {days[0]: 1, days[1]: 2, days[2]: 1}
+    uploads = {day: new[day]["observation_count"] - old[day]["observation_count"] for day in days}
+    assert uploads == change
+    assert after["timezone"] == "America/Phoenix"
+
+
+def test_a_long_window_is_drawn_by_day_and_a_short_one_by_hour(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    with _client(timescale_url) as client:
+        assert _read(client, "/api/stats/activity?hours=24")["bucket"] == "hour"
+        assert _read(client, "/api/stats/activity?hours=72")["bucket"] == "hour"
+        week = _read(client, "/api/stats/activity?hours=168")
+    assert week["bucket"] == "day"
+    # Each day starts at a local midnight: 07:00 UTC in Arizona.
+    starts = week["hours"]
+    assert isinstance(starts, list)
+    for moment in starts:
+        assert datetime.fromisoformat(str(moment)).astimezone(PHOENIX).hour == 0
+
+
+def test_the_busiest_senders_ignore_a_future_clock(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """`/top` had a lower bound only, so a row dated ahead counted in every window."""
+    node = 294101
+    with migrated_engine.begin() as connection:
+        _node(connection, node, gateway=False)
+        for packet_id in range(1, 400):
+            _packet(connection, node, packet_id, datetime.now(UTC) + timedelta(hours=2))
+    with _client(timescale_url) as client:
+        clear_all()
+        rows = client.get("/api/stats/top?hours=24&limit=100").json()
+    assert f"!{node:08x}" not in {row["node_id"] for row in rows}
+
+
+def test_the_hardware_mix_follows_the_window(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """Boards heard in the window, from the packets, not every node ever seen."""
+    recent, older = 294201, 294202
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        for node, board in ((recent, "WINDOW_RECENT_BOARD"), (older, "WINDOW_OLDER_BOARD")):
+            _node(connection, node, gateway=False)
+            connection.execute(
+                text("UPDATE node SET hw_model = :b WHERE node_num = :n"),
+                {"b": board, "n": node},
+            )
+        _packet(connection, recent, 1, now - timedelta(hours=2))
+        _packet(connection, older, 1, now - timedelta(days=10))
+
+    def boards(client: TestClient, query: str) -> set[str]:
+        clear_all()
+        return {row["hw_model"] for row in client.get(f"/api/stats/hardware{query}").json()}
+
+    with _client(timescale_url) as client:
+        day = boards(client, "?hours=24")
+        month = boards(client, "?hours=720")
+        ever = boards(client, "")
+    assert "WINDOW_RECENT_BOARD" in day and "WINDOW_OLDER_BOARD" not in day
+    assert {"WINDOW_RECENT_BOARD", "WINDOW_OLDER_BOARD"} <= month
+    assert {"WINDOW_RECENT_BOARD", "WINDOW_OLDER_BOARD"} <= ever
+
+
+def test_a_range_that_starts_before_retention_says_where_it_counts_from(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    start = (datetime.now(PHOENIX) - timedelta(days=40)).date()
+    end = (datetime.now(PHOENIX) - timedelta(days=15)).date()
+    with _client(timescale_url) as client:
+        body = _read(client, f"/api/stats?since={start}&until={end}")
+        daily = _read(client, f"/api/stats/daily?since={start}&until={end}")
+    kept = datetime.fromisoformat(str(body["retained_from"]))
+    assert kept > datetime.fromisoformat(str(body["window_start"]))
+    assert body["previous"] is None
+    listed = daily["days"]
+    assert isinstance(listed, list)
+    # Days older than retention are left out, never drawn as a zero.
+    assert listed and listed[0]["day"] > start.isoformat()

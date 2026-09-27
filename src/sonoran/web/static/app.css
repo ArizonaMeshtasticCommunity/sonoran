@@ -1866,6 +1866,33 @@ body.chart-staged { overflow: hidden; }
 .chat-range .range-quick { display: flex; gap: .25rem; }
 
 /*
+ * The Statistics range (#294) borrows the chat range above, and adds the
+ * one thing the chat does not need: which quick range is in force. The
+ * pressed chip is filled, as the preset switch's chosen side is.
+ */
+.stats-range { justify-content: flex-end; }
+.stats-range .chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.stats-range input[type="date"] { padding: .3rem .4rem; }
+.stats-range .range-refusal {
+  flex: 1 1 100%;
+  margin: 0;
+  text-align: right;
+  font-size: .78rem;
+  color: var(--warn);
+}
+/* The range a widget counts, beside its title. */
+.range-chip {
+  margin-left: .35rem;
+  font-size: .72rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/*
  * At a phone width the range wraps to its own line and the quick buttons
  * come first, because they are what gets used on a phone -- typing a
  * datetime on a 320px screen is a last resort, not the common path.
@@ -1908,6 +1935,9 @@ body.chart-staged { overflow: hidden; }
    */
   .chat-range.show-custom .range-custom-fields { display: flex; flex-wrap: wrap; }
   .range-custom-fields input[type="datetime-local"] { flex: 1 1 100%; }
+  /* A date box is narrow enough for two in a row, with "to" between. */
+  .stats-range input[type="date"] { flex: 1 1 7rem; min-width: 0; }
+  .stats-range .range-refusal { text-align: left; }
   .chat-full .page-head { margin-bottom: .5rem; }
   .chat-full .page-head .controls { gap: .4rem; }
   .chat-full .chat-title-row h2 { font-size: 1.15rem; }
