@@ -106,29 +106,105 @@ _hardware_cache: TimedCache[list[dict[str, object]]] = TimedCache()
 _portnums_cache: KeyedCache[list[dict[str, object]]] = KeyedCache(capacity=32)
 
 
+#: The windowed answers, one for each window asked for. Capped, so a
+#: caller that varies `hours` cannot grow it without limit.
+_window_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=16)
+
+
 @router.get("")
-async def stats(request: Request, session: AsyncSession = Depends(get_session)) -> dict[str, int]:
+async def stats(
+    request: Request,
+    hours: int | None = Query(default=None, ge=1, le=720),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
     """Return current dashboard summary counts.
 
     Held for `STATS_CACHE_SECONDS`. A mesh does not change its totals
     in a way anybody reads at second resolution, and these are the four
     unbounded counts in the API.
+
+    With `hours`, packets and uploads are counted over the last `hours`
+    of receive time instead, and `previous` holds the same two counts
+    for the window before. Nodes and gateways stay totals of every node
+    ever seen (Will, #292). Without `hours` the answer is unchanged.
     """
     settings: Settings = request.app.state.settings
-    return await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+    if hours is None:
+        return dict(
+            await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+        )
+    return await _window_cache.get(
+        str(hours),
+        settings.stats_cache_seconds,
+        lambda: _read_window_summary(session, settings, hours),
+    )
 
 
-async def _read_summary(session: AsyncSession) -> dict[str, int]:
-    """Count the nodes, the packets, the observations, and the gateways."""
+async def _read_window_summary(
+    session: AsyncSession, settings: Settings, hours: int
+) -> dict[str, object]:
+    """Count packets and uploads in the window, and nodes over all time.
+
+    The window is receive time, bounded at both ends, so a row dated in
+    the future by a gateway clock written before the 9.4 fix does not
+    count. See AGENTS.md 9.4.
+
+    `previous` is None when the window before starts earlier than the
+    packet retention. Those rows are gone, so a comparison with them
+    would show a rise that did not happen.
+    """
+    now = datetime.now(UTC)
+    span = timedelta(hours=hours)
+    start = now - span
+    earlier = start - span
+    retained_from = now - timedelta(days=settings.retention_days_packet)
+    lifetime = await _lifetime_nodes(session)
+    return {
+        "window_hours": hours,
+        "node_count": lifetime["node_count"],
+        "gateway_count": lifetime["gateway_count"],
+        **await _window_counts(session, start, now),
+        "previous": (
+            None if earlier < retained_from else await _window_counts(session, earlier, start)
+        ),
+    }
+
+
+async def _lifetime_nodes(session: AsyncSession) -> dict[str, int]:
+    """Count every node ever seen, and every node ever flagged a gateway."""
     return {
         "node_count": (await session.scalar(select(func.count()).select_from(Node))) or 0,
-        "packet_count": (await session.scalar(select(func.count()).select_from(Packet))) or 0,
-        "observation_count": (await session.scalar(select(func.count()).select_from(PacketSeen)))
-        or 0,
         "gateway_count": (
             await session.scalar(select(func.count()).select_from(Node).where(Node.is_mqtt_gateway))
         )
         or 0,
+    }
+
+
+async def _window_counts(session: AsyncSession, start: datetime, end: datetime) -> dict[str, int]:
+    """Count the packets first seen, and the uploads, in `[start, end)`."""
+    packets = await session.scalar(
+        select(func.count())
+        .select_from(Packet)
+        .where(Packet.first_seen_at >= start, Packet.first_seen_at < end)
+    )
+    uploads = await session.scalar(
+        select(func.count())
+        .select_from(PacketSeen)
+        .where(PacketSeen.seen_at >= start, PacketSeen.seen_at < end)
+    )
+    return {"packet_count": packets or 0, "observation_count": uploads or 0}
+
+
+async def _read_summary(session: AsyncSession) -> dict[str, int]:
+    """Count the nodes, the packets, the observations, and the gateways."""
+    lifetime = await _lifetime_nodes(session)
+    return {
+        "node_count": lifetime["node_count"],
+        "packet_count": (await session.scalar(select(func.count()).select_from(Packet))) or 0,
+        "observation_count": (await session.scalar(select(func.count()).select_from(PacketSeen)))
+        or 0,
+        "gateway_count": lifetime["gateway_count"],
     }
 
 

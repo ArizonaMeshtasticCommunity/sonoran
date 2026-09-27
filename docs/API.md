@@ -1553,9 +1553,31 @@ figures stay exact and the readers share them.
 
 ### 8.1 `GET /api/stats`
 
-Returns the dashboard summary: node counts, packet counts, gateway counts, messages per hour.
+Returns the dashboard summary: `node_count`, `packet_count`,
+`observation_count` (uploads) and `gateway_count`.
 
-Held for `STATS_CACHE_SECONDS`. See 8.0.
+Query parameters:
+
+- `hours` — optional, 1 to 720. Count `packet_count` and
+  `observation_count` over the last `hours` of receive time
+  (`packet.first_seen_at`, `packet_seen.seen_at`), bounded at both ends,
+  so a row dated in the future does not count (AGENTS.md 9.4).
+  `node_count` and `gateway_count` stay totals of every node ever seen
+  and every node ever flagged a gateway, with or without `hours` (#292).
+
+With `hours` the response also carries:
+
+- `window_hours` — the window counted.
+- `previous` — `packet_count` and `observation_count` for the window of
+  the same length just before. It is null when that window starts
+  before `RETENTION_DAYS_PACKET`: those rows are gone, and a comparison
+  with them would show a rise that did not happen.
+
+Without `hours` the answer is unchanged: every row the database holds.
+The dashboard asks for `hours=24`.
+
+Held for `STATS_CACHE_SECONDS`, one answer for each window, in a cache
+with a bounded number of keys. See 8.0.
 
 ### 8.2 `GET /api/stats/top`
 

@@ -104,7 +104,9 @@ def test_the_firehose_does_not_call_its_upload_count_a_gateway_count() -> None:
 def test_the_summary_tiles_do_not_call_uploads_observations() -> None:
     """The same word, on the tile and in the table."""
     app = _read("app.js")
-    assert "statTile('Uploads', count(stats.observation_count)" in app
+    # The label now names its window, "Uploads (24 h)" (#292), through
+    # `label`. The word is still Uploads.
+    assert "statTile(label('Uploads', true), count(stats.observation_count)" in app
     assert "statTile('Observations'" not in app
 
 

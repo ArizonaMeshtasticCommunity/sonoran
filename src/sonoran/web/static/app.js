@@ -1246,15 +1246,54 @@ function fitChartExpand(target) {
 
 /* ---------------------------------------------------------------- 4 */
 
-/** Shared summary tiles used by the dashboard and the statistics page. */
-async function loadSummary(page) {
+/*
+ * A count against the same count in the window before, for a tile's
+ * delta line (#292): "▲ 4% on the day before".
+ *
+ * Null when there is nothing honest to compare with. The API sends no
+ * `previous` when the window before is older than the packets it keeps,
+ * and a comparison with deleted rows would show a rise that never
+ * happened.
+ */
+function changeOn(current, previous, before) {
+  if (current == null || previous == null) return null;
+  if (previous === 0) return current ? `none on ${before}` : `same as ${before}`;
+  const change = ((current - previous) / previous) * 100;
+  if (Math.abs(change) < 0.5) return `same as ${before}`;
+  return `${change > 0 ? '▲' : '▼'} ${Math.round(Math.abs(change))}% on ${before}`;
+}
+
+/**
+ * Shared summary tiles used by the dashboard and the statistics page.
+ *
+ * With `hours`, Packets and Uploads count that rolling window and compare
+ * with the window before it. Nodes and Gateways stay totals of every node
+ * ever seen, whatever the window (Will, #292), and keep the line against
+ * yesterday's snapshot, which is a total too.
+ */
+async function loadSummary(page, { hours = null } = {}) {
   const target = $('[data-summary]', page);
   if (!target) return;
-  const [stats, snapshots] = await getAll(['api/stats', 'api/stats/snapshots/daily?days=2']);
+  const [stats, snapshots] = await getAll([
+    hours ? `api/stats?hours=${hours}` : 'api/stats',
+    'api/stats/snapshots/daily?days=2',
+  ]);
   if (!stats) return replace(target, failure(new Error('Statistics are not available.')));
   const yesterday = snapshots && snapshots[1];
-  const delta = (key) =>
+  const snapshotDelta = (key) =>
     yesterday && yesterday[key] != null ? `${count(yesterday[key])} yesterday` : null;
+  const windowed = stats.window_hours != null;
+  const span = windowed ? windowName(stats.window_hours) : '';
+  const before = stats.window_hours === 24 ? 'the day before' : `the previous ${span}`;
+  const delta = (key) => {
+    if (!windowed) return snapshotDelta(key);
+    if (key === 'node_count' || key === 'gateway_count') return snapshotDelta(key);
+    return changeOn(stats[key], stats.previous ? stats.previous[key] : null, before);
+  };
+  // "(24 h)" on the two that follow the window, "(all time)" on the two
+  // that do not, so one row of tiles does not mix two meanings unlabelled.
+  const label = (name, rolling) => (windowed ? `${name} (${rolling ? span : 'all time'})` : name);
+  const within = windowed ? ` in the last ${span}` : '';
   /*
    * "Observations" was the endpoint's word for `packet_seen`, printed
    * at the reader. A `packet_seen` row is one MQTT upload, and saying
@@ -1265,18 +1304,29 @@ async function loadSummary(page) {
    * dashboard has one word for it. No count changes.
    */
   replace(target,
-    statTile('Nodes', count(stats.node_count), delta('node_count'),
-      'How many nodes this database holds.'),
-    statTile('Packets', count(stats.packet_count), delta('packet_count'),
-      'Packets stored. The same packet uploaded by several gateways is counted once.'),
-    statTile('Uploads', count(stats.observation_count), delta('observation_count'),
-      'One for each time a gateway uploaded a packet to MQTT. One packet is often '
+    statTile(label('Nodes', false), count(stats.node_count), delta('node_count'),
+      'How many nodes this database holds: every node it has ever heard.'),
+    statTile(label('Packets', true), count(stats.packet_count), delta('packet_count'),
+      `Packets stored${within}. The same packet uploaded by several gateways is counted once.`),
+    statTile(label('Uploads', true), count(stats.observation_count), delta('observation_count'),
+      `One for each time a gateway uploaded a packet to MQTT${within}. One packet is often `
       + 'uploaded by several gateways, and by the same gateway more than once, so this '
       + 'is larger than the packet count and is not a count of gateways.'),
-    statTile('Gateways', count(stats.gateway_count), delta('gateway_count'),
-      'Nodes that upload what they hear to MQTT. They are the only observers this '
-      + 'database has.'));
+    statTile(label('Gateways', false), count(stats.gateway_count), delta('gateway_count'),
+      'Nodes that upload what they hear to MQTT, counting every one ever seen. They are '
+      + 'the only observers this database has.'));
 }
+
+/** A window in hours as the page names it: "24 h", "7 d". */
+function windowName(hours) {
+  return hours % 24 === 0 && hours > 24 ? `${hours / 24} d` : `${hours} h`;
+}
+
+/*
+ * The window the dashboard's headline tiles count (Will, #292: "the 4
+ * main stats on the dashboard should show the rolling last 24 hours").
+ */
+const DASHBOARD_SUMMARY_HOURS = 24;
 
 async function loadTopTalkers(page) {
   const target = $('[data-top-talkers]', page);
@@ -1409,7 +1459,7 @@ const PAGES = {};
 const PORTNUM_CHART_HOURS = 24;
 
 PAGES.dashboard = async (page) => {
-  await Promise.all([loadSummary(page), loadTopTalkers(page)]);
+  await Promise.all([loadSummary(page, { hours: DASHBOARD_SUMMARY_HOURS }), loadTopTalkers(page)]);
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
