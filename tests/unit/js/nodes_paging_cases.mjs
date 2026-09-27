@@ -97,6 +97,21 @@ ok('a page of nothing but repeats adds nothing', allRepeats.added.length === 0);
 ok('a page of nothing but repeats still moves the offset', allRepeats.offset === 200);
 ok('a page of nothing but repeats is not the end', allRepeats.exhausted === false);
 
+// --- the cursor (#250) ---------------------------------------------
+//
+// The next page starts after the row the server names, so the cursor it
+// sent is the one carried forward. An answer with no cursor (an older
+// server, or a proxy that dropped the header) gives null, and the next
+// page then goes back to the offset rather than to the top of the list.
+const byCursor = mergeNodePage([], rowsFrom(0, 100), { offset: 0, pageSize: 100, cursor: 'abc' });
+ok('the cursor the server sent is the one carried to the next page', byCursor.cursor === 'abc',
+  `cursor ${byCursor.cursor}`);
+const noCursor = mergeNodePage([], rowsFrom(0, 100), { offset: 0, pageSize: 100, cursor: null });
+ok('no cursor is null, never a stale one', noCursor.cursor === null, `cursor ${noCursor.cursor}`);
+ok('and the offset is still counted for that case', noCursor.offset === 100);
+const unnamed = mergeNodePage([], rowsFrom(0, 3), { offset: 0, pageSize: 100 });
+ok('an old caller that passes no cursor gets null', unnamed.cursor === null);
+
 // --- rubbish in ----------------------------------------------------
 const junk = mergeNodePage([], null, { offset: 0, pageSize: 100 });
 ok('no rows at all does not throw', junk.rows.length === 0 && junk.exhausted === true);

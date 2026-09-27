@@ -572,6 +572,56 @@ async function main() {
     return `${busiest.id}: ${before} -> ${after} rows by scrolling, ${paged.length} page(s) by cursor with the sort; "${status}"`;
   });
 
+  await journey(context, 'the nodes list scrolls on by cursor (#250)', async (page) => {
+    /*
+     * The seed holds one page of nodes, so a second page cannot happen
+     * against it. This serves 250 nodes built from a real row, and pages
+     * them the way the server does: a `cursor` that names the last row,
+     * returned in `X-Next-Cursor`. The claims are about the page: every
+     * later request carries the cursor and the sort, none carries an
+     * offset, and the list reaches the end with no node twice. The
+     * server's half is `tests/integration/test_node_cursor.py`.
+     */
+    const template = (await (await page.request.get(`${BASE}/api/nodes?limit=1`)).json())[0];
+    must(template, 'the instance has no node to copy');
+    const TOTAL = 250;
+    const nodes = Array.from({ length: TOTAL }, (_, index) => ({
+      ...template,
+      node_num: 0x0e2e0000 + index,
+      node_id: `!0e2e${String(index).padStart(4, '0')}`,
+      long_name: `Cursor ${index}`,
+      short_name: `C${index}`,
+    }));
+    const asked = [];
+    await page.route(/\/api\/nodes\?/, (route, request) => {
+      const url = new URL(request.url());
+      asked.push(url.search);
+      const limit = Number(url.searchParams.get('limit') || 100);
+      const cursor = url.searchParams.get('cursor');
+      const start = cursor == null ? 0 : Number(cursor) + 1;
+      const rows = nodes.slice(start, start + limit);
+      const headers = { 'X-Total-Count': String(TOTAL) };
+      if (rows.length) headers['X-Next-Cursor'] = String(start + rows.length - 1);
+      return route.fulfill({ contentType: 'application/json', headers, body: JSON.stringify(rows) });
+    });
+    await open(page, 'nodes');
+    const count = () => page.locator('[data-page="nodes"] tbody tr').count();
+    for (let tries = 0; tries < 20 && (await count()) < TOTAL; tries += 1) {
+      await page.locator('[data-node-more]').scrollIntoViewIfNeeded().catch(() => {});
+      await page.waitForTimeout(500);
+    }
+    const shown = await count();
+    const later = asked.slice(1);
+    must(later.length > 0, `only one page was asked for (${shown} rows)`);
+    must(later.every((query) => /[?&]cursor=/.test(query)), `a later page had no cursor: ${later.join(' ')}`);
+    must(!asked.some((query) => /[?&]offset=/.test(query)), `a page was asked for by offset: ${asked.join(' ')}`);
+    must(asked.every((query) => /[?&]sort=last_heard\b/.test(query)), 'a page lost the sort');
+    must(shown === TOTAL, `the list stopped at ${shown} of ${TOTAL}`);
+    const ids = await page.$$eval('[data-page="nodes"] tbody tr code', (cells) => cells.map((cell) => cell.textContent));
+    must(new Set(ids).size === ids.length, 'a node appears twice after paging');
+    return `${shown} rows over ${asked.length} pages, every later page by cursor`;
+  });
+
   await journey(context, 'the nodes search narrows the list', async (page) => {
     await open(page, 'nodes');
     const count = () => page.locator('[data-page="nodes"] tbody tr').count();

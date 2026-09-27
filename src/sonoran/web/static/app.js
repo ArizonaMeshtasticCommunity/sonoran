@@ -4456,8 +4456,12 @@ PAGES.graph = async (page) => {
 const NODE_PAGE = 100;
 let nodeSort = { key: 'last_heard', order: 'desc' };
 /* How far into the server's ordering we have read. Advanced by the rows
- * the SERVER served, never by the rows we kept -- see `mergeNodePage`. */
+ * the SERVER served, never by the rows we kept -- see `mergeNodePage`.
+ * Sent only when the server gave no cursor. */
 let nodeOffset = 0;
+/* Where the next page starts: the server's `X-Next-Cursor` for the last
+ * row it served (#250). Null before the first page. */
+let nodeCursor = null;
 let nodeTotal = 0;
 let nodeRows = [];
 /*
@@ -4492,20 +4496,21 @@ let nodeScrollWatch = null;
  * advancing by the kept count would re-request the rows just dropped:
  * a list that pages forever and never reaches its end.
  *
- * **A duplicate is dropped rather than drawn.** The plan (§6.2) asks for
- * keyset pagination on a stable sort key to prevent this, and the API
- * offers `limit`/`offset` only — so the risk it names is real and is
- * answered here instead. If a node's `last_heard` changes between two
- * requests the server's ordering shifts under us, and a row that moved
- * back a page arrives twice. Dropping it by `node_id` keeps the list
- * from showing one node twice. The other half of that shift — a row
- * that moved FORWARD a page, and is therefore never seen — cannot be
- * detected from here, and this comment says so rather than implying the
- * problem is solved. Nothing on this page refreshes on a timer, so the
- * window for either is one reader's own scrolling rather than a
- * 15-second poll.
+ * **The next page starts from the cursor, not the offset (#250).** The
+ * plan (§6.2) asked for keyset pagination, and `/api/nodes` now answers
+ * each page with `X-Next-Cursor`, which names the last row it served.
+ * With an offset, a node whose `last_heard` changed between two requests
+ * shifted every row behind it, and in a "quiet first" order the row at
+ * the page boundary was never served at all — a gap nothing here could
+ * detect. A cursor cannot shift. The offset is still counted, and sent
+ * only when an answer came back with no cursor (an older server, or a
+ * proxy that dropped the header), so the list still reaches its end.
+ *
+ * **A duplicate is still dropped rather than drawn.** The cursor makes a
+ * repeat impossible in principle; this makes it harmless on the offset
+ * path, and costs one Set.
  */
-function mergeNodePage(held, incoming, { offset, pageSize }) {
+function mergeNodePage(held, incoming, { offset, pageSize, cursor = null }) {
   const served = Array.isArray(incoming) ? incoming : [];
   const seen = new Set((held || []).map((row) => row.node_id));
   const added = [];
@@ -4517,6 +4522,7 @@ function mergeNodePage(held, incoming, { offset, pageSize }) {
   return {
     rows: (held || []).concat(added),
     offset: offset + served.length,
+    cursor: cursor || null,
     // A short page means the server had nothing more to give. An exactly
     // full page does NOT mean there is more, so the next request can
     // still come back empty — which is this same test, one page later.
@@ -4547,13 +4553,16 @@ function nodeProgressWords(shown, total, exhausted) {
   return `Showing ${count(shown)} of ${count(total)}`;
 }
 
-function nodeQuery(page, offset = 0) {
+function nodeQuery(page, { offset = 0, cursor = null } = {}) {
   const params = new URLSearchParams({
     limit: String(NODE_PAGE),
-    offset: String(offset),
     sort: nodeSort.key,
     order: nodeSort.order,
   });
+  // The cursor when there is one (#250). The server refuses it under any
+  // other sort, which is why the sort still goes with every page.
+  if (cursor) params.set('cursor', cursor);
+  else if (offset) params.set('offset', String(offset));
   const value = (selector) => {
     const node = $(selector, page);
     return node ? node.value : '';
@@ -4593,6 +4602,24 @@ function nodeFacetQuery(page) {
   const params = new URLSearchParams(nodeQuery(page).split('?')[1]);
   for (const key of ['limit', 'offset', 'sort', 'order']) params.delete(key);
   return `api/nodes/facets?${params}`;
+}
+
+/** One page of the list, with the total and the cursor its headers carry.
+ *
+ * `getList` with one more header. An absent total stays null, never 0,
+ * and an absent cursor stays null, which sends the next page back to
+ * the offset. */
+async function getNodePage(path) {
+  const response = await fetch(api(path));
+  if (!response.ok) throw requestFailed(path, response.status);
+  const rows = await response.json();
+  const header = response.headers.get('X-Total-Count');
+  const total = header == null ? null : Number(header);
+  return {
+    rows,
+    total: Number.isFinite(total) ? total : null,
+    cursor: response.headers.get('X-Next-Cursor'),
+  };
 }
 
 /* Everything the filter panel can narrow on.
@@ -4995,13 +5022,16 @@ async function loadNodes(page, { reset = false } = {}) {
   const target = $('[data-node-table]', page);
   if (reset) {
     nodeOffset = 0;
+    // A cursor belongs to the order and filters it was made under.
+    nodeCursor = null;
     nodeRows = [];
     nodeExhausted = false;
     replace(target, el('p', { class: 'loading', text: 'Loading' }));
   }
   nodeLoadingMore = true;
   drawNodeMore(page);
-  const answer = await getList(nodeQuery(page, nodeOffset)).catch((error) => error);
+  const answer = await getNodePage(nodeQuery(page, { offset: nodeOffset, cursor: nodeCursor }))
+    .catch((error) => error);
   /*
    * A newer request has started, so this answer is stale.
    *
@@ -5027,10 +5057,12 @@ async function loadNodes(page, { reset = false } = {}) {
   const merged = mergeNodePage(reset ? [] : nodeRows, answer.rows, {
     offset: nodeOffset,
     pageSize: NODE_PAGE,
+    cursor: answer.cursor,
   });
   const appended = reset ? null : merged.added;
   nodeRows = merged.rows;
   nodeOffset = merged.offset;
+  nodeCursor = merged.cursor;
   nodeExhausted = merged.exhausted;
   nodeTotal = answer.total;
 
@@ -6942,9 +6974,9 @@ function packetRowKey(row) {
  * infinite scroll gets wrong quietly live here, and pure code can be run
  * in a test rather than read.
  *
- * **Cursor, not offset, so there is no offset to advance.** The nodes
- * list pages by offset, and its comment is honest that a row which moves
- * forward a page is never seen. Packets arrive all the time -- a busy
+ * **Cursor, not offset, so there is no offset to advance.** With an
+ * offset, a row which moves forward a page is never seen (the nodes list
+ * paged that way until #250). Packets arrive all the time -- a busy
  * gateway uploads several a minute -- so that is the ordinary case here,
  * not the rare one. The server answers each page with `X-Next-Before`,
  * which names the last row served; the next page starts after THAT row,
