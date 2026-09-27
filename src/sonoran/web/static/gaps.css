@@ -284,6 +284,27 @@
 .gap-filter { display: inline-flex; gap: .5rem; align-items: center; padding: .2rem .6rem; border: 1px solid var(--line); border-radius: 999px; font-size: .82rem; }
 .gap-open { white-space: nowrap; font-size: .82rem; }
 
+/*
+ * The key above the table (#265).
+ *
+ * Closed by default, and one line when closed. Open, it is a short list
+ * in the panel's own type: the entries are read once, by a newcomer, and
+ * must not push the table off a phone screen for everybody after.
+ * `overflow-wrap` because a column heading with its unit is a long
+ * unbroken phrase at 320 px.
+ */
+.gap-key { margin: .2rem 0 .6rem; font-size: .85rem; overflow-wrap: anywhere; }
+.gap-key > summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.gap-key > p { margin: .5rem 0 .3rem; }
+.gap-key-answers { list-style: none; margin: 0 0 .5rem; padding: 0; display: grid; gap: .3rem; }
+.gap-key-answers .gap-chip { cursor: default; margin-right: .35rem; }
+.gap-key-list { margin: 0; display: grid; gap: .5rem; }
+.gap-key-list + .gap-key-list { margin-top: .5rem; }
+.gap-key-item dt { font-weight: 650; }
+.gap-key-item dd { margin: .1rem 0 0; color: var(--muted); }
+.gap-key-item dd p { margin: 0 0 .15rem; }
+.gap-key-item dd strong { color: var(--text); font-weight: 600; }
+
 /* The light theme (#50). See the note at the end of app.css. */
 :root[data-theme="light"] {
   --gap-unknown: #4d6891;

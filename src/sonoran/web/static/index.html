@@ -806,6 +806,41 @@
           -->
           <div class="panel span-2 gap-nodes">
             <h3 data-gaps-table-heading>Nodes</h3>
+            <!--
+              A key for the table (#265, suggested by StarSkream: "A key
+              explaining the data would be helpful"). Closed by default:
+              explanatory prose is useful once and clutter every time
+              after, which is why #191 moved panel prose behind buttons.
+              The per-signal entries are filled by gaps.js from the
+              server's `signal_key`; the fixed columns and the three
+              answers are the page's own, so they are written here.
+            -->
+            <details class="gap-key">
+              <summary>How to read this table</summary>
+              <p>Each signal column asks one question about a node. The answer is one of three:</p>
+              <ul class="gap-key-answers">
+                <li><span class="gap-chip bad"><span class="gap-word">Yes</span></span> the problem was measured. The number beside it, where there is one, is the measurement.</li>
+                <li><span class="gap-chip ok"><span class="gap-word">No</span></span> it was measured and the problem is not there.</li>
+                <li><span class="gap-chip unknown"><span class="gap-word">&mdash;</span></span> cannot tell: there is not enough evidence either way. This is not the same as No.</li>
+              </ul>
+              <dl class="gap-key-list">
+                <div class="gap-key-item">
+                  <dt>Evidence</dt>
+                  <dd><p>Opens the sentence and the counts behind every answer in the row.</p></dd>
+                </div>
+                <div class="gap-key-item">
+                  <dt>Node and Role</dt>
+                  <dd><p>The node's name, and the role its owner set on it, such as Client or Router.</p></dd>
+                </div>
+              </dl>
+              <dl class="gap-key-list" data-gaps-key-signals></dl>
+              <dl class="gap-key-list">
+                <div class="gap-key-item">
+                  <dt>Packets</dt>
+                  <dd><p>How many packets from this node reached us in the window. Too few, and most answers are &ldquo;cannot tell&rdquo;.</p></dd>
+                </div>
+              </dl>
+            </details>
             <div class="gap-toolbar">
               <div class="segmented" role="group" aria-label="Which nodes" data-gaps-view></div>
               <input type="search" placeholder="Find a node" aria-label="Find a node" data-gaps-search>
