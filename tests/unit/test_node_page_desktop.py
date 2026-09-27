@@ -103,33 +103,51 @@ def test_the_button_still_carries_the_total() -> None:
 # --- item 7: say why there is no distance --------------------------
 
 
-def test_a_rounded_position_says_so_instead_of_only_none() -> None:
-    """The tile must name the reason, not just report absence."""
+#
+# #257 replaced the three tests that stood here. They pinned the #193.7
+# sentences -- "Its own position is rounded, so no distance can be
+# measured" and "None with an exact position" -- and the choice between
+# them on `routes.position === false`. With an estimate and its error
+# bar, a rounded position of its own no longer leaves the tile empty, so
+# the first sentence would now be false. What #193.7 asked for is kept:
+# the tile names the cause, and the cause comes from the API rather than
+# being guessed from an empty list.
+
+NODE_PAGE = STATIC.parents[1] / "api" / "routes" / "node_page.py"
+
+
+def test_a_rounded_position_gives_an_estimate_not_a_blank() -> None:
+    """The tile goes through `roughKm`, and the old dead end is gone."""
     app = _code("app.js")
-    assert "Its own position is rounded, so no distance can be measured." in app
+    assert "roughKm(row.approx_distance_km, row.distance_error_km)" in app
+    assert "Its own position is rounded, so no distance can be measured." not in app
 
 
-def test_the_reason_is_chosen_from_the_node_and_not_guessed() -> None:
-    """It reads `routes.position`, the field the API actually sends.
+def test_the_reason_is_chosen_by_the_api_and_not_guessed() -> None:
+    """Both tiles read the reason the API sends for that tile."""
+    app = _code("app.js")
+    assert "routes.furthest_heard_by_reason" in app
+    assert "routes.furthest_heard_reason" in app
 
-    Verified against the running instance: `/api/nodes/.../routes`
-    returns `position: false` for this node. A sentence keyed on
-    anything else -- an empty list, a null distance -- would also fire
-    when the *other* ends were rounded, which is a different cause and
-    a different sentence.
+
+def test_every_reason_the_api_can_send_has_words_for_both_tiles() -> None:
+    """A code with no sentence would fall back to "No distance is known".
+
+    The codes are read out of `_no_distance_reason` itself, so a fifth
+    cause added there fails here until the page can say it.
     """
+    source = NODE_PAGE.read_text(encoding="utf-8")
+    # Up to the next line that starts at column 0: the next definition,
+    # whether `def` or `async def`.
+    body = re.split(r"\n(?=\S)", source.split("def _no_distance_reason", 1)[1], maxsplit=1)[0]
+    codes = set(re.findall(r'"(\w+)"', body.split('"""', 2)[2]))
+    assert codes == {"quiet", "no_link", "no_position", "partners_no_position"}, codes
     app = _code("app.js")
-    assert "routes.position === false" in app
-
-
-def test_the_other_reason_survives() -> None:
-    """A node with an exact position keeps the original wording.
-
-    Without this, the fix could have replaced one blanket sentence with
-    another blanket sentence.
-    """
-    app = _code("app.js")
-    assert "'None with an exact position.'" in app
+    block = app.split("const NO_DISTANCE = {", 1)[1].split("\n};", 1)[0]
+    for side in ("heardBy", "heard"):
+        words = block.split(f"{side}: {{", 1)[1].split("\n  },", 1)[0]
+        for code in codes:
+            assert f"{code}: [" in words, f"{side} has no sentence for {code}"
 
 
 # --- items 1 and 2: one column, even gaps --------------------------

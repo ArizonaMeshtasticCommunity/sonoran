@@ -416,6 +416,61 @@ async function main() {
     return `${busiest.id}, heard by ${busiest.heard}: ${fits}`;
   });
 
+  await journey(context, 'a furthest-node tile shows a distance or says why not', async (page) => {
+    /*
+     * #257. Every node shows a distance -- with a range when a position
+     * is rounded -- or a sentence saying why there is none. Never a bare
+     * "-", and never a precise-looking figure from a rounded position.
+     *
+     * One node of each kind the API reports is opened: an exact distance,
+     * an estimate, and each reason for none. The kinds come from /routes,
+     * so the tiles are checked against what they were given rather than
+     * against a count written here.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=40`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    const kinds = new Map();
+    for (const node of nodes) {
+      const routes = await (await page.request.get(
+        `${BASE}/api/nodes/${encodeURIComponent(node.node_id)}/routes?hours=720`)).json();
+      const row = routes.furthest_heard_by;
+      const kind = !row ? `reason:${routes.furthest_heard_by_reason}`
+        : row.distance_km != null ? 'exact' : 'estimate';
+      if (!kinds.has(kind)) kinds.set(kind, node.node_id);
+    }
+    must(kinds.has('estimate'), `no node here has an estimated distance; kinds found: ${[...kinds.keys()].join(', ')}`);
+    must([...kinds.keys()].some((kind) => kind.startsWith('reason:')),
+      'no node here lacks a distance, so the reason sentences were never exercised');
+    const seen = [];
+    for (const [kind, id] of kinds) {
+      await page.goto(`${BASE}/#node/${encodeURIComponent(id)}`, { waitUntil: 'load' });
+      // Written out in full: `page.evaluate` sends the function's text,
+      // so it cannot close over a helper defined out here.
+      const read = () => {
+        const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
+          .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
+        return found ? {
+          value: found.querySelector('.value').textContent.trim(),
+          detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
+        } : null;
+      };
+      must(await waitFor(page, read, 15000), `${id}: the furthest tile never drew`);
+      const { value, detail } = await page.evaluate(read);
+      must(value !== '-' && value !== '', `${id} (${kind}): the tile is a bare "${value}"`);
+      if (kind === 'exact') {
+        must(/^\d[\d.,]*\s?(ft|mi|m|km)$/.test(value), `${id}: an exact distance reads "${value}"`);
+      } else if (kind === 'estimate') {
+        must(/^(about|under) /.test(value), `${id}: an estimate is printed as a plain figure: "${value}"`);
+        must(/±|rounded by up to/.test(detail), `${id}: an estimate has no range beside it: "${detail}"`);
+      } else {
+        must(value === 'Not known', `${id} (${kind}): no distance, yet the tile reads "${value}"`);
+        must(detail.length > 40, `${id} (${kind}): no sentence says why: "${detail}"`);
+      }
+      seen.push(`${kind}=${value}`);
+    }
+    return seen.join('; ');
+  });
+
   await journey(context, 'the nodes search narrows the list', async (page) => {
     await open(page, 'nodes');
     const count = () => page.locator('[data-page="nodes"] tbody tr').count();

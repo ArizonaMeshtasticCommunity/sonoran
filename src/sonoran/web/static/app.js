@@ -6207,6 +6207,88 @@ const km = (value) => (
   value == null ? '-' : SonoranUnits.distanceFromKm(value, { digits: value < 10 ? 1 : 0 })
 );
 
+/*
+ * A distance measured from a rounded position, said as one (#257).
+ *
+ * The API gives the straight-line distance between the two positions it
+ * holds and the most the rounding can move it (`distance_error_km`, the
+ * two ends' firmware deviations added). Printing the first as "179 mi"
+ * would be the exact false precision the #55 rule exists to stop, so it
+ * never goes out without the second.
+ *
+ * The estimate is also ROUNDED TO ITS OWN ERROR. "about 179.3 mi ± 1.8"
+ * still claims a tenth of a mile it does not have; the step is the power
+ * of ten under the error, so a 2.9 km error rounds to whole kilometres
+ * and a 23 km one to tens. When the error is as large as the distance
+ * itself, the estimate says nothing about where in that range the node
+ * is, and the only true statement is an upper bound: "under 50 mi".
+ *
+ * Returns `{ value, bar }`, both in the reader's units. Never called with
+ * a missing number: `Number(null)` is 0, and a missing estimate printed
+ * as "about 0 ft" would claim two nodes stand on the same spot.
+ */
+function roughKm(estimate, error) {
+  if (!(error > 0) || estimate == null) return null;
+  if (error >= estimate) {
+    return { value: `under ${km(estimate + error)}`, bar: `rounded by up to ${km(error)}` };
+  }
+  const step = 10 ** Math.floor(Math.log10(error));
+  const shown = Math.round(estimate / step) * step;
+  return {
+    value: `about ${SonoranUnits.distanceFromKm(shown, { digits: step < 1 ? 1 : 0 })}`,
+    bar: `± ${km(error)}`,
+  };
+}
+
+/*
+ * One row's distance: exact, estimated with its range, or "-".
+ *
+ * The estimate may break onto two lines in a narrow column, but only
+ * between the estimate and its range: "about 174 mi ± 1.8" over a lone
+ * "mi" reads as two measurements. So the spaces inside each half are
+ * no-break spaces.
+ */
+function reachText(row) {
+  if (row.distance_km != null) return km(row.distance_km);
+  const rough = roughKm(row.approx_distance_km, row.distance_error_km);
+  if (!rough) return '-';
+  const keep = (text) => text.replace(/ /g, ' ');
+  return `${keep(rough.value)} ${keep(rough.bar)}`;
+}
+
+/*
+ * Why a furthest-node tile has no distance, and what would give it one
+ * (#257). The API names the cause (`_no_distance_reason` in
+ * node_page.py); the words are here. Each says what the owner, or the
+ * reader, can do -- a bare "-" told them neither.
+ *
+ * Measured on the seeded mesh before this change, 13 of 24 nodes had no
+ * "furthest node that heard it": 4 had a rounded position of their own,
+ * 1 had none, and 8 had no single-hop link on record -- one of those
+ * heard directly by nine gateways that the page did not count. After
+ * it, 8 remain, and every one says why.
+ */
+const NO_DISTANCE = {
+  heardBy: {
+    quiet: ['It sent nothing in this window.', 'Choose a longer window at the top of the page.'],
+    no_link: ['No other node recorded hearing it directly: no neighbor report names it, no traceroute hop leaves it, and no gateway uploaded its packets without a relay.',
+      'A gateway, or a node with the NeighborInfo module on, within radio range of it would record the link.'],
+    no_position: ['It shares no position, so no distance can be measured.',
+      'Its owner can turn on position sharing. A rounded position is enough for an estimate.'],
+    partners_no_position: ['None of the nodes that heard it shares a position.',
+      'Any one of them sharing a position, even a rounded one, would give a distance.'],
+  },
+  heard: {
+    quiet: ['It sent nothing in this window.', 'Choose a longer window at the top of the page.'],
+    no_link: ['It recorded hearing no node directly: it sent no neighbor report, no traceroute hop reached it, and it uploaded no packet heard without a relay.',
+      'Turning on its NeighborInfo module, or MQTT uploading, would record what it hears.'],
+    no_position: ['It shares no position, so no distance can be measured.',
+      'Its owner can turn on position sharing. A rounded position is enough for an estimate.'],
+    partners_no_position: ['None of the nodes it heard shares a position.',
+      'Any one of them sharing a position, even a rounded one, would give a distance.'],
+  },
+};
+
 function routesPanel(routes) {
   if (!routes) return el('div', { class: 'panel span-2' }, failure(new Error('Cannot load the routes.')));
   /*
@@ -6244,9 +6326,35 @@ function routesPanel(routes) {
    * setting, not somebody else's. The rule itself does not change --
    * a distance is still never measured from a rounded position.
    */
-  const noDistance = routes.position === false
-    ? 'Its own position is rounded, so no distance can be measured.'
-    : 'None with an exact position.';
+  /*
+   * #257 keeps that rule and stops it emptying the tile. A rounded pair
+   * now gives an estimate with its range ("about 180 mi", "± 1.8 mi,
+   * from a rounded position"), and a tile with no distance of either kind
+   * says why and what would fix it, from `NO_DISTANCE`. What is gone is
+   * the sentence above: with the estimate, a rounded position of its own
+   * no longer leaves the tile empty.
+   */
+  const furthestTile = (label, row, reason, words) => {
+    const hint = 'The most distant node on this list. Marked "about" with a ± range when either position is rounded: the range is how far the rounding can move it.';
+    // The tile with a second muted line: the estimate's range, or what
+    // would give a tile with no distance one.
+    const twoLine = (value, first, second) => el('div', { class: 'route-tile' },
+      el('span', { class: 'label', text: label, 'data-label': label, 'data-hint': hint }),
+      el('span', { class: 'value', text: value }),
+      el('span', { class: 'muted', text: first }),
+      second ? el('span', { class: 'muted', text: second }) : null);
+    if (!row) {
+      const [why, fix] = words[reason] || ['No distance is known.', ''];
+      return twoLine('Not known', why, fix);
+    }
+    const who = `${row.display_name}${row.best_snr != null ? `, ${round(row.best_snr, 1)} dB` : ''}`;
+    if (row.distance_km != null) return tile(label, km(row.distance_km), who, hint);
+    const rough = roughKm(row.approx_distance_km, row.distance_error_km);
+    // The API sends the two together; without the range there is no
+    // honest figure to print, so it says so rather than guessing.
+    if (!rough) return twoLine('Not known', who, 'Its distance came without a range, so it is not shown.');
+    return twoLine(rough.value, who, `${rough.bar}: a position is rounded, so this is an estimate.`);
+  };
   const depth = routes.hop_depth || { packets: 0, counts: [] };
   /*
    * Three columns, not five (#260).
@@ -6277,38 +6385,42 @@ function routesPanel(routes) {
    * Asserted at 320, 768, 1024 and 1440 px on the node heard by the most
    * nodes, by the e2e journey "the Who hears it table fits its panel".
    */
+  // `gateway` is an upload with no hop used (#257): the gateway heard
+  // the sender itself. See `_direct_links` in node_page.py.
+  const KIND_WORDS = { neighbor: 'neighbor report', traceroute: 'traceroute', gateway: 'direct upload' };
   const evidence = (row) => {
-    const kinds = row.kinds.map((kind) => (kind === 'neighbor' ? 'neighbor report' : 'traceroute')).join(', ');
+    const kinds = row.kinds.map((kind) => KIND_WORDS[kind] || kind).join(', ');
     // `count` prints an absent number as "-", never as 0.
     return `${count(row.count)} ${row.count === 1 ? 'report' : 'reports'}: ${kinds}`;
   };
   const columns = [
     { label: 'Node', wrap: true,
-      hint: 'Under each name: how many neighbor reports and traceroute hops show the link in this direction, and which of the two they were.',
+      hint: 'Under each name: how many reports show the link in this direction, and what kind. A direct upload is a gateway uploading a packet it heard with no relay in between.',
       cell: (row) => el('div', { class: 'route-who' },
         nodeChip(row), el('span', { class: 'muted', text: evidence(row) })) },
     { label: 'SNR', num: true, hint: 'The best signal-to-noise ratio any of those reports measured on the link.', cell: (row) => snrCell(row.best_snr) },
-    { label: 'Distance', num: true, hint: 'Only where both nodes share an exact position.', cell: (row) => km(row.distance_km) },
+    { label: 'Distance', num: true, wrap: true,
+      hint: 'Straight-line distance. Marked "about", with a ± range, when either position is rounded: the range is how far the rounding can move it.',
+      cell: (row) => reachText(row) },
   ];
   return el('div', { class: 'panel span-2' },
     el('h3', {}, 'Links and routes',
-      el('span', { class: 'muted', text: `from neighbor reports and traceroutes, last ${routes.window_hours} h` })),
+      el('span', { class: 'muted', text: `from neighbor reports, traceroutes and direct uploads, last ${routes.window_hours} h` })),
     el('div', { class: 'route-tiles' },
       tile('Longest route segment',
         longest ? km(longest.distance_km) : '-',
         longest ? `${longest.from.display_name} to ${longest.to.display_name}` : 'No traceroute segment with two exact positions.',
         'The longest single hop of any traceroute this node took part in.'),
-      tile('Furthest node that heard it', heardBy ? km(heardBy.distance_km) : '-',
-        heardBy ? `${heardBy.display_name}${heardBy.best_snr != null ? `, ${round(heardBy.best_snr, 1)} dB` : ''}` : noDistance),
-      tile('Furthest node it heard', heard ? km(heard.distance_km) : '-',
-        heard ? `${heard.display_name}${heard.best_snr != null ? `, ${round(heard.best_snr, 1)} dB` : ''}` : noDistance),
+      furthestTile('Furthest node that heard it', heardBy, routes.furthest_heard_by_reason, NO_DISTANCE.heardBy),
+      furthestTile('Furthest node it heard', heard, routes.furthest_heard_reason, NO_DISTANCE.heard),
       tile('Hops to the nearest gateway', depth.median == null ? '-' : String(depth.median),
         depth.packets
           ? `typical, over ${count(depth.packets)} packets: ${depth.counts.map((item) => `${item.hops} hop${item.hops === 1 ? '' : 's'} ${count(item.packets)}`).join(', ')}`
           : 'No other gateway heard it in the window.',
         'The fewest hops any gateway saw each packet use. Its own uploads are left out.')),
     el('p', { class: 'muted' },
-      'Distances need an exact position at both ends. A rounded position can be kilometres out, so such pairs are left out'
+      'A rounded position can be kilometres out, so a distance from one is marked "about" with the range the rounding allows. '
+      + 'The longest route segment needs an exact position at both ends, and rounded pairs are left out of it'
       + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')
       + (routes.trace_limit_reached ? ` Only the newest ${count(routes.traces_read)} traceroutes were read.` : '')),
     el('div', { class: 'grid two' },
