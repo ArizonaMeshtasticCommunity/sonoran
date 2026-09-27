@@ -1933,15 +1933,45 @@
           <div class="page-head">
             <div>
               <h2>Network statistics</h2>
-              <p class="sub">Totals, hardware mix, and daily history.</p>
+              <p class="sub">Traffic, hardware and leaderboards over the range you choose.</p>
+            </div>
+            <!--
+              The range every widget on this page reads (#294). Will: "the
+              ability to set the date range with some common quick click
+              buttons at the top right of the page ... Default is last 30
+              days rolling." Plus a from/to range, which he also asked for.
+
+              The same shape as the chat range, so a reader learns one
+              control: three quick ranges, and the date boxes behind a
+              disclosure on a phone. The range lives in the address
+              (`#stats?range=7d`, `#stats?from=...&to=...`), so a reload or
+              a shared link keeps it.
+            -->
+            <div class="controls">
+              <div class="chat-range stats-range" data-stats-range>
+                <div class="range-quick" role="group" aria-label="Quick ranges">
+                  <button type="button" class="chip" data-stats-quick="24h" aria-pressed="false">24 h</button>
+                  <button type="button" class="chip" data-stats-quick="7d" aria-pressed="false">7 d</button>
+                  <button type="button" class="chip" data-stats-quick="30d" aria-pressed="true">30 d</button>
+                </div>
+                <button type="button" class="chip range-custom" data-stats-custom-toggle
+                        aria-expanded="false" aria-controls="stats-custom-range">Dates…</button>
+                <div class="range-custom-fields" id="stats-custom-range" data-stats-custom>
+                  <input type="date" data-stats-from aria-label="Statistics from" />
+                  <span class="range-to" aria-hidden="true">to</span>
+                  <input type="date" data-stats-to aria-label="Statistics until" />
+                </div>
+                <p class="range-refusal" data-stats-range-note role="status" hidden></p>
+              </div>
             </div>
           </div>
           <div class="grid" data-summary></div>
           <div class="grid two" style="margin-top: 1rem">
-            <div class="panel"><h3>Daily activity</h3><div class="chart" data-daily-chart></div></div>
-            <div class="panel"><h3>Hardware models</h3><div class="chart" data-hardware-chart></div></div>
+            <div class="panel"><h3><span>Daily activity <span class="range-chip" data-range-chip></span></span></h3><div class="chart" data-daily-chart></div></div>
+            <div class="panel"><h3><span>Hardware models <span class="range-chip" data-range-chip></span></span></h3><div class="chart" data-hardware-chart></div></div>
             <div class="panel span-2">
-              <h3><span>What the mesh is sending, by hour</span>
+              <h3><span><span data-activity-title>What the mesh is sending, by hour</span>
+                <span class="range-chip" data-range-chip></span></span>
                 <span class="muted head-note" data-activity-note></span></h3>
               <div class="chart" data-activity-chart></div>
             </div>
@@ -1955,12 +1985,12 @@
               <div class="grid" data-leaderboards></div>
             </div>
             <div class="panel span-2">
-              <h3><span>Busiest senders (24 h)</span>
+              <h3><span>Busiest senders <span class="range-chip" data-range-chip></span></span>
                 <span class="muted head-note">a diagnostic, not a prize: air time is shared</span></h3>
               <div class="table-wrap" data-top-talkers></div>
             </div>
             <div class="panel span-2">
-              <h3><span>Nodes worth a look</span>
+              <h3><span>Nodes worth a look <span class="range-chip" data-range-chip></span></span>
                 <span class="muted head-note" data-broadcast-note></span></h3>
               <p class="muted" style="margin: -.25rem 0 .75rem; font-size: .8rem">
                 How often each node sends, against the firmware defaults. A node

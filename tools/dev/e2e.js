@@ -1782,6 +1782,211 @@ async function main() {
     return `${count} charts`;
   });
 
+  await journey(context, 'statistics and the firehose follow the units setting (#291)', async (page) => {
+    /*
+     * Will: "The statistics page isn't showing the distances and metrics
+     * in what is set in the settings. Seems stuck in km."
+     *
+     * The link board is the one that was stuck, and the seeded mesh has
+     * no two-way link long enough to rank, so its rows are supplied here
+     * with the API's own shape: a value and `"unit": "km"`. The firehose
+     * line is supplied the same way, with a temperature and a pressure,
+     * because its server-built prose said "21.5 C" in every mode.
+     */
+    /*
+     * Each handler tolerates the page closing under it. The firehose
+     * refreshes on its own, so a request can still be in flight when the
+     * journey ends, and an unhandled rejection there stops the whole run.
+     */
+    const patch = (edit) => async (route) => {
+      try {
+        const response = await route.fetch();
+        const body = await response.json();
+        edit(body);
+        await route.fulfill({ response, json: body });
+      } catch {
+        await route.abort().catch(() => {});
+      }
+    };
+    await page.route(/\/api\/stats\/leaderboards(\?|$)/, patch((body) => {
+      for (const board of body.boards || []) {
+        if (board.key !== 'longest_link') continue;
+        board.rows = [{
+          node_id: '!0a51d002', display_name: 'Link End A',
+          other_id: '!0a51b007', other_name: 'Link End B',
+          value: 25, unit: 'km', detail: '9.0 dB, 3 and 4 reports each way',
+        }];
+      }
+    }));
+    await page.route(/\/api\/packets\?.*summary=true/, patch((body) => {
+      if (!body.length) return;
+      body[0].summary = '21.5 °C, humidity 40 %, 1013.2 hPa';
+      body[0].summary_parts = [
+        { value: 21.5, unit: '°C' }, ', ', 'humidity 40 %', ', ', { value: 1013.2, unit: 'hPa' },
+      ];
+    }));
+    const linkValue = async () => {
+      await waitFor(page, () => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+        .some((h) => /Longest reliable link/.test(h.textContent)), 20000);
+      return page.evaluate(() => {
+        const board = [...document.querySelectorAll('[data-page="stats"] .leaderboard')]
+          .find((panel) => /Longest reliable link/.test(panel.querySelector('h3').textContent));
+        const value = board && board.querySelector('.board .value');
+        return value ? value.textContent : null;
+      });
+    };
+    const firstSummary = async () => {
+      await waitFor(page, () => !!document.querySelector('[data-page="firehose"] .summary'), 20000);
+      return page.evaluate(() => document.querySelector('[data-page="firehose"] .summary').textContent);
+    };
+
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    const imperialLink = await linkValue();
+    must(imperialLink === '15.5 mi', `the link board read ${imperialLink} in imperial, not 15.5 mi`);
+
+    /*
+     * The same page, switched in place. The page must redraw on its own.
+     *
+     * Only once the first draw has finished: `render` ignores a call that
+     * arrives while a page is still loading, so a switch made mid-load is
+     * not redrawn. That is a separate fault from the one this journey is
+     * for, and it is noted in the #291 report.
+     */
+    await waitFor(page, () => !loading, 60000);
+    await page.evaluate(() => {
+      window.SonoranSettings.set('units', 'metric');
+      window.SonoranSettings.set('temperature', 'celsius');
+    });
+    await waitFor(page, () => {
+      const value = document.querySelector('[data-page="stats"] .leaderboard .board .value');
+      return [...document.querySelectorAll('[data-page="stats"] .leaderboard .board .value')]
+        .some((node) => /km$/.test(node.textContent)) || !value;
+    }, 10000);
+    const metricLink = await linkValue();
+    must(metricLink === '25.0 km', `the link board read ${metricLink} in metric, not 25.0 km`);
+
+    await page.goto(`${BASE}/#firehose`, { waitUntil: 'load' });
+    const metricLine = await firstSummary();
+    must(metricLine === '21.5 °C, humidity 40 %, 1013.2 hPa', `the firehose line read "${metricLine}" in metric`);
+    await waitFor(page, () => !loading, 60000);
+    await page.evaluate(() => {
+      window.SonoranSettings.set('units', 'imperial');
+      window.SonoranSettings.set('temperature', 'fahrenheit');
+    });
+    await waitFor(page, () => {
+      const line = document.querySelector('[data-page="firehose"] .summary');
+      return !!line && /inHg/.test(line.textContent);
+    }, 20000);
+    const imperialLine = await firstSummary();
+    must(imperialLine === '70.7 °F, humidity 40 %, 29.92 inHg', `the firehose line read "${imperialLine}" in imperial`);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    return `${imperialLink} / ${metricLink}; "${imperialLine}"`;
+  });
+
+  await journey(context, 'the statistics range reaches every widget (#294)', async (page) => {
+    /*
+     * Will: "all the stats, widgets, etc should adjust to them. Default is
+     * last 30 days rolling." So this checks the requests every widget
+     * makes, not only the chips: a chip that changes while its widget still
+     * asks for 24 hours is the failure this journey is for.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (/\/api\/stats(\/(top|leaderboards|daily|hardware|activity|broadcast))?\?/.test(url)) asked.push(url);
+    });
+    const WIDGETS = ['stats?', 'top?', 'leaderboards?', 'daily?', 'hardware?', 'activity?', 'broadcast?'];
+    const everyWidgetAsked = (needle) => WIDGETS.filter((path) =>
+      !asked.some((url) => url.includes(`/api/${path === 'stats?' ? '' : 'stats/'}${path}`) && url.includes(needle)));
+    const settled = () => waitFor(page, () => !loading, 60000);
+    const chips = () => page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] [data-range-chip]')]
+      .map((chip) => chip.textContent));
+    const pressed = () => page.evaluate(() => [...document.querySelectorAll('[data-stats-quick][aria-pressed="true"]')]
+      .map((button) => button.dataset.statsQuick));
+
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    await settled();
+    must(JSON.stringify(await pressed()) === '["30d"]', `the default is not 30 d: ${await pressed()}`);
+    let missing = everyWidgetAsked('hours=720');
+    must(!missing.length, `these widgets did not ask for 30 days: ${missing.join(', ')}`);
+    const defaultChips = await chips();
+    must(defaultChips.length >= 5 && defaultChips.every((text) => text.startsWith('last 30 d')),
+      `a widget does not name the range: ${defaultChips.join(' | ')}`);
+
+    // A quick range: every widget again, the address, and no history entry.
+    const depth = await page.evaluate(() => history.length);
+    asked.length = 0;
+    await page.click('[data-stats-quick="7d"]');
+    await settled();
+    must(page.url().endsWith('#stats?range=7d'), `the address is ${page.url()}`);
+    must(await page.evaluate(() => history.length) === depth, 'the range added a history entry');
+    missing = everyWidgetAsked('hours=168');
+    must(!missing.length, `these widgets did not follow 7 d: ${missing.join(', ')}`);
+    must((await chips()).every((text) => text.startsWith('last 7 d')), 'a chip still names another range');
+
+    /*
+     * The gaps-backed boards cannot follow the range, and say so. The link
+     * board does follow it.
+     */
+    const boards = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+      .map((h) => [h.dataset.label, (h.querySelector('span.muted') || {}).textContent || '']));
+    if (boards.length) {
+      const link = boards.find(([title]) => /Longest reliable link/.test(title));
+      must(link && link[1] === 'last 7 d', `the link board chip reads ${link && link[1]}`);
+      const fixed = boards.filter(([title]) => !/Longest reliable link/.test(title));
+      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
+        `a gaps board does not say it keeps its own window: ${JSON.stringify(fixed)}`);
+    }
+
+    // A reload keeps it.
+    await page.reload({ waitUntil: 'load' });
+    await settled();
+    must(JSON.stringify(await pressed()) === '["7d"]', 'a reload lost the range');
+
+    // 24 h draws its charts, by hour.
+    await page.goto(`${BASE}/#stats?range=24h`, { waitUntil: 'load' });
+    await settled();
+    const drawn = await waitFor(page, () => [...document.querySelectorAll('[data-page="stats"] canvas')]
+      .filter((canvas) => canvas.width > 0 && canvas.height > 0).length > 0, 30000);
+    must(drawn, 'no chart was drawn at 24 h');
+    const title = await page.evaluate(() => document.querySelector('[data-activity-title]').textContent);
+    must(/by hour$/.test(title), `at 24 h the activity chart says "${title}"`);
+
+    /*
+     * A custom range that starts before what is kept: every packet widget
+     * says where it really counts from. 26 days, so the API accepts it.
+     */
+    const day = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
+    asked.length = 0;
+    await page.goto(`${BASE}/#stats?from=${day(40)}&to=${day(15)}`, { waitUntil: 'load' });
+    await settled();
+    missing = everyWidgetAsked(`since=${day(40)}`);
+    must(!missing.length, `these widgets did not follow the dates: ${missing.join(', ')}`);
+    const capped = await chips();
+    must(capped.every((text) => /counted from/.test(text)),
+      `a widget does not say retention cuts the range short: ${capped.join(' | ')}`);
+    const packetTile = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .stat')]
+      .map((tile) => tile.innerText).find((text) => /PACKETS|Packets/.test(text)) || '');
+    must(/counted from/.test(packetTile), `the packets tile compares a part with a whole: ${packetTile}`);
+
+    // Longer than retention is refused beside the boxes, and nothing moves.
+    const before = page.url();
+    await page.evaluate(() => {
+      const range = document.querySelector('[data-stats-range]');
+      range.classList.add('show-custom');
+    });
+    await page.fill('[data-stats-from]', day(45));
+    await page.fill('[data-stats-to]', day(1));
+    await page.dispatchEvent('[data-stats-to]', 'change');
+    const refusal = await page.evaluate(() => {
+      const note = document.querySelector('[data-stats-range-note]');
+      return note.hidden ? '' : note.textContent;
+    });
+    must(/at most 30 days/.test(refusal), `a 45 day range was not refused in words: "${refusal}"`);
+    must(page.url() === before, 'a refused range still changed the address');
+    return `${WIDGETS.length} widgets follow 30 d, 7 d, 24 h and a custom range; capped ranges say so`;
+  });
+
   await journey(context, 'the planner offers its control', async (page) => {
     await open(page, 'planner', 5000);
     must((await page.locator('[data-planner-run]').count()) > 0, 'no run control');
@@ -3085,6 +3290,62 @@ async function main() {
       out.push(`${width}:${got.y}`);
     }
     return `scrollY after load ${out.join(' ')}`;
+  });
+
+  await journey(phone, 'the summary tiles are one compact block on a phone (#278)', async (page) => {
+    /*
+     * The four numbers took 292 px, 35% of the first screen, in the mobile
+     * review, and 415 px on the dashboard once each tile carried a delta.
+     * The ask was a strip about 120 px tall. Measured with the CI runner's
+     * wider fonts imitated (letter-spacing .05em), at this phone's 390 px
+     * and at 320 px, on both pages that carry the tiles.
+     */
+    const measure = async () => page.evaluate(() => {
+      const grid = document.querySelector('.page.active [data-summary]');
+      const tiles = [...grid.children];
+      const box = grid.getBoundingClientRect();
+      const over = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+      const spill = tiles.some((tile) => tile.scrollWidth > tile.clientWidth + 1);
+      return { height: Math.round(box.height), tiles: tiles.length, over, spill };
+    });
+    const found = [];
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 664 });
+      for (const name of ['dashboard', 'stats']) {
+        await open(page, name, 1500);
+        await waitFor(page, () => !loading, 60000);
+        await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+        await page.waitForTimeout(200);
+        const got = await measure();
+        must(got.tiles === 4, `${name} at ${width} px drew ${got.tiles} tiles`);
+        must(got.over <= 0, `${name} at ${width} px scrolls sideways by ${got.over} px`);
+        must(!got.spill, `a tile's text spills out of it on ${name} at ${width} px`);
+        // About 120 px was the ask at 390; it measures 126 px, and 139 px
+        // with the wider letters, which wrap one label. The limits leave
+        // room for a runner whose fonts are wider still, and are still
+        // well under the 415 px this replaced. 320 px wraps the longer
+        // labels to a second line, so it is allowed more.
+        const limit = width === 390 ? 160 : 185;
+        must(got.height <= limit, `${name} at ${width} px: the tiles are ${got.height} px tall, over ${limit}`);
+        found.push(`${name} ${width}px ${got.height}px`);
+      }
+    }
+    /*
+     * The words after the change are off the screen, not out of the page:
+     * a screen reader still hears "on the day before".
+     */
+    await page.setViewportSize({ width: 390, height: 664 });
+    await open(page, 'dashboard', 1500);
+    await waitFor(page, () => !loading, 60000);
+    const words = await page.evaluate(() => {
+      const rest = document.querySelector('[data-summary] .delta-rest');
+      return rest ? { text: rest.textContent, shown: rest.getBoundingClientRect().width > 1 } : null;
+    });
+    if (words) {
+      must(/before/.test(words.text), `the delta lost its words: "${words.text}"`);
+      must(!words.shown, 'the delta words still take room on a phone');
+    }
+    return found.join(', ');
   });
 
   await phone.close();

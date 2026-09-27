@@ -165,7 +165,7 @@
     return `${head}. The largest holds ${biggest.node_count} ` +
       `${biggest.node_count === 1 ? 'node' : 'nodes'} across ` +
       `${biggest.point_count} ${biggest.point_count === 1 ? 'place' : 'places'}, ` +
-      `about ${biggest.width_km} km wide.`;
+      `about ${SonoranUnits.distanceFromKm(biggest.width_km)} wide.`;
   }
 
   /* ------------------------------------------------------- the radio */

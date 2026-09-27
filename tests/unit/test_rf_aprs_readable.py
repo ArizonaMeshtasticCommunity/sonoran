@@ -22,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "src" / "sonoran" / "web" / "static"
 RF = (STATIC / "rf.js").read_text(encoding="utf-8")
 TABLES = (STATIC / "vendor" / "aprs" / "aprs-tables.js").read_text(encoding="utf-8")
+# The weather lines go through the units formatter (#291). With no
+# settings loaded it answers in its defaults: imperial and Fahrenheit.
+UNITS = (STATIC / "units.js").read_text(encoding="utf-8")
 
 
 def _node() -> str:
@@ -35,7 +38,8 @@ def _call(expression: str) -> object:
     start = RF.index("  const APRS_TABLES = ")
     end = RF.index("  /* Keys the APRS tooltip turns into words.")
     script = (
-        f"var window = {{}};\n{TABLES}\n{RF[start:end]}\nconsole.log(JSON.stringify({expression}));"
+        "var window = globalThis;\n"
+        f"{UNITS}\n{TABLES}\n{RF[start:end]}\nconsole.log(JSON.stringify({expression}));"
     )
     done = subprocess.run(
         [_node(), "-e", script], capture_output=True, text=True, timeout=30, check=False
@@ -83,9 +87,11 @@ def test_weather_is_read_with_units_and_a_missing_reading_is_not_invented() -> N
         " pressure_hpa: 1014.1, rain_1h_in: 0, rain_today_in: 0})"
     )
     assert lines == [
-        "Wind from SSE (154°) at 2 mph, gusts 3 mph",
-        "Temperature 70 °F (21 °C)",
-        "Pressure 1014.1 hPa",
+        "Wind from SSE (154°) at 2.0 mph, gusts 3.0 mph",
+        # One unit, the reader's. It showed both, whichever was chosen.
+        "Temperature 70 °F",
+        # Inches of mercury in imperial mode (Will, #291).
+        "Pressure 29.95 inHg",
         "Rain 0.00 in in the last hour, 0.00 in since midnight",
     ]
     # No humidity was sent, so no humidity line: never a 0 %.
@@ -94,14 +100,14 @@ def test_weather_is_read_with_units_and_a_missing_reading_is_not_invented() -> N
 
 def test_sunlight_and_snow_are_read_with_units() -> None:
     assert _call("weatherLines({luminosity_wm2: 0, snow_24h_in: 1.5})") == [
-        "Snow 1.5 in in 24 hours",
+        "Snow 1.50 in in 24 hours",
         "Sunlight 0 W/m²",
     ]
 
 
 def test_a_sensor_in_celsius_reads_the_same_way() -> None:
     assert _call("weatherLines({temperature_c: 21.44, humidity: 40, battery_ok: 0})") == [
-        "Temperature 21.4 °C (71 °F)",
+        "Temperature 70.6 °F",
         "Humidity 40 %",
         "Battery low",
     ]

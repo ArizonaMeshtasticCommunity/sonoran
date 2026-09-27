@@ -1,8 +1,9 @@
 """Read-only dashboard statistic endpoints."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import TypedDict
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, TypedDict
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
+from sonoran.api.window import Window, optional_window, retained_from, window_query
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
 from sonoran.decode.portnums import traffic_label
@@ -106,25 +108,75 @@ _hardware_cache: TimedCache[list[dict[str, object]]] = TimedCache()
 _portnums_cache: KeyedCache[list[dict[str, object]]] = KeyedCache(capacity=32)
 
 
+#: The windowed answers, one for each window asked for. Capped, so a
+#: caller that varies the window cannot grow it without limit.
+_window_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=16)
+#: The windowed hardware mix (#294), capped the same way.
+_hardware_window_cache: KeyedCache[list[dict[str, object]]] = KeyedCache(capacity=16)
+
+
 @router.get("")
-async def stats(request: Request, session: AsyncSession = Depends(get_session)) -> dict[str, int]:
+async def stats(
+    request: Request,
+    window: Window | None = Depends(optional_window),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
     """Return current dashboard summary counts.
 
     Held for `STATS_CACHE_SECONDS`. A mesh does not change its totals
     in a way anybody reads at second resolution, and these are the four
     unbounded counts in the API.
+
+    With a window (`hours`, or `since` and `until`), packets and uploads
+    are counted over that window of receive time instead, and `previous`
+    holds the same two counts for the window of the same length before
+    it. Nodes and gateways stay totals of every node ever seen (Will,
+    #292). Without a window the answer is unchanged.
     """
     settings: Settings = request.app.state.settings
-    return await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+    if window is None:
+        return dict(
+            await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+        )
+    return await _window_cache.get(
+        window.key,
+        settings.stats_cache_seconds,
+        lambda: _read_window_summary(session, settings, window),
+    )
 
 
-async def _read_summary(session: AsyncSession) -> dict[str, int]:
-    """Count the nodes, the packets, the observations, and the gateways."""
+async def _read_window_summary(
+    session: AsyncSession, settings: Settings, window: Window
+) -> dict[str, object]:
+    """Count packets and uploads in the window, and nodes over all time.
+
+    The window is receive time, bounded at both ends, so a row dated in
+    the future by a gateway clock written before the 9.4 fix does not
+    count. See AGENTS.md 9.4.
+
+    `previous` is None when the window before starts earlier than the
+    packet retention. Those rows are gone, so a comparison with them
+    would show a rise that did not happen.
+    """
+    earlier = window.start - (window.end - window.start)
+    lifetime = await _lifetime_nodes(session)
+    return {
+        **window.describe(settings),
+        "node_count": lifetime["node_count"],
+        "gateway_count": lifetime["gateway_count"],
+        **await _window_counts(session, window.start, window.end),
+        "previous": (
+            None
+            if earlier < retained_from(settings)
+            else await _window_counts(session, earlier, window.start)
+        ),
+    }
+
+
+async def _lifetime_nodes(session: AsyncSession) -> dict[str, int]:
+    """Count every node ever seen, and every node ever flagged a gateway."""
     return {
         "node_count": (await session.scalar(select(func.count()).select_from(Node))) or 0,
-        "packet_count": (await session.scalar(select(func.count()).select_from(Packet))) or 0,
-        "observation_count": (await session.scalar(select(func.count()).select_from(PacketSeen)))
-        or 0,
         "gateway_count": (
             await session.scalar(select(func.count()).select_from(Node).where(Node.is_mqtt_gateway))
         )
@@ -132,22 +184,75 @@ async def _read_summary(session: AsyncSession) -> dict[str, int]:
     }
 
 
+async def _window_counts(session: AsyncSession, start: datetime, end: datetime) -> dict[str, int]:
+    """Count the packets first seen, and the uploads, in `[start, end)`."""
+    packets = await session.scalar(
+        select(func.count())
+        .select_from(Packet)
+        .where(Packet.first_seen_at >= start, Packet.first_seen_at < end)
+    )
+    uploads = await session.scalar(
+        select(func.count())
+        .select_from(PacketSeen)
+        .where(PacketSeen.seen_at >= start, PacketSeen.seen_at < end)
+    )
+    return {"packet_count": packets or 0, "observation_count": uploads or 0}
+
+
+async def _read_summary(session: AsyncSession) -> dict[str, int]:
+    """Count the nodes, the packets, the observations, and the gateways."""
+    lifetime = await _lifetime_nodes(session)
+    return {
+        "node_count": lifetime["node_count"],
+        "packet_count": (await session.scalar(select(func.count()).select_from(Packet))) or 0,
+        "observation_count": (await session.scalar(select(func.count()).select_from(PacketSeen)))
+        or 0,
+        "gateway_count": lifetime["gateway_count"],
+    }
+
+
 @router.get("/hardware")
 async def hardware(
-    request: Request, session: AsyncSession = Depends(get_session)
+    request: Request,
+    window: Window | None = Depends(optional_window),
+    session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
-    """Return node counts grouped by hardware model."""
+    """Return node counts grouped by hardware model.
+
+    Without a window, every node ever seen. With one, the nodes that sent
+    a packet inside it (#294): "boards heard in the last 30 days". The
+    packet is the evidence rather than `node.last_heard`, because
+    `last_heard` holds only the latest time, and a node heard in a past
+    range and again since would drop out of that range.
+    """
     settings: Settings = request.app.state.settings
-    return await _hardware_cache.get(settings.stats_cache_seconds, lambda: _read_hardware(session))
+    if window is None:
+        return await _hardware_cache.get(
+            settings.stats_cache_seconds, lambda: _read_hardware(session)
+        )
+    return await _hardware_window_cache.get(
+        window.key,
+        settings.stats_cache_seconds,
+        lambda: _read_hardware(session, window),
+    )
 
 
-async def _read_hardware(session: AsyncSession) -> list[dict[str, object]]:
-    """Group every node by the hardware it reported."""
+async def _read_hardware(
+    session: AsyncSession, window: Window | None = None
+) -> list[dict[str, object]]:
+    """Group every node, or every node heard in the window, by its hardware."""
     statement = (
         select(Node.hw_model, func.count().label("count"))
         .group_by(Node.hw_model)
         .order_by(func.count().desc())
     )
+    if window is not None:
+        heard = (
+            select(Packet.from_node_num)
+            .where(Packet.first_seen_at >= window.start, Packet.first_seen_at < window.end)
+            .distinct()
+        )
+        statement = statement.where(Node.node_num.in_(heard))
     return [
         {"hw_model": model, "count": count}
         for model, count in (await session.execute(statement)).all()
@@ -230,9 +335,22 @@ async def daily_snapshots(
     ]
 
 
+#: The three windowed tables and charts on the Statistics page (#294).
+#:
+#: Each read aggregates the whole window of `packet`, and the page's
+#: default window is 30 days, so without a hold every load of the page
+#: ran three full-retention aggregates. Keyed by the window and the
+#: other parameters, and capped.
+_top_cache: KeyedCache[list[dict[str, object]]] = KeyedCache(capacity=16)
+_activity_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=16)
+_broadcast_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=16)
+_daily_cache: KeyedCache[dict[str, object]] = KeyedCache(capacity=16)
+
+
 @router.get("/top")
 async def top_talkers(
-    hours: int = Query(default=24, ge=1, le=720),
+    request: Request,
+    window: Window = Depends(window_query(24)),
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
@@ -243,12 +361,25 @@ async def top_talkers(
     channel a busy sender is a cost to everybody else, and the page says
     so beside the count (#60). None when the node reports no telemetry.
     """
-    now = datetime.now(UTC)
-    start = now - timedelta(hours=hours)
+    settings: Settings = request.app.state.settings
+    return await _top_cache.get(
+        f"{window.key}:{limit}",
+        settings.stats_cache_seconds,
+        lambda: _read_top(session, window, limit),
+    )
+
+
+async def _read_top(session: AsyncSession, window: Window, limit: int) -> list[dict[str, object]]:
+    """Count each sender's packets in the window, busiest first."""
+    now = window.end
+    start = window.start
     rows = (
         await session.execute(
             select(Packet.from_node_num, func.count().label("total"))
-            .where(Packet.first_seen_at >= start)
+            # Bounded at both ends, like `/activity` and `/broadcast`. It
+            # had a lower bound only, so a packet row dated in the future
+            # counted in every window. See AGENTS.md 9.4.
+            .where(Packet.first_seen_at >= start, Packet.first_seen_at < now)
             .group_by(Packet.from_node_num)
             .order_by(func.count().desc())
             .limit(limit)
@@ -343,7 +474,11 @@ class NodeHealth(TypedDict):
 
 
 async def _node_health(
-    session: AsyncSession, node_nums: list[int], start: datetime, window_seconds: int
+    session: AsyncSession,
+    node_nums: list[int],
+    start: datetime,
+    window_seconds: int,
+    end: datetime | None = None,
 ) -> dict[int, NodeHealth]:
     """Return the latest battery and uptime of each node.
 
@@ -369,8 +504,9 @@ async def _node_health(
     # says is newest, so without an upper bound a node claiming 2036
     # always wins its own "latest battery" -- and keeps winning it
     # after the radio has been off for a month. 79 rows across 13 nodes
-    # are dated in the future today. See AGENTS.md 9.4.
-    now = datetime.now(UTC)
+    # are dated in the future today. See AGENTS.md 9.4. A window that
+    # ends in the past ends there (#294).
+    now = end or datetime.now(UTC)
     latest = (
         await session.execute(
             select(
@@ -420,12 +556,105 @@ async def _node_health(
     return health
 
 
-@router.get("/activity")
-async def activity(
-    hours: int = Query(default=24, ge=1, le=720),
+#: Above this many hours the activity chart is drawn by day, not by hour.
+#: A 30 day chart by hour has 720 columns, too many to read.
+HOURLY_UP_TO_HOURS = 72
+
+
+def _local_day(column: Any, zone: str) -> Any:
+    """The local midnight that starts the day `column` falls in.
+
+    The day is the mesh's own (`DISPLAY_TIMEZONE`), not UTC. In Arizona
+    a UTC day starts at 5 pm local, so a UTC bucket would put one
+    evening in two days.
+    """
+    return func.timezone(zone, func.date_trunc("day", func.timezone(zone, column)))
+
+
+@router.get("/daily")
+async def daily(
+    request: Request,
+    window: Window = Depends(window_query(720)),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    """Return packet counts for each hour, split by packet family.
+    """Return what the mesh did on each local day of the window (#294).
+
+    Packets first seen, uploads, and distinct nodes that sent a packet,
+    for each day in `DISPLAY_TIMEZONE`. This is traffic on the day.
+    `/snapshots/daily` is not: it holds the whole-table totals the jobs
+    service counted once a UTC day, which is "packets still kept", and
+    it stays as it is for anybody who reads it.
+
+    A day with no traffic is a zero. A day older than packet retention
+    is left out, because its rows are gone and a zero would claim the
+    mesh was quiet.
+    """
+    settings: Settings = request.app.state.settings
+    return await _daily_cache.get(
+        window.key,
+        settings.stats_cache_seconds,
+        lambda: _read_daily(session, settings, window),
+    )
+
+
+async def _read_daily(
+    session: AsyncSession, settings: Settings, window: Window
+) -> dict[str, object]:
+    """Count each local day's packets, uploads and senders."""
+    zone = ZoneInfo(settings.display_timezone)
+    day = _local_day(Packet.first_seen_at, settings.display_timezone).label("day")
+    packet_rows = (
+        await session.execute(
+            select(
+                day,
+                func.count().label("packets"),
+                func.count(func.distinct(Packet.from_node_num)).label("nodes"),
+            )
+            .where(Packet.first_seen_at >= window.start, Packet.first_seen_at < window.end)
+            .group_by(day)
+        )
+    ).all()
+    seen_day = _local_day(PacketSeen.seen_at, settings.display_timezone).label("day")
+    upload_rows = (
+        await session.execute(
+            select(seen_day, func.count().label("uploads"))
+            .where(PacketSeen.seen_at >= window.start, PacketSeen.seen_at < window.end)
+            .group_by(seen_day)
+        )
+    ).all()
+
+    def local(moment: datetime) -> date:
+        return moment.astimezone(zone).date()
+
+    packets = {local(row.day): (row.packets, row.nodes) for row in packet_rows}
+    uploads = {local(row.day): row.uploads for row in upload_rows}
+    first = local(max(window.start, retained_from(settings)))
+    # The end is exclusive. A window that ends at a local midnight holds
+    # nothing of the day that midnight starts, so that day is not listed.
+    last = local(window.end - timedelta(microseconds=1))
+    days = []
+    current = first
+    while current <= last:
+        sent, nodes = packets.get(current, (0, 0))
+        days.append(
+            {
+                "day": current.isoformat(),
+                "packet_count": sent,
+                "observation_count": uploads.get(current, 0),
+                "node_count": nodes,
+            }
+        )
+        current += timedelta(days=1)
+    return {**window.describe(settings), "timezone": settings.display_timezone, "days": days}
+
+
+@router.get("/activity")
+async def activity(
+    request: Request,
+    window: Window = Depends(window_query(24)),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    """Return packet counts for each hour or day, split by packet family.
 
     This answers "what is the mesh actually doing", and how that changes
     through the day. Node info and position usually dominate.
@@ -433,10 +662,30 @@ async def activity(
     The time used is when this process received the packet, never a time
     the packet carries. Node clocks have been seen nearly 28 hours out.
     See AGENTS.md 9.4.
+
+    Windows longer than `HOURLY_UP_TO_HOURS` come in local days, and
+    `bucket` says which. `hours` holds the start of each bucket either
+    way, so an older reader still gets a list of times.
     """
-    now = datetime.now(UTC)
-    start = now - timedelta(hours=hours)
-    bucket = func.date_trunc("hour", Packet.first_seen_at).label("hour")
+    settings: Settings = request.app.state.settings
+    return await _activity_cache.get(
+        window.key,
+        settings.stats_cache_seconds,
+        lambda: _read_activity(session, settings, window),
+    )
+
+
+async def _read_activity(
+    session: AsyncSession, settings: Settings, window: Window
+) -> dict[str, object]:
+    """Group the window's packets by bucket and family."""
+    start, now = window.start, window.end
+    by_day = window.hours > HOURLY_UP_TO_HOURS
+    bucket = (
+        _local_day(Packet.first_seen_at, settings.display_timezone)
+        if by_day
+        else func.date_trunc("hour", Packet.first_seen_at)
+    ).label("bucket")
     rows = (
         await session.execute(
             select(bucket, Packet.portnum, Packet.payload_state, func.count().label("total"))
@@ -445,7 +694,7 @@ async def activity(
             # clocks run wrong: rows dated more than a day ahead exist.
             # Without this the chart grows hours that have not happened.
             # See docs/ISSUES.md 1.5.
-            .where(Packet.first_seen_at >= start, Packet.first_seen_at <= now)
+            .where(Packet.first_seen_at >= start, Packet.first_seen_at < now)
             .group_by(bucket, Packet.portnum, Packet.payload_state)
             .order_by(bucket)
         )
@@ -472,13 +721,14 @@ async def activity(
     # Busiest family first, so a stacked chart reads from the bottom.
     order = sorted(totals, key=lambda name: -totals[name])
     return {
-        "window_hours": hours,
+        **window.describe(settings),
+        "bucket": "day" if by_day else "hour",
         "hours": hours_seen,
         "families": [
             {
                 "name": name,
                 "total": totals[name],
-                # One value for each hour, zero where nothing was sent.
+                # One value for each bucket, zero where nothing was sent.
                 "counts": [series[name].get(moment, 0) for moment in hours_seen],
             }
             for name in order
@@ -543,7 +793,8 @@ def _node_num_of(item: BroadcastReport) -> int:
 
 @router.get("/broadcast")
 async def broadcast_rates(
-    hours: int = Query(default=24, ge=1, le=720),
+    request: Request,
+    window: Window = Depends(window_query(24)),
     limit: int = Query(default=40, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
@@ -567,9 +818,21 @@ async def broadcast_rates(
     Only families with a known default appear. A node sending text
     quickly is having a conversation, not a misconfiguration.
     """
-    now = datetime.now(UTC)
-    start = now - timedelta(hours=hours)
-    window_seconds = hours * 3600
+    settings: Settings = request.app.state.settings
+    return await _broadcast_cache.get(
+        f"{window.key}:{limit}",
+        settings.stats_cache_seconds,
+        lambda: _read_broadcast(session, settings, window, limit),
+    )
+
+
+async def _read_broadcast(
+    session: AsyncSession, settings: Settings, window: Window, limit: int
+) -> dict[str, object]:
+    """Measure each node's broadcast rates over the window."""
+    now = window.end
+    start = window.start
+    window_seconds = round((now - start).total_seconds())
     wanted = {name: portnums_pb2.PortNum.Value(name) for name in BROADCAST_INTERVALS}  # type: ignore[attr-defined]
     by_number = {number: name for name, number in wanted.items()}
 
@@ -581,7 +844,7 @@ async def broadcast_rates(
             # See docs/ISSUES.md 1.5.
             .where(
                 Packet.first_seen_at >= start,
-                Packet.first_seen_at <= now,
+                Packet.first_seen_at < now,
                 Packet.portnum.in_(wanted.values()),
             )
             .group_by(Packet.from_node_num, Packet.portnum)
@@ -605,7 +868,7 @@ async def broadcast_rates(
         )
 
     names = await resolve_names(session, families)
-    health = await _node_health(session, list(families), start, window_seconds)
+    health = await _node_health(session, list(families), start, window_seconds, now)
     report = [
         _broadcast_report(node_num, name_of(names, node_num), rates)
         for node_num, rates in families.items()
@@ -623,7 +886,7 @@ async def broadcast_rates(
         )
     )
     return {
-        "window_hours": hours,
+        **window.describe(settings),
         "intervals": BROADCAST_INTERVALS,
         "notable_ratio": NOTABLE_RATIO,
         "brownout_band": [BROWNOUT_LOW, BROWNOUT_HIGH],

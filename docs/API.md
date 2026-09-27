@@ -944,7 +944,12 @@ Query parameters:
   precision, battery and voltage, temperature and humidity, a neighbor
   count, or a traceroute request or reply. It is null for a kind that
   stores nothing to show (node info, routing), and for a text message
-  while text storage is off. The firehose asks for it.
+  while text storage is off. The firehose asks for it. With it comes
+  `summary_parts`: the same line as a list, where each part is text or a
+  measurement `{"value": 21.5, "unit": "°C"}`. The units are SI (`°C`,
+  `hPa`, `m`), and the browser writes each measurement in the reader's
+  units. `summary` is the parts joined in SI, for a reader that does not
+  convert (#291).
 
 Response item:
 
@@ -1503,6 +1508,39 @@ Response: `a`, `b`, `window_hours`, `report_count`, `best_snr`,
 
 ## 8. Statistics endpoints
 
+### 8.00 The window every statistics widget reads (#294)
+
+The Statistics page has one range control, and every widget on it reads
+the same window. `sonoran/api/window.py` is the one place that turns the
+query into a window. These endpoints take it: `/api/stats`, `/top`,
+`/leaderboards`, `/hardware`, `/daily`, `/activity` and `/broadcast`.
+
+Query parameters, one form or the other:
+
+- `hours` — 1 to 720. A rolling window that ends now.
+- `since`, and optionally `until` — a fixed window. A value with no time
+  zone is local time in `DISPLAY_TIMEZONE`, so `since=2026-09-01` is
+  midnight in Arizona, 07:00 UTC. `until` is exclusive and never later
+  than now. Without `until` the window ends now.
+
+The answer is 422 when both forms are given, when `until` has no
+`since`, when the window does not start before it ends and before now,
+or when it is longer than 720 hours (30 days). 720 hours is the default
+packet retention: a longer window over `packet` reads ground that is
+already deleted.
+
+A fixed window can still start before the oldest packet kept. The
+answers that are objects then carry, with `window_hours`:
+
+- `window_start`, `window_end` — the window in UTC.
+- `retained_from` — now minus `RETENTION_DAYS_PACKET`. Where it is later
+  than `window_start`, the widget counted from there, and the page says
+  so on the widget.
+
+Each endpoint keeps its old default when no window is given, so an
+older caller gets the answer it always got. Each windowed answer is held
+for `STATS_CACHE_SECONDS` in a cache with a bounded number of keys.
+
 ### 8.0 Three of these read the whole table, and are held
 
 `/api/stats`, `/api/stats/hardware` and `/api/stats/portnums` are the
@@ -1569,15 +1607,41 @@ figures stay exact and the readers share them.
 
 ### 8.1 `GET /api/stats`
 
-Returns the dashboard summary: node counts, packet counts, gateway counts, messages per hour.
+Returns the dashboard summary: `node_count`, `packet_count`,
+`observation_count` (uploads) and `gateway_count`.
 
-Held for `STATS_CACHE_SECONDS`. See 8.0.
+Query parameters:
+
+- `hours` — optional, 1 to 720. Count `packet_count` and
+  `observation_count` over the last `hours` of receive time
+  (`packet.first_seen_at`, `packet_seen.seen_at`), bounded at both ends,
+  so a row dated in the future does not count (AGENTS.md 9.4).
+  `node_count` and `gateway_count` stay totals of every node ever seen
+  and every node ever flagged a gateway, with or without `hours` (#292).
+- `since`, `until` — a fixed window instead of `hours`. See 8.00. The
+  Statistics page sends its range this way or as `hours`.
+
+With a window the response also carries the window fields of 8.00, and:
+
+- `window_hours` — the window counted.
+- `previous` — `packet_count` and `observation_count` for the window of
+  the same length just before. It is null when that window starts
+  before `RETENTION_DAYS_PACKET`: those rows are gone, and a comparison
+  with them would show a rise that did not happen.
+
+Without a window the answer is unchanged: every row the database holds.
+The dashboard asks for `hours=24`.
+
+Held for `STATS_CACHE_SECONDS`, one answer for each window, in a cache
+with a bounded number of keys. See 8.0.
 
 ### 8.2 `GET /api/stats/top`
 
 Returns top talkers by unique packet count.
 
-Query parameters: `hours` (default 24), `limit` (default 20).
+Query parameters: the window (8.00, default 24 hours), `limit` (default
+20). The window is bounded at both ends: it had a lower bound only, so a
+packet row dated in the future counted in every window (AGENTS.md 9.4).
 
 Item: `node_id`, `display_name`, `packet_count`, `air_util_tx`.
 `air_util_tx` is the node's own average share of air time spent
@@ -1591,13 +1655,24 @@ Returns leaderboards that reward what helps the mesh (#60). None of them
 counts packets.
 
 Query parameters: `channel` — the preset. Without it, the assessed
-preset with the most nodes.
+preset with the most nodes. A window (8.00) moves `longest_link` to it.
+Without one, that board reads its own 72 hours.
+
+`reachable` and `direct_gateways` do not follow the window. They are
+read from the gaps assessment, which the gaps job writes for one window,
+`GAPS_WINDOW_HOURS`. Each board's `window_hours` says which window it
+holds, and `longest_link` carries `follows_window`, so the page can say
+which boards follow its range.
 
 Response: `available`, `preset`, `presets`, `assessed`, `boards`.
 
 Each board: `key`, `title`, `measure`, `window_hours`, `cannot_know`,
 `rows`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
 a link row also carries `other_id` and `other_name`.
+`unit` is SI (`km` for a link) or a word (`%`, `gateways`). The API does
+not convert. The page writes `value` and `unit` through
+`SonoranUnits.measure`, which gives miles or kilometres from the reader's
+setting (#291).
 
 - `reachable` — the share of the hours a node was awake in which
   something on the air heard it. At least 24 hours awake. Read from the
@@ -1613,6 +1688,11 @@ a link row also carries `other_id` and `other_name`.
 ### 8.3 `GET /api/stats/hardware`
 
 Returns node counts grouped by hardware model.
+
+Without a window, every node ever seen. With one (8.00), only the nodes
+that sent a packet inside it. The packet is the evidence, not
+`node.last_heard`: that holds only the latest time, so a node heard in a
+past range and again since would drop out of that range.
 
 ### 8.4 `GET /api/stats/portnums`
 
@@ -1646,7 +1726,25 @@ groups, so they are not usable as a packet-type filter.
 
 Returns rows from `daily_snapshot`, newest first.
 
-Query parameters: `days` (default 30).
+Query parameters: `days` (default 30). It is a row limit, not a date
+filter.
+
+These are whole-table counts the jobs service takes once a UTC day, so
+`packet_count` is "packets still kept", not packets sent that day. The
+Statistics page no longer draws them. See 8.5.1.
+
+### 8.5.1 `GET /api/stats/daily`
+
+Returns what the mesh did on each local day of the window (#294).
+
+Query parameters: the window (8.00, default 720 hours).
+
+Response: the window fields, `timezone`, and `days`. Each day has `day`
+(`YYYY-MM-DD` in `DISPLAY_TIMEZONE`), `packet_count` (packets first
+seen), `observation_count` (uploads) and `node_count` (distinct nodes
+that sent a packet). A day with no traffic is a zero. A day older than
+`retained_from` is left out, because its rows are gone and a zero would
+say the mesh was quiet.
 
 ### 8.6 `GET /api/stats/activity`
 
@@ -1654,12 +1752,16 @@ Returns packet counts for each hour, split by packet family. This is the
 "what is the mesh actually doing" chart. Node info and position usually
 dominate.
 
-Query parameter: `hours` (default 24, maximum 720).
+Query parameters: the window (8.00, default 24 hours).
 
-Response: `window_hours`, `hours` (the hour each column stands for), and
-`families`. Each family has `name`, `total`, and `counts`, one value for
-each hour and zero where nothing was sent. The busiest family is first,
-so a stacked chart reads from the bottom.
+Response: the window fields, `bucket`, `hours` (the start of each
+column), and `families`. Each family has `name`, `total`, and `counts`,
+one value for each column and zero where nothing was sent. The busiest
+family is first, so a stacked chart reads from the bottom.
+
+`bucket` is `hour` up to 72 hours and `day` above that. A 30 day chart
+by hour has 720 columns. A day is a local day in `DISPLAY_TIMEZONE`, and
+its column starts at local midnight.
 
 The time is when this process received the packet, never a time the
 packet carries. See AGENTS.md 9.4.
@@ -1669,9 +1771,10 @@ packet carries. See AGENTS.md 9.4.
 Returns how often each node sends, against the firmware defaults, with
 what the device telemetry says about its health.
 
-Query parameters: `hours` (default 24), `limit` (default 40).
+Query parameters: the window (8.00, default 24 hours), `limit`
+(default 40).
 
-Response: `window_hours`, `intervals` (the defaults used),
+Response: the window fields, `intervals` (the defaults used),
 `notable_ratio`, `brownout_band`, `node_count`, `notable_count`,
 `power_loop_count`, and `nodes`.
 

@@ -214,10 +214,12 @@ const CELSIUS = (value) => (
 const WEATHER_LABELS = {
   temperature: ['Temperature', (v) => CELSIUS(v)],
   relative_humidity: ['Humidity', (v) => `${round(v, 0)} %`],
-  barometric_pressure: ['Pressure', (v) => `${round(v, 1)} hPa`],
-  wind_speed: ['Wind speed', (v) => `${round(v, 1)} m/s`],
+  // Inches of mercury, miles per hour and inches of rain when the reader
+  // chose imperial (Will, #291). The sensors report hPa, m/s and mm.
+  barometric_pressure: ['Pressure', (v) => SonoranUnits.pressureFromHpa(v)],
+  wind_speed: ['Wind speed', (v) => SonoranUnits.speedFromMs(v)],
   wind_direction: ['Wind direction', (v) => `${round(v, 0)} deg`],
-  rainfall: ['Rainfall', (v) => `${round(v, 1)} mm`],
+  rainfall: ['Rainfall', (v) => SonoranUnits.lengthFromMm(v)],
   lux: ['Light', (v) => `${round(v, 0)} lx`],
   uv_lux: ['UV', (v) => `${round(v, 0)} lx`],
   iaq: ['Air quality index', (v) => `${round(v, 0)}`],
@@ -527,7 +529,8 @@ function statTile(label, value, delta, hint) {
         'data-label': label,
         text: label,
       }),
-      delta ? el('span', { class: 'delta', text: delta }) : null));
+      // Text, or a node when part of the line folds away on a phone.
+      delta ? el('span', { class: 'delta' }, delta) : null));
 }
 
 /** Render an SNR value with its quality colour. */
@@ -1362,15 +1365,76 @@ function fitChartExpand(target) {
 
 /* ---------------------------------------------------------------- 4 */
 
-/** Shared summary tiles used by the dashboard and the statistics page. */
-async function loadSummary(page) {
+/*
+ * A count against the same count in the window before, for a tile's
+ * delta line (#292): "▲ 4% on the day before".
+ *
+ * Null when there is nothing honest to compare with. The API sends no
+ * `previous` when the window before is older than the packets it keeps,
+ * and a comparison with deleted rows would show a rise that never
+ * happened.
+ */
+function changeOn(current, previous, before) {
+  if (current == null || previous == null) return null;
+  if (previous === 0) return current ? `none on ${before}` : `same as ${before}`;
+  const change = ((current - previous) / previous) * 100;
+  if (Math.abs(change) < 0.5) return `same as ${before}`;
+  return `${change > 0 ? '▲' : '▼'} ${Math.round(Math.abs(change))}% on ${before}`;
+}
+
+/*
+ * "▲ 4% on the day before" as two parts, so a phone can show "▲ 4%"
+ * beside the figure and fold the words away (#278). The words stay in
+ * the page for a screen reader, and the tile's hint says them too.
+ */
+function compactDelta(text) {
+  const found = text && /^(.*?)( (?:on|as) .*)$/.exec(text);
+  return found ? [found[1], el('span', { class: 'delta-rest', text: found[2] })] : text;
+}
+
+/**
+ * Shared summary tiles used by the dashboard and the statistics page.
+ *
+ * With `hours`, Packets and Uploads count that rolling window and compare
+ * with the window before it. Nodes and Gateways stay totals of every node
+ * ever seen, whatever the window (Will, #292), and keep the line against
+ * yesterday's snapshot, which is a total too.
+ *
+ * The Statistics page passes its own range instead (#294): `query` is the
+ * window in the API's words and `span` is what the labels call it.
+ */
+async function loadSummary(page, { hours = null, query = null, span = null } = {}) {
   const target = $('[data-summary]', page);
   if (!target) return;
-  const [stats, snapshots] = await getAll(['api/stats', 'api/stats/snapshots/daily?days=2']);
+  const asked = query || (hours ? `hours=${hours}` : null);
+  const [stats, snapshots] = await getAll([
+    asked ? `api/stats?${asked}` : 'api/stats',
+    'api/stats/snapshots/daily?days=2',
+  ]);
   if (!stats) return replace(target, failure(new Error('Statistics are not available.')));
   const yesterday = snapshots && snapshots[1];
-  const delta = (key) =>
+  const snapshotDelta = (key) =>
     yesterday && yesterday[key] != null ? `${count(yesterday[key])} yesterday` : null;
+  const windowed = stats.window_hours != null;
+  const named = span || (windowed ? windowName(Math.round(stats.window_hours)) : '');
+  const before = stats.window_hours === 24
+    ? 'the day before'
+    : `the previous ${windowName(Math.round(stats.window_hours || 0))}`;
+  // A window that starts before the oldest packet kept counts from there,
+  // and the tile says so rather than comparing a part with a whole.
+  const cap = retentionCap(stats);
+  const delta = (key) => {
+    if (!windowed) return snapshotDelta(key);
+    if (key === 'node_count' || key === 'gateway_count') return snapshotDelta(key);
+    if (cap) return cap;
+    return compactDelta(changeOn(stats[key], stats.previous ? stats.previous[key] : null, before));
+  };
+  // Said in the hint too, because a phone shows only "▲ 4%" (#278).
+  const compared = windowed && !cap ? ` The line under the figure compares with ${before}.` : '';
+  // "(24 h)" on the two that follow the window, "(all time)" on the two
+  // that do not, so one row of tiles does not mix two meanings unlabelled.
+  const label = (name, rolling) => (windowed ? `${name} (${rolling ? named : 'all time'})` : name);
+  const within = windowed ? ` in ${span ? span : `the last ${named}`}` : '';
   /*
    * "Observations" was the endpoint's word for `packet_seen`, printed
    * at the reader. A `packet_seen` row is one MQTT upload, and saying
@@ -1381,23 +1445,50 @@ async function loadSummary(page) {
    * dashboard has one word for it. No count changes.
    */
   replace(target,
-    statTile('Nodes', count(stats.node_count), delta('node_count'),
-      'How many nodes this database holds.'),
-    statTile('Packets', count(stats.packet_count), delta('packet_count'),
-      'Packets stored. The same packet uploaded by several gateways is counted once.'),
-    statTile('Uploads', count(stats.observation_count), delta('observation_count'),
-      'One for each time a gateway uploaded a packet to MQTT. One packet is often '
+    statTile(label('Nodes', false), count(stats.node_count), delta('node_count'),
+      'How many nodes this database holds: every node it has ever heard.'),
+    statTile(label('Packets', true), count(stats.packet_count), delta('packet_count'),
+      `Packets stored${within}. The same packet uploaded by several gateways is counted once.${compared}`),
+    statTile(label('Uploads', true), count(stats.observation_count), delta('observation_count'),
+      `One for each time a gateway uploaded a packet to MQTT${within}. One packet is often `
       + 'uploaded by several gateways, and by the same gateway more than once, so this '
-      + 'is larger than the packet count and is not a count of gateways.'),
-    statTile('Gateways', count(stats.gateway_count), delta('gateway_count'),
-      'Nodes that upload what they hear to MQTT. They are the only observers this '
-      + 'database has.'));
+      + `is larger than the packet count and is not a count of gateways.${compared}`),
+    statTile(label('Gateways', false), count(stats.gateway_count), delta('gateway_count'),
+      'Nodes that upload what they hear to MQTT, counting every one ever seen. They are '
+      + 'the only observers this database has.'));
 }
 
-async function loadTopTalkers(page) {
+/** A window in hours as the page names it: "24 h", "7 d". */
+function windowName(hours) {
+  return hours % 24 === 0 && hours > 24 ? `${hours / 24} d` : `${hours} h`;
+}
+
+/*
+ * "Counted from 28 Aug": what a widget says when the range starts before
+ * the oldest packet the database keeps (#294).
+ *
+ * Null when the whole range is kept. An hour of slack, because a rolling
+ * 30 day window and the 30 day retention are computed a few microseconds
+ * apart and would otherwise always look capped.
+ */
+function retentionCap(meta) {
+  if (!meta || !meta.window_start || !meta.retained_from) return null;
+  const start = new Date(meta.window_start).getTime();
+  const kept = new Date(meta.retained_from).getTime();
+  if (!(kept - start > 3600000)) return null;
+  return `counted from ${DATE.format(new Date(kept))}: older packets are not kept`;
+}
+
+/*
+ * The window the dashboard's headline tiles count (Will, #292: "the 4
+ * main stats on the dashboard should show the rolling last 24 hours").
+ */
+const DASHBOARD_SUMMARY_HOURS = 24;
+
+async function loadTopTalkers(page, { query = 'hours=24' } = {}) {
   const target = $('[data-top-talkers]', page);
   if (!target) return;
-  const rows = await get('api/stats/top?hours=24&limit=15').catch(() => null);
+  const rows = await get(`api/stats/top?${query}&limit=15`).catch(() => null);
   if (!rows) return replace(target, failure(new Error('Cannot load the busiest nodes.')));
   replace(target, table([
     { label: 'Node', cell: (row) => nodeChip(row) },
@@ -1420,7 +1511,7 @@ async function loadTopTalkers(page) {
  */
 let leaderboardPreset = '';
 
-async function loadLeaderboards(page) {
+async function loadLeaderboards(page, { query = '', span = '' } = {}) {
   const target = $('[data-leaderboards]', page);
   if (!target) return;
   /*
@@ -1432,8 +1523,8 @@ async function loadLeaderboards(page) {
    * in JavaScript rather than sitting in the markup.
    */
   const wanted = window.SonoranPreset ? SonoranPreset.current() : leaderboardPreset;
-  const query = wanted ? `?channel=${encodeURIComponent(wanted)}` : '';
-  const data = await get(`api/stats/leaderboards${query}`).catch(() => null);
+  const params = [wanted ? `channel=${encodeURIComponent(wanted)}` : '', query].filter(Boolean).join('&');
+  const data = await get(`api/stats/leaderboards${params ? `?${params}` : ''}`).catch(() => null);
   if (!data) return replace(target, failure(new Error('Cannot load the leaderboards.')));
   if (!data.available) {
     return replace(target, empty('No gap assessment has been written yet, so there is nothing to rank.'));
@@ -1474,15 +1565,31 @@ async function loadLeaderboards(page) {
    * leaderboard and a scoreboard: a ranking that does not say what it
    * cannot see invites somebody to read it as a judgement.
    */
+  /*
+   * The window chip says whether a board follows the page's range (#294).
+   *
+   * The link board does. The two boards read from the gaps assessment keep
+   * the gaps job's own window, because that job writes one file for one
+   * window -- so their chip says their window and that the range does not
+   * reach them, rather than letting a reader take them for the range.
+   */
+  const boardWindow = (board) => {
+    if (board.follows_window && span) return span;
+    if (!board.window_hours) return null;
+    const own = `last ${windowName(Math.round(board.window_hours))}`;
+    return span ? `${own}, not the page range` : own;
+  };
   replace(target, data.boards.map((board) => el('div', { class: 'panel leaderboard' },
     el('h3', { 'data-hint': board.cannot_know || null, 'data-label': board.title }, board.title,
-      board.window_hours ? el('span', { class: 'muted', text: `last ${board.window_hours} h` }) : null),
+      boardWindow(board) ? el('span', { class: 'muted', text: boardWindow(board) }) : null),
     el('p', { class: 'muted', text: board.measure }),
     board.rows.length
       ? el('ol', { class: 'board' }, board.rows.map((row) => el('li', {},
           el('span', { class: 'who' }, nodeChip(row),
             row.other_id ? [' to ', nodeChip({ node_id: row.other_id, display_name: row.other_name })] : null),
-          el('span', { class: 'value', text: `${count(row.value)} ${row.unit}` }),
+          // Through the formatter: the API sends the link board in km,
+          // and printing that as it came is the bug Will saw (#291).
+          el('span', { class: 'value', text: SonoranUnits.measure(row.value, row.unit) }),
           el('span', { class: 'muted detail', text: row.detail }))))
       /*
        * "Nothing qualifies" is a measurement. "Not assessed" is an
@@ -1530,7 +1637,7 @@ const PORTNUM_CHART_HOURS = 24;
 const DASHBOARD_MESSAGES = 5;
 
 PAGES.dashboard = async (page) => {
-  await Promise.all([loadSummary(page), loadTopTalkers(page)]);
+  await Promise.all([loadSummary(page, { hours: DASHBOARD_SUMMARY_HOURS }), loadTopTalkers(page)]);
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
@@ -6313,7 +6420,7 @@ function healthChecks(gaps, detail) {
   const position = {
     exact: ['ok', 'Shares its position.'],
     coarse: ['ok', deviation
-      ? `Shares its position, rounded to about ${count(Math.round(deviation))} m.`
+      ? `Shares its position, rounded to about ${SonoranUnits.distanceFromM(deviation)}.`
       : 'Shares its position at reduced precision.'],
     none: ['unknown', 'Shares no position. That is optional on this mesh.'],
   }[confidence] || ['unknown', 'Shares no position. That is optional on this mesh.'];
@@ -8605,6 +8712,21 @@ function redrawLiveTable(target, rows, keyOf, build) {
  */
 const firehoseFilter = { type: '', hours: '' };
 
+/*
+ * The "What it said" line, in the reader's units.
+ *
+ * The server sends `summary_parts`: text, and measurements as a number
+ * with an SI unit. It used to send prose only, so a temperature read
+ * "21.5 C" in every mode (#291). `summary` is the same line in SI and is
+ * used only when the parts are missing.
+ */
+function summaryText(row) {
+  if (!Array.isArray(row.summary_parts)) return row.summary;
+  return row.summary_parts
+    .map((part) => (typeof part === 'string' ? part : SonoranUnits.measure(part.value, part.unit)))
+    .join('');
+}
+
 /** The address of the firehose, filtered. */
 function firehoseHref(type, hours) {
   const params = new URLSearchParams();
@@ -8813,9 +8935,18 @@ PAGES.firehose = async (page) => {
    */
   const packetHref = (row) =>
     `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
-  // The rows on screen before this poll, for the "N new" pill (#280).
-  const before = new Set(Array.from(target.querySelectorAll('tbody tr'), (row) => row.dataset.rowKey));
-  redrawLiveTable(target, rows, (row) => row.packet_key, () => table([
+  /*
+   * The key carries the reader's units as well as the packet. A kept row
+   * keeps its old text, so without this a change of units on the settings
+   * page left every row already on screen in the old units (#291).
+   */
+  const units = `${SonoranUnits.imperial() ? 'i' : 'm'}${SonoranUnits.fahrenheit() ? 'f' : 'c'}`;
+  // The rows on screen before this poll, for the "N new" pill (#280), by
+  // packet alone: with the units in the key, every row would count as new
+  // after a change of units.
+  const before = new Set(Array.from(target.querySelectorAll('tbody tr'),
+    (row) => String(row.dataset.rowKey || '').split('|')[0]));
+  redrawLiveTable(target, rows, (row) => `${row.packet_key}|${units}`, () => table([
     /*
      * Time first, and it IS the link (Will, 2026-09-26).
      *
@@ -8848,7 +8979,7 @@ PAGES.firehose = async (page) => {
       wrap: true,
       hint: 'A short line from the decoded packet. Node info and routing packets store nothing to show, and neither does a text message while text storage is off.',
       cell: (row) => (row.summary
-        ? el('span', { class: 'summary', text: row.summary })
+        ? el('span', { class: 'summary', text: summaryText(row) })
         : el('span', { class: 'muted', text: '-' })),
     },
     { label: 'Channel', cell: (row) => row.channel || '-' },
@@ -9017,20 +9148,29 @@ function drawBroadcastTable(page, data) {
   ));
 }
 
-/** Draw what the mesh sends each hour, stacked by packet family. */
-function drawActivityChart(page, data) {
+/**
+ * Draw what the mesh sends each hour, or each day for a long range,
+ * stacked by packet family.
+ */
+function drawActivityChart(page, data, span = null) {
   const note = $('[data-activity-note]', page);
   const target = $('[data-activity-chart]', page);
+  const title = $('[data-activity-title]', page);
+  const words = span || (data ? `the last ${windowName(Math.round(data.window_hours))}` : '');
   if (!data || !data.families) {
     note.textContent = '';
     return chartEmpty(target, 'Cannot load what the mesh is sending.');
   }
+  // Above three days the API answers by local day: 720 hourly columns
+  // are too many to read (#294).
+  const byDay = data.bucket === 'day';
+  if (title) title.textContent = `What the mesh is sending, by ${byDay ? 'day' : 'hour'}`;
   if (!data.families.length) {
     note.textContent = '';
-    return chartEmpty(target, `No packet was stored in the last ${data.window_hours} h.`);
+    return chartEmpty(target, `No packet was stored in ${words}.`);
   }
   const total = data.families.reduce((sum, family) => sum + family.total, 0);
-  note.textContent = `${count(total)} packets over ${data.window_hours} h`;
+  note.textContent = `${count(total)} packets`;
 
   // Only the families worth a band. The rest become one "other" band, so
   // the legend stays readable.
@@ -9056,7 +9196,11 @@ function drawActivityChart(page, data) {
       textStyle: { color: PALETTE.muted },
       top: 0,
     },
-    xAxis: { type: 'category', data: data.hours.map((hour) => clock(hour)), ...AXIS },
+    xAxis: {
+      type: 'category',
+      data: data.hours.map((moment) => (byDay ? DATE.format(new Date(moment)) : clock(moment))),
+      ...AXIS,
+    },
     yAxis: { type: 'value', ...AXIS },
     series: bands.map((band, index) => ({
       name: portnumLabel(band.name),
@@ -9071,47 +9215,194 @@ function drawActivityChart(page, data) {
   });
 }
 
-PAGES.stats = async (page) => {
-  await Promise.all([loadSummary(page), loadTopTalkers(page), loadLeaderboards(page)]);
-  const [daily, hardware, activity, broadcast] = await getAll([
-    'api/stats/snapshots/daily?days=30',
-    'api/stats/hardware',
-    'api/stats/activity?hours=24',
-    'api/stats/broadcast?hours=24&limit=40',
-  ]);
-  drawActivityChart(page, activity);
-  drawBroadcastTable(page, broadcast);
+/*
+ * The Statistics range (#294).
+ *
+ * Will: "the stats page needs the ability to set the date range with some
+ * common quick click buttons at the top right of the page and all the
+ * stats, widgets, etc should adjust to them. Default is last 30 days
+ * rolling." He also asked for a from/to range.
+ *
+ * The range lives in the address, as the chat range does: `#stats`,
+ * `#stats?range=7d`, or `#stats?from=2026-09-01&to=2026-09-10`. The
+ * router reads it, and a change writes it back with `replaceState`, so a
+ * reload or a shared link keeps it and the Back button is not flooded.
+ *
+ * The largest quick range is 30 days because that is how long packets are
+ * kept (RETENTION_DAYS_PACKET). A longer button would draw every
+ * packet-based widget over deleted ground and call it quiet.
+ */
+const STATS_RANGES = { '24h': 24, '7d': 168, '30d': 720 };
+const STATS_DEFAULT_RANGE = '30d';
+// The API's cap, in days: a custom range longer than this is refused.
+const STATS_MAX_DAYS = 30;
+let statsRange = { key: STATS_DEFAULT_RANGE, from: null, to: null };
 
-  const dailyChart = $('[data-daily-chart]', page);
-  if (!daily) {
-    chartEmpty(dailyChart, 'Cannot load the daily history.');
-  } else if (!daily.length) {
-    // The jobs service writes `daily_snapshot`. No row means nobody has
-    // written one yet, which is not the same as thirty quiet days.
-    chartEmpty(dailyChart, 'No daily snapshot has been written yet. The jobs service writes one each day.');
-  } else {
-    const rows = [...daily].reverse();
-    chart(dailyChart, {
-      ...CHART_BASE,
-      legend: { textStyle: { color: PALETTE.muted }, top: 0 },
-      xAxis: { type: 'category', data: rows.map((row) => row.day), ...AXIS },
-      // Node counts are far smaller than packet counts. Give each its own axis.
-      yAxis: [
-        { type: 'value', name: 'Packets', ...AXIS },
-        { type: 'value', name: 'Nodes', ...AXIS, splitLine: { show: false } },
-      ],
-      series: [
-        { name: 'Packets', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 0, data: rows.map((row) => row.packet_count), itemStyle: { color: PALETTE.accent } },
-        { name: 'Nodes', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 1, data: rows.map((row) => row.node_count), itemStyle: { color: PALETTE.good } },
-      ],
-    });
+// A calendar date as the page writes it. The dates in the address are the
+// mesh's local days already, so they are formatted as UTC, which leaves
+// them where they are.
+const CALENDAR_DAY = new Intl.DateTimeFormat(undefined, {
+  month: 'short', day: 'numeric', timeZone: 'UTC',
+});
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A `YYYY-MM-DD`, or null for anything that is not a real date. */
+function calendarDay(value) {
+  if (!value || !ISO_DAY.test(value)) return null;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value ? value : null;
+}
+
+/** The day after a `YYYY-MM-DD`. */
+function nextCalendarDay(value) {
+  return new Date(Date.parse(`${value}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+}
+
+/** Read the range from the address. Anything unknown is the default. */
+function statsRangeFromAddress(hash = location.hash) {
+  const query = new URLSearchParams(hash.split('?')[1] || '');
+  const from = calendarDay(query.get('from'));
+  if (from) {
+    const to = calendarDay(query.get('to'));
+    return { key: 'custom', from, to: to && to >= from ? to : null };
   }
+  const key = query.get('range');
+  return { key: Object.hasOwn(STATS_RANGES, key || '') ? key : STATS_DEFAULT_RANGE, from: null, to: null };
+}
+
+/** The range in the API's words. */
+function statsRangeQuery(range = statsRange) {
+  if (range.key !== 'custom') return `hours=${STATS_RANGES[range.key]}`;
+  // `to` is the last day shown, so the window ends at the next midnight.
+  // The API reads a date with no zone as the mesh's local midnight.
+  const until = range.to ? `&until=${nextCalendarDay(range.to)}` : '';
+  return `since=${range.from}${until}`;
+}
+
+/** The range in the page's words: "last 30 d", "1 Sep to 10 Sep". */
+function statsRangeWords(range = statsRange) {
+  if (range.key !== 'custom') return `last ${windowName(STATS_RANGES[range.key])}`;
+  const from = CALENDAR_DAY.format(new Date(`${range.from}T00:00:00Z`));
+  if (!range.to) return `${from} to now`;
+  if (range.to === range.from) return from;
+  return `${from} to ${CALENDAR_DAY.format(new Date(`${range.to}T00:00:00Z`))}`;
+}
+
+/** The address for a range, written without adding a history entry. */
+function statsWriteRange(range) {
+  statsRange = range;
+  const hash = range.key === 'custom'
+    ? `#stats?from=${range.from}${range.to ? `&to=${range.to}` : ''}`
+    : (range.key === STATS_DEFAULT_RANGE ? '#stats' : `#stats?range=${range.key}`);
+  history.replaceState(null, '', hash);
+}
+
+/*
+ * Why a typed range was not used, or null when it can be.
+ *
+ * Checked here as well as by the API, so the reader is told in words next
+ * to the boxes rather than finding every widget on the page failed.
+ */
+function statsRangeRefusal(from, to) {
+  if (!from) return 'Choose a start date.';
+  const today = new Date().toISOString().slice(0, 10);
+  if (from > today) return 'The start date is in the future.';
+  if (to && to < from) return 'The end date is before the start date.';
+  const last = to || today;
+  const days = Math.round((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+  if (days > STATS_MAX_DAYS) {
+    return `A range can be at most ${STATS_MAX_DAYS} days, the time packets are kept.`;
+  }
+  return null;
+}
+
+/** Show the range in force on the control. */
+function statsDrawControl(page) {
+  for (const button of $$('[data-stats-quick]', page)) {
+    button.setAttribute('aria-pressed', String(button.dataset.statsQuick === statsRange.key));
+  }
+  const from = $('[data-stats-from]', page);
+  const to = $('[data-stats-to]', page);
+  // Not while the reader is typing in one, which would move their caret.
+  if (from && document.activeElement !== from) from.value = statsRange.from || '';
+  if (to && document.activeElement !== to) to.value = statsRange.to || '';
+  const range = $('[data-stats-range]', page);
+  if (range && statsRange.key === 'custom') range.classList.add('show-custom');
+}
+
+/*
+ * The range on every widget that follows it, and where retention cuts it
+ * short, that too (#294: "where a table's retention caps the range, say
+ * so on the widget rather than pretending").
+ *
+ * Every widget with a chip is built from `packet`, so one cap covers them
+ * all. The leaderboards write their own chips.
+ */
+function statsDrawChips(page, meta) {
+  const cap = retentionCap(meta);
+  const text = cap ? `${statsRangeWords()} · ${cap}` : statsRangeWords();
+  for (const chip of $$('[data-range-chip]', page)) chip.textContent = text;
+}
+
+/** Draw each local day's packets and the nodes heard that day. */
+function drawDailyChart(page, daily) {
+  const dailyChart = $('[data-daily-chart]', page);
+  if (!daily || !Array.isArray(daily.days)) {
+    return chartEmpty(dailyChart, 'Cannot load the daily history.');
+  }
+  if (!daily.days.length) {
+    // Every day in the range is older than what is kept.
+    return chartEmpty(dailyChart, 'No day in this range is still kept. Packets are kept for 30 days.');
+  }
+  chart(dailyChart, {
+    ...CHART_BASE,
+    legend: { textStyle: { color: PALETTE.muted }, top: 0 },
+    xAxis: {
+      type: 'category',
+      data: daily.days.map((row) => CALENDAR_DAY.format(new Date(`${row.day}T00:00:00Z`))),
+      ...AXIS,
+    },
+    // Node counts are far smaller than packet counts. Give each its own axis.
+    yAxis: [
+      { type: 'value', name: 'Packets', ...AXIS },
+      { type: 'value', name: 'Nodes', ...AXIS, splitLine: { show: false } },
+    ],
+    series: [
+      { name: 'Packets', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 0, data: daily.days.map((row) => row.packet_count), itemStyle: { color: PALETTE.accent } },
+      { name: 'Nodes heard', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 1, data: daily.days.map((row) => row.node_count), itemStyle: { color: PALETTE.good } },
+    ],
+  });
+}
+
+PAGES.stats = async (page) => {
+  statsDrawControl(page);
+  const query = statsRangeQuery();
+  const span = statsRangeWords();
+  const summarySpan = statsRange.key === 'custom' ? span : windowName(STATS_RANGES[statsRange.key]);
+  await Promise.all([
+    loadSummary(page, { query, span: summarySpan }),
+    loadTopTalkers(page, { query }),
+    loadLeaderboards(page, { query, span }),
+  ]);
+  const [daily, hardware, activity, broadcast] = await getAll([
+    // Traffic on each local day, from `packet`. It was the jobs service's
+    // daily snapshot, which is the whole-table total held at a UTC
+    // midnight -- "packets still kept", not what the mesh did that day.
+    `api/stats/daily?${query}`,
+    `api/stats/hardware?${query}`,
+    `api/stats/activity?${query}`,
+    `api/stats/broadcast?${query}&limit=40`,
+  ]);
+  statsDrawChips(page, daily || activity || broadcast);
+  drawActivityChart(page, activity, span);
+  drawBroadcastTable(page, broadcast);
+  drawDailyChart(page, daily);
 
   const hardwareChart = $('[data-hardware-chart]', page);
   if (!hardware) {
     chartEmpty(hardwareChart, 'Cannot load the hardware mix.');
   } else if (!hardware.length) {
-    chartEmpty(hardwareChart, 'No node has reported its board model.');
+    chartEmpty(hardwareChart, `No node that reported its board model was heard in ${span}.`);
   } else {
     const top = hardware.slice(0, 12).reverse();
     // Every bar carries its name (#72). ECharts drops every other label
@@ -9347,7 +9638,7 @@ const DECODED_LABELS = {
   latitude: ['Latitude', (v) => round(v, 5)],
   longitude: ['Longitude', (v) => round(v, 5)],
   altitude: ['Altitude', (v) => SonoranUnits.heightFromM(v)],
-  ground_speed: ['Ground speed', (v) => `${v} m/s`],
+  ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromMs(v)],
   ground_track: ['Ground track', (v) => `${round(v, 0)} deg`],
   sats_in_view: ['Satellites', (v) => String(v)],
   precision_bits: ['Precision bits', (v) => String(v)],
@@ -9585,7 +9876,7 @@ function positionValues(row) {
       ? 'full'
       : `about ${SonoranUnits.distanceFromM(doubt)} `
         + `(${row.precision_bits} bits). The node chose to send a rounded position.`],
-    row.ground_speed == null ? null : ['Ground speed', `${row.ground_speed} m/s`],
+    row.ground_speed == null ? null : ['Ground speed', SonoranUnits.speedFromMs(row.ground_speed)],
     row.sats_in_view == null ? null : ['Satellites', String(row.sats_in_view)],
   ].filter(Boolean);
   return el('dl', { class: 'kv' }, entries.flatMap(([label, value]) =>
@@ -10403,6 +10694,9 @@ async function route() {
     // put `since=Invalid Date` in the query and take a 422.
     firehoseFilter.hours = Number.isFinite(hours) && hours > 0 ? String(hours) : '';
   }
+  // `#stats?range=7d` or `#stats?from=...&to=...` (#294). Read here, like
+  // the firehose filter, so an absent range is the default again.
+  if (known === 'stats') statsRange = statsRangeFromAddress();
   if (known === 'chat') {
     const channel = decodeURIComponent(parts[1] || '') || null;
     /*
@@ -10781,6 +11075,49 @@ function wire() {
       toggle.setAttribute('aria-expanded', String(open));
       if (open) {
         const first = $('[data-chat-from]', range);
+        if (first) first.focus();
+      }
+    });
+  }
+  /*
+   * The Statistics range (#294). A quick range redraws at once. The date
+   * boxes redraw on `change`, and only once the pair makes a range the
+   * API will answer; otherwise the refusal is said beside them.
+   */
+  for (const button of $$('[data-stats-quick]')) {
+    button.addEventListener('click', () => {
+      const key = button.dataset.statsQuick;
+      if (!Object.hasOwn(STATS_RANGES, key)) return;
+      const note = $('[data-stats-range-note]');
+      if (note) note.hidden = true;
+      statsWriteRange({ key, from: null, to: null });
+      render('stats');
+    });
+  }
+  for (const box of $$('[data-stats-from], [data-stats-to]')) {
+    box.addEventListener('change', () => {
+      const page = $('[data-page="stats"]');
+      const from = calendarDay($('[data-stats-from]', page).value);
+      const to = calendarDay($('[data-stats-to]', page).value);
+      const refusal = statsRangeRefusal(from, to);
+      const note = $('[data-stats-range-note]', page);
+      if (note) {
+        note.textContent = refusal || '';
+        note.hidden = !refusal;
+      }
+      if (refusal) return;
+      statsWriteRange({ key: 'custom', from, to });
+      render('stats');
+    });
+  }
+  for (const toggle of $$('[data-stats-custom-toggle]')) {
+    toggle.addEventListener('click', () => {
+      const range = toggle.closest('[data-stats-range]');
+      if (!range) return;
+      const open = range.classList.toggle('show-custom');
+      toggle.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const first = $('[data-stats-from]', range);
         if (first) first.focus();
       }
     });

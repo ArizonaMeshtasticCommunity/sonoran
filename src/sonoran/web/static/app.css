@@ -1949,6 +1949,33 @@ body.chart-staged { overflow: hidden; }
 .chat-range .range-quick { display: flex; gap: .25rem; }
 
 /*
+ * The Statistics range (#294) borrows the chat range above, and adds the
+ * one thing the chat does not need: which quick range is in force. The
+ * pressed chip is filled, as the preset switch's chosen side is.
+ */
+.stats-range { justify-content: flex-end; }
+.stats-range .chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.stats-range input[type="date"] { padding: .3rem .4rem; }
+.stats-range .range-refusal {
+  flex: 1 1 100%;
+  margin: 0;
+  text-align: right;
+  font-size: .78rem;
+  color: var(--warn);
+}
+/* The range a widget counts, beside its title. */
+.range-chip {
+  margin-left: .35rem;
+  font-size: .72rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/*
  * At a phone width the range wraps to its own line and the quick buttons
  * come first, because they are what gets used on a phone -- typing a
  * datetime on a 320px screen is a last resort, not the common path.
@@ -2001,6 +2028,9 @@ body.chart-staged { overflow: hidden; }
    */
   .chat-range.show-custom .range-custom-fields { display: flex; flex-wrap: wrap; }
   .range-custom-fields input[type="datetime-local"] { flex: 1 1 100%; }
+  /* A date box is narrow enough for two in a row, with "to" between. */
+  .stats-range input[type="date"] { flex: 1 1 7rem; min-width: 0; }
+  .stats-range .range-refusal { text-align: left; }
   .chat-full .page-head { margin-bottom: .5rem; }
   .chat-full .page-head .controls { gap: .4rem; }
   .chat-full .chat-title-row h2 { font-size: 1.15rem; }
@@ -2242,6 +2272,55 @@ a.more { text-decoration: none; display: inline-block; }
    * ticker.
    */
   .map-overlay:not(.watch-panel) { position: static; width: auto; margin-top: .6rem; }
+}
+
+/*
+ * The four summary tiles as one compact block on a phone (#278).
+ *
+ * Measured at 390 px, the two by two above still took 415 px on the
+ * dashboard, a whole screen of four numbers before the first panel. Each
+ * tile was a 1.6 rem figure, a label, a delta and 1.7 rem of padding,
+ * and the "i" beside each label is a button, so the 44 px touch height
+ * above made every label row 44 px tall.
+ *
+ * Here the tiles keep two by two and lose the air: less padding, a
+ * smaller figure, and the change ("▲ 4%") on the figure's own line
+ * instead of a line of its own. The words after it ("on the day
+ * before") leave the screen but stay for a screen reader, and the
+ * tile's hint says them. The "i" keeps its 44 px tap area but takes
+ * only its own height in the row, through a negative margin, so the
+ * target does not grow the tile.
+ */
+@media (max-width: 40rem) {
+  .grid[data-summary] { gap: .5rem; }
+  .grid[data-summary] > .panel { padding: 0; }
+  .grid[data-summary] .stat {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: .4rem;
+    row-gap: .15rem;
+    padding: .5rem .65rem;
+  }
+  .grid[data-summary] .stat .value { grid-area: 1 / 1; font-size: 1.25rem; }
+  .grid[data-summary] .stat .delta {
+    grid-area: 1 / 2;
+    font-size: .7rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .grid[data-summary] .stat .label {
+    grid-area: 2 / 1 / 3 / 3;
+    font-size: .66rem;
+    letter-spacing: .03em;
+    line-height: 1.25;
+  }
+  .grid[data-summary] .stat .hint-open { margin-block: -.875rem; }
+  .grid[data-summary] .delta-rest {
+    position: absolute; width: 1px; height: 1px; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
 }
 
 /*

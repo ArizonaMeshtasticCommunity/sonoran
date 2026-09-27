@@ -515,8 +515,8 @@
       host,
       statTile(number(preset.site_count), 'Sites predicted from',
         preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
-      statTile(number(preset.usable_area_km2), 'Usable km²', 'Both directions'),
-      statTile(number(preset.downlink_area_km2), 'Heard km²', 'One direction only'),
+      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area', 'Both directions'),
+      statTile(SonoranUnits.areaFromKm2(preset.downlink_area_km2) || '-', 'Heard area', 'One direction only'),
       statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
     );
   }
@@ -659,7 +659,7 @@
         {},
         'Each node is predicted out to ',
         el('strong', { text: SonoranUnits.distanceFromKm(summary.radius_km) }),
-        '. Terrain is about 90 m across. Coverage that follows ridge lines and stops at ',
+        `. Terrain is about ${SonoranUnits.distanceFromM(90)} across. Coverage that follows ridge lines and stops at `,
         'them is the model working. A smooth circle means the terrain did not load.',
       ),
       el(
