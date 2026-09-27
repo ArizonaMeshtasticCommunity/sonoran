@@ -892,6 +892,68 @@ async function main() {
     return `${opened.rows} -> ${after.rows} rows, the anchored row drifted ${drift}px`;
   });
 
+  await journey(context, 'the chat table pages on as you scroll', async (page) => {
+    /*
+     * #297. The table view stopped at 100 rows: only the reading view
+     * paged. Will decided there is no "Load older" button, so the table
+     * must load its next page as the reader scrolls to its foot.
+     *
+     * The seed holds a few dozen messages a channel, less than one page,
+     * so the channel here is served by the journey: 250 messages a minute
+     * apart, answered the way `/api/chat` answers (newest first, `before`
+     * exclusive, `limit`). Each `seen_at` carries microseconds, so the
+     * cursor can be checked to be the row's own string and not one
+     * rounded through a Date.
+     */
+    const CHANNEL = 'E2EPaging';
+    const TOTAL = 250;
+    const now = Date.now();
+    const iso = (ms, micro) => new Date(ms).toISOString().replace(/\.(\d{3})Z$/, `.$1${micro}+00:00`);
+    const all = Array.from({ length: TOTAL }, (_, index) => ({
+      packet_id: 900000 + index,
+      from_node: '!0e2e0001', from_node_id: '!0e2e0001', from_name: 'Paging test',
+      to_node: '^all', channel: CHANNEL, body: `message ${index}`,
+      seen_at: iso(now - (TOTAL - index) * 60000, String(index % 1000).padStart(3, '0')),
+      reply_id: null, emoji: false, reply_to: null, reactions: [], metrics: null,
+    })).reverse();
+    const cursors = [];
+    await page.route(/\/api\/chat\?/, async (route, request) => {
+      const query = new URL(request.url()).searchParams;
+      if (query.get('channel') !== CHANNEL) return route.continue();
+      const before = query.get('before');
+      if (before) cursors.push(before);
+      const since = query.get('since') ? new Date(query.get('since')).getTime() : null;
+      const limit = Number(query.get('limit') || 100);
+      const rows = all
+        .filter((row) => !before || row.seen_at < before)
+        .filter((row) => since == null || new Date(row.seen_at).getTime() >= since)
+        .slice(0, limit);
+      return route.fulfill({ json: rows });
+    });
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await open(page, `chat/${CHANNEL}/table`, 3000);
+    const count = () => document.querySelectorAll('[data-page="chat"] [data-chat-body] tbody tr').length;
+    const opened = await page.evaluate(count);
+    must(opened === 100, `the table opened with ${opened} rows, not one page of 100`);
+    for (let step = 0; step < 6 && (await page.evaluate(count)) < TOTAL; step += 1) {
+      await page.mouse.wheel(0, 20000);
+      await page.waitForTimeout(700);
+    }
+    const reached = await page.evaluate(count);
+    must(reached === TOTAL, `scrolling the table reached ${reached} of ${TOTAL} rows`);
+    const badge = await page.locator('[data-chat-count]').innerText();
+    must(/250 messages/.test(badge), `the count should say every message is loaded: "${badge}"`);
+    must(cursors.length >= 2 && cursors.every((cursor) => all.some((row) => row.seen_at === cursor)),
+      `a cursor was not a row's own timestamp: ${cursors.join(', ')}`);
+
+    // Switching to the reading view keeps what was loaded.
+    await page.click('[data-chat-view-choice="chat"]');
+    await page.waitForTimeout(1500);
+    const kept = await page.evaluate(() => document.querySelectorAll('[data-chat-scroll] .messages li').length);
+    must(kept === TOTAL, `switching to the chat view kept ${kept} of ${TOTAL} rows`);
+    return `100 -> ${reached} rows in the table by scrolling, ${kept} kept on switching view`;
+  });
+
   await journey(context, 'coverage switches preset', async (page) => {
     await open(page, 'coverage', 5000);
     /*

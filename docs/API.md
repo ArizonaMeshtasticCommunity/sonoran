@@ -1059,7 +1059,14 @@ Returns every detected channel with its recent messages. The chat page
 draws one section per channel, below the heading of its group.
 
 Each section has `channel`, `label`, `group`, `preset`, `tier`,
-`count`, `last_seen`, and `messages`.
+`count`, `reactions`, `last_seen`, and `messages`.
+
+`count` is the number of messages in the window, without tapbacks. It
+is the same set that `GET /api/chat` pages through, so the chat page
+can load every message the count promises (#297). `reactions` is the
+number of tapbacks in the window. A channel that holds only tapbacks
+keeps its section, with a `count` of 0. `last_seen` is the newest row
+of either kind.
 
 Groups are drawn in this order:
 

@@ -259,4 +259,9 @@ def test_the_table_view_is_not_the_pinned_layout() -> None:
     assert "page.classList.remove('chat-full')" in source, (
         "the table view keeps the full-height chat layout"
     )
-    assert "chatTable(chatRows)" in source, "the table view no longer draws the rows"
+    # Drawn by `chatDrawTable` since #297, so a page of older rows can
+    # redraw the table without going through the whole page again.
+    assert "chatDrawTable(page)" in source, "the table view no longer draws the rows"
+    assert "chatTable(chatRows)" in _function("chatDrawTable"), (
+        "the table view no longer draws the rows"
+    )
