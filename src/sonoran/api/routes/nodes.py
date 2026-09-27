@@ -340,6 +340,73 @@ SORTS: dict[str, Any] = {
     "position": Node.last_position_precision_bits,
 }
 
+# How each sort value travels inside a list cursor (#250). JSON has no
+# datetime, so the two times go as ISO text and are read back. The type
+# is checked on the way in, so a hand-typed cursor cannot put a string
+# where the query compares a number.
+_TIME_SORTS = frozenset({"last_heard", "first_seen"})
+_NUMBER_SORTS = frozenset({"node_id", "position"})
+
+
+def _node_cursor(sort: str, order: str, value: object, node_num: int) -> str:
+    """Return the `cursor` that continues the node list after one row (#250).
+
+    Opaque to the page. It names the last row served by its sort value
+    and its `node_num`, which is the list's whole order and unique. It
+    also carries the sort and order it was made under, so that
+    `_read_node_cursor` can refuse it under any other.
+    """
+    if isinstance(value, datetime):
+        value = value.isoformat()
+    payload = [sort, order, value, node_num]
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+
+
+def _read_node_cursor(raw: str, sort: str, order: str) -> tuple[Any, int]:
+    """Decode a node list `cursor`, or answer 422.
+
+    A cursor from another sort or order is refused, not applied. Its
+    value means nothing in this order, so it would skip or repeat rows
+    with no error at all.
+    """
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        made_sort, made_order, value, node_num = json.loads(base64.urlsafe_b64decode(padded))
+        if value is not None:
+            if made_sort in _TIME_SORTS:
+                value = datetime.fromisoformat(value)
+            elif made_sort in _NUMBER_SORTS:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise TypeError("a number sort needs a whole number")
+            elif not isinstance(value, str):
+                raise TypeError("a text sort needs text")
+        if isinstance(node_num, bool) or not isinstance(node_num, int):
+            raise TypeError("node_num must be a whole number")
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise HTTPException(status_code=422, detail="invalid cursor") from exc
+    if (made_sort, made_order) != (sort, order):
+        raise HTTPException(
+            status_code=422,
+            detail=f"the cursor was made for sort={made_sort}&order={made_order}",
+        )
+    return value, node_num
+
+
+def _after_node(column: Any, order: str, cursor: tuple[Any, int]) -> ColumnElement[bool]:
+    """Return the nodes that come after the cursor in the list's order.
+
+    The order is `column` in the chosen direction with NULLs last, then
+    `node_num` ascending in both directions. So a row is later when its
+    value is further along, or equal with a larger `node_num`, and every
+    NULL comes after every value.
+    """
+    value, node_num = cursor
+    tail = Node.node_num > node_num
+    if value is None:
+        return and_(column.is_(None), tail)
+    further = column > literal(value) if order == "asc" else column < literal(value)
+    return or_(further, and_(column == literal(value), tail), column.is_(None))
+
 
 def _usable_position() -> ColumnElement[bool]:
     """The SQL form of `positions.is_usable`.
@@ -479,6 +546,7 @@ async def list_nodes(
     sort: str = Query(default="last_heard"),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
     offset: int = Query(default=0, ge=0, le=100_000),
+    cursor: str | None = Query(default=None, max_length=1024),
     limit: int = Query(default=100, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
 ) -> list[NodeSummary]:
@@ -497,12 +565,23 @@ async def list_nodes(
     caller happens to hold would sort the most recently heard 500 by
     name and present the answer as the first 500 by name. Those are
     different sets and a reader cannot tell them apart by looking.
+
+    **Paging is by cursor (#250).** Each non-empty answer carries
+    `X-Next-Cursor`, and passing it back as `cursor` returns the rows
+    after the last one served, in the same order. `offset` still works.
+    It is not what the page uses: `last_heard` changes all the time, and
+    a node that moves forward past an offset boundary between two pages
+    is never served at all. Nothing in the browser can detect that. A
+    cursor names the last row itself, so a row that moves cannot shift
+    the next page. The cursor carries its sort and order and is refused
+    under any other, as for the packet timeline (#259).
     """
     if sort not in SORTS:
         raise HTTPException(
             status_code=422,
             detail=f"sort must be one of: {', '.join(sorted(SORTS))}",
         )
+    after = None if cursor is None else _read_node_cursor(cursor, sort, order)
     column = SORTS[sort]
     direction = column.asc() if order == "asc" else column.desc()
 
@@ -517,7 +596,12 @@ async def list_nodes(
     ordering = (direction.nullslast(), Node.node_num.asc())
 
     filters = (q, hw, role, gateway, active_hours, before, channel, position, licensed)
-    statement = _apply_node_filters(select(Node), *filters, first_seen_hours, quiet_hours)
+    # The sort value is selected beside the row, so the cursor can name it
+    # exactly as the database compares it. `name` is an expression, not a
+    # column the row carries.
+    statement = _apply_node_filters(
+        select(Node, column.label("sort_value")), *filters, first_seen_hours, quiet_hours
+    )
     counted = _apply_node_filters(
         select(func.count()).select_from(Node), *filters, first_seen_hours, quiet_hours
     )
@@ -545,8 +629,15 @@ async def list_nodes(
     total = await session.scalar(counted)
     response.headers["X-Total-Count"] = str(total or 0)
 
-    rows = (await session.scalars(statement.order_by(*ordering).offset(offset).limit(limit))).all()
-    return [_summary(node) for node in rows]
+    if after is not None:
+        statement = statement.where(_after_node(column, order, after))
+    served = (
+        await session.execute(statement.order_by(*ordering).offset(offset).limit(limit))
+    ).all()
+    if served:
+        last, last_value = served[-1]
+        response.headers["X-Next-Cursor"] = _node_cursor(sort, order, last_value, last.node_num)
+    return [_summary(node) for node, _value in served]
 
 
 def _gaps_node_nums(request: Request, preset: str, state: str) -> set[int] | None:

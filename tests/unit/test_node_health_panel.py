@@ -111,9 +111,14 @@ def test_the_disclosure_reports_its_state() -> None:
 
 
 def test_the_dot_row_is_labelled_rather_than_read_as_shapes() -> None:
-    """Six unlabelled spans are noise to a screen reader."""
+    """Six unlabelled spans are noise to a screen reader.
+
+    Since #276 the row is a button that lists each check, so it is named
+    by the sentence and then by what it does, not given `role="img"`.
+    """
     body = _panel()
-    assert "role: 'img'" in body and "'aria-label': sentence" in body, (
+    assert "tapTip('health-dots'," in body
+    assert "'aria-label': `${sentence}. Show each check.`" in body, (
         "the dot row carries no accessible name, so the summary is "
         "available only to people who can see colour"
     )

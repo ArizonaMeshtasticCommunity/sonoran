@@ -881,6 +881,62 @@ h3:has(.node-map-link) { display: flex; align-items: baseline; gap: .5rem; }
 }
 .node-name .id { font: var(--mono); color: var(--muted); flex: 0 0 auto; }
 
+/*
+ * A node list as cards on a phone (#272).
+ *
+ * At 390 px the nodes table hid 61% of its width, and Role and Last
+ * heard, the column a regular reader most wants, were off to the right.
+ * Below 40rem each row becomes a two-line card: the name and short name,
+ * then role, last heard and the gateway tag. The table stays at every
+ * other width.
+ *
+ * CSS only, on the same table. The rows, the appended pages, the sort
+ * and the hints are the ones the desktop uses, so nothing can drift.
+ * The heading row stays as a wrapped row of sort buttons, so a phone can
+ * still sort by every column, including the two the card leaves out.
+ *
+ * The cells are picked by position. `nodeColumns` is Node, Node ID,
+ * Hardware, Role, Flags, Last heard. The dashboard's Recently heard is
+ * Node, Role, Heard. The e2e journey reads Role and Last heard off a
+ * card, so a reordered column fails it rather than showing the wrong
+ * value.
+ */
+@media (max-width: 40rem) {
+  .node-cards table, .node-cards tbody, .recent-cards table, .recent-cards tbody {
+    display: block; width: 100%;
+  }
+  .node-cards thead, .recent-cards thead { display: block; }
+  .node-cards thead tr, .recent-cards thead tr {
+    display: flex; flex-wrap: wrap; align-items: center; column-gap: .25rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .node-cards th, .recent-cards th { display: block; border: 0; padding-left: 0; }
+  .node-cards tbody tr, .recent-cards tbody tr {
+    display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .4rem; row-gap: .15rem;
+    padding: .55rem .6rem; border-bottom: 1px solid var(--line);
+  }
+  .node-cards td, .recent-cards td {
+    display: block; padding: 0; border: 0; white-space: normal; text-align: left;
+  }
+  /* Line one: the name, and the short name beside it. */
+  .node-cards td:nth-child(1), .recent-cards td:nth-child(1) { flex: 1 0 100%; min-width: 0; }
+  .node-cards td:nth-child(1) .linky, .recent-cards td:nth-child(1) .linky { max-width: 100%; }
+  /* Line two: role, last heard, gateway, in that order. */
+  .node-cards td:nth-child(2), .node-cards td:nth-child(3) { display: none; }
+  .node-cards td:nth-child(4) { order: 1; }
+  .node-cards td:nth-child(6) { order: 2; }
+  .node-cards td:nth-child(5) { order: 3; }
+  .node-cards td:nth-child(6)::before,
+  .node-cards td:nth-child(5)::before,
+  .recent-cards td:nth-child(3)::before { content: '\00b7'; margin-right: .4rem; color: var(--muted); }
+  /* Only the gateway tag earns a place on the card. A row with none has
+     no third item, and no separator hanging at the end. */
+  .node-cards td:nth-child(5) .tag:not(.gateway) { display: none; }
+  .node-cards td:nth-child(5):not(:has(.gateway)) { display: none; }
+  .node-cards td:nth-child(4), .node-cards td:nth-child(6),
+  .recent-cards td:nth-child(2), .recent-cards td:nth-child(3) { color: var(--muted); font-size: .85rem; }
+}
+
 /* Tables and lists */
 
 /*
@@ -964,11 +1020,30 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
   padding: .7rem .8rem;
   font-size: .82rem; font-weight: 400; line-height: 1.5;
   text-transform: none; letter-spacing: 0; text-align: left;
+  /* The panel is a child of the heading in the document, and the top
+     layer changes where it draws, not what it inherits. A `th` is
+     `nowrap`, so without this the sentence ran on one line and the
+     panel scrolled sideways to show it (#298). `overflow-wrap` keeps a
+     long enum with no space in it from doing the same. */
+  white-space: normal; overflow-wrap: anywhere;
   color: var(--muted); background: var(--panel);
   border: 1px solid var(--line); border-radius: .5rem;
   box-shadow: 0 .5rem 1.5rem var(--scroll-shadow);
 }
 .hint-pop[hidden] { display: none; }
+/* A `tapTip` panel is built of spans, because its button can sit inside
+   phrasing content such as a tag in a table cell (#276). */
+.hint-pop .hint-name, .hint-pop .hint-line { display: block; margin: 0 0 .4rem; }
+.hint-pop .hint-line:last-child { margin-bottom: 0; }
+/* A value that opens its own meaning (#276). A tag keeps its look; any
+   other value reads as text with a dotted line under it, which says
+   "there is more here" without looking like a link somewhere else. */
+.tip-open { font-family: inherit; line-height: inherit; background: none; cursor: pointer; }
+.tip-open:not(.tag) {
+  border: 0; padding: 0; color: inherit; font-size: inherit;
+  text-decoration: underline dotted; text-underline-offset: .2em;
+}
+.tip-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hint-pop p { margin: 0 0 .4rem; }
 .hint-pop p:last-child { margin-bottom: 0; }
 .hint-pop .hint-name {
@@ -2909,14 +2984,18 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    `.health-cards`, so only the summary half needs anything new. */
 .health-headline { font-weight: 650; margin: 0 0 .4rem; }
 .health-dots { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .6rem; }
+/* The row of dots is one button that lists the checks (#276). Tall
+   enough to hit with a finger, with no underline under a row of dots. */
+.health-dots-row { margin: 0 0 .6rem; }
+.health-dots.tip-open { margin: 0; min-height: 1.5rem; align-items: center; text-decoration: none; }
 .health-dot {
   width: .7rem;
   height: .7rem;
   border-radius: 50%;
   /* A dot carries state by colour, so it needs a non-colour cue too
-     (WCAG 1.4.1). The ring differs in width per state, and each dot has
-     a `title`; the row as a whole is labelled with the sentence above
-     it, which is what a screen reader actually reads. */
+     (WCAG 1.4.1). The ring differs in width per state, and the row is a
+     button that lists each check by name (#276); it is labelled with the
+     sentence above it, which is what a screen reader actually reads. */
   background: var(--muted);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / .35);
 }

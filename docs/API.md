@@ -72,7 +72,9 @@ Filters:
   on the wrong hour whenever its own clock was wrong, and a band built
   from one of each would be measured against two clocks. A node never
   heard at all matches neither, the same way it matches no `active_hours`.
-- `before`, `limit`, `offset` — pagination.
+- `before` — only nodes last heard before this time.
+- `limit`, `offset`, `cursor` — paging. Default limit 100. Maximum 500.
+  See "Paging" below.
 
 - `gaps` — `bad`, `ok` or `unknown`, from the gaps assessment. **Requires
   `gaps_preset`**: a node can need help on one modem preset and be fine
@@ -93,6 +95,23 @@ is what the column shows. Nulls sort last in both directions: a node
 with no role is not the smallest role. Every order is made total with
 the node number, so a node cannot arrive on two pages or on none.
 
+Paging:
+
+- `cursor` — the rows after the last row of a previous page, in the
+  same order. Every non-empty answer carries the cursor for its last
+  row in the `X-Next-Cursor` header. A short page is the end. The
+  cursor is opaque. It carries the `sort` and `order` it was made
+  under, and under any other it returns 422, so a later page cannot
+  come back in a different order. A cursor that cannot be read, or
+  whose value has the wrong type for its sort, returns 422.
+
+Use `cursor`, not `offset`, to page (#250). `last_heard` changes all the
+time. A node heard between two offset pages moves in the order, and
+every row behind it moves by one: a row is then shown twice, or it is
+never served at all. The second case cannot be seen by the caller. A
+cursor names the last row by its sort value and its node number, so a
+node that moves cannot shift the next page. `offset` still works.
+
 ### 3.1.1 `GET /api/nodes/facets`
 
 Returns the values each filter could take and how many nodes sit behind
@@ -107,11 +126,6 @@ they are asking is "if I picked this instead, how many would I have".
 Groups: `hw`, `role`, `channel`, `position`, `gateway`, `licensed`, and
 `gaps` — the last carrying a preset with each state, because that state
 has no meaning without one.
-
-**Paging is by offset and the list is alive.** A node heard between two
-requests can shift the boundary, so a row may be seen twice or missed
-across pages. A keyset cursor would fix it and is more machinery than a
-few thousand rows deserve; this is written down rather than hidden.
 
 Response item:
 

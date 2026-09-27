@@ -586,6 +586,56 @@ async function main() {
     return `${busiest.id}: ${before} -> ${after} rows by scrolling, ${paged.length} page(s) by cursor with the sort; "${status}"`;
   });
 
+  await journey(context, 'the nodes list scrolls on by cursor (#250)', async (page) => {
+    /*
+     * The seed holds one page of nodes, so a second page cannot happen
+     * against it. This serves 250 nodes built from a real row, and pages
+     * them the way the server does: a `cursor` that names the last row,
+     * returned in `X-Next-Cursor`. The claims are about the page: every
+     * later request carries the cursor and the sort, none carries an
+     * offset, and the list reaches the end with no node twice. The
+     * server's half is `tests/integration/test_node_cursor.py`.
+     */
+    const template = (await (await page.request.get(`${BASE}/api/nodes?limit=1`)).json())[0];
+    must(template, 'the instance has no node to copy');
+    const TOTAL = 250;
+    const nodes = Array.from({ length: TOTAL }, (_, index) => ({
+      ...template,
+      node_num: 0x0e2e0000 + index,
+      node_id: `!0e2e${String(index).padStart(4, '0')}`,
+      long_name: `Cursor ${index}`,
+      short_name: `C${index}`,
+    }));
+    const asked = [];
+    await page.route(/\/api\/nodes\?/, (route, request) => {
+      const url = new URL(request.url());
+      asked.push(url.search);
+      const limit = Number(url.searchParams.get('limit') || 100);
+      const cursor = url.searchParams.get('cursor');
+      const start = cursor == null ? 0 : Number(cursor) + 1;
+      const rows = nodes.slice(start, start + limit);
+      const headers = { 'X-Total-Count': String(TOTAL) };
+      if (rows.length) headers['X-Next-Cursor'] = String(start + rows.length - 1);
+      return route.fulfill({ contentType: 'application/json', headers, body: JSON.stringify(rows) });
+    });
+    await open(page, 'nodes');
+    const count = () => page.locator('[data-page="nodes"] tbody tr').count();
+    for (let tries = 0; tries < 20 && (await count()) < TOTAL; tries += 1) {
+      await page.locator('[data-node-more]').scrollIntoViewIfNeeded().catch(() => {});
+      await page.waitForTimeout(500);
+    }
+    const shown = await count();
+    const later = asked.slice(1);
+    must(later.length > 0, `only one page was asked for (${shown} rows)`);
+    must(later.every((query) => /[?&]cursor=/.test(query)), `a later page had no cursor: ${later.join(' ')}`);
+    must(!asked.some((query) => /[?&]offset=/.test(query)), `a page was asked for by offset: ${asked.join(' ')}`);
+    must(asked.every((query) => /[?&]sort=last_heard\b/.test(query)), 'a page lost the sort');
+    must(shown === TOTAL, `the list stopped at ${shown} of ${TOTAL}`);
+    const ids = await page.$$eval('[data-page="nodes"] tbody tr code', (cells) => cells.map((cell) => cell.textContent));
+    must(new Set(ids).size === ids.length, 'a node appears twice after paging');
+    return `${shown} rows over ${asked.length} pages, every later page by cursor`;
+  });
+
   await journey(context, 'the nodes search narrows the list', async (page) => {
     await open(page, 'nodes');
     const count = () => page.locator('[data-page="nodes"] tbody tr').count();
@@ -662,6 +712,87 @@ async function main() {
     const sorted = [...after].sort((a, b) => a.localeCompare(b));
     must(after.join() === sorted.join(), `not in order: ${after.join(', ')}`);
     return `${total(nowSaying)} nodes, reordered by role (aria-sort=${announced})`;
+  });
+
+  await journey(context, 'Apply in the node filters leaves focus on the Filters button (#251)', async (page) => {
+    /*
+     * Hiding the panel took the focus out of Apply and left it on the
+     * document body, so the next Tab started from the top of the page.
+     * Walked with the keyboard only, and read from `activeElement`
+     * after the list has reloaded, not by eye.
+     */
+    await open(page, 'nodes');
+    const toggle = page.locator('[data-page="nodes"] [data-node-filter-open]');
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    must((await toggle.getAttribute('aria-expanded')) === 'true', 'Enter did not open the panel');
+    await page.locator('[data-node-filter-apply]').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2500);
+    const focus = await page.evaluate(() => {
+      const active = document.activeElement;
+      return {
+        onToggle: active === document.querySelector('[data-node-filter-open]'),
+        tag: active ? active.tagName : null,
+        hidden: document.querySelector('[data-node-filters]').hidden,
+      };
+    });
+    must(focus.hidden, 'Apply did not close the panel');
+    must(focus.onToggle, `after Apply the focus is on <${String(focus.tag).toLowerCase()}>, not the Filters button`);
+    return 'Apply closes the panel and focus stays on Filters';
+  });
+
+  await journey(context, 'the Filters badge counts only what the reader changed (#301)', async (page) => {
+    /*
+     * A first visit showed "2" with every group at "Any": the badge
+     * counted the toolbar's default 24 hours and the sidebar's preset.
+     * Will (2026-09-27): count what the reader changed, toolbar or panel,
+     * and never the preset. What is SENT must not change.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/nodes\?/.test(request.url())) asked.push(request.url());
+    });
+    await open(page, 'nodes');
+    await page.locator('[data-page="nodes"] tbody tr').first().waitFor({ timeout: 15000 });
+    const toggle = page.locator('[data-page="nodes"] [data-node-filter-open]');
+    const badge = page.locator('[data-page="nodes"] [data-node-filter-count]');
+    const state = async () => ({
+      hidden: await badge.isHidden(),
+      text: (await badge.textContent()).trim(),
+      name: await toggle.getAttribute('aria-label'),
+    });
+    const first = await state();
+    must(first.hidden && first.name === 'Filters',
+      `a first visit shows a badge: "${first.text}", named "${first.name}"`);
+    must(asked.length && /[?&]active_hours=24\b/.test(asked[0]) && /[?&]channel=/.test(asked[0]),
+      `the first request lost its window or preset: ${asked[0]}`);
+
+    // One panel choice, applied, is one.
+    await toggle.click();
+    const none = page.locator('[data-node-filters] .filter-option', { hasText: 'None reported' }).first();
+    await none.waitFor({ timeout: 15000 });
+    await none.click();
+    await page.locator('[data-node-filter-apply]').click();
+    await page.waitForTimeout(2500);
+    const one = await state();
+    must(!one.hidden && one.text === '1', `one panel choice shows "${one.text}"`);
+    must(await page.locator('[data-node-chips] .chip-drop').count() === 1, 'no chip for the one choice');
+
+    // Clear all takes it away.
+    await toggle.click();
+    await page.waitForTimeout(400);
+    await page.locator('[data-node-filter-clear]').click();
+    await page.waitForTimeout(2500);
+    must((await state()).hidden, 'Clear all left the badge up');
+
+    // A toolbar control away from its default counts too.
+    await page.locator('[data-page="nodes"] [data-node-active]').selectOption('');
+    await page.waitForTimeout(2500);
+    const toolbar = await state();
+    must(!toolbar.hidden && toolbar.text === '1', `"Any time" in the toolbar shows "${toolbar.text}"`);
+    return 'no badge on a first visit, 1 for a panel choice, none after Clear all, 1 for the toolbar';
   });
 
   await journey(context, 'the units setting reaches the pages', async (page) => {
@@ -1936,6 +2067,217 @@ async function main() {
     await page.waitForTimeout(250);
     must((await type.getAttribute('aria-expanded')) === 'false', 'Escape did not close it');
     return `${await buttons.count()} columns explained, hints and exact values both reachable`;
+  });
+
+  await journey(context, 'a hint panel wraps its sentence at every width (#298)', async (page) => {
+    /*
+     * The journey above checks that the panel BOX is on the screen and
+     * that `innerText` holds the sentence. Both passed while the
+     * sentence ran on one line inside a 350 px panel and scrolled
+     * sideways out of sight: `innerText` includes overflowed text. So
+     * this opens every hint on the four pages that carry column hints
+     * and asks the panel itself whether it scrolls.
+     *
+     * `letter-spacing` is widened as the "Who hears it" journey does, so
+     * the wider Linux fonts of the CI runner are covered too.
+     */
+    const out = [];
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      let opened = 0;
+      for (const name of ['nodes', 'firehose', 'dashboard', 'stats']) {
+        await open(page, name, 1500);
+        // The firehose draws its table only once rows arrive.
+        await page.locator(`[data-page="${name}"] .hint-open`).first()
+          .waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
+        await page.addStyleTag({ content: '.hint-pop { letter-spacing: .05em !important; }' });
+        const buttons = page.locator(`[data-page="${name}"] .hint-open`);
+        const total = await buttons.count();
+        must(total > 0, `${name} has no hint control at ${width} px`);
+        for (let index = 0; index < total; index += 1) {
+          const button = buttons.nth(index);
+          if (!(await button.isVisible())) continue;
+          await button.click();
+          await page.waitForTimeout(120);
+          const size = await page.evaluate((id) => {
+            const panel = document.getElementById(id);
+            const box = panel.getBoundingClientRect();
+            return {
+              label: panel.querySelector('.hint-name')?.textContent || id,
+              scroll: panel.scrollWidth,
+              client: panel.clientWidth,
+              wrap: getComputedStyle(panel).whiteSpace,
+              left: box.left,
+              right: box.right,
+              page: document.documentElement.scrollWidth,
+              view: document.documentElement.clientWidth,
+            };
+          }, await button.getAttribute('aria-controls'));
+          must(size.scroll <= size.client + 1,
+            `${name} ${size.label} scrolls sideways at ${width} px: ${size.scroll}/${size.client}`);
+          must(size.wrap === 'normal', `${name} ${size.label}: white-space is ${size.wrap}`);
+          must(size.left >= -1 && size.right <= size.view + 1,
+            `${name} ${size.label} runs off the screen at ${width} px`);
+          must(size.page <= size.view + 1,
+            `${name} ${size.label} widens the page at ${width} px: ${size.page}/${size.view}`);
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(60);
+          opened += 1;
+        }
+      }
+      out.push(`${width}:${opened}`);
+    }
+    return `panels opened and measured at ${out.join(' ')}`;
+  });
+
+  await journey(phone, 'a phone reads the node lists as cards (#272)', async (page) => {
+    /*
+     * At 390 px the nodes table hid 61% of its width, Role and Last heard
+     * among it. Below 40rem each row is a card. Measured per card, with
+     * letter-spacing widened for the CI runner's fonts: nothing scrolls
+     * sideways, and the Role and Last heard of the row are on the screen.
+     * Then the same page at 768 px must still be a table.
+     */
+    const out = [];
+    const cards = async (name, wrap, roleCell, heardCell) => {
+      await open(page, name, 1500);
+      await page.locator(`${wrap} tbody tr`).first()
+        .waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+      await page.addStyleTag({ content: `${wrap} { letter-spacing: .05em; }` });
+      await page.waitForTimeout(200);
+      return page.evaluate(({ wrap: selector, roleCell: role, heardCell: heard }) => {
+        const box = document.querySelector(selector);
+        const rows = box ? [...box.querySelectorAll('tbody tr')] : [];
+        const view = document.documentElement.clientWidth;
+        const onScreen = (cell) => {
+          if (!cell) return false;
+          const rect = cell.getBoundingClientRect();
+          return rect.width > 0 && rect.left >= -1 && rect.right <= view + 1;
+        };
+        const first = rows[0];
+        return {
+          rows: rows.length,
+          scroll: box ? box.scrollWidth : 0,
+          client: box ? box.clientWidth : 0,
+          display: first ? getComputedStyle(first).display : null,
+          role: first ? onScreen(first.children[role - 1]) : false,
+          heard: first ? onScreen(first.children[heard - 1]) : false,
+          heardText: first ? first.children[heard - 1].textContent : '',
+          height: first ? Math.round(first.getBoundingClientRect().height) : 0,
+          sortable: box ? box.querySelectorAll('thead .sort-button').length : 0,
+        };
+      }, { wrap, roleCell, heardCell });
+    };
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 664 });
+      for (const [name, wrap, role, heard] of [
+        ['nodes', '[data-node-table]', 4, 6],
+        ['dashboard', '[data-recent-nodes]', 2, 3],
+      ]) {
+        const size = await cards(name, wrap, role, heard);
+        must(size.rows > 0, `${name}: no node rows at ${width} px`);
+        must(size.display === 'flex', `${name}: a row is ${size.display} at ${width} px, not a card`);
+        must(size.scroll <= size.client + 1,
+          `${name} scrolls sideways at ${width} px: ${size.scroll}/${size.client}`);
+        must(size.role, `${name}: Role is off the screen at ${width} px`);
+        must(size.heard && /ago/.test(size.heardText),
+          `${name}: Last heard is off the screen or not in its cell at ${width} px (${size.heardText})`);
+        if (name === 'nodes') must(size.sortable >= 6, `the phone can sort by only ${size.sortable} columns`);
+        out.push(`${name}@${width} ${size.scroll}/${size.client} ${size.height}px`);
+      }
+    }
+    await page.setViewportSize({ width: 768, height: 1024 });
+    const wide = await cards('nodes', '[data-node-table]', 4, 6);
+    must(wide.display === 'table-row', `at 768 px the nodes list is not a table: ${wide.display}`);
+    return out.join(', ');
+  });
+
+  await journey(phone, 'a phone can tap what used to be a title (#276)', async (page) => {
+    /*
+     * A touch screen never shows a `title`. Four kinds of meaning lived
+     * only there: the gateway tag, the send-rate tags and uptime notes on
+     * Statistics, the node page's health dots, and the exact time of a
+     * message. Each is now a button that opens a panel. For each kind:
+     * the value carries no `title`, a tap opens the panel with the
+     * sentence in it, the panel fits the screen, and Escape shuts it.
+     */
+    const done = [];
+    const tapAndRead = async (button, pattern, label) => {
+      must((await button.getAttribute('title')) === null, `${label} still carries a title`);
+      await button.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {
+        throw new Error(`${label} cannot be scrolled into view, so it cannot be tapped`);
+      });
+      await button.tap();
+      await page.waitForTimeout(250);
+      must((await button.getAttribute('aria-expanded')) === 'true', `tapping ${label} did not open it`);
+      const panel = page.locator(`#${await button.getAttribute('aria-controls')}`);
+      must(await panel.isVisible(), `${label}: the panel did not appear`);
+      const text = await panel.innerText();
+      must(pattern.test(text), `${label}: the panel says ${JSON.stringify(text.slice(0, 80))}`);
+      const box = await panel.boundingBox();
+      const width = page.viewportSize().width;
+      must(box.x >= -1 && box.x + box.width <= width + 1, `${label}: the panel runs off the screen`);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
+      must(!(await panel.isVisible()), `${label}: Escape did not close it`);
+      done.push(label);
+      return text;
+    };
+
+    /*
+     * A message whose packet is known links to the packet page, which
+     * prints the exact time. One with no packet has only the time, and
+     * the seed has none of those, so the feed is served with the packet
+     * taken off each message.
+     */
+    await page.route(/\/api\/chat\?/, async (route) => {
+      try {
+        const response = await route.fetch();
+        const rows = await response.json();
+        const bare = Array.isArray(rows) ? rows.map((row) => ({ ...row, packet_id: null })) : rows;
+        await route.fulfill({ response, json: bare });
+      } catch {
+        // The page closed with a live refresh in flight.
+      }
+    });
+    try {
+      await open(page, 'dashboard', 3500);
+      const when = page.locator('[data-recent-chat] button.when').first();
+      await when.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+      must(await when.count(), 'no message time to tap on the dashboard feed');
+      await tapAndRead(when, /\d:\d\d/, 'a message time');
+    } finally {
+      // The dashboard refreshes itself, so a request can still be on its
+      // way through the route when the next page opens.
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+
+    await open(page, 'nodes', 3500);
+    const gateway = page.locator('[data-page="nodes"] tbody .tip-open.gateway').first();
+    await gateway.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await gateway.count(), 'no gateway tag on the nodes list');
+    await tapAndRead(gateway, /uploads packets it hears to MQTT/, 'the gateway tag');
+
+    await open(page, 'stats', 4500);
+    const rate = page.locator('[data-page="stats"] [data-broadcast-table] .tip-open.tag').first();
+    await rate.waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await rate.count(), 'no send-rate tag on Statistics');
+    await tapAndRead(rate, /The default is every/, 'a send-rate tag');
+    const uptime = page.locator('[data-page="stats"] [data-broadcast-table] .tip-open:not(.tag)').first();
+    if (await uptime.count()) await tapAndRead(uptime, /running since it last restarted/, 'an uptime note');
+
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(3500);
+    const dots = page.locator('[data-page="node"] .tip-open.health-dots');
+    await dots.first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {});
+    must(await dots.count() === 1, 'the health dots are not one button');
+    const dotCount = await dots.locator('.health-dot').count();
+    const listed = await tapAndRead(dots, /: /, 'the health dots');
+    const lines = listed.split('\n').filter((line) => /: /.test(line)).length;
+    must(lines === dotCount, `${dotCount} dots but ${lines} checks named`);
+
+    return done.join(', ');
   });
 
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {

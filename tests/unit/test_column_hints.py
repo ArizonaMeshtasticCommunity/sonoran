@@ -140,3 +140,23 @@ def test_the_phone_journey_walks_the_control_that_replaced_the_block() -> None:
     assert "uploaded this packet to MQTT" in body
     assert "TELEMETRY_APP|POSITION_APP|NODEINFO_APP" in body
     assert "runs off the screen" in body, "nothing checks the panel fits the phone"
+
+
+def test_the_panel_wraps_what_it_inherits_from_the_heading() -> None:
+    """#298: the panel is a child of the `th`, and `th` is `nowrap`.
+
+    The top layer changes where the panel draws, not what it inherits.
+    So the sentence ran on one line and the panel scrolled sideways to
+    show it: Node ID measured 519 px of text in a 350 px panel. The
+    panel resets `white-space` beside the other values it undoes.
+    """
+    start = CSS.index(".hint-pop {")
+    body = CSS[start : CSS.index(".hint-pop[hidden]")]
+    assert "white-space: normal;" in body, "the panel inherits `nowrap` from the heading"
+    assert "overflow-wrap: anywhere;" in body
+    # And a browser measures it, because a rule that is present can
+    # still lose to a more specific one.
+    start = E2E.index("'a hint panel wraps its sentence at every width (#298)'")
+    journey = E2E[start : start + 4000]
+    assert "panel.scrollWidth" in journey
+    assert "size.scroll <= size.client + 1" in journey

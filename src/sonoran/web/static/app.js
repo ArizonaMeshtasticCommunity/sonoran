@@ -771,9 +771,14 @@ function messageItem(message, options = {}) {
       options.badge || null,
       options.showChannel && message.channel
         ? el('span', { class: 'channel-label', text: message.channel }) : null,
+      /*
+       * The exact time behind "1h ago" was a `title`, which a phone never
+       * shows (#276). A tap now opens it. A time that links to its packet
+       * keeps the link: the packet page prints the exact time.
+       */
       message.packet_id == null
-        ? el('time', { class: 'when', datetime: message.seen_at || '',
-            title: stamp(message.seen_at), text: messageWhen(message.seen_at) })
+        ? tapTip('when', el('time', { datetime: message.seen_at || '', text: messageWhen(message.seen_at) }),
+          'Received', [stamp(message.seen_at)])
         : el('a', {
             class: 'when', title: `${stamp(message.seen_at)}. Open packet ${message.packet_id}`,
             href: `#packet/${encodeURIComponent(message.from_node)}/${message.packet_id}`,
@@ -4497,8 +4502,12 @@ PAGES.graph = async (page) => {
 const NODE_PAGE = 100;
 let nodeSort = { key: 'last_heard', order: 'desc' };
 /* How far into the server's ordering we have read. Advanced by the rows
- * the SERVER served, never by the rows we kept -- see `mergeNodePage`. */
+ * the SERVER served, never by the rows we kept -- see `mergeNodePage`.
+ * Sent only when the server gave no cursor. */
 let nodeOffset = 0;
+/* Where the next page starts: the server's `X-Next-Cursor` for the last
+ * row it served (#250). Null before the first page. */
+let nodeCursor = null;
 let nodeTotal = 0;
 let nodeRows = [];
 /*
@@ -4533,20 +4542,21 @@ let nodeScrollWatch = null;
  * advancing by the kept count would re-request the rows just dropped:
  * a list that pages forever and never reaches its end.
  *
- * **A duplicate is dropped rather than drawn.** The plan (§6.2) asks for
- * keyset pagination on a stable sort key to prevent this, and the API
- * offers `limit`/`offset` only — so the risk it names is real and is
- * answered here instead. If a node's `last_heard` changes between two
- * requests the server's ordering shifts under us, and a row that moved
- * back a page arrives twice. Dropping it by `node_id` keeps the list
- * from showing one node twice. The other half of that shift — a row
- * that moved FORWARD a page, and is therefore never seen — cannot be
- * detected from here, and this comment says so rather than implying the
- * problem is solved. Nothing on this page refreshes on a timer, so the
- * window for either is one reader's own scrolling rather than a
- * 15-second poll.
+ * **The next page starts from the cursor, not the offset (#250).** The
+ * plan (§6.2) asked for keyset pagination, and `/api/nodes` now answers
+ * each page with `X-Next-Cursor`, which names the last row it served.
+ * With an offset, a node whose `last_heard` changed between two requests
+ * shifted every row behind it, and in a "quiet first" order the row at
+ * the page boundary was never served at all — a gap nothing here could
+ * detect. A cursor cannot shift. The offset is still counted, and sent
+ * only when an answer came back with no cursor (an older server, or a
+ * proxy that dropped the header), so the list still reaches its end.
+ *
+ * **A duplicate is still dropped rather than drawn.** The cursor makes a
+ * repeat impossible in principle; this makes it harmless on the offset
+ * path, and costs one Set.
  */
-function mergeNodePage(held, incoming, { offset, pageSize }) {
+function mergeNodePage(held, incoming, { offset, pageSize, cursor = null }) {
   const served = Array.isArray(incoming) ? incoming : [];
   const seen = new Set((held || []).map((row) => row.node_id));
   const added = [];
@@ -4558,6 +4568,7 @@ function mergeNodePage(held, incoming, { offset, pageSize }) {
   return {
     rows: (held || []).concat(added),
     offset: offset + served.length,
+    cursor: cursor || null,
     // A short page means the server had nothing more to give. An exactly
     // full page does NOT mean there is more, so the next request can
     // still come back empty — which is this same test, one page later.
@@ -4588,13 +4599,16 @@ function nodeProgressWords(shown, total, exhausted) {
   return `Showing ${count(shown)} of ${count(total)}`;
 }
 
-function nodeQuery(page, offset = 0) {
+function nodeQuery(page, { offset = 0, cursor = null } = {}) {
   const params = new URLSearchParams({
     limit: String(NODE_PAGE),
-    offset: String(offset),
     sort: nodeSort.key,
     order: nodeSort.order,
   });
+  // The cursor when there is one (#250). The server refuses it under any
+  // other sort, which is why the sort still goes with every page.
+  if (cursor) params.set('cursor', cursor);
+  else if (offset) params.set('offset', String(offset));
   const value = (selector) => {
     const node = $(selector, page);
     return node ? node.value : '';
@@ -4634,6 +4648,24 @@ function nodeFacetQuery(page) {
   const params = new URLSearchParams(nodeQuery(page).split('?')[1]);
   for (const key of ['limit', 'offset', 'sort', 'order']) params.delete(key);
   return `api/nodes/facets?${params}`;
+}
+
+/** One page of the list, with the total and the cursor its headers carry.
+ *
+ * `getList` with one more header. An absent total stays null, never 0,
+ * and an absent cursor stays null, which sends the next page back to
+ * the offset. */
+async function getNodePage(path) {
+  const response = await fetch(api(path));
+  if (!response.ok) throw requestFailed(path, response.status);
+  const rows = await response.json();
+  const header = response.headers.get('X-Total-Count');
+  const total = header == null ? null : Number(header);
+  return {
+    rows,
+    total: Number.isFinite(total) ? total : null,
+    cursor: response.headers.get('X-Next-Cursor'),
+  };
 }
 
 /* Everything the filter panel can narrow on.
@@ -5003,11 +5035,51 @@ function drawNodeChips(page) {
 
 let nodeFacets = null;
 
-/** How many filters are narrowing the list, for the summary line. */
-function nodeFilterCount(page) {
-  const query = new URLSearchParams(nodeQuery(page).split('?')[1]);
-  for (const key of ['limit', 'offset', 'sort', 'order']) query.delete(key);
-  return [...query.keys()].length;
+/** How many filters the reader has changed, for the badge on Filters.
+ *
+ * It counted every key of the list query, so a first visit showed "2"
+ * with nothing chosen: the toolbar's default "Last 24 h", and the preset
+ * channel from the sidebar (#301). Will (2026-09-27): count only what the
+ * reader changed. A toolbar control counts when it differs from its
+ * default, a panel filter counts when it is set, and the preset never
+ * counts, because the sidebar is where the preset shows.
+ *
+ * Counted by query key, so a filter that both the toolbar and the panel
+ * can set ("Heard within", role, gateway) counts once. `gaps_preset`
+ * travels with `gaps` and is not a second filter.
+ *
+ * Pure, so the cases in `tests/unit/js` run it rather than read it.
+ */
+function nodeFilterCount(toolbar, defaults, panel) {
+  const changed = new Set();
+  for (const [key, value] of Object.entries(toolbar)) {
+    if (value !== defaults[key]) changed.add(key);
+  }
+  for (const key of panel.keys()) {
+    if (key !== 'gaps_preset') changed.add(key);
+  }
+  return changed.size;
+}
+
+/** The toolbar as `nodeFilterCount` reads it: what it holds now, and what
+ * it held when the page loaded. The default comes from the markup (the
+ * `selected` option), so it cannot drift from `index.html`. */
+function nodeToolbar(page) {
+  const active = $('[data-node-active]', page);
+  const role = $('[data-node-role]', page);
+  const first = (select) => {
+    const chosen = select ? [...select.options].find((option) => option.defaultSelected) : null;
+    return chosen ? chosen.value : (select && select.options[0] ? select.options[0].value : '');
+  };
+  return {
+    toolbar: {
+      q: $('[data-node-search]', page).value.trim(),
+      active_hours: active ? active.value : '',
+      role: role ? role.value : '',
+      gateway: $('[data-node-gateway]', page).getAttribute('aria-pressed') === 'true',
+    },
+    defaults: { q: '', active_hours: first(active), role: first(role), gateway: false },
+  };
 }
 
 /*
@@ -5036,13 +5108,16 @@ async function loadNodes(page, { reset = false } = {}) {
   const target = $('[data-node-table]', page);
   if (reset) {
     nodeOffset = 0;
+    // A cursor belongs to the order and filters it was made under.
+    nodeCursor = null;
     nodeRows = [];
     nodeExhausted = false;
     replace(target, el('p', { class: 'loading', text: 'Loading' }));
   }
   nodeLoadingMore = true;
   drawNodeMore(page);
-  const answer = await getList(nodeQuery(page, nodeOffset)).catch((error) => error);
+  const answer = await getNodePage(nodeQuery(page, { offset: nodeOffset, cursor: nodeCursor }))
+    .catch((error) => error);
   /*
    * A newer request has started, so this answer is stale.
    *
@@ -5068,10 +5143,12 @@ async function loadNodes(page, { reset = false } = {}) {
   const merged = mergeNodePage(reset ? [] : nodeRows, answer.rows, {
     offset: nodeOffset,
     pageSize: NODE_PAGE,
+    cursor: answer.cursor,
   });
   const appended = reset ? null : merged.added;
   nodeRows = merged.rows;
   nodeOffset = merged.offset;
+  nodeCursor = merged.cursor;
   nodeExhausted = merged.exhausted;
   nodeTotal = answer.total;
 
@@ -5174,12 +5251,10 @@ function nodeColumns(onSort) {
       hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is. '
         + 'Sorting this column orders by how exactly the position is known.',
       cell: (row) => el('span', {},
+        // A tap opens what the tag means; a `title` was hover only (#276).
         row.is_mqtt_gateway
-          ? el('span', {
-              class: 'tag gateway',
-              title: 'This node uploads packets it hears to MQTT. It is not a device role.',
-              text: 'gateway',
-            })
+          ? tapTip('tag gateway', 'gateway', 'Gateway',
+            ['This node uploads packets it hears to MQTT. It is not a device role.'])
           : null,
         row.has_position ? el('span', { class: 'tag', text: 'position' }) : null),
     }),
@@ -5325,7 +5400,8 @@ function rearmNodeScroll() {
  * of 2,372 nodes said "300 nodes match" and meant "here are 300".
  */
 function describeNodeList(page) {
-  const filters = nodeFilterCount(page);
+  const { toolbar, defaults } = nodeToolbar(page);
+  const filters = nodeFilterCount(toolbar, defaults, nodeFilters);
   /*
    * No longer says how it is sorted or how many filters are on (Will,
    * 2026-09-26). The column heading already carries the sort -- it is
@@ -6420,12 +6496,21 @@ function healthPanel(gaps, detail, evidencePanel) {
     cannotTell.length ? `${count(cannotTell.length)} can't tell yet` : null,
   ].filter(Boolean).join(' · ');
 
-  const dots = el('p', { class: 'health-dots', role: 'img', 'aria-label': sentence },
-    ...judged.map((check) => el('span', {
-      class: `health-dot state-${check.state}`,
-      'aria-hidden': 'true',
-      title: `${check.name}: ${(HEALTH_STATES[check.state] || HEALTH_STATES.unknown).word}`,
-    })));
+  /*
+   * Which check each dot is used to be in a `title` on the dot, which a
+   * phone never shows (#276). The row is now one button, and a tap opens
+   * the list of checks in the order of the dots. The accessible name is
+   * still the sentence, with what the button does after it.
+   */
+  const dotWords = (check) => `${check.name}: ${(HEALTH_STATES[check.state] || HEALTH_STATES.unknown).word}`;
+  const dots = el('p', { class: 'health-dots-row' },
+    tapTip('health-dots',
+      judged.map((check) => el('span', {
+        class: `health-dot state-${check.state}`, 'aria-hidden': 'true',
+      })),
+      'Each dot, in order',
+      judged.map(dotWords),
+      { 'aria-label': `${sentence}. Show each check.` }));
 
   const full = el('div', { class: 'health-full', hidden: true },
     ...HEALTH_GROUPS.map((group) => {
@@ -6983,9 +7068,9 @@ function packetRowKey(row) {
  * infinite scroll gets wrong quietly live here, and pure code can be run
  * in a test rather than read.
  *
- * **Cursor, not offset, so there is no offset to advance.** The nodes
- * list pages by offset, and its comment is honest that a row which moves
- * forward a page is never seen. Packets arrive all the time -- a busy
+ * **Cursor, not offset, so there is no offset to advance.** With an
+ * offset, a row which moves forward a page is never seen (the nodes list
+ * paged that way until #250). Packets arrive all the time -- a busy
  * gateway uploads several a minute -- so that is the ordinary case here,
  * not the rare one. The server answers each page with `X-Next-Before`,
  * which names the last row served; the next page starts after THAT row,
@@ -8704,22 +8789,23 @@ function drawBroadcastTable(page, data) {
     } else if (h.restarted) {
       parts.push(el('span', { class: 'tag', text: 'restarted' }));
     }
+    /*
+     * The meaning of each of these was a `title`, which a phone never
+     * shows (#276). Each value is now the button that opens it.
+     */
     if (h.battery_level != null) {
       const mains = h.battery_level > 100;
-      parts.push(el('span', {
-        class: h.brownout_risk ? 'tag bad' : 'tag',
-        title: mains
+      parts.push(tapTip(h.brownout_risk ? 'tag bad' : 'tag',
+        mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
+        mains ? 'On mains' : 'Battery',
+        [mains
           ? 'The node reports a battery level above 100%, which the firmware uses for mains power.'
-          : 'Battery level the node last reported.',
-        text: mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
-      }));
+          : 'Battery level the node last reported.']));
     }
     if (h.uptime_seconds != null) {
-      parts.push(el('span', {
-        class: 'muted',
-        title: 'How long the node says it has been running since it last restarted.',
-        text: `up ${everySeconds(h.uptime_seconds)}`,
-      }));
+      parts.push(el('span', { class: 'muted' },
+        tapTip('', `up ${everySeconds(h.uptime_seconds)}`, 'Uptime',
+          ['How long the node says it has been running since it last restarted.'])));
     }
     return el('span', { class: 'tags' }, parts.length ? parts : el('span', { text: 'ok' }));
   };
@@ -8729,12 +8815,14 @@ function drawBroadcastTable(page, data) {
       Object.entries(row.families)
         .sort((a, b) => b[1].ratio - a[1].ratio)
         .slice(0, 3)
-        .map(([name, rate]) => el('span', {
-          class: rate.notable ? 'tag bad' : rate.faster_than_default ? 'tag' : 'tag muted',
-          title: `every ${everySeconds(rate.interval_seconds)}, ` +
-                 `default ${everySeconds(rate.default_seconds)}`,
-          text: `${portnumLabel(name)} ${rate.ratio}x`,
-        })));
+        // "2.5x" says how much faster, and only the panel says what
+        // that is in time (#276): the `title` was hover only.
+        .map(([name, rate]) => tapTip(
+          rate.notable ? 'tag bad' : rate.faster_than_default ? 'tag' : 'tag muted',
+          `${portnumLabel(name)} ${rate.ratio}x`,
+          portnumLabel(name),
+          [`Sends every ${everySeconds(rate.interval_seconds)}. `
+            + `The default is every ${everySeconds(rate.default_seconds)}.`])));
 
   replace(target, table(
     [
@@ -9815,6 +9903,17 @@ function fitHint(host, noun, label, hint, exact) {
     'aria-expanded': 'false',
     'aria-controls': id,
   }, el('span', { class: 'hint-mark', 'aria-hidden': 'true', text: 'i' }));
+  wireHint(button, panel);
+  host.append(button, panel);
+}
+
+/**
+ * Make `button` open and close `panel`, the way every hint does.
+ *
+ * Shared by `fitHint` and `tapTip`, so the popover path and the fallback
+ * path cannot drift between the two.
+ */
+function wireHint(button, panel) {
   /*
    * The browser drives it where it can. `popovertarget` toggles the
    * panel, closes it on Escape and on a tap outside, and — the part a
@@ -9823,7 +9922,7 @@ function fitHint(host, noun, label, hint, exact) {
    * it in the same gesture.
    */
   if (POPOVER) {
-    button.setAttribute('popovertarget', id);
+    button.setAttribute('popovertarget', panel.id);
     /*
      * An auto popover closes any other one as it opens, so nothing here
      * has to track which panel is up. `toggle` is the first moment the
@@ -9845,7 +9944,38 @@ function fitHint(host, noun, label, hint, exact) {
       placeHint(button, panel);
     });
   }
-  host.append(button, panel);
+}
+
+/**
+ * A short value whose meaning used to live only in a `title` (#276).
+ *
+ * A touch screen never shows a `title`, so the meaning of a gateway tag,
+ * a send-rate tag, an uptime note or a health dot could not be read on a
+ * phone at all (mobile review, section 2.7). Here the value itself is
+ * the button, and a tap, a click or Enter opens the same panel as a
+ * column hint. It closes the same way: Escape, a tap outside, or a
+ * second press.
+ *
+ * Returns the button and its panel side by side, in a fragment. The panel
+ * stays next to its button in the document for a screen reader, as a
+ * column hint's does. Spans, not paragraphs, because a tag sits inside
+ * phrasing content such as a table cell's span.
+ */
+function tapTip(className, content, label, lines, extra = {}) {
+  const id = `hint-${++hintSeq}`;
+  const panel = el('span', { class: 'hint-pop', id, hidden: !POPOVER },
+    el('span', { class: 'hint-name', text: label }),
+    ...lines.filter(Boolean).map((line) => el('span', { class: 'hint-line', text: line })));
+  if (POPOVER) panel.setAttribute('popover', 'auto');
+  const button = el('button', {
+    type: 'button', class: `tip-open ${className}`.trim(),
+    'aria-expanded': 'false', 'aria-controls': id, ...extra,
+  }, content);
+  wireHint(button, panel);
+  // A fragment, so it drops into `el()` wherever one element would.
+  const pair = document.createDocumentFragment();
+  pair.append(button, panel);
+  return pair;
 }
 
 /**
@@ -10482,6 +10612,14 @@ function wire() {
   $('[data-node-filter-apply]').addEventListener('click', () => {
     filterPanel.hidden = true;
     filterToggle.setAttribute('aria-expanded', 'false');
+    /*
+     * Hiding the panel takes the focus out of Apply, and the browser puts
+     * it on the document body, so a keyboard reader starts again from the
+     * top of the page (#251, WCAG 2.4.3). The panel is a disclosure, so
+     * focus goes back to the button that opened it. The button is never
+     * `disabled` while the list loads: that would blur it again.
+     */
+    filterToggle.focus();
     render('nodes');
   });
   $('[data-node-filter-clear]').addEventListener('click', () => {
