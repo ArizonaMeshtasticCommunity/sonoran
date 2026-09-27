@@ -3167,6 +3167,17 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
      fixing, one control along. */
   color: #fff;
 }
+/*
+ * The "not used on this page" note (#232). Quiet: it explains the control
+ * above it rather than competing with it, and it must not read as an error.
+ */
+.preset-scope {
+  margin: .35rem 0 0;
+  font-size: .72rem;
+  color: var(--muted);
+  text-align: center;
+}
+
 .preset-choice:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

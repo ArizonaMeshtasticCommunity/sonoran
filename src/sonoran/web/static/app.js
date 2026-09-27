@@ -8820,9 +8820,80 @@ if (!POPOVER) {
   });
 }
 
+/*
+ * Which pages the global preset actually applies to (#232, Tyler's second
+ * point: "dim filters that are not applicable to the page you're on").
+ *
+ * DECLARED, never inferred, and that is the whole point of this list.
+ *
+ * Three ways of working it out automatically were tried and each got a
+ * page wrong:
+ *
+ * - **Diffing the API requests** between the two presets said `coverage`
+ *   ignores it. Coverage obeys it completely -- `state.preset` drives the
+ *   tile URL, the node overlay, the legend and the summary -- and it only
+ *   measured as inert because that instance had no published coverage run,
+ *   so none of the path executed. The log was describing the data, not the
+ *   code.
+ * - **Grepping each page function** for the store said `stats` ignores it.
+ *   The leaderboards read it from a separate function.
+ * - **Looking for which modules mention the store** says `chat` ignores it.
+ *   Chat filters its channel sections client-side through `channelsFor`,
+ *   so the request never names a preset.
+ *
+ * A note that says "not used here" is a CLAIM about what the reader is
+ * looking at. Getting it wrong on coverage would tell somebody the switch
+ * is doing nothing while it silently decides which mesh their map shows,
+ * which is worse than saying nothing at all. So each page says, and
+ * `test_preset_scope.py` fails if a page is added without saying.
+ */
+const PRESET_PAGES = new Set([
+  'dashboard', 'nodes', 'chat', 'map', 'graph', 'coverage', 'planner',
+  'gaps', 'firehose', 'stats',
+]);
+
+/*
+ * Pages the preset does not reach. Listed rather than derived, so that the
+ * two lists together must account for every page in `PAGES` -- a new page
+ * belongs in exactly one and the test says which is missing.
+ *
+ * The four single-subject pages are here because they show one node, one
+ * packet, one link or one traceroute: the thing is already chosen, and the
+ * preset has nothing left to narrow.
+ */
+const PRESET_FREE_PAGES = new Set([
+  'traceroutes', 'meshnet', 'rf', 'config', 'settings',
+  'node', 'packet', 'link', 'traceroute',
+]);
+
+/** True when the menu's preset changes what this page shows. */
+function presetAppliesTo(name) {
+  return PRESET_PAGES.has(name);
+}
+
+/*
+ * Say so, next to the switch, when the page in view ignores it.
+ *
+ * A NOTE and not a dimmed control, which is what the issue suggested. A
+ * disabled-looking radio group says "you cannot change this", and that is
+ * false: the reader can change it here and it takes effect everywhere it
+ * applies, including the page they go to next. The switch is global, so it
+ * is never inoperable -- it is only irrelevant to what is currently on
+ * screen, and those are different sentences. Trivially swapped for dimming
+ * if Tyler would rather have that.
+ */
+function drawPresetScope(name) {
+  const note = $('[data-preset-scope]');
+  if (!note) return;
+  const applies = presetAppliesTo(name);
+  note.hidden = applies;
+  note.textContent = applies ? '' : 'Not used on this page.';
+}
+
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
+  drawPresetScope(name);
   loading = true;
   try {
     await PAGES[name](page);

@@ -271,6 +271,16 @@
             <span class="menu-field-label" id="preset-label">Preset</span>
             <div class="preset-switch" role="radiogroup" aria-labelledby="preset-label"
                  data-preset-switch></div>
+            <!--
+              Says so when the page in view ignores the preset (#232). A note
+              rather than a dimmed control: a disabled-looking switch says
+              "you cannot change this", which is false -- it is global, so it
+              can always be changed and always takes effect where it applies.
+              It is irrelevant to this page, not inoperable. Which pages those
+              are is declared in `PRESET_PAGES`, never inferred; the comment
+              there records the three ways inferring it got a page wrong.
+            -->
+            <p class="preset-scope" data-preset-scope hidden></p>
           </div>
 
           <!--
