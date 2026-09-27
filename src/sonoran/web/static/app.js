@@ -8813,14 +8813,40 @@ function traceroutePath(hops) {
  * CSS filter over its picture would invert its colours too. The link
  * still opens mesh-graph itself.
  */
-function meshGraphTrace(trace) {
+/*
+ * The whole panel, heading included, so the traceroute page and the
+ * packet page draw the same thing (Will, 2026-09-27: the packet page gets
+ * the same button). `extra` is the grid class the caller needs.
+ *
+ * "Open in mesh-graph" is a link drawn as a button at the top right of
+ * the drawing (#289), the `a.button-link` of the node page (#258). It
+ * stays an `<a>`, so middle-click and "Open in new tab" still work. It
+ * sits in the heading and not over the picture: the picture is hidden
+ * until it loads and replaced by a sentence when mesh-graph has none,
+ * and the button stays in both cases (Will, 2026-09-27). With no URL
+ * there is no button, only the sentence that says why.
+ */
+function meshGraphTrace(trace, extra = '') {
   const url = trace && trace.graph_url;
-  if (!url) return empty('This traceroute has no packet ID, so it cannot be linked.');
+  const panel = (...body) => el('div', { class: `panel ${extra}`.trim(), 'data-mesh-graph-panel': '' },
+    el('h3', {}, el('span', { text: 'mesh-graph drawing' }),
+      url
+        ? el('a', { class: 'button-link', href: url, target: '_blank', rel: 'noopener' },
+            icon('#i-external'), el('span', { text: 'Open in mesh-graph' }),
+            el('span', { class: 'sr-only', text: ' (opens in a new tab)' }))
+        : null),
+    ...body);
+  if (!url) return panel(empty('This traceroute has no packet ID, so it cannot be linked.'));
   const drawing = el('img', {
     src: trace.drawing_url ? api(trace.drawing_url) : url,
     alt: '',
     class: 'trace-drawing',
-    loading: 'lazy',
+    /*
+     * Not `loading: 'lazy'`. The picture is `display: none` until it
+     * loads, and Chromium never fetches a lazy image that has no box:
+     * measured, the request was not made at all, so neither the drawing
+     * nor the "holds no drawing" sentence ever appeared (#289).
+     */
     onload: (event) => { event.target.style.display = 'block'; },
     onerror: (event) => {
       event.target.replaceWith(el('p', {
@@ -8829,11 +8855,7 @@ function meshGraphTrace(trace) {
       }));
     },
   });
-  return el('div', {},
-    el('p', { style: 'margin:0 0 .5rem' },
-      el('a', { class: 'linky', href: url, target: '_blank', rel: 'noopener',
-        text: 'Open this trace in mesh-graph' })),
-    drawing);
+  return panel(drawing);
 }
 
 
@@ -8945,9 +8967,7 @@ PAGES.traceroute = async (page) => {
       el('h3', {}, 'Path there'),
       traceroutePath(trace.hops)),
     pathBackPanel(trace),
-    el('div', { class: 'panel span-2' },
-      el('h3', {}, 'mesh-graph drawing'),
-      meshGraphTrace(trace))));
+    meshGraphTrace(trace, 'span-2')));
 };
 
 /*
@@ -9468,9 +9488,7 @@ PAGES.packet = async (page) => {
           el('h3', {}, 'Path this packet took',
             el('a', { class: 'linky', href: `#traceroute/${trace.id}`, text: 'full page' })),
           traceroutePath(trace.hops)),
-        el('div', { class: 'panel' },
-          el('h3', {}, 'mesh-graph drawing'),
-          meshGraphTrace(trace)));
+        meshGraphTrace(trace));
     }
   }
 };

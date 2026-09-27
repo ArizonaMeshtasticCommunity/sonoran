@@ -59,6 +59,7 @@ const errors = [];
  * failure still counts as an error.
  */
 const IGNORE = /404|favicon|tile|No terrain is held for this area/i;
+const DRAWING = /\/api\/traceroutes\/\d+\/drawing\.svg$/;
 
 /*
  * A console error is only ours if it came from our own origin.
@@ -140,7 +141,15 @@ async function journey(context, name, body) {
     // A console error carries the offending URL in its location, which
     // the text does not.
     const where = (message.location() || {}).url || '';
-    if (!isOurs(where)) {
+    /*
+     * The trace drawing is mesh-graph's picture, proxied by our API
+     * (#51), so a failure there is mesh-graph's answer on our origin:
+     * 502 when it cannot be reached, which is every test instance, and
+     * 404 when it holds no drawing. It counts as somebody else's host.
+     * It went unseen until #289, because the picture was lazy-loaded
+     * while hidden and Chromium never asked for it at all.
+     */
+    if (!isOurs(where) || DRAWING.test(where)) {
       elsewhere.push(`${name}: ${message.text()} [${where || 'unknown host'}]`);
       return;
     }
@@ -1268,6 +1277,86 @@ async function main() {
       }
     }
     return `columns ${out.join(' ')}; no reply and stored reply both said truly`;
+  });
+
+  await journey(context, 'the mesh-graph button sits at the top right of the drawing (#289)', async (page) => {
+    /*
+     * The link was a line of text above the drawing. It is now a link
+     * drawn as a button in the drawing's heading, on the trace page and
+     * on the packet page alike. Claims: it is an `<a>` to `graph_url`
+     * that opens a new tab; it is at the heading's right edge on a wide
+     * screen and 44 px tall on a phone; it stays when mesh-graph has no
+     * drawing (Will, 2026-09-27); and a trace with no URL has no button.
+     */
+    const rows = await (await page.request.get(`${BASE}/api/traceroutes?limit=1`)).json();
+    if (!rows.length) return 'no traceroute stored to open';
+    const trace = rows[0];
+    // mesh-graph holds no drawing of it, as far as this page can tell.
+    await page.route(/\/drawing\.svg$/, (route) => route.fulfill({ status: 404, body: '' }));
+    const button = () => {
+      const panel = document.querySelector('[data-mesh-graph-panel]');
+      if (!panel || !panel.querySelector('.trace-drawing, p')) return null;
+      const a = panel.querySelector('h3 a.button-link');
+      const head = panel.querySelector('h3').getBoundingClientRect();
+      const box = a && a.getBoundingClientRect();
+      return {
+        found: Boolean(a),
+        tag: a && a.tagName, href: a && a.getAttribute('href'), target: a && a.target, rel: a && a.rel,
+        right: box && Math.round(head.right - box.right),
+        top: box && Math.round(box.top - head.top),
+        height: box && Math.round(box.height),
+        text: panel.innerText,
+        doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    };
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${BASE}/?b=1#traceroute/${trace.id}`, { waitUntil: 'load' });
+    must(await waitFor(page, button, 15000), 'the drawing panel never drew');
+    // The picture fails after the panel is drawn, so wait for its answer.
+    await waitFor(page, () => /holds no drawing/.test(
+      document.querySelector('[data-mesh-graph-panel]').innerText), 10000);
+    const wide = await page.evaluate(button);
+    must(wide.found && wide.tag === 'A', 'the drawing panel has no mesh-graph link in its heading');
+    must(wide.href === trace.graph_url, `it goes to ${wide.href}, not ${trace.graph_url}`);
+    must(wide.target === '_blank' && /noopener/.test(wide.rel), `target=${wide.target} rel=${wide.rel}`);
+    must(Math.abs(wide.right) <= 1 && wide.top <= 4, `it is ${wide.right} px from the right, ${wide.top} px down`);
+    must(/holds no drawing/.test(wide.text), 'the page did not say mesh-graph has no drawing');
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.waitForTimeout(400);
+    const narrow = await page.evaluate(button);
+    must(narrow.height >= 44, `it is ${narrow.height} px tall on a phone`);
+    must(narrow.doc <= 1, 'the page scrolls sideways at 390 px');
+
+    // The packet page draws the same panel. The seeded mesh stores no
+    // packet row for its traceroutes, so a real traceroute packet is
+    // opened and its lookup answered with the trace above.
+    const packets = await (await page.request.get(
+      `${BASE}/api/packets?portnum=TRACEROUTE_APP&limit=1`)).json();
+    let onPacket = 'no traceroute packet stored';
+    if (packets.length) {
+      await page.route(/\/api\/traceroutes\/by-packet\//, (route) => route.fulfill({ json: trace }));
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const [from, id] = [packets[0].from_node, packets[0].packet_key.split(':')[1]];
+      await page.goto(`${BASE}/?b=2#packet/${from}/${id}`, { waitUntil: 'load' });
+      must(await waitFor(page, button, 15000), 'the packet page drew no mesh-graph panel');
+      const packet = await page.evaluate(button);
+      must(packet.found && packet.href === trace.graph_url, 'the packet page has no matching button');
+      onPacket = 'same on the packet page';
+    }
+
+    // No URL, no button, and the sentence that says why.
+    await page.route(new RegExp(`/api/traceroutes/${trace.id}$`), async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), graph_url: null } });
+    });
+    await page.goto(`${BASE}/?b=3#traceroute/${trace.id}`, { waitUntil: 'load' });
+    must(await waitFor(page, button, 15000), 'the drawing panel never drew without a URL');
+    const none = await page.evaluate(button);
+    must(!none.found, 'a trace with no URL still has a button');
+    must(/cannot be linked/.test(none.text), 'a trace with no URL does not say why');
+    return `top right at 1280 (${wide.right} px), ${narrow.height} px tall at 390, `
+      + `kept with no drawing, ${onPacket}, gone with no URL`;
   });
 
   await journey(context, 'the firehose draws rows', async (page) => {

@@ -587,6 +587,16 @@ a.button-link[hidden] { display: none; }
 a.button-link:hover { border-color: var(--accent); }
 a.button-link .icon { width: 1.05rem; height: 1.05rem; fill: currentColor; flex: 0 0 auto; }
 a.button-link .icon + span { margin-left: .4rem; }
+/*
+ * In a panel heading, at its top right (#289). The heading is small,
+ * uppercase, spaced and muted, and a button inside it must be none of
+ * those. `.panel > h3` already wraps and pushes a second child to the
+ * right, so on a narrow panel the button drops under the title.
+ */
+.panel > h3 a.button-link {
+  font-size: .88rem; font-weight: 400; text-transform: none;
+  letter-spacing: normal; color: var(--text);
+}
 
 /* Panels */
 
@@ -2146,6 +2156,9 @@ a.more { text-decoration: none; display: inline-block; }
   input, select, button, .sidebar nav a {
     min-height: 2.75rem;
   }
+  /* A link drawn as a button (#258, #289) is a button to a finger, and
+     the rule above names `button`, which cannot reach it. */
+  a.button-link { min-height: 2.75rem; }
   /*
    * The four summary tiles went one to a row on a phone, so eight
    * hundred pixels of counting stood between the nav and the first
