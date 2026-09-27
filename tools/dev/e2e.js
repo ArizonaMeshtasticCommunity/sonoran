@@ -1153,6 +1153,58 @@ async function main() {
     return 'fine pointer, tolerance 0';
   });
 
+  await journey(context, 'chart and checker libraries load only where used (#277)', async (page) => {
+    /*
+     * ECharts and the config checker's libraries sit in <template>s and
+     * are fetched by the first page that needs them. Nodes needs neither
+     * and must fetch neither. Every page that draws a chart is then
+     * opened COLD, each in a fresh load, because a page reached by a
+     * hash change would find the library the last page loaded.
+     */
+    const fetched = [];
+    page.on('request', (request) => fetched.push(new URL(request.url()).pathname));
+    const heavy = /echarts\.min\.js|protobuf\.min\.js|js-yaml\.min\.js|config-check\.js/;
+    await open(page, 'nodes', 3000);
+    const early = fetched.filter((path) => heavy.test(path));
+    must(early.length === 0, `the nodes page fetched ${early.join(', ')}`);
+    must(!(await page.evaluate(() => Boolean(window.echarts))), 'echarts is defined on the nodes page');
+
+    const drew = [];
+    for (const name of ['dashboard', 'stats', 'graph']) {
+      await page.goto('about:blank');
+      await open(page, name, 500);
+      const drawn = (want) => [...document.querySelectorAll(`[data-page="${want}"] canvas`)]
+        .some((canvas) => canvas.width > 0);
+      let ok = false;
+      for (let tries = 0; tries < 60 && !ok; tries += 1) {
+        ok = await page.evaluate(drawn, name);
+        if (!ok) await page.waitForTimeout(500);
+      }
+      must(ok, `a cold load of #${name} drew no chart`);
+      drew.push(name);
+      // Let the page's other requests land before leaving it, or the
+      // navigation aborts them and each one is counted as an error.
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    }
+    // The node page draws its charts once its panels arrive.
+    const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
+    must(nodes.length > 0, 'no node to open');
+    await page.goto('about:blank');
+    await open(page, `node/${encodeURIComponent(nodes[0].node_id)}`, 500);
+    must(await waitFor(page, () => [...document.querySelectorAll('[data-page="node"] canvas')]
+      .some((canvas) => canvas.width > 0), 30000), `a cold load of node ${nodes[0].node_id} drew no chart`);
+    drew.push('node');
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+    await page.goto('about:blank');
+    await open(page, 'config', 500);
+    must(await waitFor(page, () => Boolean(window.SonoranConfigCheck && window.jsyaml && window.protobuf), 30000),
+      'the config page did not load its checker and libraries');
+    must(await waitFor(page, () => document.querySelector('[data-page="config"]').innerText.trim().length > 0, 10000),
+      'the config page is empty');
+    return `nodes fetched neither; cold charts on ${drew.join(', ')}; config loaded its checker`;
+  });
+
   await journey(context, 'a traceroute opens', async (page) => {
     await open(page, 'traceroutes', 4000);
     const link = page.locator('[data-page="traceroutes"] .linky').first();

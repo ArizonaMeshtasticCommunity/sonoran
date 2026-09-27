@@ -757,6 +757,83 @@ function messageItem(message, options = {}) {
     reactionChips(message.reactions, message.channel));
 }
 
+/*
+ * Load a set of scripts the page holds back until it needs them (#277).
+ *
+ * ECharts was a third of every page's download (327 kB of 885 kB
+ * gzipped), and every script was synchronous, so Nodes and Chat, which
+ * draw no chart, waited for it before they showed a row. The config
+ * checker's libraries were the same on every page but one.
+ *
+ * index.html keeps each set inside `<template data-lazy-scripts="…">`.
+ * A script inside a template never runs, and the server still writes
+ * the asset version into its address. This copies each one into the
+ * page: classic scripts first, with `async = false` so they run in
+ * their written order while they download together, then any module
+ * after the last of them, because a module reads their globals. The
+ * integrity hash and `crossorigin` are copied as well.
+ *
+ * One promise per set, so a second caller waits on the same load. A
+ * failed load is forgotten, so the next visit tries again.
+ */
+const lazyScripts = new Map();
+
+function loadScript(from) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    for (const name of ['type', 'integrity', 'crossorigin']) {
+      if (from.hasAttribute(name)) script.setAttribute(name, from.getAttribute(name));
+    }
+    script.async = false;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`Could not load ${from.getAttribute('src')}`));
+    script.src = from.getAttribute('src');
+    document.body.append(script);
+  });
+}
+
+/*
+ * The router runs at the end of app.js, and the config template comes
+ * after app.js in the page, so on a reload of `#config` it has not been
+ * parsed yet. Found by the e2e: the set came back empty, resolved at
+ * once, and the page waited for a checker that was never fetched.
+ */
+const pageParsed = () => (document.readyState === 'loading'
+  ? new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+  : Promise.resolve());
+
+function loadScripts(name) {
+  if (lazyScripts.has(name)) return lazyScripts.get(name);
+  const loading = pageParsed()
+    .then(() => {
+      const template = document.querySelector(`template[data-lazy-scripts="${name}"]`);
+      if (!template) throw new Error(`No scripts are held back as "${name}"`);
+      const all = [...template.content.querySelectorAll('script[src]')];
+      const modules = all.filter((script) => script.type === 'module');
+      const classic = all.filter((script) => script.type !== 'module');
+      return Promise.all(classic.map(loadScript)).then(() => Promise.all(modules.map(loadScript)));
+    })
+    .catch((error) => {
+      lazyScripts.delete(name);
+      throw error;
+    });
+  lazyScripts.set(name, loading);
+  return loading;
+}
+
+/*
+ * The pages that draw an ECharts chart. `render` loads the library
+ * before it draws one of them. A page that starts drawing charts must
+ * be added here, or it throws "echarts is not defined" on a cold load;
+ * the e2e opens each of these cold and asserts a chart was drawn.
+ */
+const CHART_PAGES = new Set(['dashboard', 'graph', 'node', 'stats', 'planner', 'rf']);
+
+/** Resolves once `echarts` exists. Already there costs nothing. */
+function chartsReady() {
+  return window.echarts ? Promise.resolve() : loadScripts('charts');
+}
+
 /* ECharts instances are kept so a redraw does not leak canvases. */
 const charts = new Map();
 /*
@@ -3960,6 +4037,8 @@ const configReady = new Promise((resolve) => {
 });
 
 PAGES.config = async (page) => {
+  // The checker and its libraries are fetched on the first visit (#277).
+  await loadScripts('config');
   await configReady;
   await window.SonoranConfigCheck.show(page);
 };
@@ -9796,6 +9875,7 @@ async function render(name) {
   drawPresetScope(name);
   loading = true;
   try {
+    if (CHART_PAGES.has(name)) await chartsReady();
     await PAGES[name](page);
     setStatus('', `Updated ${clock(new Date())}`);
   } catch (error) {

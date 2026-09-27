@@ -449,6 +449,12 @@ general proxy for the tile source.
   This keeps the site working without third-party availability.
 - Libraries: Leaflet for the map, ECharts for the charts and the mesh
   graph. Both are in `web/static/vendor`.
+- ECharts and the config checker's scripts are not loaded by every
+  page (#277). They sit inside `<template data-lazy-scripts>` in
+  `index.html`, and `loadScripts` in `app.js` adds them when a page
+  needs them: `render` loads ECharts before a page in `CHART_PAGES`, and
+  `PAGES.config` loads the checker. A page that starts drawing a chart
+  must be added to `CHART_PAGES`.
 - `map-defaults.js` loads straight after Leaflet and sets what every
   map shares. On a touch screen (`pointer: coarse`) every map draws on
   a canvas with a 20 px hit tolerance, and a tap goes to the nearest
