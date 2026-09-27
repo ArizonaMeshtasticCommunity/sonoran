@@ -5,6 +5,24 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.09.27 — 2026-09-27
+
+**`main` now matches the live site.** PR #302 merged the batch released as [v2026.09.26.2](https://github.com/ArizonaMeshtasticCommunity/sonoran/releases/tag/v2026.09.26.2) into `main`, and s.azmsh.dev was redeployed from `main` (4bd8b97) on 2026-09-27 at about 07:30 UTC. From here on, deploy from `main` again.
+
+#### Fixes
+
+- **Node page, "Who hears it" on phones:** at 320 px the table no longer scrolls sideways on devices whose fonts run wider. The headings can put their info mark under the word, and "about" in an estimated distance can move to its own line. A number always stays with its unit. (#260)
+
+  CI caught this on the merge PR: the table fit to the pixel on macOS fonts and overflowed by 15 px on the Linux runner. The e2e journey now also measures with wider letters, so it fails on any machine, not only one with wider fonts.
+
+#### Maintenance
+
+- CHANGELOG.md, DECISIONS.md, and the #252 recovery tool's instructions (run it as the migration role, not as ingest) are now on `main`.
+
+#### Thank you
+
+- **@logans-stuff** for okaying the CI runs, on his own hardware, that caught the 320 px overflow before it merged.
+
 ## v2026.09.26.2 — 2026-09-26
 
 **Deployed to https://s.azmsh.dev on 2026-09-27 at 05:22 UTC**, from branch `batch/v2026.09.26.2` (01d2b3b). CI on this project runs on a community member's self-hosted hardware, so the release was published from the branch first. The branch then went to `main` as a single pull request, once the hardware's owner okayed that CI run.
