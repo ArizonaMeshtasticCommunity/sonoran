@@ -6693,16 +6693,21 @@ function roughKm(estimate, error) {
 /*
  * One row's distance: exact, estimated with its range, or "-".
  *
- * The estimate may break onto two lines in a narrow column, but only
- * between the estimate and its range: "about 174 mi ± 1.8" over a lone
- * "mi" reads as two measurements. So the spaces inside each half are
- * no-break spaces.
+ * The estimate may break across lines in a narrow column, but never
+ * inside a measurement: "about 174 mi ± 1.8" over a lone "mi" reads as
+ * two measurements. So a number keeps its unit, and "±" keeps its
+ * number, with no-break spaces.
+ *
+ * The words before a number ("about", "under") may break off. Binding
+ * them too made "about 90 mi" one unbreakable piece, which set the
+ * Distance column's floor in "Who hears it" once its heading could wrap
+ * (#260, and `.route-list th` in app.css).
  */
 function reachText(row) {
   if (row.distance_km != null) return km(row.distance_km);
   const rough = roughKm(row.approx_distance_km, row.distance_error_km);
   if (!rough) return '-';
-  const keep = (text) => text.replace(/ /g, ' ');
+  const keep = (text) => text.replace(/± /g, '±\u00a0').replace(/ (\S+)$/, '\u00a0$1');
   return `${keep(rough.value)} ${keep(rough.bar)}`;
 }
 

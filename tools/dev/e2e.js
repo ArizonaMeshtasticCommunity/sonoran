@@ -413,7 +413,22 @@ async function main() {
     must((await page.evaluate(find)).text.includes(LONG_NAME),
       'the long name was not drawn, so this would measure a table that was never stressed');
     const fits = await tableFitsAt(page, find, 'the Who hears it table');
-    return `${busiest.id}, heard by ${busiest.heard}: ${fits}`;
+    /*
+     * Fitting on the fonts of the machine that runs this is not enough.
+     * It passed here at exactly 254 px in a 254 px panel on macOS, and
+     * failed on the CI runner, whose Linux fonts are wider, at 269. So at
+     * the narrowest width it must also fit with every letter 0.05em wider,
+     * about the difference between the two.
+     */
+    await page.setViewportSize({ width: TABLE_WIDTHS[0], height: 900 });
+    await page.addStyleTag({ content: '.route-list * { letter-spacing: .05em !important; }' });
+    await page.waitForTimeout(400);
+    const wide = await page.evaluate(find);
+    must(
+      wide.scroll <= wide.client + 1,
+      `the Who hears it table scrolls sideways at ${TABLE_WIDTHS[0]} px with wider letters: the table is ${wide.scroll} px in a ${wide.client} px panel`,
+    );
+    return `${busiest.id}, heard by ${busiest.heard}: ${fits}; wider letters ${wide.scroll}/${wide.client}`;
   });
 
   await journey(context, 'a furthest-node tile shows a distance or says why not', async (page) => {

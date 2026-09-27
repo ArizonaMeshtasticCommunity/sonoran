@@ -3006,6 +3006,11 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* Less padding between three columns than between eight: the panel is
    half a page wide at most, and 254 px at a 320 px screen. */
 .route-list th, .route-list td { padding-inline: .45rem; }
+/* A heading may put its hint mark under the word (#260). Every `th` is
+   `nowrap`, so "DISTANCE" and its mark were one piece, and at 320 px the
+   three headings, not the rows, set the table's width: 253 px in a 254 px
+   panel on macOS fonts, 269 px on the CI runner's wider Linux fonts. */
+.route-list th { white-space: normal; }
 
 /* The charts sit in their own grid so each one keeps a whole cell. */
 .history-grid { margin: 0; grid-column: 1 / -1; }
