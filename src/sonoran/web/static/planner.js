@@ -612,8 +612,35 @@ async function applyShareLink() {
 
 function ensurePlannerMap() {
   if (state.map) return state.map;
-  const map = L.map('planner-map', { preferCanvas: true })
-    .setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
+  /*
+   * Open on Arizona, not on the southwest of the United States (§6.5).
+   *
+   * `zoomSnap: 0.25` and `fitBounds` on the deployment's home region,
+   * which is exactly what #195 did for the live map and for the same
+   * reason: a whole-number zoom shows a different area on every screen.
+   *
+   * Measured on this instance, an 842x840 map box at a 1500x1050 window,
+   * with the node list blocked so the first-visit fit could not hide the
+   * answer:
+   *
+   *     before  zoom 7,    9.25 deg of longitude, -116.13 to -106.88
+   *     after   zoom 7.25, 7.78 deg of longitude, -115.84 to -108.06
+   *
+   * Arizona is 5.8 degrees wide, so it went from 63% of the width and
+   * sitting left of centre -- 2.2 degrees of New Mexico on the right,
+   * 1.3 degrees of California on the left -- to 75% and centred. The
+   * fractional snap is what buys the last part: at snap 1 the fit rounds
+   * down to zoom 7 and gives back the first line.
+   *
+   * `homeBounds` is app.js's, which reads `CONFIG.mapHome` and returns
+   * null for a deployment that has not set one. No geography is written
+   * into this file. app.js has loaded by the time this runs -- this
+   * function is called from `show`, which the router calls.
+   */
+  const map = L.map('planner-map', { preferCanvas: true, zoomSnap: 0.25 });
+  const home = typeof homeBounds === 'function' ? homeBounds() : null;
+  if (home) map.fitBounds(home, { padding: [20, 20] });
+  else map.setView(CONFIG.mapCenter || [34.0, -111.5], CONFIG.mapZoom || 7);
   if (CONFIG.tileUrl) {
     L.tileLayer(CONFIG.tileUrl, {
       className: 'basemap-tiles',
@@ -1295,6 +1322,325 @@ function wirePlannerMode() {
   applyPlannerMode(plannerMode());
 }
 
+/* ---------------------------------------------------------------- */
+/* The same height, in the reader's units                            */
+
+/*
+ * The planner's typed boxes are metres, and they stay metres (§6.5,
+ * `docs/PLANNER.md` 4, `SESSION_PLAN.md`).
+ *
+ * The number in these boxes is handed to the propagation model, not
+ * printed: `planner-params.js` converts it to the feet the engine takes,
+ * and feeding metres straight through overstates every antenna by 3.28
+ * times. The rest of the dashboard reads in feet by default, so the risk
+ * is a reader who types 20 meaning feet and gets a 20 m mast — a wrong
+ * prediction that looks entirely right.
+ *
+ * So the label keeps saying metres and this echoes the same height in
+ * whatever units the reader has chosen, read-only. It converts nothing on
+ * the way in: `SonoranUnits.heightToM` exists for that and is NOT used
+ * here, deliberately. Changing the boxes to feet needs the conversion on
+ * the way in, the share link kept in metres — `docs/PLANNER.md` 5.1 says
+ * the link's heights are metres and a link must mean the same thing to
+ * both readers — and a measured prediction proving an equivalent input
+ * gives an equivalent answer. None of that is this.
+ *
+ * Nothing at all is shown to a reader already on metric, where it would
+ * only repeat the box.
+ */
+const HEIGHT_HINTS = ['tx_height', 'rx_height'];
+
+function showHeightHints() {
+  const imperial = window.SonoranUnits ? SonoranUnits.imperial() : false;
+  for (const name of HEIGHT_HINTS) {
+    const hint = document.querySelector(`[data-planner-hint="${name}"]`);
+    const box = field(name);
+    if (!hint || !box) continue;
+    const raw = box.value.trim();
+    // An empty box is not 0 m. `Number('')` is 0, and "0 ft" under an
+    // empty height box states a mast flat on the ground.
+    const metres = raw === '' ? null : Number(raw);
+    if (!imperial || metres === null || !Number.isFinite(metres)) {
+      hint.hidden = true;
+      hint.textContent = '';
+      continue;
+    }
+    hint.hidden = false;
+    hint.textContent = `This box is in metres — that is about ${SonoranUnits.heightFromM(metres)}.`;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Finding the site by name                                          */
+
+/*
+ * An address or a place name instead of a coordinate (§6.5).
+ *
+ * **Where the typed address goes.** To `/api/geocode` on this origin, and
+ * `api/routes/geocode.py` forwards it to the configured geocoder. It is
+ * the only reader-supplied text this dashboard sends anywhere, and the
+ * reason it goes through this server rather than straight to a geocoder
+ * is twofold: the Content-Security-Policy is `connect-src 'self'`, and a
+ * direct call would hand the reader's IP address to a third party along
+ * with where they are thinking of putting a mast.
+ *
+ * `docs/PLANNER.md` 2 says no site plan is ever sent to this server. That
+ * still holds for a plan: the coordinates, the antenna, the prediction
+ * and the share link never leave the browser. A place the reader asked
+ * this server to look up for them is a request they made on purpose, and
+ * the control is only drawn where the deployment has the feature on.
+ *
+ * The control reveals itself only when `SONORAN.geocode.enabled` says the
+ * endpoint is there, the same rule as the pickers: a search box that
+ * answers 404 is worse than none.
+ */
+function setFindNote(text, kind) {
+  const note = document.querySelector('[data-planner-find-note]');
+  if (!note) return;
+  note.textContent = text || '';
+  note.hidden = !text;
+  note.className = `muted planner-find-note${kind ? ` ${kind}` : ''}`;
+}
+
+/*
+ * A geocoder's name for a place, shortened to a site label.
+ *
+ * The upstream answers with the whole chain -- "Flagstaff, Coconino
+ * County, Arizona, United States" is 53 characters and a street address
+ * runs past 80. The button shows all of it, because that is how a reader
+ * tells two answers apart, but the Site name box is a label on a
+ * prediction and it travels in the share link, where `SHARE_NAME_LIMIT`
+ * would cut it mid-county.
+ *
+ * Two parts: the place and what it is in. Enough to be a name, short
+ * enough to read in a link.
+ */
+function siteLabel(name) {
+  return String(name).split(',').slice(0, 2).map((part) => part.trim()).filter(Boolean).join(', ');
+}
+
+function showFound(places) {
+  const box = document.querySelector('[data-planner-find-results]');
+  if (!box) return;
+  if (!places.length) {
+    replace(box, []);
+    box.hidden = true;
+    return;
+  }
+  replace(box, places.map((place) => el('button', {
+    type: 'button',
+    class: 'toggle',
+    // `text` is `textContent`. The name comes from a third party and
+    // never goes near an innerHTML sink -- #81 was a stored name reaching
+    // one of those, and this is the same shape of data from further away.
+    text: place.name,
+    onclick: () => {
+      setSite(place.lat, place.lon, siteLabel(place.name));
+      // The list has done its job. Left up, the next thing the reader
+      // clicks would move the site they just chose.
+      replace(box, []);
+      box.hidden = true;
+      setFindNote('');
+      state.map.setView([place.lat, place.lon], Math.max(state.map.getZoom(), 11));
+    },
+  })));
+  box.hidden = false;
+}
+
+async function findPlace() {
+  const input = document.querySelector('[data-planner-address]');
+  if (!input) return;
+  const asked = input.value.trim();
+  showFound([]);
+  if (asked.length < 2) {
+    setFindNote('Type at least two characters of a place or an address.', 'warn');
+    return;
+  }
+  setFindNote('Looking…');
+  let body = null;
+  try {
+    body = await get(`api/geocode?q=${encodeURIComponent(asked)}`);
+  } catch (error) {
+    /*
+     * Said plainly, and not retried. The endpoint answers 429 when the
+     * budget or the upstream's own rate is spent, and a retry from here
+     * would spend somebody else's turn. `get` throws for any status that
+     * is not 2xx, so this one message covers off, refused and broken --
+     * the console keeps the detail.
+     */
+    console.warn('address lookup failed', error);
+    setFindNote(
+      'That address could not be looked up just now. Click the map instead, '
+        + 'or try again in a moment.',
+      'warn',
+    );
+    return;
+  }
+  const places = (body && Array.isArray(body.places) ? body.places : [])
+    // Defensive about somebody else's numbers: a name with no coordinate
+    // would put `undefined` into the form and predict from nothing.
+    .filter((place) => place
+      && typeof place.name === 'string'
+      && Number.isFinite(Number(place.lat))
+      && Number.isFinite(Number(place.lon)))
+    .map((place) => ({ name: place.name, lat: Number(place.lat), lon: Number(place.lon) }));
+  if (!places.length) {
+    setFindNote(
+      'Nothing of that name was found in this region. A place outside it is not '
+        + 'offered, because there is no terrain here to predict over.',
+      'warn',
+    );
+    return;
+  }
+  setFindNote(places.length === 1 ? 'One place found.' : `${places.length} places found.`);
+  showFound(places);
+}
+
+function wireAddressSearch() {
+  const run = document.querySelector('[data-planner-find]');
+  const input = document.querySelector('[data-planner-address]');
+  const button = document.querySelector('[data-planner-find-go]');
+  if (!run || !input || !button) return;
+  const offered = Boolean(CONFIG.geocode && CONFIG.geocode.enabled);
+  if (!offered) return;
+  button.addEventListener('click', () => { findPlace().catch((error) => console.error(error)); });
+  input.addEventListener('keydown', (event) => {
+    // Enter in a lone text box would submit a form; there is no form
+    // here, so it would do nothing at all, which reads as broken.
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    findPlace().catch((error) => console.error(error));
+  });
+  run.hidden = false;
+}
+
+/* ---------------------------------------------------------------- */
+/* Preset, slot and frequency                                        */
+
+/*
+ * One setting said three ways, and each of them editable (§6.5).
+ *
+ * A modem preset sets a bandwidth. The band is divided into slots one
+ * bandwidth wide, and `lora.channel_num` on the radio picks one. So the
+ * frequency is the slot and the preset together, and a reader may
+ * reasonably know any one of the three: the slot is what azmsh.net tells
+ * them to set, the frequency is what a spectrum display shows them, and
+ * the preset is what the app calls it.
+ *
+ * **One direction of truth per edit, and no dispatched events.** The risk
+ * the plan names is a loop: the frequency handler moves the slot, whose
+ * handler moves the frequency, and so on. Every write below sets `.value`
+ * directly and never dispatches `change`, so no handler can re-enter
+ * another. The address still follows, because each field already has its
+ * own `change` listener from `wirePlanner` and the reader's own edit
+ * fires that.
+ *
+ * The rules:
+ *
+ * - **preset** -> the sensitivity it implies, and the frequency of the
+ *   slot already chosen. The slot number is what the operator set on the
+ *   radio and it does not change when they compare two presets; the
+ *   frequency does, because the slots are a different width.
+ * - **slot** -> the frequency.
+ * - **frequency** -> the slot, or "not on a slot" when it is between two.
+ *   A typed frequency is never snapped: `lora.override_frequency` is a
+ *   real setting and a licensed operator may sit anywhere. Snapping would
+ *   move somebody's prediction without being asked.
+ */
+function slotPicker() {
+  return document.querySelector('[data-planner-slot]');
+}
+
+/** The frequency box's value as a number, or null when it is not one. */
+function typedFrequency() {
+  const box = field('frequency_mhz');
+  if (!box) return null;
+  const raw = box.value.trim();
+  // `Number('')` is 0, and 0 MHz is not a frequency. An empty box means
+  // the reader has not said, which is not the same as the bottom of the
+  // band -- the fifth instance of that bug shape in this repository.
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function setSlotNote(text) {
+  const note = document.querySelector('[data-planner-slot-note]');
+  if (!note) return;
+  note.textContent = text || '';
+  note.hidden = !text;
+}
+
+/**
+ * Fill the slot menu for a preset, and select the slot a frequency is in.
+ *
+ * Rebuilt on every preset change because the number of slots is the band
+ * divided by the bandwidth: 52 at 500 kHz, 416 at 62.5 kHz. A menu built
+ * once would offer slot 300 on Short turbo, which does not exist.
+ */
+function fillSlots(presetKey, megahertz) {
+  const picker = slotPicker();
+  if (!picker) return;
+  const params = SonoranPlannerParams;
+  const slots = params.slotsForPreset(presetKey);
+  const chosen = params.slotForFrequency(presetKey, megahertz);
+  const options = [];
+  /*
+   * The "not on a slot" entry exists only while that is true, and it is
+   * not selectable: choosing it would mean nothing. It is there so the
+   * menu never shows a slot the frequency box disagrees with, which is
+   * the way a three-way binding lies.
+   */
+  if (chosen === null) {
+    options.push(el('option', { value: '', text: 'Not on a slot', selected: true }));
+  }
+  for (let slot = 1; slot <= slots; slot += 1) {
+    const centre = params.frequencyForSlot(presetKey, slot);
+    options.push(el('option', {
+      value: String(slot),
+      /*
+       * The frequency in the label, because the slot number alone tells a
+       * reader nothing about where in the band they are.
+       *
+       * `String` and not `toFixed(3)`: a 62.5 kHz slot sits on a quarter
+       * of a kilohertz, so 902.03125 printed as "902.031" and a reader who
+       * typed back what the label said would be told they were not on a
+       * slot. The tolerance in `slotForFrequency` is half a kilohertz, so
+       * typing either form lands on the slot -- but the label should not
+       * be the one that lies.
+       */
+      text: `${slot} — ${String(centre)} MHz`,
+      selected: slot === chosen,
+    }));
+  }
+  replace(picker, options);
+  picker.value = chosen === null ? '' : String(chosen);
+  setSlotNote(
+    chosen === null && megahertz !== null
+      ? `${megahertz} MHz is not the centre of a slot on this preset. That is allowed, and it `
+        + 'is what a frequency override on the radio does.'
+      : '',
+  );
+}
+
+function wireChannelLink() {
+  const preset = document.querySelector('[data-planner="preset"]');
+  const frequency = field('frequency_mhz');
+  const picker = slotPicker();
+  if (!preset || !frequency || !picker) return;
+
+  picker.addEventListener('change', () => {
+    const centre = SonoranPlannerParams.frequencyForSlot(preset.value, picker.value);
+    // Null for the "not on a slot" entry, which cannot be chosen on
+    // purpose but can be reached with a keyboard on some browsers.
+    if (centre === null) return;
+    frequency.value = String(centre);
+    setSlotNote('');
+  });
+
+  frequency.addEventListener('change', () => fillSlots(preset.value, typedFrequency()));
+}
+
 /*
  * Pick the board instead of typing its transmit power (#110, #113).
  *
@@ -1511,7 +1857,22 @@ function wirePlanner() {
       el('option', { value: item.key, text: `${item.label} (${item.sensitivity} dBm)` })));
     preset.addEventListener('change', () => {
       const chosen = SonoranPlannerParams.PRESETS.find((item) => item.key === preset.value);
-      if (chosen) fillForm({ sensitivity: chosen.sensitivity });
+      if (!chosen) return;
+      fillForm({ sensitivity: chosen.sensitivity });
+      /*
+       * The slot the reader had, at the new preset's bandwidth.
+       *
+       * Read BEFORE the menu is rebuilt, because rebuilding it is what
+       * loses the old selection. A slot that the new preset has not got
+       * -- slot 300 on Short turbo, which has 52 -- comes back null from
+       * `frequencyForSlot` and the frequency is then left as it was,
+       * which `fillSlots` reports as "not on a slot" rather than
+       * inventing a number.
+       */
+      const held = slotPicker() ? slotPicker().value : '';
+      const centre = SonoranPlannerParams.frequencyForSlot(preset.value, held);
+      if (centre !== null) fillForm({ frequency_mhz: centre });
+      fillSlots(preset.value, typedFrequency());
     });
   }
 
@@ -1552,10 +1913,23 @@ function wirePlanner() {
   // The cable helper reveals itself only once the catalogue has
   // arrived, so a failed fetch leaves no dead controls on the form.
   wirePlannerMode();
+  wireChannelLink();
+  wireAddressSearch();
   wireBoardRun();
   wireCableRun();
   wireAntennaRun('tx', 'tx_gain');
   wireAntennaRun('rx', 'rx_gain');
+  // After `fillForm`, so the menu opens on the slot the default frequency
+  // is in rather than on "not on a slot".
+  if (preset) fillSlots(preset.value, typedFrequency());
+  showHeightHints();
+  /*
+   * The hint follows the units setting, which the settings page can
+   * change while this page is open in another tab. Without this the echo
+   * under a metres box would keep saying feet after a reader switched to
+   * metric -- a stale unit on a page about units.
+   */
+  if (window.SonoranSettings) SonoranSettings.onChange(() => showHeightHints());
 
   /*
    * The address follows a committed edit, not a keystroke.
@@ -1572,6 +1946,10 @@ function wirePlanner() {
     input.addEventListener('change', () => {
       state.ranOn = null;
       writeAddress();
+      // The two height boxes carry an echo in the reader's own units.
+      // Cheap enough to redo for any committed edit rather than keep a
+      // second list of which fields have one.
+      showHeightHints();
     });
   }
 
@@ -1630,8 +2008,21 @@ async function show() {
   if (nodes) state.nodes = nodes;
   drawNodes();
   if (first && !state.result && state.nodes.length) {
+    /*
+     * The first fit counts the nodes inside the home region only (#114,
+     * #195). One node near Oakland used to drag the live map's opening
+     * view out over four states, and this page had the same fit with the
+     * same hole in it: the planner is about Arizona terrain, and the
+     * terrain service holds nothing where that node is.
+     *
+     * The filter applies to the VOTE and to nothing else. Every node is
+     * still drawn by `drawNodes` above and still reachable by panning,
+     * which is the reading #114 settled on.
+     */
+    const home = typeof homeBounds === 'function' ? homeBounds() : null;
     const points = state.nodes
       .filter((node) => node.lat != null && node.lon != null)
+      .filter((node) => !home || home.contains([node.lat, node.lon]))
       .map((node) => [node.lat, node.lon]);
     if (points.length) map.fitBounds(points, { padding: [30, 30], maxZoom: 11 });
   }

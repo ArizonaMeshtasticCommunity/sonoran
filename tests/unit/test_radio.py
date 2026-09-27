@@ -44,19 +44,28 @@ from sonoran.radio.resolve import (
 PLANNER_PARAMS = Path("src/sonoran/web/static/planner-params.js")
 
 
-def _presets_from_javascript() -> dict[str, float]:
-    """Return the preset sensitivities the planner form holds.
+def _presets_from_javascript() -> dict[str, tuple[float, int]]:
+    """Return the sensitivity and bandwidth the planner form holds.
 
     The file has no build step, so it is read as text. The entries look
     like this:
 
-        { key: 'LONG_FAST', label: 'Long fast', sensitivity: -139 },
+        { key: 'LONG_FAST', label: 'Long fast', sensitivity: -139,
+          bandwidthHz: 250000 },
+
+    The bandwidth joined this in §6.5, where the frequency slot needs it:
+    a slot is one bandwidth wide, so the same slot number is a different
+    frequency on each preset. It is read here rather than in a case of its
+    own because a bandwidth that disagreed with the Python table would
+    move a predicted frequency by a whole slot with nothing on screen to
+    show it.
     """
     text = PLANNER_PARAMS.read_text(encoding="utf-8")
     pattern = re.compile(
-        r"\{\s*key:\s*'([A-Z_]+)',\s*label:\s*'[^']*',\s*sensitivity:\s*(-?[\d.]+)\s*\}"
+        r"\{\s*key:\s*'([A-Z_]+)',\s*label:\s*'[^']*',\s*sensitivity:\s*(-?[\d.]+),"
+        r"\s*bandwidthHz:\s*(\d+)\s*\}"
     )
-    return {key: float(value) for key, value in pattern.findall(text)}
+    return {key: (float(value), int(bandwidth)) for key, value, bandwidth in pattern.findall(text)}
 
 
 def test_the_python_and_javascript_preset_tables_agree() -> None:
@@ -67,7 +76,7 @@ def test_the_python_and_javascript_preset_tables_agree() -> None:
     map on the same page.
     """
     javascript = _presets_from_javascript()
-    python = {preset.key: preset.sensitivity_dbm for preset in PRESETS}
+    python = {preset.key: (preset.sensitivity_dbm, preset.bandwidth_hz) for preset in PRESETS}
 
     assert javascript, "no presets were found in planner-params.js"
     assert javascript == python

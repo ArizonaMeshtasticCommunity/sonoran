@@ -101,6 +101,17 @@
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.59,13.41C11,13.8 11,14.44 10.59,14.83C10.2,15.22 9.56,15.22 9.17,14.83C7.22,12.88 7.22,9.71 9.17,7.76V7.76L12.71,4.22C14.66,2.27 17.83,2.27 19.78,4.22C21.73,6.17 21.73,9.34 19.78,11.29L18.29,12.78C18.3,11.96 18.17,11.14 17.89,10.36L18.36,9.88C19.53,8.72 19.53,6.83 18.36,5.66C17.19,4.5 15.3,4.5 14.14,5.66L10.59,9.21C9.42,10.38 9.42,12.24 10.59,13.41M13.41,9.17C13.8,8.78 14.44,8.78 14.83,9.17C16.78,11.12 16.78,14.29 14.83,16.24V16.24L11.29,19.78C9.34,21.73 6.17,21.73 4.22,19.78C2.27,17.83 2.27,14.66 4.22,12.71L5.71,11.22C5.7,12.04 5.83,12.86 6.11,13.65L5.64,14.12C4.47,15.28 4.47,17.17 5.64,18.34C6.81,19.5 8.7,19.5 9.86,18.34L13.41,14.79C14.58,13.62 14.58,11.76 13.41,10.59C13,10.2 13,9.56 13.41,9.17Z"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/></symbol>
+    <!--
+      The planner's address search (§6.5).
+
+      §3.5's rule is that destructive, sharing and export actions carry an
+      icon and ordinary filters do not. This is neither: it is an action
+      that goes and fetches something, the magnifier is the least
+      ambiguous icon in the set, and the button it sits on is the only one
+      on that form. Nothing else on the planner gained one -- Run
+      prediction and Clear are still words alone.
+    -->
+    <symbol id="i-search" viewBox="0 0 24 24"><path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/></symbol>
     <!-- The phone nav button. Open, and closed. -->
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/></symbol>
     <symbol id="i-menu-close" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></symbol>
@@ -183,11 +194,20 @@
           <a href="#rf" data-nav="rf"><svg class="icon" aria-hidden="true"><use href="#i-rf"/></svg>RF</a>
           <a href="#stats" data-nav="stats"><svg class="icon" aria-hidden="true"><use href="#i-stats"/></svg>Statistics</a>
           <!--
-            Settings last, per Will. It is the one link that is about the
-            site rather than about the mesh, so it sits apart from the
-            pages that show data.
+            Settings is NOT in this list, and that is the point (Will,
+            2026-09-26: "there is a duplicate settings button on the
+            bottom"). It briefly had an entry here AND the link in the
+            menu footer below, which is two routes to one page.
+
+            The footer link is the one that stayed, because this list is
+            the fourteen pages Will named in the order he named them --
+            Dashboard through Statistics -- and Settings was never one of
+            them; he asked for it at the bottom of the menu, under the
+            preset switch. The ordering case in
+            tests/unit/test_nav_and_global_preset.py holds that list to
+            exactly those fourteen, so an entry added back here fails a
+            test rather than quietly reappearing on the screen.
           -->
-          <a href="#settings" data-nav="settings" class="nav-settings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>Settings</a>
         </nav>
         <!--
           The one live region on the site, and deliberately the only one.
@@ -263,8 +283,18 @@
             live here cycled system -> light -> dark; the settings page
             offers the three as a choice, which is clearer anyway because
             an icon cannot say which of three states it is in.
+
+            This is now the ONLY route to the settings page, so it carries
+            `data-nav="settings"` like a nav entry does. Two things in
+            app.js read that attribute and neither knows about this
+            element otherwise: `route()` sets `.current` and
+            `aria-current="page"` on it, and `markNavHere` reads its text
+            to tell the menu button which page you are on. Without the
+            attribute a reader on the settings page had nothing marked as
+            current and the closed menu button named no page at all --
+            which is what removing the nav entry cost, and it was silent.
           -->
-          <a class="menu-settings-link" href="#settings">
+          <a class="menu-settings-link" href="#settings" data-nav="settings">
             <svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>
             <span>Settings</span>
           </a>
@@ -873,6 +903,29 @@
               </div>
               <h3>Transmitter</h3>
               <label>Site name <input data-planner="site_name" placeholder="Ridge above the pass" /></label>
+              <!--
+                Find the site by name instead of by coordinate (§6.5).
+                Hidden until planner.js has seen `SONORAN.geocode.enabled`,
+                for the same reason the pickers below are: a deployment
+                that has turned address search off must not be shown a box
+                that cannot answer.
+
+                The lookup goes to `/api/geocode` on this origin, which
+                forwards it. Read that module before touching this: the
+                typed address is the only reader-supplied text this
+                dashboard sends anywhere.
+              -->
+              <div class="planner-find" data-planner-find hidden>
+                <label>Find a place
+                  <input data-planner-address type="search" autocomplete="off"
+                         placeholder="Flagstaff, or a street address" />
+                </label>
+                <button type="button" class="toggle" data-planner-find-go>
+                  <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span>Find</span>
+                </button>
+              </div>
+              <p class="muted planner-find-note" data-planner-find-note hidden></p>
+              <div class="planner-find-results" data-planner-find-results hidden></div>
               <div class="pair">
                 <label>Latitude <input data-planner="lat" inputmode="decimal" placeholder="click the map" /></label>
                 <label>Longitude <input data-planner="lon" inputmode="decimal" placeholder="click the map" /></label>
@@ -884,18 +937,35 @@
                 rule, and the note says which one you got. A figure
                 guessed from a board name must not look like a figure
                 somebody measured.
+
+                NOT a `.pair`. It holds one control, and a `.pair` is two
+                equal columns, so its `<select>` was 145 px wide inside a
+                336 px form and "I'll type the power myself" was cut off
+                mid-word -- which is the truncation §6.5 names. Measured
+                at 1500 px before and after.
               -->
-              <div class="pair board-run" data-board-run hidden>
+              <div class="board-run" data-board-run hidden>
                 <label>Your radio <select data-board-type></select></label>
               </div>
               <p class="muted board-note" data-board-note hidden></p>
-              <div class="pair">
-                <label>Antenna height (m) <input data-planner="tx_height" inputmode="decimal" /></label>
-                <label data-advanced-only>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
-              </div>
-              <div class="pair">
-                <label data-advanced-only>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
-                <label>Frequency (MHz) <input data-planner="frequency_mhz" inputmode="decimal" /></label>
+              <!--
+                One field per row where the two halves of a pair are in
+                different modes.
+
+                A `display: none` grid item leaves its column behind:
+                `grid-template-columns: 1fr 1fr` still makes two tracks,
+                so a Simple field paired with an Advanced one sat at half
+                width with no partner. Every `.pair` below holds two
+                fields of the SAME mode, which is why the antenna gains
+                moved to sit beside the powers.
+              -->
+              <label>Antenna height (m) <input data-planner="tx_height" inputmode="decimal" /></label>
+              <!-- Filled by planner.js with the same height in the
+                   reader's own units. See `showHeightHints`. -->
+              <p class="muted planner-unit-hint" data-planner-hint="tx_height" hidden></p>
+              <div class="pair" data-advanced-only>
+                <label>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
+                <label>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
               </div>
               <!--
                 Pick the antenna instead of typing its gain (#111, #113).
@@ -904,22 +974,36 @@
                 the engine, the share link and anybody who already knows
                 their figure are all untouched.
               -->
-              <div class="pair antenna-run" data-antenna-run="tx" hidden>
+              <div class="antenna-run" data-antenna-run="tx" hidden>
                 <label>Antenna at your site <select data-antenna-type="tx"></select></label>
               </div>
               <p class="muted antenna-note" data-antenna-note="tx" hidden></p>
 
               <h3>Receiver</h3>
               <label>Modem preset <select data-planner="preset"></select></label>
-              <div class="pair">
+              <!--
+                Preset, slot and frequency are one setting said three ways
+                (§6.5). The slot is `lora.channel_num` on the radio and
+                counts from 1; the frequency is its centre. Each may be
+                edited and the others follow, in `wireChannelLink`.
+
+                Only the frequency travels in a share link. Two numbers
+                that can disagree, in a link nobody can check, is the
+                failure this avoids.
+              -->
+              <div class="pair" data-advanced-only>
+                <label>Frequency slot <select data-planner-slot></select></label>
+                <label>Frequency (MHz) <input data-planner="frequency_mhz" inputmode="decimal" /></label>
+              </div>
+              <p class="muted planner-slot-note" data-planner-slot-note hidden></p>
+              <label>Height (m) <input data-planner="rx_height" inputmode="decimal" /></label>
+              <p class="muted planner-unit-hint" data-planner-hint="rx_height" hidden></p>
+              <div class="pair" data-advanced-only>
                 <label>Sensitivity (dBm) <input data-planner="sensitivity" inputmode="decimal" /></label>
-                <label>Height (m) <input data-planner="rx_height" inputmode="decimal" /></label>
+                <label>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
               </div>
-              <div class="pair">
-                <label data-advanced-only>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
-                <label data-advanced-only>Cable loss (dB), each end
-                  <input data-planner="system_loss" inputmode="decimal" /></label>
-              </div>
+              <label data-advanced-only>Cable loss (dB), each end
+                <input data-planner="system_loss" inputmode="decimal" /></label>
               <!--
                 Pick the antenna instead of typing its gain (#111, #113).
                 "Antenna gain (dBi)" asks for a number printed on a box
@@ -927,7 +1011,7 @@
                 the engine, the share link and anybody who already knows
                 their figure are all untouched.
               -->
-              <div class="pair antenna-run" data-antenna-run="rx" hidden>
+              <div class="antenna-run" data-antenna-run="rx" hidden>
                 <label>Antenna at the far end <select data-antenna-type="rx"></select></label>
               </div>
               <p class="muted antenna-note" data-antenna-note="rx" hidden></p>
@@ -947,13 +1031,28 @@
                 <label>Length (ft) <input data-cable-length inputmode="decimal" value="10" /></label>
               </div>
               <p class="muted cable-note" data-cable-note hidden></p>
-              <p class="muted" style="font-size: .78rem">
+              <!-- Advanced-only, because in Simple there is no
+                   sensitivity box on screen for it to be about. The
+                   sensitivity still moves with the preset either way. -->
+              <p class="muted" style="font-size: .78rem" data-advanced-only>
                 The sensitivity follows the preset. Lower it by a few dB in town,
                 where the band is shared and noisy.
               </p>
 
-              <h3>Ground and air</h3>
-              <div class="pair">
+              <!--
+                Ground and air is Advanced in full (§6.5). Simple predicts
+                on `desert`, vertical, no clutter and 30 km, which is what
+                Arizona and a Meshtastic node are; #239 carries the
+                question of reading the climate from the coordinate, and
+                until it is answered a beginner in Flagstaff is better
+                served by a default that is openly a default than by a
+                lookup that is confidently wrong.
+
+                The heading carries the marker too. A heading over nothing
+                reads as a section that failed to load.
+              -->
+              <h3 data-advanced-only>Ground and air</h3>
+              <div class="pair" data-advanced-only>
                 <label>Radio climate <select data-planner="radio_climate"></select></label>
                 <label>Polarization
                   <select data-planner="polarization">
@@ -962,11 +1061,11 @@
                   </select>
                 </label>
               </div>
-              <div class="pair">
+              <div class="pair" data-advanced-only>
                 <label>Clutter height (m) <input data-planner="clutter_height" inputmode="decimal" /></label>
                 <label>Range (km) <input data-planner="radius" inputmode="decimal" /></label>
               </div>
-              <details>
+              <details data-advanced-only>
                 <summary class="muted">Model constants</summary>
                 <div class="pair">
                   <label>Ground dielectric <input data-planner="ground_dielectric" inputmode="decimal" /></label>
@@ -1424,6 +1523,30 @@
 
           <div class="panel">
             <div class="table-wrap" data-node-table></div>
+            <!--
+              The foot of the list (Will, 2026-09-26): the list pages on
+              as the reader scrolls, and this says how far through it they
+              are and loads the next page on demand.
+
+              OUTSIDE `.table-wrap`, which scrolls sideways. The button
+              this replaces was appended inside it, so on a narrow screen
+              with the table scrolled right to read the last column, the
+              button had scrolled off to the left.
+
+              In the markup rather than built by `drawNodeMore`, because a
+              `role="status"` element created at the same moment as its
+              text is not reliably announced. Built once, it announces
+              every page that arrives without a click -- which is every
+              page, now that scrolling loads them.
+
+              The button stays as well as the scrolling (§6.2): infinite
+              scroll has no affordance, offers a keyboard nothing to
+              operate, and breaks "jump to the end".
+            -->
+            <p class="more-wrap" data-node-more hidden>
+              <button type="button" class="more" data-node-more-button>Show more nodes</button>
+              <span class="muted" role="status" data-node-progress></span>
+            </p>
           </div>
         </section>
 
@@ -1463,7 +1586,16 @@
         <section class="page" data-page="chat">
           <div class="page-head">
             <div>
-              <h2 data-chat-title>Chat</h2>
+              <!--
+                The count rides beside the channel name (§6.1). The
+                sentence that used to sit under it said "The newest 100
+                messages in the window, newest first." -- a line of height
+                on every visit to say what the list already shows.
+              -->
+              <div class="chat-title-row">
+                <h2 data-chat-title>Chat</h2>
+                <span class="chat-count" data-chat-count hidden></span>
+              </div>
               <p class="sub" data-chat-sub>One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
             </div>
             <div class="controls">
@@ -1477,11 +1609,38 @@
                 <button type="button" data-chat-view-choice="chat" aria-pressed="true">Chat</button>
                 <button type="button" data-chat-view-choice="table" aria-pressed="false">Table</button>
               </div>
-              <select data-chat-hours aria-label="Time window">
-                <option value="24">Last 24 h</option>
-                <option value="168" selected>Last 7 days</option>
-                <option value="720">Last 30 days</option>
-              </select>
+              <!--
+                A range, not a window (§6.1). Three fixed windows could not
+                answer "what was said on Tuesday evening", which is the
+                question somebody asks when they are looking for a message
+                they remember.
+                The quick buttons stay because they fill the two boxes in
+                one tap and that is the common case; they set the range
+                rather than being a separate mode, so there is one piece of
+                state and the address always carries it.
+              -->
+              <div class="chat-range" data-chat-range>
+                <div class="range-quick" role="group" aria-label="Quick ranges">
+                  <button type="button" class="chip" data-chat-quick="24">24 h</button>
+                  <button type="button" class="chip" data-chat-quick="168">7 d</button>
+                  <button type="button" class="chip" data-chat-quick="720">30 d</button>
+                </div>
+                <!--
+                  Typing a date is the last resort on a 320 px screen, and it
+                  cost a whole 44 px row of a 568 px viewport: the head was
+                  248 px and the messages got 218 px, so the chat was mostly
+                  header. Behind a disclosure below 40rem, always open above
+                  it. The button is only rendered where it does something, so
+                  a wide screen has no control that cannot be pressed.
+                -->
+                <button type="button" class="chip range-custom" data-chat-custom-toggle
+                        aria-expanded="false" aria-controls="chat-custom-range">Dates…</button>
+                <div class="range-custom-fields" id="chat-custom-range" data-chat-custom>
+                  <input type="datetime-local" data-chat-from aria-label="Messages from" />
+                  <span class="range-to" aria-hidden="true">to</span>
+                  <input type="datetime-local" data-chat-to aria-label="Messages until" />
+                </div>
+              </div>
               <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
             </div>
           </div>
@@ -1493,7 +1652,8 @@
           <div class="page-head">
             <div>
               <h2>Weekly mesh net check-in</h2>
-              <p class="sub">Every message that carries the <code>#meshnet</code> tag, by week.</p>
+              <p class="sub">Who checked in each week, and how many weeks running. Every message
+                that carries the <code>#meshnet</code> tag.</p>
             </div>
             <div class="controls">
               <label class="muted">Tag <input data-meshnet-tag value="meshnet" size="10" /></label>
@@ -1505,6 +1665,10 @@
               <button type="button" class="primary" data-meshnet-apply>Show</button>
             </div>
           </div>
+          <!-- How far the runs were counted, and what an unfinished week
+               means. Filled by app.js, because both come from the
+               server's answer rather than being true of the page. -->
+          <p class="muted small" data-meshnet-note></p>
           <div data-meshnet-body><p class="loading">Loading</p></div>
         </section>
 
@@ -1513,7 +1677,13 @@
           <div class="page-head">
             <div>
               <h2>Packet firehose</h2>
-              <p class="sub">Every packet the mesh sees, newest first.</p>
+              <!-- The window is named, not implied (plan §5.1). A page
+                   showing 150 rows out of a database and a page showing
+                   150 rows out of one day look identical and answer
+                   different questions. app.js fills the span from
+                   whatever the address asked for. -->
+              <p class="sub">Every packet the mesh sees, newest first.
+                <strong data-firehose-window>All time</strong>.</p>
             </div>
             <div class="controls">
               <input type="search" data-firehose-portnum list="firehose-types"
@@ -1523,6 +1693,15 @@
                    or the exact protobuf name, and app.js translates a
                    readable answer into the name the API wants. -->
               <datalist id="firehose-types" data-firehose-types></datalist>
+              <select data-firehose-hours aria-label="Time window">
+                <!-- Empty, and first, because every packet stored is what
+                     this page has always shown. A new default window
+                     would quietly change what the page means. -->
+                <option value="">All time</option>
+                <option value="24">Last 24 h</option>
+                <option value="168">Last 7 days</option>
+                <option value="720">Last 30 days</option>
+              </select>
               <button type="button" class="primary" data-firehose-apply>Filter</button>
               <button type="button" class="toggle" data-live aria-pressed="true">Live</button>
             </div>
@@ -1626,14 +1805,51 @@
           <div class="page-head">
             <div>
               <h2>Settings</h2>
-              <p class="sub">How this site reads. Kept in this browser and sent nowhere.</p>
+              <!--
+                The one line of prose left on the page, and it absorbed a
+                whole panel (Will, 2026-09-26: "You have a lot of extra
+                information in there... Be critical and improve that
+                page").
+
+                A fourth panel, "Where this is kept", held two paragraphs
+                about `localStorage`: that the settings live in this
+                browser under one key, that no request carries them and
+                the server never sees them, that they therefore do not
+                follow you to another device or survive clearing site
+                data, and that the preset is chosen in the menu rather
+                than here. A panel with no control in it, on a page of
+                controls -- which is also why the grid had a lone box on
+                a second row.
+
+                Two of those facts are worth a reader's time and neither
+                is visible anywhere else: the site does not send these
+                anywhere, and that is the same reason a phone and a
+                laptop disagree. They are one clause here. The rest was
+                the reasoning behind the choices, not information for the
+                reader, and it is where the reasoning belongs:
+
+                * `localStorage` over cookies, and the API keeping SI:
+                  settings.js's header comment and
+                  docs/design/2026-09-26-ux-overhaul.md §2.3.
+                * why the preset is in the menu and not on this page --
+                  it changes what the data IS, not how it is written:
+                  settings.js's header comment and AGENTS.md 9.7.
+              -->
+              <p class="sub">How this site reads. Kept in this browser and sent nowhere — which
+                is also why they do not follow you to another device.</p>
             </div>
           </div>
 
           <!--
-            One panel per choice, each with the reason it exists under it.
-            A settings page that only lists switches makes somebody guess
-            what each one changes.
+            One panel per setting, and a sentence under a heading only
+            where the sentence says something the control cannot.
+
+            Every line here used to carry an explanation, and two of them
+            explained the buttons they sat above. "Miles and feet, or
+            kilometres and metres" is the two button labels, in order, in
+            a sentence; a reader who can see the control has already read
+            it. What survives is the part a reader would otherwise get
+            wrong, and the cuts are recorded on each panel.
 
             Radio groups rather than selects: every choice here has two or
             three options, all one or two words, and a select costs a tap
@@ -1641,16 +1857,35 @@
             `SonoranSettings.options`, so the markup cannot offer a value
             the store would refuse.
           -->
-          <div class="grid two">
+          <div class="grid">
+            <!--
+              Kept: short distances read in the small unit whichever
+              system you choose. Without it, a reader who asks for miles
+              and then sees "530 ft" on a node page has been given every
+              reason to think the setting did not take.
+
+              Cut with it: `because "530 ft" beats "0.1 miles" for two
+              nodes in one street`. That is why the threshold exists, not
+              what it does, and it is already written at length beside
+              `SMALL_UNIT_LIMIT` in units.js -- including the part this
+              page never said, that the limit is a thousand of the small
+              unit rather than one of the big one.
+            -->
             <div class="panel">
               <h3>Distance and height</h3>
-              <p class="sub">Miles and feet, or kilometres and metres. Short distances read in
-                feet or metres either way, because "530 ft" beats "0.1 miles" for two nodes in
-                one street.</p>
+              <p class="sub">Short distances read in feet or metres either way.</p>
               <div class="settings-choice" role="radiogroup" aria-label="Distance units"
                    data-setting="units"></div>
             </div>
 
+            <!--
+              Kept whole. The control offers two words a reader knows;
+              what it cannot say is that nothing is being re-measured --
+              the sensors on the mesh report Celsius and this converts
+              what they sent. A reader chasing a tenth of a degree
+              against their own thermometer needs that, and nowhere else
+              on the site says it.
+            -->
             <div class="panel">
               <h3>Temperature</h3>
               <p class="sub">Sensors report in Celsius; this is only how it is shown.</p>
@@ -1658,22 +1893,31 @@
                    data-setting="temperature"></div>
             </div>
 
+            <!--
+              This one named a button that is not on the screen: it said
+              "**System** follows what your device is set to", while the
+              option beside it reads "Follow my device". So it was a
+              restatement AND an inconsistent one.
+
+              What is left says the one thing the label does not: the
+              choice keeps following. "Follow my device" reads as taking
+              whatever the device says now; app.js reloads the page when
+              `prefers-color-scheme` changes, so the site turns dark at
+              sunset with it.
+
+              Cut: "It is the default, and the one worth keeping unless
+              you want this site to differ from everything else." Which
+              option is chosen is on the screen, in the control. That it
+              is the DEFAULT is a fact about a reader who has never been
+              here, and the reasoning for it is in settings.js beside
+              `FIELDS`.
+            -->
             <div class="panel">
               <h3>Appearance</h3>
-              <p class="sub"><strong>System</strong> follows what your device is set to and
-                changes with it. It is the default, and the one worth keeping unless you want
-                this site to differ from everything else.</p>
+              <p class="sub"><strong>Follow my device</strong> changes with your device when it
+                switches between light and dark.</p>
               <div class="settings-choice" role="radiogroup" aria-label="Appearance"
                    data-setting="theme"></div>
-            </div>
-
-            <div class="panel">
-              <h3>Where this is kept</h3>
-              <p class="sub">In this browser, under one key, and nowhere else. It is not sent
-                with any request and the server never sees it — which is also why it does not
-                follow you to another device or survive clearing site data.</p>
-              <p class="sub">The preset you are viewing is chosen in the menu rather than here,
-                because it changes which mesh you are looking at rather than how it reads.</p>
             </div>
           </div>
         </section>
@@ -1703,6 +1947,13 @@
     <script src="static/units.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/preset.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/labels.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!--
+      The weekly check-in's wording rules. Before app.js, which reads
+      `window.SonoranMeshnet` at the top level of its meshnet section:
+      loaded after, the constant would be undefined and the page would
+      throw on every render rather than fail where it could be seen.
+    -->
+    <script src="static/meshnet.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The planner loads before app.js on purpose. app.js runs the router
       as its last act, and the router needs window.SonoranPlanner to

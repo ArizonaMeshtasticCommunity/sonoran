@@ -135,7 +135,21 @@ def test_the_chat_caption_is_named_as_the_template_it_is() -> None:
     """
     plan = PLAN.read_text(encoding="utf-8")
     assert "count(messages.length)" in plan, "the plan quotes a string that does not exist"
-    assert "count(messages.length)" in _all_frontend(), "the template itself is gone"
+    # SHIPPED. This case began as a tripwire for the planning phase: it made
+    # sure the plan quoted a string that really existed, so the work was not
+    # planned against something imagined. §6.1 has since landed, so the
+    # template is legitimately gone and the tripwire flips -- it now guards
+    # the outcome instead of the plan's accuracy. The count Will wanted kept
+    # is beside the channel title, which is the half that would otherwise be
+    # quietly lost if somebody deleted the caption and stopped there.
+    frontend = _all_frontend()
+    assert "count(messages.length)" not in frontend, (
+        "the caption template is back; §6.1 moved the count beside the title"
+    )
+    assert "data-chat-count" in frontend, (
+        "the caption went but the count did not arrive beside the channel title, "
+        "so the number Will asked to keep is simply missing"
+    )
 
 
 def test_the_plan_records_what_cannot_be_done_as_asked() -> None:

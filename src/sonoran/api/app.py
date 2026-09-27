@@ -26,6 +26,7 @@ from sonoran.api.routes.chat import router as chat_router
 from sonoran.api.routes.coverage import router as coverage_router
 from sonoran.api.routes.embed import router as embed_router
 from sonoran.api.routes.gaps import router as gaps_router
+from sonoran.api.routes.geocode import router as geocode_router
 from sonoran.api.routes.graph import router as graph_router
 from sonoran.api.routes.leaderboards import router as leaderboards_router
 from sonoran.api.routes.map import router as map_router
@@ -40,7 +41,12 @@ from sonoran.api.routes.traceroutes import router as traceroutes_router
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.embed.sanitise import frame_ancestors, safe_origin
-from sonoran.logging import configure_logging, get_logger
+from sonoran.logging import (
+    configure_logging,
+    get_logger,
+    quieten_http_client,
+    redact_access_query,
+)
 from sonoran.radio.overrides import load_overrides
 
 logger = get_logger(__name__)
@@ -394,6 +400,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # The radio overrides are read once. The file is in the repository
     # and ships with the image, so a change to it arrives with a deploy.
     app.state.radio_overrides = load_overrides(settings.radio_overrides_path)
+    # The planner's address search is the one endpoint that carries words
+    # a reader typed, and a GET puts them in the request line that
+    # uvicorn's access log writes out. Installed here rather than in
+    # `configure_logging` because this factory runs AFTER uvicorn has
+    # applied its own logging config, which is the ordering that decides
+    # whether the filter is still attached when the first request lands.
+    redact_access_query("/api/geocode")
+    # And the line httpx writes for the outbound half of it, which is
+    # at INFO and held the same address. Both mitigations are here so
+    # that removing one and leaving the other is a visible edit.
+    quieten_http_client()
     app.add_middleware(SecurityHeadersMiddleware)
     # Compress what is worth compressing.
     #
@@ -426,6 +443,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(embed_router)
     app.include_router(radio_router)
     app.include_router(gaps_router)
+    app.include_router(geocode_router)
     app.include_router(graph_router)
     app.include_router(map_router)
     app.include_router(packets_router)
@@ -466,6 +484,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # (#177). Pages fall back to their old behaviour when this
             # one is not in the data they were given.
             "defaultPreset": settings.default_preset,
+            # Whether the planner may offer an address search (§6.5).
+            #
+            # Said here rather than discovered by asking the endpoint,
+            # for the reason `.cable-run` is hidden until its catalogue
+            # arrives: a control that cannot work is worse than no
+            # control, and a probe request would put an empty query in
+            # the log of a deployment that has the feature switched off.
+            "geocode": {"enabled": bool(settings.geocode_url.strip())},
             # What the coverage page needs to hand somebody an embed
             # snippet, and to tell them the truth about whether it will
             # work. Three things can each stop an embed dead, and all

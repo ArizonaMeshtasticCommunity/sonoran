@@ -45,18 +45,130 @@ const POLARIZATION_CODES = { horizontal: 0, vertical: 1 };
  *
  * A preset is also a different radio configuration: a node on LongFast
  * cannot hear a node on MediumFast at all. See AGENTS.md 9.7.
+ *
+ * `bandwidthHz` is here for the frequency slot, not for the link
+ * budget. A slot is one bandwidth wide, so the same slot number is a
+ * different frequency on each preset, and the two cannot be worked out
+ * apart. The figures are `sonoran/radio/presets.py`, and
+ * `tests/unit/test_planner_slot_and_frequency.py` pins the two tables
+ * together so a preset cannot be edited in one and not the other.
  */
 const PRESETS = [
-  { key: 'SHORT_TURBO', label: 'Short turbo', sensitivity: -126 },
-  { key: 'SHORT_FAST', label: 'Short fast', sensitivity: -129 },
-  { key: 'SHORT_SLOW', label: 'Short slow', sensitivity: -131.5 },
-  { key: 'MEDIUM_FAST', label: 'Medium fast', sensitivity: -134 },
-  { key: 'MEDIUM_SLOW', label: 'Medium slow', sensitivity: -136.5 },
-  { key: 'LONG_FAST', label: 'Long fast', sensitivity: -139 },
-  { key: 'LONG_MODERATE', label: 'Long moderate', sensitivity: -142 },
-  { key: 'LONG_SLOW', label: 'Long slow', sensitivity: -144.5 },
-  { key: 'VERY_LONG_SLOW', label: 'Very long slow', sensitivity: -147.5 },
+  { key: 'SHORT_TURBO', label: 'Short turbo', sensitivity: -126, bandwidthHz: 500000 },
+  { key: 'SHORT_FAST', label: 'Short fast', sensitivity: -129, bandwidthHz: 250000 },
+  { key: 'SHORT_SLOW', label: 'Short slow', sensitivity: -131.5, bandwidthHz: 250000 },
+  { key: 'MEDIUM_FAST', label: 'Medium fast', sensitivity: -134, bandwidthHz: 250000 },
+  { key: 'MEDIUM_SLOW', label: 'Medium slow', sensitivity: -136.5, bandwidthHz: 250000 },
+  { key: 'LONG_FAST', label: 'Long fast', sensitivity: -139, bandwidthHz: 250000 },
+  { key: 'LONG_MODERATE', label: 'Long moderate', sensitivity: -142, bandwidthHz: 125000 },
+  { key: 'LONG_SLOW', label: 'Long slow', sensitivity: -144.5, bandwidthHz: 125000 },
+  { key: 'VERY_LONG_SLOW', label: 'Very long slow', sensitivity: -147.5, bandwidthHz: 62500 },
 ];
+
+/* ---------------------------------------------------------------- */
+/* The frequency slot                                                */
+
+/*
+ * The US 902 to 928 MHz band, which is the only region this mesh runs.
+ *
+ * The firmware divides it into slots one bandwidth wide and a node sits
+ * in the middle of one of them:
+ *
+ *     slots     = floor((end - start) / bandwidth)
+ *     centre    = start + bandwidth / 2 + (slot - 1) * bandwidth
+ *
+ * **`slot` here is the number the operator sets, `lora.channel_num`,
+ * and it counts from 1.** `sonoran/radio/channels.py` computes the same
+ * frequencies from a zero-based index, because there it comes out of a
+ * hash of the channel name. The two differ by one, and getting that
+ * wrong moves every prediction one slot — 250 kHz — with nothing on
+ * screen to show it. The check that keeps them honest is LongFast: the
+ * firmware default is `channel_num` 20 and 906.875 MHz, which
+ * `channels.py` reaches as its index 19.
+ */
+const BAND_START_HZ = 902000000;
+const BAND_END_HZ = 928000000;
+
+/** How many slots a preset's bandwidth divides the band into. */
+function slotsForPreset(key) {
+  const found = PRESETS.find((item) => item.key === key);
+  if (!found) return 0;
+  return Math.floor((BAND_END_HZ - BAND_START_HZ) / found.bandwidthHz);
+}
+
+/**
+ * The centre frequency of one slot, in MHz, or null.
+ *
+ * Null for a slot this preset has not got, and for anything that is not a
+ * whole number in range.
+ *
+ * **The range check is what handles ABSENT, and it is not a coincidence.**
+ * `Number(null)`, `Number('')` and `Number(' ')` are all 0, and slot 0
+ * does not exist: an empty slot menu -- which is exactly what "not on a
+ * slot" leaves behind -- would otherwise compute 901.875 MHz, below the
+ * band, and read as an ordinary typo. This is the fifth instance in this
+ * repository of a value meaning ABSENT sharing storage with a real one
+ * (#149, #157, #190, #197).
+ *
+ * There was an explicit `slot === null || slot === undefined || slot ===
+ * ''` guard above this. It was removed because a mutation test could not
+ * kill it: `number < 1` already answers every one of those cases, and a
+ * line no test can fail is a line that documents nothing and could be
+ * wrong without anybody knowing. The cases for the empty values are still
+ * in `planner_slot_cases.mjs`; they now exercise the guard that does the
+ * work.
+ */
+function frequencyForSlot(key, slot) {
+  const found = PRESETS.find((item) => item.key === key);
+  if (!found) return null;
+  const number = Number(slot);
+  if (!Number.isInteger(number)) return null;
+  if (number < 1 || number > slotsForPreset(key)) return null;
+  const hz = BAND_START_HZ + found.bandwidthHz / 2 + (number - 1) * found.bandwidthHz;
+  /*
+   * Five decimals, not three.
+   *
+   * Three is a kilohertz, which is finer than any slot is wide and looked
+   * like plenty. It is not: half of 62.5 kHz is 31.25 kHz, so Very long
+   * slow's slots sit on quarter-kilohertz boundaries and 902.03125 MHz
+   * came back as 902.031. The error was a quarter of a kilohertz -- far
+   * too small to change a prediction, and just inside the tolerance in
+   * `slotForFrequency`, so every round trip still passed. What found it
+   * was comparing against `sonoran/radio/channels.py`, which does the
+   * same arithmetic in integer hertz: Long moderate's own channel is
+   * 912.8125 MHz there and was 912.812 here.
+   *
+   * `Number` then drops the trailing zeros, so slot 18 is still 906.375
+   * and not 906.37500.
+   */
+  return Number((hz / 1000000).toFixed(5));
+}
+
+/**
+ * The slot a frequency sits in the middle of, or null.
+ *
+ * Null when the frequency is not a slot centre for this preset. That is
+ * a real answer and not a failure: a licensed operator may set any
+ * frequency, and `lora.override_frequency` exists for exactly that. The
+ * form says "not on a slot" rather than snapping the number somebody
+ * typed, because snapping would change a prediction without being asked.
+ */
+function slotForFrequency(key, megahertz) {
+  const found = PRESETS.find((item) => item.key === key);
+  if (!found) return null;
+  if (megahertz === null || megahertz === undefined || megahertz === '') return null;
+  const mhz = Number(megahertz);
+  if (!Number.isFinite(mhz)) return null;
+  const offset = mhz * 1000000 - BAND_START_HZ - found.bandwidthHz / 2;
+  const guess = Math.round(offset / found.bandwidthHz) + 1;
+  const centre = frequencyForSlot(key, guess);
+  if (centre === null) return null;
+  // Compared as frequencies rather than as an integer test on the
+  // division: a float division of 906.375 MHz by 250 kHz does not land
+  // exactly on 17, and a tolerance in slots is a tolerance that changes
+  // size with the bandwidth. Half a kilohertz is inside every slot.
+  return Math.abs(centre - mhz) < 0.0005 ? guess : null;
+}
 
 /*
  * The largest radius the engine can plot.
@@ -67,9 +179,24 @@ const PRESETS = [
 const MAX_RADIUS_METRES = 150000;
 
 /*
+ * The slot this mesh runs, and the frequency it comes to.
+ *
+ * Slot 18 is what the azmsh.net recommendation asks a metro node for --
+ * `METRO_RECOMMENDATIONS.channelNum` in the config checker, which is the
+ * same number the reader sets on the radio. On Medium fast's 250 kHz
+ * that is 906.375 MHz.
+ *
+ * It was 906.875 MHz here, which is LongFast's own slot 20 and not
+ * anything this mesh is configured for: the comment called it "the
+ * middle of the US 915 band", which it is not either. Derived rather
+ * than typed, so the number cannot drift from the slot it claims to be.
+ */
+const DEFAULT_SLOT = 18;
+const DEFAULT_PRESET_KEY = 'MEDIUM_FAST';
+
+/*
  * Defaults for this mesh.
  *
- * 906.875 MHz is the middle of the US 915 band that Meshtastic uses.
  * 0.1 W and 2.15 dBi describe a stock device with its rubber antenna.
  * Desert is the right climate for Arizona, not the temperate default
  * the site planner ships.
@@ -82,7 +209,11 @@ const DEFAULTS = {
   tx_power: 30,
   tx_gain: 2.15,
   system_loss: 2,
-  frequency_mhz: 906.875,
+  // Slot 18 on the default preset. `frequencyForSlot` is declared above
+  // this object, so it can be called here; the alternative -- a literal
+  // with the slot in a comment beside it -- is how the old 906.875 came
+  // to describe a slot nothing on this mesh uses.
+  frequency_mhz: frequencyForSlot(DEFAULT_PRESET_KEY, DEFAULT_SLOT),
   rx_height: 1,
   rx_gain: 2.15,
   // Medium fast, because that is what this mesh actually runs (#105).
@@ -91,6 +222,10 @@ const DEFAULTS = {
   // predict a reach nobody has. The change handler already keeps them
   // together after the first load; this keeps them together before it.
   sensitivity: -134,
+  // Spelled out rather than `DEFAULT_PRESET_KEY`, because
+  // `test_page_defaults.py` reads this literal to check that the
+  // sensitivity beside it is the one this preset implies. A node case
+  // asserts the two names agree, so the pair cannot drift.
   preset: 'MEDIUM_FAST',
   clutter_height: 0,
   ground_dielectric: 15,
@@ -131,6 +266,13 @@ const SHARE_VERSION = 1;
  * It is the order of the form: site, transmitter, receiver, ground and
  * air. A link is read by people in chat clients before it is opened,
  * so the order it reads in is worth keeping.
+ *
+ * **The frequency slot is deliberately not one of them.** A slot is the
+ * frequency and the preset's bandwidth said another way, and a link
+ * carrying both a slot and a frequency could carry two that disagree --
+ * which the reader of the link has no way to notice. The page that opens
+ * a link works the slot out from the frequency it was given, so there is
+ * one number in the link and one answer on the form.
  */
 const SHARE_FIELDS = [
   'site_name',
@@ -419,6 +561,13 @@ window.SonoranPlannerParams = {
   CLIMATE_LABELS,
   POLARIZATION_CODES,
   PRESETS,
+  BAND_START_HZ,
+  BAND_END_HZ,
+  DEFAULT_SLOT,
+  DEFAULT_PRESET_KEY,
+  slotsForPreset,
+  frequencyForSlot,
+  slotForFrequency,
   MAX_RADIUS_METRES,
   DEFAULTS,
   FORM_DEFAULTS,

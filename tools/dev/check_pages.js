@@ -62,7 +62,16 @@ const PAGES = [
   '/#graph',
   '/#nodes',
   '/#chat',
-  '/#checkin',
+  /*
+   * `#meshnet`, not `#checkin`.
+   *
+   * This list said `#checkin`, which is not a route: `route()` does not
+   * find it in `PAGES` and falls back to the dashboard. So the weekly
+   * check-in page was never opened by this check, and the dashboard was
+   * checked twice -- a green that meant nothing for the page it named.
+   * The nav link has always been `#meshnet`.
+   */
+  '/#meshnet',
   '/#firehose',
   '/#traceroutes',
   '/#stats',

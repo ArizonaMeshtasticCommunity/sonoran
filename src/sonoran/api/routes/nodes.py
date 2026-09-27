@@ -389,6 +389,7 @@ def _apply_node_filters(
     position: str | None = None,
     licensed: bool | None = None,
     first_seen_hours: int | None = None,
+    quiet_hours: int | None = None,
 ) -> Select[Any]:
     """Apply the documented node list filters to a statement.
 
@@ -429,6 +430,28 @@ def _apply_node_filters(
         statement = statement.where(
             Node.first_seen >= datetime.now(UTC) - timedelta(hours=first_seen_hours)
         )
+    if quiet_hours is not None:
+        # The other side of `active_hours`: nodes NOT heard for that long.
+        #
+        # "Which routers have gone quiet" is the question this list gets
+        # asked most, and until now the only way to ask it was to widen
+        # the window to "any time" and sort ascending -- which answers a
+        # different question and puts the answer at the top by luck.
+        #
+        # `before` could express it, and the caller would have to name
+        # the moment: a browser with a wrong clock would then silently
+        # filter on the wrong hour. `active_hours` already sets the
+        # precedent that the server names "now", and the two have to
+        # agree or a band built from both ("heard this week but not
+        # today") is measured against two different clocks.
+        #
+        # A node with no `last_heard` at all is left out rather than
+        # counted as quiet forever, which is what SQL does with NULL here
+        # anyway: it has never been heard, so "how long since" has no
+        # answer. `active_hours` treats it the same way.
+        statement = statement.where(
+            Node.last_heard < datetime.now(UTC) - timedelta(hours=quiet_hours)
+        )
     return statement
 
 
@@ -446,6 +469,7 @@ async def list_nodes(
     position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
     licensed: bool | None = None,
     first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
+    quiet_hours: int | None = Query(default=None, ge=1, le=8760),
     gaps: str | None = Query(default=None, pattern="^(bad|ok|unknown)$"),
     gaps_preset: str | None = None,
     sort: str = Query(default="last_heard"),
@@ -489,9 +513,9 @@ async def list_nodes(
     ordering = (direction.nullslast(), Node.node_num.asc())
 
     filters = (q, hw, role, gateway, active_hours, before, channel, position, licensed)
-    statement = _apply_node_filters(select(Node), *filters, first_seen_hours)
+    statement = _apply_node_filters(select(Node), *filters, first_seen_hours, quiet_hours)
     counted = _apply_node_filters(
-        select(func.count()).select_from(Node), *filters, first_seen_hours
+        select(func.count()).select_from(Node), *filters, first_seen_hours, quiet_hours
     )
 
     # The gaps state is per preset, because a node can need help on one
@@ -560,6 +584,7 @@ async def node_facets(
     position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
     licensed: bool | None = None,
     first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
+    quiet_hours: int | None = Query(default=None, ge=1, le=8760),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return the values each filter could take, and how many nodes each holds.
@@ -596,6 +621,7 @@ async def node_facets(
             None if lifted == "position" else position,
             None if lifted == "licensed" else licensed,
             None if lifted == "first_seen_hours" else first_seen_hours,
+            None if lifted == "quiet_hours" else quiet_hours,
         ).group_by(column)
         rows = (await session.execute(statement)).all()
         return [
@@ -629,6 +655,7 @@ async def node_facets(
         None,
         licensed,
         first_seen_hours,
+        quiet_hours,
     ).group_by("state")
 
     # The gaps states, per preset, because a node can need help on one
@@ -658,6 +685,7 @@ async def node_facets(
                     position,
                     licensed,
                     first_seen_hours,
+                    quiet_hours,
                 ).where(Node.node_num.in_(wanted))
             )
             if total:

@@ -1714,6 +1714,136 @@ body.chart-staged { overflow: hidden; }
   gap: .2rem 1rem; padding-bottom: .6rem; border-bottom: 1px solid var(--line);
 }
 .chat-reading .msg-text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+
+/*
+ * The chat, as a chat (§6.1).
+ *
+ * `chat-full` turns the page into a column as tall as the viewport, with
+ * the head OUTSIDE the part that scrolls. That is what pins the head, and
+ * it is deliberately not `position: sticky`: a sticky header needs a
+ * containing block taller than itself to have anywhere to stick, which is
+ * the trap that silently un-stuck the planner sidebar when one stray
+ * `</div>` moved `<main>` out of `.shell`. A header that is simply not
+ * inside the scroller cannot come unstuck.
+ *
+ * The height subtracts `.content`'s own padding (1.5rem top, 4rem bottom)
+ * so the page fills the viewport without making the DOCUMENT scroll --
+ * two scrollbars, one inside the other, is the usual way this goes wrong.
+ *
+ * `svh` and not `vh`: on a phone `vh` is the viewport with the browser
+ * chrome hidden, so a `100vh` column is taller than what can be seen and
+ * the newest message sits under the address bar.
+ */
+.page.active[data-page="chat"].chat-full {
+  display: flex;
+  flex-direction: column;
+  height: calc(100svh - 5.5rem);
+  /* A flex column will not let a child shrink below its content without
+     this, and the scroller's content is the whole conversation. */
+  min-height: 0;
+}
+.chat-full .page-head { flex: 0 0 auto; margin-bottom: .75rem; }
+.chat-full [data-chat-body] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-scroll {
+  flex: 1 1 auto;
+  /* Below this the list is not worth scrolling and the page may as well
+     take a document scrollbar instead -- a phone in landscape with the
+     head wrapped onto three rows. */
+  min-height: 10rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: .75rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: .6rem;
+}
+.chat-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The marker at the top of the loaded range: either an invitation to
+   scroll for more, or the honest end of it. */
+.chat-edge {
+  margin: 0 0 .75rem;
+  font-size: .8rem;
+  text-align: center;
+}
+
+/* The count beside the channel name. */
+.chat-title-row { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.chat-count {
+  font-size: .8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  /* Reads as a quiet annotation on the title rather than a second
+     heading competing with it. */
+  padding: .1rem .4rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+/* The range control. */
+.chat-range { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.chat-range input[type="datetime-local"] {
+  font-size: .85rem;
+  /* 16px minimum on the font would be the iOS zoom rule, but this is not
+     a text field a phone zooms into; the e2e checks that separately and a
+     date control is native there. */
+  padding: .3rem .4rem;
+}
+.chat-range .range-to { color: var(--muted); font-size: .8rem; }
+.chat-range .range-quick { display: flex; gap: .25rem; }
+
+/*
+ * At a phone width the range wraps to its own line and the quick buttons
+ * come first, because they are what gets used on a phone -- typing a
+ * datetime on a 320px screen is a last resort, not the common path.
+ */
+/*
+ * The two date boxes.
+ *
+ * Above 40rem they are simply there and the toggle is not rendered at all,
+ * so a wide screen never shows a control that does nothing.
+ */
+.range-custom { display: none; }
+.range-custom-fields { display: flex; align-items: center; gap: .4rem; }
+
+/*
+ * Below 40rem the chat head was 248 px of a 568 px viewport and the message
+ * list got 218 px -- 38 per cent of the screen, for a view whose whole
+ * purpose is the messages. The date boxes were a 44 px row of that, and
+ * typing a datetime on a 320 px screen is a last resort rather than the
+ * common path, so they fold behind the toggle and the three quick ranges
+ * stay in the open.
+ *
+ * The title also gets smaller here. A 1.4rem heading wrapping beside a
+ * count is a second row that says nothing the channel name has not.
+ */
+@media (max-width: 40rem) {
+  .chat-range { width: 100%; }
+  .chat-range .range-quick { flex: 1 1 auto; }
+  .chat-range input[type="datetime-local"] { flex: 1 1 8rem; min-width: 0; }
+  .range-custom { display: inline-flex; }
+  .range-custom-fields { display: none; flex: 1 1 100%; }
+  /*
+   * Stacked, one box per row, and that is not tidiness.
+   *
+   * A `datetime-local` has a large intrinsic minimum width -- wider than
+   * the `8rem` flex-basis asks for -- so two of them side by side plus the
+   * "to" overflowed a 320 px screen and took the document sideways by
+   * 139 px. `min-width: 0` does not help, because the control's own
+   * minimum is what exceeds the row. One per row fits with room to spare,
+   * and the cost is only paid while the reader has the panel open.
+   */
+  .chat-range.show-custom .range-custom-fields { display: flex; flex-wrap: wrap; }
+  .range-custom-fields input[type="datetime-local"] { flex: 1 1 100%; }
+  .chat-full .page-head { margin-bottom: .5rem; }
+  .chat-full .page-head .controls { gap: .4rem; }
+  .chat-full .chat-title-row h2 { font-size: 1.15rem; }
+}
 .msg-metrics {
   display: grid; grid-template-columns: auto 1fr; gap: .05rem .5rem; margin: 0;
   font-size: .75rem; color: var(--muted); align-content: start;
@@ -1742,10 +1872,59 @@ a.more { text-decoration: none; display: inline-block; }
 .messages li.dm .who .name::after { content: " -> DM"; color: var(--muted); font-weight: 400; }
 
 .week { border: 1px solid var(--line); border-radius: .6rem; margin-bottom: 1rem; background: var(--panel); }
-.week > summary { cursor: pointer; padding: .75rem 1rem; display: flex; gap: 1rem; align-items: baseline; }
+/*
+ * `flex-wrap` and no `nowrap` anywhere in this summary.
+ *
+ * The heading holds a date range, a state and a count. At 1440 px they
+ * sit on one line; at 320 px the range alone is most of the width, so
+ * they have to be allowed to stack. An e2e journey walks all fourteen
+ * pages at 320 px and fails on any sideways document scroll, and a
+ * flex row that cannot wrap is the usual way that happens.
+ */
+.week > summary {
+  cursor: pointer; padding: .75rem 1rem; display: flex; flex-wrap: wrap;
+  gap: .3rem 1rem; align-items: baseline;
+}
 .week > summary .range { font-weight: 650; }
 .week > summary .count { color: var(--muted); font-size: .85rem; }
+.week > summary .in-progress {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--accent); border: 1px solid var(--accent); border-radius: .8rem;
+  padding: 0 .4rem; flex: 0 0 auto;
+}
 .week > div { padding: 0 1rem 1rem; }
+
+/* --- Weekly check-in: who took part, and for how many weeks ------- */
+
+.check-ins, .absences ul { list-style: none; margin: .25rem 0 .75rem; padding: 0; }
+.check-in, .absence {
+  display: flex; flex-wrap: wrap; gap: .25rem .6rem; align-items: baseline;
+  padding: .3rem 0; border-bottom: 1px solid var(--panel-2);
+}
+/*
+ * `min-width: 0` on the name, not a fixed column.
+ *
+ * A long node name is chosen by whoever owns the radio and can be
+ * anything; a flex item defaults to `min-width: auto`, which refuses to
+ * shrink below its content and pushes the row wider than the viewport.
+ */
+.check-in > :first-child, .absence > :first-child { min-width: 0; flex: 1 1 8rem; }
+.streak {
+  flex: 0 0 auto; font-size: .8rem; font-weight: 600; color: var(--accent);
+  border: 1px solid var(--line); border-radius: .8rem; padding: .05rem .5rem;
+  background: var(--panel-2);
+}
+/* A run whose beginning is off the end of the read. Same words, quieter
+   colour, because the number is a floor rather than a measurement. */
+.streak.bounded { color: var(--muted); }
+.small { font-size: .8rem; }
+.absences h4 { margin: .75rem 0 .2rem; font-size: .85rem; font-weight: 650; }
+.absent-word { flex: 0 0 auto; font-size: .8rem; font-weight: 600; }
+/* The week in progress is amber, a finished week's gap is red. They are
+   different claims: one is "not yet", the other is "not at all". */
+.absence.pending .absent-word { color: var(--warn); }
+.absence.broken .absent-word { color: var(--bad); }
+.absence .muted.small { flex: 1 1 100%; }
 
 /* Feedback */
 
@@ -2008,6 +2187,28 @@ td .summary { color: var(--text); }
   min-width: 0;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
+
+/*
+ * Less space between the subtitle and the tool (§6.5).
+ *
+ * Measured at 1500x1050 before the change: 52.3 px from the bottom of the
+ * subtitle to the top of the form, made of the page head's 1.25 rem, an
+ * always-reserved 19.2 px progress line, and that line's own bottom
+ * margin. 33.6 px after.
+ *
+ * The reserved line STAYS. It is empty until a run starts and then holds
+ * "radial 240 of 360", and without the reserve the form and the map would
+ * step down by 19 px at the moment the reader presses Run. Nineteen
+ * pixels of quiet space is a better trade than a layout shift under the
+ * cursor; the margins around it were the part that was not paying for
+ * itself.
+ *
+ * Scoped to this page rather than applied to `.page-head` everywhere: the
+ * other thirteen pages have no reserved line under their heading, so the
+ * same change there would only crowd them.
+ */
+[data-page="planner"] .page-head { margin-bottom: .5rem; }
+[data-planner-progress] { margin: 0 0 .4rem; }
 
 .planner-form h3 { margin: 1.1rem 0 .5rem; }
 .planner-form h3:first-child { margin-top: 0; }
@@ -2437,8 +2638,38 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* The count is the point of the option, so it is legible rather than
    decorative — but never louder than the value it describes. */
 .filter-count { font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.filter-option.chosen .filter-count { color: var(--accent); }
+/*
+ * The chosen option's count takes `--text`, NOT `--accent`.
+ *
+ * `--accent` on `--panel-2` measures 4.38:1 in the light theme, under
+ * the 4.5 floor — the exact pair #120 removed from the pressed toggle,
+ * and `test_text_on_the_second_surface_is_checked_too` is the case that
+ * caught it. The option is already marked as chosen three other ways:
+ * an accent border, `aria-pressed`, and the label in `--text`.
+ */
+.filter-option.chosen .filter-count { color: var(--text); }
 .filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: 1rem 0 0; }
+
+/*
+ * A long facet: a search box, then the top of it, then the rest behind a
+ * button (§6.2 — the hardware filter, which production fills with 57
+ * models).
+ *
+ * `width: 100%` with `border-box`, because the fieldset it sits in is a
+ * grid column: a `size` in characters would set an intrinsic width that
+ * the grid then has to honour, and at 320 px that is how a filter panel
+ * pushes the document sideways.
+ */
+.filter-search {
+  width: 100%; box-sizing: border-box; min-width: 0; margin: 0 0 .45rem;
+  background: var(--panel-2); border: 1px solid var(--line); color: inherit;
+  border-radius: .4rem; padding: .35rem .5rem; font: inherit; font-size: .85rem;
+}
+.filter-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* "Nothing here matches" — a search that found nothing, which is not the
+   same as a facet with nothing in it. */
+.filter-note { font-size: .8rem; margin: .45rem 0 0; }
+.filter-group > .more { margin-top: .45rem; }
 
 /* What is in force, above the table. */
 .filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0 0 .7rem; }
@@ -2462,6 +2693,64 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .mode-switch { display: flex; gap: .4rem; margin: 0 0 .8rem; }
 .mode-switch .toggle[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
 .planner-form.is-simple [data-advanced-only] { display: none; }
+
+/*
+ * The address search (§6.5). Hidden until planner.js knows the
+ * deployment has it, like the pickers above.
+ *
+ * `min-width: 0` on the label: a flex item's floor is its content, and a
+ * text box carries a placeholder. Without it the row cannot shrink and
+ * the whole document scrolls sideways at 320 px, which is WCAG 2.2 SC
+ * 1.4.10 Reflow -- the same bug the share-link box had, and the reason
+ * `.planner-share input` carries the same line. Measured at 320 px: 0 px
+ * of sideways scroll with it, 16 px without.
+ *
+ * `align-items: end` so the button sits on the box's baseline rather than
+ * in the middle of the label above it. It wraps first on a narrow form,
+ * which is why the button keeps its text.
+ */
+.planner-find[hidden] { display: none; }
+.planner-find { display: flex; gap: .5rem; align-items: end; margin: 0 0 .5rem; }
+.planner-find label { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+.planner-find button { flex: 0 0 auto; }
+.planner-find-note { font-size: .78rem; margin: 0 0 .5rem; }
+/*
+ * The places the lookup found, as buttons.
+ *
+ * Buttons and not a `<select>`: the list is usually one or two answers,
+ * a select would need a change handler that fires on keyboard arrows,
+ * and a name from a third party belongs in `textContent` where no markup
+ * in it can mean anything.
+ */
+.planner-find-results[hidden] { display: none; }
+.planner-find-results { display: grid; gap: .3rem; margin: 0 0 .6rem; }
+.planner-find-results button {
+  text-align: left;
+  font-size: .8rem;
+  line-height: 1.3;
+  /* A long "display_name" is four commas deep. It wraps rather than
+     stretching the form, which on a 21 rem column it would. */
+  white-space: normal;
+}
+
+/*
+ * The same height in the reader's own units, under a box that asks for
+ * metres (§6.5, and `docs/PLANNER.md` 4).
+ *
+ * The planner's typed boxes are metres and stay metres: the number goes
+ * into the propagation model, and confusing the two overstates every
+ * antenna by 3.28 times. But the rest of the dashboard reads in feet by
+ * default, so a reader who has never seen the label is the one at risk.
+ * This echoes what they typed in their own units, read-only, so the box
+ * cannot be misread without the page saying so.
+ *
+ * Hidden entirely for a reader already on metric: there it would repeat
+ * the box.
+ */
+.planner-unit-hint[hidden] { display: none; }
+.planner-unit-hint { font-size: .76rem; margin: -.3rem 0 .6rem; }
+.planner-slot-note[hidden] { display: none; }
+.planner-slot-note { font-size: .78rem; margin: -.2rem 0 .6rem; }
 .board-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 .antenna-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 /* The link budget under the planner's summary tiles (#113). */
@@ -2905,9 +3194,79 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * because they are the same kind of control and looking different would
  * suggest they behave differently.
  */
+
+/*
+ * Three settings, three columns, all the same width.
+ *
+ * The page used `.grid.two`, which is `auto-fit, minmax(24rem, 1fr)` --
+ * the number of columns comes out of the viewport width. With four panels
+ * that meant three across and a fourth alone on a row two thirds empty at
+ * 1500 px, and two-plus-an-orphan on a laptop. The dashboard and the
+ * statistics page already pin their own track count for the same reason
+ * (see `.grid.two` above); this is that, for three.
+ *
+ * Capped and left-aligned rather than centred. `.grid` centres itself
+ * inside 100rem, which on a wide screen would float three small cards
+ * away from the heading above them; 62rem is where they stop growing and
+ * the page still reads as one column of content under its title.
+ */
+.page[data-page="settings"] .grid {
+  max-width: 62rem;
+  margin-inline: 0;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 62rem) {
+  .page[data-page="settings"] .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/*
+ * The controls line up across the row.
+ *
+ * Each panel is a heading, one line of prose and a control, and the prose
+ * wraps to one line or two depending on the column width -- so the three
+ * controls sat at three different heights, which is most of what made the
+ * page look unfinished. `margin-top: auto` in a column flexbox pushes each
+ * control to the bottom of its panel, and the panels are equal height
+ * already because a grid row stretches them.
+ */
+.page[data-page="settings"] .panel { display: flex; flex-direction: column; }
+.page[data-page="settings"] .settings-choice { margin-top: auto; }
+
+/*
+ * `.sub` is styled by `.page-head .sub` and nowhere else, so inside a
+ * panel it fell back to body size and body colour -- a paragraph louder
+ * than the heading above it and the control below it. Muted and small, as
+ * it is under a page heading, so the eye goes to the control.
+ */
+.page[data-page="settings"] .panel .sub {
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.45;
+  margin: 0 0 .85rem;
+}
+/*
+ * Equal columns, and labels that wrap inside their own button.
+ *
+ * This was a wrapping flex row of `white-space: nowrap` buttons, which
+ * sizes each option to its longest word and then breaks the ROW when they
+ * do not fit. In a three-column page that showed as "Miles and feet" and
+ * "Kilometres and metres" stacked on two rows while the panels either
+ * side kept theirs on one -- three controls, three different shapes, for
+ * no reason a reader could see.
+ *
+ * A grid, like the menu's preset switch, because a grid row cannot break
+ * -- the options stay side by side at every width and the control keeps
+ * one shape. `auto` rather than the preset switch's `1fr`: these labels
+ * are phrases of very different lengths, and equal thirds would have made
+ * "Follow my device" take three lines next to "Light" and "Dark" on one.
+ * `auto` hands each option the room its own words need, and only starts
+ * wrapping them when the panel genuinely runs out -- which at 320 px is
+ * "Kilometres and metres" over two lines, with the row still intact.
+ */
 .settings-choice {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
   gap: .3rem;
   padding: .25rem;
   background: var(--panel-2);
@@ -2915,17 +3274,18 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   border-radius: .55rem;
 }
 .settings-option {
-  flex: 1 1 auto;
   font: inherit;
   font-size: .85rem;
   font-weight: 550;
-  padding: .45rem .7rem;
+  padding: .45rem .5rem;
   border: 1px solid transparent;
   border-radius: .4rem;
   background: none;
   color: var(--muted);
   cursor: pointer;
-  white-space: nowrap;
+  /* Balanced rather than ragged: a two-line label reads as two halves of
+     one phrase instead of four words and an orphan. */
+  text-wrap: balance;
   transition: background-color .12s ease, color .12s ease;
 }
 .settings-option:hover { color: var(--text); }
@@ -2954,27 +3314,77 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   text-decoration: none;
 }
 .menu-settings-link:hover { border-color: var(--accent); }
-.menu-settings-link .icon { color: var(--accent); }
+/*
+ * The gear, at the size of every other icon in the sidebar.
+ *
+ * This rule set `color` alone, and an icon here is an inline `<svg><use>`
+ * from the sprite: no intrinsic size, so the browser fell back to the
+ * replaced-element default of 300x150 and drew a gear the height of four
+ * rows, and `color` on an SVG paints nothing without `fill:
+ * currentColor`, so it came out black on the dark sidebar rather than
+ * accent. `.sidebar nav a .icon` had always covered the nav entry beside
+ * it, which is why the footer link's own gear was never looked at.
+ *
+ * Same 1.15rem as the nav entries above it, because this link sits in the
+ * same column and reads as one of them.
+ */
+.menu-settings-link .icon {
+  width: 1.15rem; height: 1.15rem; flex: 0 0 auto;
+  fill: currentColor; color: var(--accent);
+}
 .menu-settings-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-/* Settings sits apart from the pages that show data. */
-#site-nav .nav-settings { margin-top: .35rem; }
+/*
+ * ...and when you are ON the settings page.
+ *
+ * `.sidebar nav a.current` says so for the fourteen pages in the list,
+ * and it is scoped to `nav` -- this link is in the footer, outside it, so
+ * the class the router sets would have landed on nothing. Same accent and
+ * same weight, because a reader should not have to learn that "current"
+ * looks one way in the list and another way underneath it.
+ *
+ * `#site-nav .nav-settings` used to sit here to hold the old nav entry
+ * apart from the pages above it. That entry is gone (Will: "there is a
+ * duplicate settings button on the bottom") and the rule went with it:
+ * dead CSS that still looks live is how a removed control comes back.
+ */
+.menu-settings-link.current {
+  color: var(--accent);
+  font-weight: 600;
+  border-color: var(--accent);
+}
 
 /*
  * The Filters button, carrying how many are in force.
  *
  * A number on the control rather than a sentence beside the table, so the
  * thing holding the filters is the thing that says so.
+ *
+ * **Scoped to the button**, and that is not tidiness. `.filter-count` is
+ * also the class on the count beside every value INSIDE the panel, which
+ * has its own rule six hundred lines above saying it must be "legible
+ * rather than decorative — but never louder than the value it describes".
+ * Unscoped, this rule comes later and wins: every count in the panel
+ * became an orange pill. Worse, `.filter-option.chosen .filter-count` is
+ * more specific again and sets the colour to the accent — so on the
+ * chosen option the number was drawn in `--accent` ON `--accent`, a
+ * contrast ratio of 1:1 and invisible. Measured in Chromium on
+ * 2026-09-26 while building the hardware picker (§6.2), which puts ten of
+ * these counts on the screen at once.
  */
-.filter-count {
+.toggle .filter-count {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 1.15rem; height: 1.15rem; margin-left: .4rem; padding: 0 .25rem;
-  background: var(--accent); color: #fff;
+  /* `--on-accent`, not `#fff`. White on the dark theme's brighter accent
+     measures 2.90:1, under the 4.5 floor; the token is the pair the
+     palette tests already hold at 4.5 in both themes (#120). */
+  background: var(--accent); color: var(--on-accent);
   border-radius: 999px;
   font-size: .7rem; font-weight: 700; font-variant-numeric: tabular-nums;
   line-height: 1;
 }
-.filter-count[hidden] { display: none; }
+/* Scoped with it: `display: inline-flex` above beats the user agent's
+   `[hidden]`, and only the badge sets that. */
+.toggle .filter-count[hidden] { display: none; }
 /* Active, so the button reads as holding something even before the number
    is read. Never colour alone: the number is the other signal. */
 .toggle.has-filters { border-color: var(--accent); color: var(--text); }
@@ -2985,6 +3395,31 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   color: var(--muted); margin-right: .2rem;
 }
 .filter-panel .node-starts { margin: 0 0 .9rem; }
+
+/*
+ * The foot of the nodes list: how far through it we are, and the button
+ * that reads on (§6.2).
+ *
+ * `.more-wrap` is `display: flex`, and a class rule beats the user
+ * agent's `[hidden] { display: none }` — so without this line the foot
+ * of a finished list stays on the page, saying nothing, and the
+ * observer watching it goes on reporting it as in view. `.filter-count`
+ * and `.cable-run` above carry the same line for the same reason.
+ */
+.more-wrap[hidden] { display: none; }
+/* The status is a sentence when the server did not send a total, so it
+ * wraps under the button rather than widening the panel at 320 px. */
+[data-node-more] { flex-wrap: wrap; }
+/* A focus ring on the foot itself: when the last page lands the button
+ * goes, and focus moves here so the reader is not thrown to the top of
+ * the document. See `drawNodeMore`. */
+[data-node-more]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* An asked-for page is in flight and the button is inert for the moment.
+ * `aria-disabled` rather than `disabled`, so the focus stays put. */
+/* The same two signals `button:disabled` uses, so an inert control looks
+   inert the same way wherever it is. */
+.more[aria-disabled='true'] { opacity: .6; cursor: not-allowed; }
+.more[aria-disabled='true']:hover { border-color: var(--line); }
 
 /* ============================================ a dense page head (one row)
  *

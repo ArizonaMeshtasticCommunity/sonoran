@@ -39,9 +39,14 @@ REQUESTED_ORDER = [
     "Firehose",
     "RF",
     "Statistics",
-    # Added 2026-09-26 with the settings page. Last on purpose: it is the
-    # one link about the site rather than about the mesh.
-    "Settings",
+    # Settings is deliberately NOT here. It had an entry at the bottom of
+    # this list for part of 2026-09-26, alongside the link in the menu
+    # footer, and Will saw the pair: "there is a duplicate settings button
+    # on the bottom". The footer link is the one that survives -- he asked
+    # for it there, under the preset switch -- and this list is exactly the
+    # fourteen pages he named, so an entry added back here fails
+    # `test_the_navigation_is_in_the_order_that_was_asked_for` instead of
+    # quietly reappearing on the screen.
 ]
 
 
@@ -117,13 +122,88 @@ def test_the_footer_reads_status_then_preset_then_settings() -> None:
     assert menu.index("site-nav") < menu.index("menu-foot"), "the nav is below the footer"
     status = menu.index("data-status-text")
     preset = menu.index("data-preset-switch")
-    # `menu-settings-link`, not `href="#settings"`: the nav has a Settings
-    # link too and it comes FIRST in the menu, so matching the href found
-    # the nav entry and reported the footer as being above the status line.
+    # `menu-settings-link` rather than `href="#settings"`. It is now the
+    # only link with that href, so either would match -- but matching the
+    # class is what keeps this case honest if a second one is ever added
+    # above the status line, which is the arrangement the href match
+    # silently accepted before the nav entry was removed.
     settings = menu.index("menu-settings-link")
     assert status < preset < settings, f"status={status}, preset={preset}, settings={settings}"
     assert "data-theme-choice" not in menu, (
         "the theme cycle button is back in the menu, so there are two controls for one value"
+    )
+
+
+def test_there_is_exactly_one_route_to_the_settings_page() -> None:
+    """Will: "there is a duplicate settings button on the bottom".
+
+    There were two: an entry at the end of the nav list and the link in
+    the menu footer, both `href="#settings"`, both visible at once on a
+    desktop. Counted against the rendered markup with comments stripped,
+    because the comments around both of them say `#settings` while
+    explaining which one went.
+    """
+    html = re.sub(r"<!--.*?-->", "", _html(), flags=re.S)
+    routes = re.findall(r'href="#settings"', html)
+    assert len(routes) == 1, f"{len(routes)} links point at #settings; there should be one"
+    # And it is the footer one, not a nav entry that survived by itself.
+    nav = html[html.index('<nav id="site-nav"') : html.index("</nav>")]
+    assert "#settings" not in nav, "the nav list has a Settings entry again"
+
+
+def test_the_one_route_is_marked_current_like_a_nav_entry() -> None:
+    """The half of the removal that was invisible.
+
+    Two things in app.js work off `data-nav`, and neither of them knows
+    the footer link exists otherwise: `route()` sets `.current` and
+    `aria-current="page"` on `[data-nav]`, and `markNavHere` looks up
+    `[data-nav="<page>"]` to tell the closed menu button which page you
+    are on. Delete the nav entry without moving the attribute and a
+    reader on the settings page has nothing marked as current and a menu
+    button that names no page -- with nothing thrown and nothing logged.
+    """
+    html = _html()
+    start = html.index('class="menu-settings-link"')
+    link = html[start : html.index("</a>", start)]
+    assert 'data-nav="settings"' in link, (
+        "the only settings link carries no data-nav, so the router cannot mark it current "
+        "and the menu button cannot name the page"
+    )
+    code = _code("app.js")
+    assert "for (const link of $$('[data-nav]'))" in code, (
+        "the router no longer marks [data-nav] links, so the attribute above does nothing"
+    )
+    assert "markNavHere" in code and '$(`[data-nav="${known}"]`)' in code, (
+        "markNavHere no longer reads the attribute the footer link carries"
+    )
+    # A link outside `<nav>` gets none of `.sidebar nav a.current`, so it
+    # needs its own rule or "current" is a class that styles nothing.
+    css = (STATIC / "app.css").read_text(encoding="utf-8")
+    assert ".menu-settings-link.current {" in css, (
+        "the current page is not shown on the only link that can show it"
+    )
+    assert not re.search(r"^#site-nav \.nav-settings", css, re.M), (
+        "the removed nav entry's styling is still here, which is how it comes back"
+    )
+
+
+def test_the_menu_closes_on_any_link_in_it_not_just_a_nav_entry() -> None:
+    """Measured at 320 px: aria-expanded stayed "true" on the footer link.
+
+    The close handler was bound to `#site-nav`, which covered every route
+    out of the menu for as long as every route was a nav entry. Settings
+    is a footer link now, so tapping it routed to the page and left the
+    menu open on top of it -- the reader was looking at the list they had
+    just chosen from, with the page a full screen below.
+    """
+    code = _code("app.js")
+    body = code[code.index("function wireNav()") :]
+    body = body[: body.index("\nfunction ")]
+    assert "menu.addEventListener('click'" in body, (
+        "the menu does not close on a link in its footer"
+    )
+    assert "nav.addEventListener('click'" not in body, (
+        "the close handler is still on the nav alone, so a footer link leaves the menu open"
     )
 
 
@@ -145,6 +225,29 @@ def test_the_menu_footer_controls_are_readable() -> None:
     option = css[css.index(".settings-option.active {") :]
     option = option[: option.index("}")]
     assert "color: #fff" in option, "the chosen option is not readable against the accent"
+
+
+def test_the_settings_link_draws_an_icon_and_not_a_billboard() -> None:
+    """Measured in Chromium: 18.39 px square, the same as a nav entry.
+
+    An icon here is an inline `<svg><use>` from the sprite, which has no
+    intrinsic size. `.menu-settings-link .icon` set `color` and nothing
+    else, so the browser used the replaced-element default of 300x150 and
+    drew a gear four rows high -- in black, because `color` paints an SVG
+    only when something sets `fill: currentColor`.
+
+    It went unseen because `.sidebar nav a .icon` sized the duplicate nav
+    entry beside it, and that is the entry Will asked to be removed. So
+    this is the same shape as every other case in this file: what was
+    keeping a thing upright was the thing that got deleted.
+    """
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    rule = css[css.index(".menu-settings-link .icon {") :]
+    rule = rule[: rule.index("}")]
+    assert "width" in rule and "height" in rule, (
+        f"the gear has no size, so it renders at the SVG default of 300x150: {rule!r}"
+    )
+    assert "fill: currentColor" in rule, "the gear is not painted, so it draws black on the sidebar"
 
 
 def test_the_controls_can_be_reached_by_keyboard() -> None:

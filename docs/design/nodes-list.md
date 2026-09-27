@@ -65,7 +65,22 @@ the order matches what the column actually shows.
 | `position` | `exact`, `coarse`, `none` | `last_position_precision_bits` and the lat/lon |
 | `licensed` | bool | `node.is_licensed` |
 | `first_seen_hours` | 1..8760 | `node.first_seen` — "new nodes" |
+| `quiet_hours` | 1..8760 | `node.last_heard` — "gone quiet" |
 | `gaps` | `bad`, `unknown`, `ok` | the gaps artefact, and requires `gaps_preset` |
+
+`quiet_hours` was added on 2026-09-26 for §6.2 of the UX overhaul, whose
+ask is that everything sortable becomes filterable. It was the one
+sortable column filterable in one direction only: `active_hours` asks
+"heard since", and nothing asked "not heard since" — which is the
+question "which routers have gone quiet" actually is, and the only way to
+ask it was to widen the window to *any time*, sort ascending and read
+from the top.
+
+`before` can express it and would put the clock in the caller's hands: a
+browser whose clock is wrong would then filter on the wrong hour, with
+nothing on the page saying so. `active_hours` already has the server name
+"now", and a band built from one of each — "heard this week but not
+today" — has to be measured against one clock, not two.
 
 The existing `q`, `hw`, `role`, `gateway`, `active_hours`, `before` and
 `limit` are unchanged.

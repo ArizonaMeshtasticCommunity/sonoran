@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.api.cache import TimedCache
+from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.config import Settings
@@ -95,7 +95,15 @@ ON_MAINS_ABOVE = 100.0
 # scan.
 _summary_cache: TimedCache[dict[str, int]] = TimedCache()
 _hardware_cache: TimedCache[list[dict[str, object]]] = TimedCache()
-_portnums_cache: TimedCache[list[dict[str, object]]] = TimedCache()
+#: Keyed, because `/portnums` now takes a window and a channel.
+#:
+#: A `TimedCache` holds ONE value, so the moment the endpoint gained
+#: parameters it would have answered every caller with the first caller's
+#: window -- the dashboard asking for 24 hours on MediumFast and the
+#: firehose's suggestion list asking for everything would have taken
+#: whichever arrived first. `KeyedCache` also caps how many keys it keeps,
+#: so a caller varying `hours` cannot grow it without limit.
+_portnums_cache: KeyedCache[list[dict[str, object]]] = KeyedCache(capacity=32)
 
 
 @router.get("")
@@ -148,22 +156,48 @@ async def _read_hardware(session: AsyncSession) -> list[dict[str, object]]:
 
 @router.get("/portnums")
 async def portnums(
-    request: Request, session: AsyncSession = Depends(get_session)
+    request: Request,
+    hours: int | None = Query(default=None, ge=1, le=8760),
+    channel: str | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
-    """Return packet counts grouped by port number, with readable names."""
+    """Return packet counts grouped by port number, with readable names.
+
+    Both filters are optional and both default to off, which is every
+    packet the database holds on every channel -- what this endpoint has
+    always answered, and what the firehose's suggestion list wants.
+
+    The dashboard passes both, because its chart is now a link into the
+    firehose (plan §7.1) and a link is only honest if the two pages count
+    the same packets. Its panel says "Packet types (24 h)" and the figures
+    under that heading were all-time on every preset, so the chart named
+    a window it was not holding.
+    """
     settings: Settings = request.app.state.settings
-    return await _portnums_cache.get(settings.stats_cache_seconds, lambda: _read_portnums(session))
+    key = f"{hours or 0}:{channel or ''}"
+    return await _portnums_cache.get(
+        key, settings.stats_cache_seconds, lambda: _read_portnums(session, hours, channel)
+    )
 
 
-async def _read_portnums(session: AsyncSession) -> list[dict[str, object]]:
-    """Group every packet ever kept by its port number."""
-    rows = await session.execute(
+async def _read_portnums(
+    session: AsyncSession, hours: int | None, channel: str | None
+) -> list[dict[str, object]]:
+    """Group packets by port number, optionally by window and channel."""
+    statement = select(
         # By state as well as port: a portnum of 0 is four different
         # things and this listing called all of them UNKNOWN_APP (#157).
-        select(Packet.portnum, Packet.payload_state, func.count().label("total")).group_by(
-            Packet.portnum, Packet.payload_state
+        Packet.portnum,
+        Packet.payload_state,
+        func.count().label("total"),
+    ).group_by(Packet.portnum, Packet.payload_state)
+    if hours is not None:
+        statement = statement.where(
+            Packet.first_seen_at >= datetime.now(UTC) - timedelta(hours=hours)
         )
-    )
+    if channel:
+        statement = statement.where(Packet.channel == channel)
+    rows = await session.execute(statement)
     return [
         {
             "portnum": portnum,

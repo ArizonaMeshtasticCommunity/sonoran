@@ -65,7 +65,7 @@ def test_the_filters_button_says_how_many_are_in_force() -> None:
     assert "data-node-filter-count" in _html(), "the button has no count"
     app = _app()
     body = app[app.index("function describeNodeList") :]
-    body = body[: body.index("\nconst NODE_SORT_WORDS")]
+    body = body[: body.index("\n}")]
     assert "data-node-filter-count" in body, "nothing fills the count"
     # A superscript number is invisible to a screen reader, so the name
     # has to carry it too.
@@ -88,7 +88,7 @@ def test_the_line_above_the_table_keeps_only_what_is_unsaid_elsewhere() -> None:
     """
     app = _app()
     body = app[app.index("function describeNodeList") :]
-    body = body[: body.index("\nconst NODE_SORT_WORDS")]
+    body = body[: body.index("\n}")]
     assert "sorted by" not in body, "the line still names the sort"
     assert "filter${filters" not in body, "the line still counts the filters"
     assert "nodes shown" in body or "nodes`" in body, "the line no longer says how many nodes"

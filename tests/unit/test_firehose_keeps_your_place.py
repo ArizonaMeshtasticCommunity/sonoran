@@ -42,9 +42,17 @@ def _redraw_body() -> str:
 
 
 def test_the_firehose_redraws_through_the_reconciler() -> None:
-    """The call site is the whole point -- the helper existing is not."""
-    start = APP_JS.index("/* --- Firehose ---")
-    block = APP_JS[start : start + 3000]
+    """The call site is the whole point -- the helper existing is not.
+
+    Read from `PAGES.firehose` to the end of that function, rather than
+    from the section banner for a fixed 3000 characters. The window
+    version went red when the section gained two helpers above the page
+    -- a comment can push the call site out of range, so the check
+    reported that the firehose had stopped reconciling when the call was
+    still there, six lines further down.
+    """
+    start = APP_JS.index("PAGES.firehose = async")
+    block = _strip_comments(APP_JS[start : APP_JS.index("\n};\n", start)])
     assert "redrawLiveTable(" in block, (
         "the firehose no longer redraws through redrawLiveTable, so it is "
         "back to replacing the table and destroying the reader's selection"

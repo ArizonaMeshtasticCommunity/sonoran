@@ -29,13 +29,39 @@ def test_a_channel_has_its_own_address() -> None:
     assert "chatHref(section.channel)" in section
 
 
-def test_the_channel_page_asks_for_metrics_and_is_bounded() -> None:
-    """The page asks for delivery facts, and stops at the API's own limit."""
+def test_the_channel_page_asks_for_metrics_and_pages_instead_of_capping() -> None:
+    """The page asks for delivery facts, and has no ceiling to apologise for.
+
+    Both halves of this changed with §6.1 and both are still real claims.
+
+    `metrics: 'true'` moved into `chatFetch`, which is the one place that
+    talks to `/api/chat` now -- asserting it inside `chatChannelPage` would
+    fail for a refactor that kept the behaviour, so it is asserted where it
+    lives and the caller is checked to use it.
+
+    `CHAT_MAX = 500` is gone deliberately. It existed because "Load older"
+    raised a LIMIT and re-asked for the whole list from the newest message
+    down, so every press re-fetched what it already had and the page had to
+    stop somewhere. Paging backwards with `before` asks only for what is
+    missing, so the cap has nothing to protect and the apology under it
+    ("This page stops at 500 messages") is gone with it.
+    """
     app = _read("app.js")
+    fetch = app[app.index("async function chatFetch(") :]
+    fetch = fetch[: fetch.index("\n}\n")]
+    assert "metrics: 'true'" in fetch, "the chat no longer asks for delivery metrics"
+    assert "before" in fetch and "since" in fetch, (
+        "the fetch takes no cursor, so it cannot page backwards"
+    )
+
     page = app[app.index("async function chatChannelPage(") :]
     page = page[: page.index("\n}\n")]
-    assert "metrics: 'true'" in page
-    assert "const CHAT_MAX = 500;" in app
+    assert "chatFetch(channel" in page, "the channel page does not go through chatFetch"
+
+    assert "CHAT_MAX" not in app.replace("`CHAT_STEP`/`CHAT_MAX`", ""), (
+        "the 500-message cap is back; paging with a cursor does not need one"
+    )
+    assert "This page stops at" not in app, "the page still apologises for a limit it no longer has"
 
 
 def test_the_view_switch_is_on_the_chat_page() -> None:

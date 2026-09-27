@@ -64,7 +64,14 @@ Filters:
 - `licensed` — `true` for nodes that claim an amateur licence.
 - `gateway` — `true` to show only MQTT gateways.
 - `active_hours` — only nodes heard in the last N hours. Default: all.
-- `first_seen_hours` — only nodes first seen in the last N hours.
+- `quiet_hours` — the other side of `active_hours`: only nodes NOT heard
+  for the last N hours. The two compose into a band, so
+  `active_hours=168&quiet_hours=24` is "heard this week but not today".
+  Both windows are measured from the server's clock, which is why this
+  exists beside `before`: a caller naming the moment itself would filter
+  on the wrong hour whenever its own clock was wrong, and a band built
+  from one of each would be measured against two clocks. A node never
+  heard at all matches neither, the same way it matches no `active_hours`.
 - `before`, `limit`, `offset` — pagination.
 
 - `gaps` — `bad`, `ok` or `unknown`, from the gaps assessment. **Requires
@@ -1041,8 +1048,45 @@ Query parameters:
 - `weeks` — how many weeks to return. Default 8.
 - `limit` — maximum messages. Default 500.
 
-Each week has `week_start`, `week_end`, `message_count`,
-`check_in_count` (how many different nodes checked in), and `messages`.
+Each week has `week_start`, `week_end`, `in_progress`, `message_count`,
+`check_in_count` (how many different nodes checked in), `check_ins`,
+`not_seen`, `messages` and `messages_shown`.
+
+Every week in the window is returned, including one nobody checked in —
+a gap is the point of this endpoint, and a week simply absent from the
+list reads as a week that never happened. Weeks older than the earliest
+tagged message the read could find are left out, because there is no
+evidence about them either way.
+
+`message_count` is measured by an aggregate and `messages` is capped by
+`limit`, so on a busy week the two disagree. `messages_shown` is the
+length of the list, so a caller can say which number is the fact.
+
+**Streaks.** A `check_ins` entry carries `node_id`, `display_name`,
+`message_count`, `first_seen`, `last_seen`, `streak_weeks`,
+`streak_at_least` and `first_ever`. A `not_seen` entry — the nodes that
+checked in the week before and not in this one — carries `node_id`,
+`display_name`, `streak_weeks` and `streak_at_least`.
+
+`streak_weeks` is the number of consecutive weeks, ending at and
+including this one, in which the node checked in. Two messages in one
+week are one check-in; a gap ends a run and nothing bridges it. The
+current week is unfinished, so a node with no message yet appears in
+`not_seen` with the run it still holds through last week, and is never
+described as having broken it. The seven rules in full, including why,
+are above `_streak_as_of` in `sonoran/api/routes/chat.py`.
+
+The read looks 52 weeks further back than the window, so a run is not
+shortened by whichever window the caller picked. `streak_at_least` says
+the run reaches the oldest week the read could see and is therefore a
+lower bound. `streaks` reports `lookback_weeks`, `floor_week` and
+`current_week`.
+
+`streaks` is **null** when nothing could be assessed: no tagged message
+anywhere in the lookback and `text_storage` false, which means message
+bodies are not being kept and there will never be a check-in to find. An
+empty response is then a fact about the configuration rather than about
+the community, and a caller must not draw it as everybody at zero.
 
 ### 5.5 `GET /api/chat/conversation/{from_node}/{packet_id}`
 
@@ -1484,7 +1528,29 @@ Returns node counts grouped by hardware model.
 
 Returns packet counts grouped by payload type.
 
-Query parameters: `hours` (default 24).
+Query parameters:
+
+- `hours` — keep packets first seen inside this window. Optional; without
+  it, every packet the database holds.
+- `channel` — keep packets seen on this channel. Optional; without it,
+  every channel.
+
+Both are optional because two callers want different things. The
+firehose's type suggestions want every type this mesh has ever sent, so
+that each suggestion returns rows. The dashboard's packet-types chart
+passes both, because a slice of it is a link into the firehose (plan
+§7.1) and the two pages have to be counting the same packets.
+
+This section used to say `hours` had a default of 24. The endpoint took
+no parameters at all, so that window did not exist — and the dashboard
+panel reading those figures is headed "Packet types (24 h)". Both were
+corrected together.
+
+Three of the names this returns are not port numbers: `UNREADABLE_PKI`,
+`UNREADABLE_NO_KEY` and `UNREADABLE_UNRECORDED` are what a `portnum` of 0
+turns out to be (§ on `traffic_label`, and #157). `/api/packets?portnum=`
+answers 422 for them, and filtering on `0` instead would return all four
+groups, so they are not usable as a packet-type filter.
 
 ### 8.5 `GET /api/stats/snapshots/daily`
 
@@ -1601,9 +1667,9 @@ from the database row, and no user input reaches the upstream URL.
 
 ## 11. Terrain endpoints
 
-These endpoints feed the coverage planner. They read the filesystem and
-the tile source. They never touch the database.
-See `docs/PLANNER.md`.
+These endpoints feed the coverage planner. They read the filesystem, the
+tile source and, for 11.3, a configured geocoder. They never touch the
+database. See `docs/PLANNER.md`.
 
 ### 11.1 `GET /api/terrain/page/{tile}`
 
@@ -1688,6 +1754,56 @@ Response:
 ```
 
 The maximum values are the far edge of the last tile, not its corner.
+
+### 11.3 `GET /api/geocode`
+
+Turns an address or a place name into coordinates, for the planner's
+site box. **The one endpoint on this API that talks to a third party on
+a reader's behalf, and the only one that carries words a reader typed.**
+Read `src/sonoran/api/routes/geocode.py` before changing it.
+
+Query: `q`, 2 to 120 characters. A control character is refused rather
+than stripped.
+
+```json
+{
+  "places": [
+    {
+      "name": "Flagstaff, Coconino County, Arizona, United States",
+      "lat": 35.1987522,
+      "lon": -111.651822
+    }
+  ]
+}
+```
+
+`places` may be empty. That is an answer: nothing of that name is in
+this region, and a place outside it has no terrain to predict over
+anyway.
+
+| Status | Meaning |
+|---|---|
+| 404 | `GEOCODE_URL` is empty, so the feature is off here. The dashboard is told the same through `window.SONORAN.geocode` and draws no search box. |
+| 422 | The query is too short, too long, or holds a control character. |
+| 429 | This client's budget, or the upstream's own rate, is spent. Wait and ask again; do not retry automatically. |
+| 502 | The geocoder did not answer, or answered with a shape this does not read. |
+
+What it guarantees, and why each one is there:
+
+- **Bounded to the home region.** `MAP_HOME_*` is sent to the upstream
+  as a viewbox with `bounded=1`, and every answer is checked again here.
+  So this cannot be used as a general purpose geocoder, in the same way
+  `/api/terrain/page` refuses a tile outside its region.
+- **Rate limited twice.** Ten lookups a minute per client address, and
+  no more than one outbound request a second from this process whoever
+  asked. A request that would wait more than two seconds for its turn is
+  refused instead of queued.
+- **Not in the log.** A GET puts the query in the request line, and the
+  API is GET-only by architecture (`AGENTS.md` 4). The access log line
+  reads `GET /api/geocode?[removed]`, and httpx's own INFO line for the
+  outbound request is silenced. Both are in `sonoran/logging.py`.
+- **Cached.** Bounded to 128 answers for an hour, which the upstream's
+  usage policy asks for.
 
 ## 12. RF map endpoints
 

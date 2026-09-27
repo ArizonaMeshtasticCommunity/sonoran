@@ -100,6 +100,43 @@ Antenna heights are entered in **metres**. The engine takes feet, and
 `planner-params.js` converts. Feeding metres straight through would
 overstate every antenna by 3.28 times.
 
+The site has a units setting and most of it reads in feet, so each of
+these boxes prints the same height in the reader's own units underneath
+it, read-only. The box itself stays metres: the number goes into the
+model, and the share link carries it in metres so that a link means one
+thing whoever opens it.
+
+### Simple and Advanced
+
+The form opens in **Simple**, which asks for the site, the two antenna
+heights, the modem preset and the three pickers (your radio, your
+antennas, your cable). Everything else is under **Advanced**: the
+frequency and its slot, the receiver sensitivity, the gains, the power,
+the cable loss, and all of Ground and air.
+
+Nothing is removed and nothing is cleared. Simple hides the boxes with
+CSS, so every value is still read, still predicted from, and still
+carried in a share link. Switching mode changes what you are asked for
+and never what gets predicted. Simple predicts on `desert`, vertical,
+no clutter and 30 km.
+
+A newcomer in Flagstaff is the case `desert` is wrong for. Reading the
+climate from the coordinate is #239, and until that lands a default that
+is openly a default is better than a lookup that is confidently wrong.
+
+### Finding the site by name
+
+The site box takes an address or a place name. The lookup goes to
+`/api/geocode` on this server, which forwards it to the configured
+geocoder; answers outside the region above are dropped. It is the only
+reader-supplied text this dashboard sends anywhere, and it goes through
+the server so that a geocoder never sees who asked. `GEOCODE_URL` empty
+turns the feature off and the box is not drawn. See
+`src/sonoran/api/routes/geocode.py`.
+
+Nothing else changed about §2: no coordinate, no antenna and no
+prediction is ever sent to the server.
+
 ### Transmitter
 
 | Field | Units | Default | Notes |
@@ -109,14 +146,15 @@ overstate every antenna by 3.28 times.
 | Antenna height | m | 3 | Above the ground, including the mast. |
 | Power | dBm | 30 | 30 dBm is 1 W. Use the figure for your region. |
 | Antenna gain | dBi | 2.15 | A stock rubber antenna. |
-| Frequency | MHz | 906.875 | The middle of the US 915 band. |
 
 ### Receiver
 
 | Field | Units | Default | Notes |
 |---|---|---|---|
-| Modem preset | choice | Long fast | Sets the sensitivity below. |
-| Sensitivity | dBm | -139 | Edit it down in town. See 4.1. |
+| Modem preset | choice | Medium fast | Sets the sensitivity and the slot width. |
+| Frequency slot | choice | 18 | `lora.channel_num` on the radio. Counts from 1. |
+| Frequency | MHz | 906.375 | Slot 18 at 250 kHz. Follows the slot. |
+| Sensitivity | dBm | -134 | Edit it down in town. See 4.1. |
 | Height | m | 1 | A handheld radio. |
 | Antenna gain | dBi | 2.15 | |
 | Cable loss | dB | 2 | Applied at both ends. |
@@ -156,6 +194,40 @@ A preset is also a radio configuration, not only a sensitivity. A node
 on Long fast cannot hear a node on Medium fast at all. See `AGENTS.md`
 9.7. The planner predicts one preset at a time, and the nodes it counts
 are every node with a position, whatever preset each one runs.
+
+### 4.2 Preset, slot and frequency
+
+These three are one setting said three ways, and each of them can be
+edited. The band is 902 to 928 MHz, a slot is one bandwidth wide, and a
+node sits in the middle of one:
+
+```
+slots  = floor((928 MHz - 902 MHz) / bandwidth)
+centre = 902 MHz + bandwidth / 2 + (slot - 1) x bandwidth
+```
+
+**The slot counts from 1.** It is `lora.channel_num` on the radio, the
+number azmsh.net tells a new node to set. `sonoran/radio/channels.py`
+reaches the same frequencies from a zero-based index, because there the
+slot comes out of a hash of the channel name. The two differ by one, and
+confusing them moves a prediction by a whole slot. LongFast is the check:
+slot 20, 906.875 MHz.
+
+What each edit does:
+
+- **preset** sets the sensitivity it implies, keeps the slot number, and
+  moves the frequency, because the slots are a different width.
+- **slot** sets the frequency.
+- **frequency** sets the slot, or says "not on a slot" when it is between
+  two. A typed frequency is never moved: `lora.override_frequency` is a
+  real setting and a licensed operator may sit anywhere.
+
+Only the frequency is in a share link. A link carrying both could carry
+two that disagree, and whoever opened it would have no way to tell.
+
+The default is slot 18 on Medium fast, which is 906.375 MHz. That is the
+azmsh.net metro recommendation. It used to be 906.875 MHz, which is
+LongFast's slot 20 and nothing this mesh runs.
 
 ## 5. Reading the result
 
@@ -214,7 +286,15 @@ Then any of the form fields, spelled as they are in
 `time_fraction`.
 
 Units are the form's, not the engine's. `radius` is in kilometres, as
-the Range field asks for it, and the heights are in metres.
+the Range field asks for it, and the heights are in metres. **They are
+metres whatever the reader's units setting says**, and the form asks for
+metres for the same reason: a link that changed meaning with the setting
+of whoever opened it would predict two different things.
+
+The **frequency slot is not in the link**. It is the frequency and the
+preset's bandwidth said another way, so a link could carry two numbers
+that disagree, and whoever received it could not tell which was meant.
+The page works the slot out from the frequency. See 4.2.
 
 Only what differs from the default is written. A link for a site with
 one field changed is 115 characters; the same link with all 21 fields

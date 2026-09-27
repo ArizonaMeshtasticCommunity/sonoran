@@ -401,6 +401,38 @@ key, not `offset`, or rows will repeat. **[found]** Infinite scroll also
 breaks "jump to the end" and browser restore-scroll; a "load more" button
 as well as auto-load is the usual answer.
 
+**Infinite scroll, more filters and the hardware picker — SHIPPED
+2026-09-26.** With three things this plan should record rather than let
+the next reader discover.
+
+**It pages on `offset`, not on a keyset.** `/api/nodes` serves
+`limit`/`offset` and has no keyset cursor, and adding one is a change to
+a documented endpoint that something outside this repository may read —
+for a page whose rows shift only between one reader's own scroll events,
+because nothing on this page refreshes on a timer. So the risk above is
+answered rather than avoided: `mergeNodePage` drops a row whose
+`node_id` is already on screen, so the repeat this section warns about
+cannot be drawn. **The other half is not solved and cannot be from the
+browser**: a row that moves FORWARD a page between two requests is
+skipped, and nothing can see that it was. If this list ever gains a live
+timer, that becomes a real hole and the keyset is the answer.
+
+**"More filters" was nearly already true.** Every sortable column could
+be narrowed except one, and that one only in a single direction:
+`active_hours` asked "heard since" and nothing asked "not heard since".
+`quiet_hours` was added to the API for it. The contract is now held by a
+test that reads `SORTS` out of `routes/nodes.py` and checks each column
+against the panel, so the claim cannot rot into a list. The search box is
+deliberately not duplicated into the panel: `q` already covers name and
+node ID, and two controls doing one job is what this page was corrected
+for.
+
+**The "searching" state asked for above was not needed, and the item that
+removed the button already shipped without it.** Recorded here because
+the sentence is still in the list above: the box debounces at 350 ms and
+the table is replaced with "Loading" on the next keystroke pause, so
+there is a visible state; it is the table, not the box.
+
 ### 6.3 Weekly check-in, with streaks
 
 **What.** Which nodes checked in, a streak count beside the name,

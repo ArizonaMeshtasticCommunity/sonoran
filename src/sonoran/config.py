@@ -152,6 +152,40 @@ class Settings(BaseSettings):
     map_home_north: float = 37.1
     map_home_east: float = -108.9
 
+    # Address search on the coverage planner (§6.5 of the UX plan).
+    #
+    # **This points at a third party, and it is the only setting here
+    # that sends a reader's own words off this machine.** The planner's
+    # site box takes a typed address, the browser asks
+    # `/api/geocode?q=...` on this origin, and `api/routes/geocode.py`
+    # forwards it. A geocoder called from the browser instead would need
+    # its own origin in the Content-Security-Policy and would see the
+    # reader's IP address as well as what they typed; the proxy keeps
+    # both here. Read that module before changing any of this.
+    #
+    # Nominatim is the default because this dashboard already leans on
+    # OpenStreetMap for its basemap, so a deployment is not being
+    # introduced to a new organisation. Its usage policy (one request a
+    # second, an identifying agent, cache what you get) is honoured in
+    # that module and not here.
+    #
+    # **Set this to empty to turn the feature off.** The endpoint then
+    # answers 404, and the dashboard is told through
+    # `window.SONORAN.geocode` and draws no search box at all -- rather
+    # than a box that cannot work, which is the trap in `AGENTS.md` 9.9.
+    #
+    # Answers outside the home region above are dropped, so this cannot
+    # be used as a general purpose geocoder for the whole world.
+    geocode_url: str = "https://nominatim.openstreetmap.org/search"
+    # How long one outbound lookup may take. Short: a reader is waiting
+    # with a cursor in a box, and a slow geocoder must not hold an API
+    # worker the way a slow tile source used to (see the terrain note).
+    geocode_timeout_seconds: float = 8.0
+    # Who this server says it is. The upstream policy requires an agent
+    # that identifies the application and refuses a generic one. It
+    # carries nothing about the reader.
+    geocode_user_agent: str = "sonoran-dashboard (Arizona Meshtastic Community)"
+
     # Coverage planner terrain. Pages are made once and kept on disk.
     terrain_cache_dir: str = "/var/lib/sonoran/terrain"
     terrain_source_url: str = "https://elevation-tiles-prod.s3.amazonaws.com"

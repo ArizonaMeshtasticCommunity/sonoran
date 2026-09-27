@@ -129,6 +129,80 @@ def test_the_first_fit_still_never_opens_wider_than_home() -> None:
     assert "if (fitted >= wanted)" in app
 
 
+# --- and the planner's map, which had the same two causes (§6.5) -------
+#
+# "The map centred on Arizona rather than the United States" is §6.5's
+# wording, and it is the same complaint as #195 on a different page. The
+# planner opened with `setView(mapCenter, mapZoom)` and no fractional
+# snap, and its first-visit fit counted every node wherever it was.
+#
+# Measured on this instance, an 842x840 map box at 1500x1050, with the
+# node list blocked so the first fit could not hide the answer:
+#
+#     before  zoom 7,    9.25 deg of longitude, -116.13 to -106.88
+#     after   zoom 7.25, 7.78 deg of longitude, -115.84 to -108.06
+#
+# Arizona is 5.8 degrees wide: 63% of the width and left of centre,
+# against 75% and centred.
+
+
+def test_the_planner_opens_on_the_same_region_as_the_live_map() -> None:
+    """The whole statement, condition included.
+
+    Asserting only that `map.fitBounds(home, ...)` appears somewhere let a
+    mutation to `if (false)` survive: the call was still in the file and
+    never ran. A source check has to read the branch as well as the call,
+    and the browser measurement above is what actually proves the view.
+    """
+    planner = _code("planner.js")
+    assert "homeBounds()" in planner, "the planner does not ask for the home region"
+    assert "if (home) map.fitBounds(home, { padding: [20, 20] });" in planner, (
+        "the planner does not fit the region, or fits it behind a condition that is not "
+        "'is there one'"
+    )
+    assert re.search(r"zoomSnap:\s*0\.\d+", planner), (
+        "without a fractional snap the fit rounds down to a whole zoom and under-fills"
+    )
+
+
+def test_the_planner_writes_no_geography_of_its_own() -> None:
+    """A hardcoded Arizona box here would be wrong for every other mesh
+    and would pass the case above."""
+    planner = _code("planner.js")
+    for latitude in ("31.2", "37.1", "-115.0", "-108.9"):
+        assert latitude not in planner, (
+            f"{latitude} is a home-region bound, hardcoded in planner.js"
+        )
+
+
+def test_a_node_outside_the_region_does_not_decide_the_planners_view() -> None:
+    """#114's rule, which the planner's own first fit did not have.
+
+    One node near Oakland used to drag the live map over four states. The
+    planner had the same fit with the same hole in it, and it matters more
+    here: the terrain service holds nothing where that node is.
+    """
+    planner = _code("planner.js")
+    fit = planner[planner.index("const first = !state.nodes.length;") :][:900]
+    assert "home.contains([node.lat, node.lon])" in fit, (
+        "the planner's first fit still counts every node, wherever it is"
+    )
+
+
+def test_the_planner_still_draws_every_node() -> None:
+    """The filter applies to the vote and to nothing else (#114 reading a)."""
+    planner = _code("planner.js")
+    draw = planner[planner.index("function drawNodes()") :][:600]
+    assert "homeBounds" not in draw and "contains(" not in draw, (
+        "the drawing loop filters on the home region too, so out-of-state nodes vanish"
+    )
+
+
+def test_the_planner_falls_back_where_no_region_is_configured() -> None:
+    planner = _code("planner.js")
+    assert "else map.setView(CONFIG.mapCenter" in planner, "the fallback path is gone"
+
+
 def test_a_deployment_with_no_region_keeps_the_old_behaviour() -> None:
     """`mapHome` absent must fall back, not break the map.
 

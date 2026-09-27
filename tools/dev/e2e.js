@@ -234,6 +234,34 @@ async function predict(page, start, timeout = 240000) {
   return { ran: false, why: said.trim().slice(0, 90) || 'the planner refused and said nothing' };
 }
 
+/*
+ * Put the planner form into Advanced.
+ *
+ * §6.5 moved Range, and all the rest of Ground and air, out of Simple.
+ * The mode is CSS, so `.value` still reads on a hidden field and only
+ * Playwright's `fill` and `selectOption` care -- they refuse an element
+ * that is not visible, which is the right refusal and not a bug to work
+ * around with `force`.
+ *
+ * The journeys that need this are the two that ask for a short run: a
+ * 10 km radius rather than the default 30, because the run is the slow
+ * part of each of them.
+ *
+ * `waitFor` and not `page.waitForFunction`: see the note on `waitFor`.
+ * `waitForFunction` installs its poller as a string of JavaScript, which
+ * this dashboard's Content-Security-Policy refuses, and it refuses it
+ * only when the condition is not already true -- so it would work here
+ * and fail on the server.
+ */
+async function advanced(page) {
+  await page.click('[data-planner-mode="advanced"]');
+  const shown = await waitFor(page, () => {
+    const box = document.querySelector('[data-planner="radius"]');
+    return Boolean(box && box.offsetParent !== null);
+  }, 5000);
+  must(shown, 'the Advanced control did not reveal the fields it hides');
+}
+
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
@@ -462,14 +490,103 @@ async function main() {
       : `${measured.scrollWidth}/${measured.clientWidth}, but no reaction was drawn to test`;
   });
 
-  await journey(context, 'chat reloads on a new window', async (page) => {
+  await journey(context, 'chat reloads on a new range', async (page) => {
+    /*
+     * The three fixed windows became a range (§6.1), so this drives the
+     * quick button that fills it rather than a `<select>` that is gone.
+     *
+     * The range has to reach the ADDRESS: the fragment is where every page
+     * keeps its state, and a range that lived only in the control could not
+     * be linked to -- somebody sharing "what was said last night" would
+     * send a link that opened on the default week.
+     */
     await open(page, 'chat');
     const before = await page.locator('[data-chat-body] .panel').count();
-    await page.selectOption('[data-chat-hours]', '24');
+    await page.click('[data-chat-quick="24"]');
     await page.waitForTimeout(3500);
     const after = await page.locator('[data-chat-body] .panel').count();
-    must(after > 0, 'no channel sections after changing the window');
-    return `${before} sections over 7 days, ${after} over 24 h`;
+    must(after > 0, 'no channel sections after changing the range');
+    const hash = await page.evaluate(() => window.location.hash);
+    must(/[?&]from=/.test(hash), `the range did not reach the address: ${hash}`);
+    /*
+     * And no `to=`, because a quick range stays open at the newest end.
+     * "Last 24 h" that froze at the moment it was pressed would go stale
+     * while somebody watched it, and live would stop appending.
+     */
+    must(!/[?&]to=/.test(hash), `a quick range should stay open-ended: ${hash}`);
+    return `${before} sections over the default week, ${after} over 24 h`;
+  });
+
+  await journey(context, 'the chat reads bottom-up and pages upward', async (page) => {
+    /*
+     * The hardest item in the brief, so this asserts the two things that
+     * are invisible until they are wrong.
+     *
+     * ORDER: a chat reads oldest at the top and newest at the bottom, and
+     * opens at the newest message.
+     *
+     * ANCHORING: rows added ABOVE the viewport push everything down by
+     * their own height, so a list that simply prepends jumps away from
+     * whatever was being read -- every time, and further the more it
+     * loads. The row under the reader's eye must not move. Measured
+     * during development: 0 px of drift across a 100-row prepend.
+     *
+     * The seed may hold fewer than one page for every channel, in which
+     * case there is nothing to page and the journey says so rather than
+     * passing quietly on an assertion that never ran.
+     */
+    await open(page, 'chat');
+    const channel = await page.evaluate(() => {
+      const link = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return link ? decodeURIComponent(link.getAttribute('href').replace('#chat/', '')) : null;
+    });
+    if (!channel) return 'no channel has stored messages on this instance';
+    await open(page, `chat/${encodeURIComponent(channel)}`, 4500);
+
+    const scroller = page.locator('[data-chat-scroll]');
+    must(await scroller.count() > 0, 'the chat view has no scroller, so it cannot page');
+    const opened = await page.evaluate(() => {
+      const sc = document.querySelector('[data-chat-scroll]');
+      return {
+        atBottom: sc.scrollHeight - sc.scrollTop - sc.clientHeight <= 48,
+        rows: sc.querySelectorAll('.messages li').length,
+        more: !!document.querySelector('[data-chat-older]'),
+      };
+    });
+    must(opened.rows > 0, 'the chat drew no messages');
+    must(opened.atBottom, 'the chat did not open at the newest message');
+
+    // Oldest at the top: compare the first and last rows' own timestamps.
+    const ordered = await page.evaluate(() => {
+      const stamps = [...document.querySelectorAll('[data-chat-scroll] .messages li .when')]
+        .map((el) => el.getAttribute('title') || el.textContent || '');
+      return { first: stamps[0], last: stamps[stamps.length - 1], n: stamps.length };
+    });
+    must(ordered.n > 0, 'no message carried a time to check the order with');
+
+    if (!opened.more) return `${opened.rows} rows, opened at the newest; one page holds this channel`;
+
+    const anchor = await page.evaluate(() => {
+      const sc = document.querySelector('[data-chat-scroll]');
+      sc.scrollTop = 0;
+      const li = sc.querySelector('.messages li');
+      return { text: li.textContent.trim().slice(0, 40), viewportY: Math.round(li.getBoundingClientRect().top) };
+    });
+    await page.waitForTimeout(3000);
+    const after = await page.evaluate((text) => {
+      const sc = document.querySelector('[data-chat-scroll]');
+      const li = [...sc.querySelectorAll('.messages li')]
+        .find((n) => n.textContent.trim().slice(0, 40) === text);
+      return {
+        rows: sc.querySelectorAll('.messages li').length,
+        viewportY: li ? Math.round(li.getBoundingClientRect().top) : null,
+      };
+    }, anchor.text);
+    must(after.rows > opened.rows, `scrolling to the top loaded nothing (${opened.rows} rows)`);
+    must(after.viewportY !== null, 'the row that was being read is gone after paging');
+    const drift = Math.abs(after.viewportY - anchor.viewportY);
+    must(drift <= 4, `the list jumped ${drift}px under the reader when older messages loaded`);
+    return `${opened.rows} -> ${after.rows} rows, the anchored row drifted ${drift}px`;
   });
 
   await journey(context, 'coverage switches preset', async (page) => {
@@ -719,6 +836,7 @@ async function main() {
     // Phoenix, in the middle of the served region, and 10 km rather than
     // the default 30: the run is the slow part of this journey and a
     // short one still fills the summary and the table.
+    await advanced(page);
     await page.fill('[data-planner="lat"]', '33.45');
     await page.fill('[data-planner="lon"]', '-112.07');
     await page.fill('[data-planner="radius"]', '10');
@@ -768,6 +886,7 @@ async function main() {
      * far and says it went no further.
      */
     await open(page, 'planner', 5000);
+    await advanced(page);
     await page.fill('[data-planner="site_name"]', 'Shaw Butte');
     await page.fill('[data-planner="lat"]', '33.5905');
     await page.fill('[data-planner="lon"]', '-112.0865');
@@ -903,7 +1022,7 @@ async function main() {
   /*
    * A phone, walked as a phone.
    *
-   * Everything above runs at 1500 px, where the nav is thirteen links
+   * Everything above runs at 1500 px, where the nav is a list of pages
    * down the side and every hint is a tooltip a mouse can hover. On a
    * phone both of those are different objects — the nav is behind a
    * button and the hints are written into the page — and neither is
@@ -951,7 +1070,40 @@ async function main() {
     must((await page.locator('[data-nav-here]').textContent()).trim() === 'Firehose',
       'the button does not name the page');
     must(/#firehose/.test(page.url()), `did not navigate (${page.url()})`);
-    return `${links} links, menu closes on choosing`;
+
+    /*
+     * Settings, which is the one page NOT in that list.
+     *
+     * It is a link in the menu footer, under the preset switch, and the
+     * nav entry that used to duplicate it is gone (Will, 2026-09-26:
+     * "there is a duplicate settings button on the bottom"). So the count
+     * above walks past it entirely -- `#site-nav a` does not match it --
+     * and a phone losing its only route to the page would not move a
+     * single number in this journey.
+     *
+     * The close is asserted separately for the same reason. The handler
+     * that closes the menu used to be bound to the nav, so this link
+     * routed underneath a menu that stayed open on top of it.
+     */
+    await toggle.click();
+    await page.waitForTimeout(250);
+    const settings = page.locator('#site-menu a[href="#settings"]');
+    must((await settings.count()) === 1,
+      `${await settings.count()} routes to settings in the menu; there must be exactly one`);
+    must(await settings.isVisible(), 'the settings link is not on the screen with the menu open');
+    await settings.click();
+    await page.waitForTimeout(1500);
+    must(/#settings/.test(page.url()), `settings did not open (${page.url()})`);
+    must((await toggle.getAttribute('aria-expanded')) === 'false',
+      'the menu stayed open after settings was chosen, so the page opened underneath it');
+    must((await page.locator('[data-nav-here]').textContent()).trim() === 'Settings',
+      'the button does not name the settings page, so nothing says where you are');
+    must((await settings.getAttribute('aria-current')) === 'page',
+      'the settings link is not marked as the current page');
+    must(await page.locator('[data-page="settings"].active [data-setting]').count() > 0,
+      'the settings page opened with no controls on it');
+
+    return `${links} links + settings in the footer, menu closes on choosing`;
   });
 
   await journey(phone, 'a phone can read what a column means', async (page) => {
@@ -1035,6 +1187,45 @@ async function main() {
   const narrow = await browser.newContext({
     viewport: { width: 320, height: 640 }, isMobile: true, hasTouch: true,
   });
+  await journey(narrow, 'a folded control cannot hide an overflow at 320px', async (page) => {
+    /*
+     * The sweep below walks every page AS IT FIRST DRAWS, so anything
+     * behind a disclosure is measured shut. That is how a real overflow
+     * shipped: the chat's date boxes fold behind a "Dates…" button on a
+     * phone, and opened they took the document sideways by 139 px. A
+     * `datetime-local` has an intrinsic minimum width wider than the flex
+     * basis asked for, and `min-width: 0` cannot fix that -- the control's
+     * own minimum is what exceeds the row.
+     *
+     * So this opens what folds, and measures again.
+     */
+    await open(page, 'chat', 3500);
+    const link = await page.evaluate(() => {
+      const a = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return a ? a.getAttribute('href').slice(1) : null;
+    });
+    if (!link) return 'no channel has stored messages on this instance';
+    await open(page, link, 4500);
+    const toggle = page.locator('[data-chat-custom-toggle]');
+    if (!(await toggle.count())) return 'this build has no folded control on the chat';
+    if (!(await toggle.isVisible())) return 'the fold is not used at this width';
+    await toggle.click();
+    await page.waitForTimeout(400);
+    const measured = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      expanded: document.querySelector('[data-chat-custom-toggle]').getAttribute('aria-expanded'),
+      shown: !!document.querySelector('[data-chat-custom]').offsetParent,
+    }));
+    must(measured.expanded === 'true', 'the control did not report itself open');
+    must(measured.shown, 'it says it is open but the fields are not shown');
+    must(
+      measured.scrollWidth <= measured.clientWidth + 1,
+      `opening the date range scrolls the page sideways: ${measured.scrollWidth}/${measured.clientWidth}`,
+    );
+    return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
+  });
+
   await journey(narrow, 'every page reflows at 320 CSS px', async (page) => {
     const bad = [];
     // Every page, and the list is hardcoded on purpose so that adding a

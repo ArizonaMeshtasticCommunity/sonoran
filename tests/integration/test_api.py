@@ -1936,6 +1936,105 @@ def test_the_summary_returns_what_the_filters_need(migrated_engine, timescale_ur
     assert rows[0]["position_confidence"] in {"exact", "coarse", "none"}
 
 
+def _seed_quiet_nodes(engine) -> None:  # type: ignore[no-untyped-def]
+    """Nodes heard at three different times, plus one never heard at all.
+
+    Every one carries a hardware model and a role, which the facet case
+    below needs: those two facets drop the nodes that report nothing, so
+    with NULLs in them their counts could not be compared to a total.
+    """
+    now = datetime.now(UTC)
+    rows = [
+        (9710, "fresh", now),
+        (9711, "hours", now - timedelta(hours=2)),
+        (9712, "weeks", now - timedelta(days=14)),
+        (9713, "silent", None),
+    ]
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM node WHERE node_num BETWEEN 9710 AND 9719"))
+        for num, name, heard in rows:
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, long_name, hw_model, role, "
+                    "first_seen, last_heard, updated_at) VALUES "
+                    "(:num, :nid, :name, 'HELTEC_V3', 'CLIENT', :now, :heard, :now)"
+                ),
+                {"num": num, "nid": f"!{num:08x}", "name": name, "now": now, "heard": heard},
+            )
+
+
+def test_quiet_hours_is_the_other_side_of_active_hours(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """ "Which routers have gone quiet" had no way to be asked (§6.2).
+
+    `active_hours` asks "heard since"; nothing asked "not heard since",
+    which is the question. The only way to ask it was to widen the window
+    to any time, sort ascending, and read from the top -- which answers a
+    different question and puts the answer first by luck.
+
+    The two must partition the nodes that have ever been heard, or a
+    reader combining them gets rows that are in neither set or in both.
+    """
+    _seed_quiet_nodes(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        quiet = client.get("/api/nodes?limit=500&quiet_hours=1").json()
+        active = client.get("/api/nodes?limit=500&active_hours=1").json()
+        band = client.get("/api/nodes?limit=500&active_hours=24&quiet_hours=1").json()
+        refused = client.get("/api/nodes?quiet_hours=0")
+    names = {row["node_id"]: row["long_name"] for row in quiet}
+    assert "hours" in names.values(), "a node heard two hours ago is not quiet for an hour"
+    assert "weeks" in names.values(), "a node heard a fortnight ago is not quiet"
+    assert "fresh" not in names.values(), "a node heard just now counts as quiet"
+    # A node that has never been heard has no answer to "how long since",
+    # and `active_hours` leaves it out too. It must not be quiet forever.
+    assert "silent" not in names.values(), "a node never heard is reported as quiet"
+    assert "silent" not in {row["long_name"] for row in active}
+
+    ours = {f"!{num:08x}" for num in (9710, 9711, 9712)}
+    quiet_ours = {row["node_id"] for row in quiet} & ours
+    active_ours = {row["node_id"] for row in active} & ours
+    assert not (quiet_ours & active_ours), "a node is both quiet and active for the same hour"
+    assert quiet_ours | active_ours == ours, "a heard node is in neither set"
+
+    # The band: heard this day, but not this hour.
+    assert {row["long_name"] for row in band} & {"fresh", "hours", "weeks"} == {"hours"}, (
+        "the two windows do not compose into a band"
+    )
+    assert refused.status_code == 422, "an hour of zero is not a window"
+
+
+def test_the_facet_counts_honour_quiet_hours(migrated_engine, timescale_url: str) -> None:  # type: ignore[no-untyped-def]
+    """A filter the facets endpoint ignores is the worst kind.
+
+    FastAPI drops a query parameter a handler does not declare, without a
+    word -- so a filter added to the list and forgotten here would leave
+    every count in the panel describing a larger set than the rows beside
+    them, which is the one thing that endpoint's docstring promises.
+
+    **Every group, not one of them.** The endpoint counts the value facets
+    through one helper and the position states through a statement of
+    their own, so a filter can reach one path and not the other. Checking
+    `position` alone passed against exactly that mutation.
+    """
+    _seed_quiet_nodes(migrated_engine)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        loose = client.get("/api/nodes/facets").json()
+        tight = client.get("/api/nodes/facets?quiet_hours=1").json()
+        rows = client.get("/api/nodes?limit=1&quiet_hours=1")
+    total = int(rows.headers["X-Total-Count"])
+    for group in ("position", "hw", "role"):
+        counted = sum(entry["count"] for entry in tight[group])
+        everything = sum(entry["count"] for entry in loose[group])
+        assert counted == total, (
+            f"the {group} facet counts {counted} nodes and the list counts {total}"
+        )
+        assert counted < everything, (
+            f"quiet_hours changed nothing in the {group} facet "
+            f"({counted} of {everything}), so it is being ignored there"
+        )
+
+
 def _seed_drawn_trace(migrated_engine, packet_id: int | None) -> int:  # type: ignore[no-untyped-def]
     """Insert one traceroute and return its row ID."""
     with migrated_engine.begin() as connection:
