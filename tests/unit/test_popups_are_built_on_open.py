@@ -33,7 +33,13 @@ LEAFLET = (STATIC / "vendor" / "leaflet.js").read_text(encoding="utf-8")
 def test_every_bindpopup_is_given_a_function() -> None:
     """A built node as the argument is the eager version, by definition."""
     for name, source in (("planner.js", PLANNER), ("coverage.js", COVERAGE)):
-        for call in re.finditer(r"\.?bindPopup\(\s*(.{0,20})", source, flags=re.S):
+        # `SonoranSheet.bind(marker, build, key)` hands `build` to
+        # bindPopup, so its second argument is held to the same rule (#281).
+        calls = [
+            *re.finditer(r"\.?bindPopup\(\s*(.{0,20})", source, flags=re.S),
+            *re.finditer(r"SonoranSheet\.bind\([^,]+,\s*(.{0,20})", source, flags=re.S),
+        ]
+        for call in calls:
             head = call.group(1).lstrip()
             assert head.startswith("()") or head.startswith("function"), (
                 f"{name} passes built content to bindPopup ({head!r}); that "

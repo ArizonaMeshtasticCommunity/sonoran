@@ -441,7 +441,7 @@ general proxy for the tile source.
 - Job: the user interface.
 - Static HTML, CSS, and JavaScript files. There is no build step.
 - Files: `index.html`, `app.css`, `app.js`, `map-defaults.js`,
-  `map-live.js`, `map-watch.js`, `planner.js`, `planner-params.js`,
+  `node-sheet.js`, `map-live.js`, `map-watch.js`, `planner.js`, `planner-params.js`,
   `planner.worker.js`, `config-check.js`, `meshtastic-static.js`,
   `gaps.js`, `siting.js`,
   `protobuf-runtime.js`, and `vendor/`.
@@ -461,6 +461,12 @@ general proxy for the tile source.
   dot, not to the dot drawn last (#266). Under
   `prefers-reduced-motion: reduce` no map animates its zoom or fades,
   and `chart()` in `app.js` turns off ECharts animation (#284).
+- `node-sheet.js` shows a node's map summary on a phone (below 40rem)
+  in a sheet at the foot of the screen, not in a Leaflet bubble (#281).
+  `SonoranSheet.bind(marker, build, key)` replaces `bindPopup` on the
+  live map and on coverage: a mouse still gets the bubble. The sheet is
+  non-modal, has a peek and a half height, a 44 px close, and Back
+  closes it.
 - The pages call the JSON API. All node names come from the API.
   The browser does no name lookup and no join.
 - The API serves `index.html` and replaces `__SONORAN_CONFIG__` with the

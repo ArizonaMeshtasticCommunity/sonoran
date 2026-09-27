@@ -1063,6 +1063,8 @@ async function main() {
     // Every DOM reading below waits past that fade first.
     const FADE_MS = 600;
     must(await page.evaluate(BUBBLE), 'opening a node did not show its bubble');
+    // A mouse gets the bubble, never the phone's sheet (#281).
+    must(await page.evaluate(() => !window.SonoranSheet.current()), 'a desktop opened the phone sheet');
 
     // One refresh from the Live timer itself, unprompted: wait for the
     // map's traffic request that only the timer's `render('map')` sends.
@@ -1082,6 +1084,12 @@ async function main() {
     edits.move = picked.moved;
     for (let refresh = 0; refresh < 3; refresh += 1) {
       await page.evaluate(async () => {
+        // `render` returns at once while another render is running, and
+        // the timer's own poll can still be running here on a slow
+        // server. "A node that moved stayed where it was" failed two
+        // runs in five on a loaded machine without this wait, and none
+        // in three with it.
+        while (loading) await new Promise((done) => setTimeout(done, 100));
         nodeCache.at = 0;
         await render('map');
       });
@@ -1121,6 +1129,7 @@ async function main() {
     // A node that really went away takes its open bubble with it.
     edits.drop = picked.open;
     await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
       nodeCache.at = 0;
       await render('map');
     });
@@ -1854,6 +1863,118 @@ async function main() {
     must(after.y < y0 && after.inView, `the pill did not go back to the newest: ${JSON.stringify(after)}`);
     must((await pill()) === null, 'the pill stayed after going back to the top');
     return `pill "4 new" at y ${shown.top}, reader's row held to ${Math.abs(held - row0.top)} px, tap went back`;
+  });
+
+  await journey(phone, 'a node opens in a sheet on a phone, and survives live refreshes (#281)', async (page) => {
+    /*
+     * Below 40rem a tap on a node opens its summary in a sheet at the
+     * foot of the screen instead of a bubble. The node list goes through
+     * a route, as in the bubble journey, so a node can vanish without
+     * writing to a shared database.
+     */
+    const edits = { drop: null };
+    await page.route(/\/api\/map\/nodes(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      let rows = await response.json();
+      if (edits.drop) rows = rows.filter((row) => row.node_id !== edits.drop);
+      return route.fulfill({ response, json: rows });
+    });
+    await open(page, 'map', 3000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size >= 2, 20000), 'the map drew fewer than two nodes');
+    // No timer poll in the middle; the refreshes below are forced.
+    await page.evaluate(() => document.querySelector('[data-page="map"] [data-live]').setAttribute('aria-pressed', 'false'));
+    const at = await page.evaluate(() => {
+      const { map, marks } = window.SonoranMap;
+      const [id, entry] = [...marks.entries()][0];
+      map.setView(entry.marker.getLatLng(), 12, { animate: false });
+      map.getContainer().scrollIntoView({ block: 'start' });
+      const point = map.latLngToContainerPoint(entry.marker.getLatLng());
+      const box = map.getContainer().getBoundingClientRect();
+      return { id, x: box.left + point.x, y: box.top + point.y, name: entry.row.display_name || id };
+    });
+    await page.waitForTimeout(300);
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    const SHEET = () => {
+      const sheet = document.querySelector('.node-sheet');
+      if (!sheet || sheet.hidden) return null;
+      const close = sheet.querySelector('.node-sheet-close').getBoundingClientRect();
+      const box = sheet.getBoundingClientRect();
+      return {
+        node: window.SonoranSheet.current(),
+        text: sheet.textContent,
+        height: Math.round(box.height),
+        top: Math.round(box.top),
+        close: [Math.round(close.width), Math.round(close.height)],
+        state: sheet.dataset.state,
+        bubble: Boolean(document.querySelector('[data-page="map"] .leaflet-popup')),
+      };
+    };
+    let sheet = await page.evaluate(SHEET);
+    must(sheet, 'a tap on a node opened no sheet');
+    must(sheet.node === at.id && sheet.text.includes(at.name), `the sheet shows ${sheet.node}, the tap was on ${at.id}`);
+    must(!sheet.bubble, 'a bubble opened on the map as well as the sheet');
+    must(/Open node detail/.test(sheet.text), 'the sheet has no way to the node page');
+    must(sheet.close[0] >= 44 && sheet.close[1] >= 44, `the close button is ${sheet.close.join(' x ')}`);
+    const viewport = page.viewportSize();
+    must(sheet.height <= viewport.height / 2 + 1, `the sheet is ${sheet.height} px of a ${viewport.height} px screen`);
+    const peek = sheet.height;
+
+    // Non-modal: the map above the sheet is still the map, and still pans.
+    const free = await page.evaluate((top) => {
+      const { map } = window.SonoranMap;
+      const box = map.getContainer().getBoundingClientRect();
+      const y = Math.max(box.top + 20, Math.min(top - 40, box.bottom - 20));
+      const hit = document.elementFromPoint(box.left + box.width / 2, y);
+      return { onMap: Boolean(hit && map.getContainer().contains(hit)), dragging: map.dragging.enabled() };
+    }, sheet.top);
+    must(free.onMap && free.dragging, `the sheet blocks the map: ${JSON.stringify(free)}`);
+
+    // Two live refreshes through the call the timer makes.
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      await page.evaluate(async () => {
+        while (loading) await new Promise((done) => setTimeout(done, 100));
+        nodeCache.at = 0;
+        await render('map');
+      });
+    }
+    sheet = await page.evaluate(SHEET);
+    must(sheet && sheet.node === at.id, 'the sheet closed when the map refreshed');
+
+    // The grabber opens it to half height when there is more to show.
+    const more = await page.evaluate(() => !document.querySelector('.node-sheet-grab').hidden);
+    if (more) {
+      await page.click('.node-sheet-grab');
+      const half = await page.evaluate(SHEET);
+      must(half.state === 'half' && half.height > peek, `the grabber did not open it further (${peek} -> ${half.height})`);
+    }
+
+    // Back takes the sheet away and leaves the reader on the map.
+    await page.goBack();
+    await page.waitForTimeout(500);
+    must((await page.evaluate(SHEET)) === null, 'Back did not close the sheet');
+    must(/#map$/.test(page.url()), `Back left the map: ${page.url()}`);
+
+    // The close button, and a node that goes away takes its sheet with it.
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    must(await page.evaluate(SHEET), 'a second tap opened no sheet');
+    await page.click('.node-sheet-close');
+    await page.waitForTimeout(300);
+    must((await page.evaluate(SHEET)) === null, 'the close button did not close the sheet');
+    must(await page.evaluate(() => !(history.state && history.state.sonoranSheet)), 'closing left its history entry behind');
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(600);
+    edits.drop = at.id;
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
+      nodeCache.at = 0;
+      await render('map');
+    });
+    must((await page.evaluate(SHEET)) === null, 'the sheet of a node that went away is still open');
+    return `sheet ${peek} px high, close ${sheet.close.join('x')}, map free above it; `
+      + `held through 2 refreshes${more ? ', grabber opens it further' : ''}; Back, close and a gone node all close it`;
   });
 
   await journey(phone, 'the map page opens at its top (#270)', async (page) => {

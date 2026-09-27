@@ -2063,14 +2063,17 @@ function drawMapNodes(rows) {
       continue;
     }
     const entry = { marker: L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom)), row };
-    entry.marker.bindPopup(() => mapNodePopup(entry.row));
+    // A bubble for a mouse, a sheet at the foot of a phone (#281).
+    SonoranSheet.bind(entry.marker, () => mapNodePopup(entry.row), row.node_id);
     entry.marker.addTo(mapState.nodes);
     marks.set(row.node_id, entry);
   }
   for (const [nodeId, entry] of marks) {
     if (seen.has(nodeId)) continue;
     // `removeLayer` fires `remove`, which closes this marker's popup.
+    // The phone's sheet is outside the map, so it is told separately.
     mapState.nodes.removeLayer(entry.marker);
+    SonoranSheet.closeIf(nodeId);
     marks.delete(nodeId);
   }
   return bounds;

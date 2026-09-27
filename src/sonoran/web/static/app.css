@@ -2299,6 +2299,41 @@ tr.row-link:focus-within td { background: var(--panel-2); }
 }
 
 /*
+ * A node's summary in a sheet at the foot of a phone's screen (#281).
+ * See node-sheet.js. No backdrop: the map above it stays in use. Above
+ * Leaflet's controls (1000) and below the skip link (1200).
+ */
+.node-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100;
+  max-height: 50svh; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--panel); color: var(--text);
+  border-top: 1px solid var(--line); border-radius: .9rem .9rem 0 0;
+  box-shadow: 0 -4px 18px var(--scroll-shadow);
+  padding: 0 1rem max(.75rem, env(safe-area-inset-bottom));
+}
+.node-sheet[hidden] { display: none; }
+.node-sheet-bar {
+  position: sticky; top: 0; display: flex; align-items: center; gap: .5rem;
+  background: var(--panel);
+}
+.node-sheet-grab {
+  flex: 1; min-height: 44px; display: flex; align-items: center; justify-content: center;
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.node-sheet-grab[hidden] { display: flex; visibility: hidden; }
+.node-sheet-grabber { width: 2.5rem; height: .3rem; border-radius: 999px; background: var(--muted); }
+.node-sheet-close {
+  width: 44px; height: 44px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 50%;
+  font-size: 1.4rem; line-height: 1; cursor: pointer;
+}
+.node-sheet-body { padding-bottom: .25rem; }
+.node-sheet-body .linky { min-height: 44px; }
+.node-sheet[data-state="peek"] .node-sheet-more { display: none; }
+
+/*
  * "3 new ↑" over the firehose (#280). The holder is sticky and has no
  * height, so the pill floats at the top of the screen while the table
  * scrolls under it, and showing it moves no row.

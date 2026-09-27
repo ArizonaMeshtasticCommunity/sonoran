@@ -52,7 +52,8 @@ def test_a_gone_node_is_removed_and_a_moved_one_moves() -> None:
 def test_the_bubble_reads_the_current_row() -> None:
     """Built on open from the entry, so a kept marker never shows old data."""
     body = _body(APP, "function drawMapNodes(rows) {")
-    assert "bindPopup(() => mapNodePopup(entry.row))" in body, (
+    # On a phone the same builder feeds the bottom sheet (#281).
+    assert "SonoranSheet.bind(entry.marker, () => mapNodePopup(entry.row)" in body, (
         "the map popup is not built on open from the entry's current row"
     )
 
