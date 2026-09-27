@@ -3948,6 +3948,14 @@ async function main() {
     const facts = [];
     for (const [name, most] of [['graph', 0.35], ['rf', 0.45], ['chat', 0.5], ['gaps', 0.35]]) {
       await open(page, name, 2500);
+      /*
+       * With letters as wide as CI's Linux fonts draw them. On a Mac the
+       * Graph row had 8 px to spare; on the runner Options no longer fit
+       * beside the search box, the row wrapped, and the head ended at 37%.
+       * 0.12em is the spacing that reproduces that here.
+       */
+      await page.addStyleTag({ content: '.page-head * { letter-spacing: .12em !important; }' });
+      await page.waitForTimeout(200);
       const got = await page.evaluate(() => {
         const head = document.querySelector('.page.active .page-head');
         const shown = [...head.querySelectorAll('.controls > *')]

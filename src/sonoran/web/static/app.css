@@ -3244,6 +3244,14 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   [data-sub-fold] > .hint-open { display: inline-flex; flex: 0 0 auto; }
+  /*
+   * A search box beside the one control left in a folded head gives way
+   * before the row wraps. At a fixed 196 px it left 8 px to spare beside
+   * Graph's Options button on a Mac; on CI's wider Linux fonts the button
+   * did not fit, the row wrapped, and the head grew by a whole control
+   * row, to 37% of an iPhone SE's first screen.
+   */
+  .page-head .controls > input[type="search"] { flex: 1 1 7rem; min-width: 7rem; width: auto; }
 }
 .filter-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
 .filter-group { border: 0; margin: 0; padding: 0; min-width: 0; }
