@@ -35,10 +35,21 @@ per-packet radio figures for the recovered window stay missing; the
 telemetry, positions, NodeInfo and messages -- what a reader sees -- come
 back.
 
-Run inside the ingest container, which has the keys and the right role::
+**Run it as the migration role, not as ingest.** The ingest image has the
+keys and the code, but ``azmsh_ingest`` is write-only by design: it holds
+INSERT and UPDATE on ``packet`` and no SELECT, so this job's reads, and the
+``WHERE`` of its update, are refused. Widening that role for a one-off
+would weaken it for good. Instead run a throwaway container from the
+ingest image with ``DATABASE_URL`` pointed at the role migrations use,
+the same host and database, with the ``postgresql+asyncpg`` scheme::
 
-    python -m sonoran.ingest.recover --since 2026-09-23T22:00:00Z
-    python -m sonoran.ingest.recover --since 2026-09-23T22:00:00Z --apply
+    docker compose run --rm --no-deps -T -e DATABASE_URL=<migration role URL> \
+        ingest python -m sonoran.ingest.recover --since 2026-09-23T22:00:00Z
+    ... --apply
+
+Take a dump first. On production, 2026-09-27, it recovered 1,832 packets
+and left 1,214 ``no_key``, the rate the fixed ingest rejects live; a second
+run recovered nothing.
 """
 
 from __future__ import annotations
