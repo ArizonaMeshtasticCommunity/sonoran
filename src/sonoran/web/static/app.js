@@ -731,6 +731,19 @@ function replyQuote(parent) {
  */
 const QUIET_CHANNELS = new Set(['Traffic', 'Weather']);
 
+/*
+ * A message's time as the line shows it (#269).
+ *
+ * The exact time was only in a `title`, which a phone never shows. "3d
+ * ago" is no use to somebody who wants to know which evening it was, so
+ * a message older than a day shows its date and time instead. A newer
+ * one keeps "5m ago", which is exact enough to read, and the packet it
+ * opens gives the clock time.
+ */
+function messageWhen(value) {
+  return ageHours(value) >= 24 ? stamp(value) : `${ago(value)} ago`;
+}
+
 function messageItem(message, options = {}) {
   const direct = message.to_node && message.to_node !== '^all';
   const quiet = QUIET_CHANNELS.has(message.channel);
@@ -760,11 +773,11 @@ function messageItem(message, options = {}) {
         ? el('span', { class: 'channel-label', text: message.channel }) : null,
       message.packet_id == null
         ? el('time', { class: 'when', datetime: message.seen_at || '',
-            title: stamp(message.seen_at), text: `${ago(message.seen_at)} ago` })
+            title: stamp(message.seen_at), text: messageWhen(message.seen_at) })
         : el('a', {
-            class: 'when', title: `Open packet ${message.packet_id}`,
+            class: 'when', title: `${stamp(message.seen_at)}. Open packet ${message.packet_id}`,
             href: `#packet/${encodeURIComponent(message.from_node)}/${message.packet_id}`,
-            text: `${ago(message.seen_at)} ago`,
+            text: messageWhen(message.seen_at),
           })),
     messageBody(message.body),
     reactionChips(message.reactions, message.channel));

@@ -314,3 +314,25 @@ def test_a_navigation_during_a_draw_is_not_dropped() -> None:
     assert "if (currentChatChannel) return undefined;" in overview[:3000], (
         "the overview can draw over a channel page opened while it loaded"
     )
+
+
+# --- the time on a message (#269) -------------------------------------
+
+
+def test_a_message_time_is_a_real_tap_target() -> None:
+    """41 x 19 px was the measured hit area; 44 px each way is the floor."""
+    rule = _rule(".messages .who a.when")
+    assert rule, "the time link has no rule of its own"
+    assert "min-height: 44px" in rule and "min-width: 44px" in rule
+    # Taken back as a margin, so the line does not grow.
+    assert "margin-block: -12.5px" in rule
+
+
+def test_an_old_message_shows_its_date_on_the_line() -> None:
+    """A `title` never shows on a phone, and "3d ago" names no evening."""
+    source = _function("messageWhen")
+    assert "ageHours(value) >= 24 ? stamp(value)" in source
+    item = _function("messageItem")
+    assert item.count("messageWhen(message.seen_at)") == 2, (
+        "the time link and the plain time do not both use messageWhen"
+    )

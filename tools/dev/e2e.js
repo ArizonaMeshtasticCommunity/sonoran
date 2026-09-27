@@ -1036,6 +1036,62 @@ async function main() {
     return `${seen.join(', ')}; limit=5; Enter opens #chat`;
   });
 
+  await journey(context, 'chat times are a real tap target and say the date when old', async (page) => {
+    /*
+     * #269, from the phone review: the time links measured 41 x 19 px,
+     * twenty of them to a page, and the exact time was only in a `title`,
+     * which a phone never shows. The hit area must be 44 px each way
+     * without moving the text, and a message older than a day must show
+     * its date and time on the line itself.
+     *
+     * The channel is served here, so there is a message three days old to
+     * look at whatever the seed's clock says.
+     */
+    const CHANNEL = 'E2ETimes';
+    const now = Date.now();
+    const row = (index, ageMs) => ({
+      packet_id: 910000 + index, from_node: '!0e2e0003', from_node_id: '!0e2e0003', from_name: 'Times test',
+      to_node: '^all', channel: CHANNEL, body: `message ${index}`, seen_at: new Date(now - ageMs).toISOString(),
+      reply_id: null, emoji: false, reply_to: null, reactions: [], metrics: null,
+    });
+    const rows = [row(1, 5 * 60000), row(0, 3 * 86400000)];
+    await page.route(/\/api\/chat\?/, async (route, request) => {
+      const query = new URL(request.url()).searchParams;
+      if (query.get('channel') !== CHANNEL) return route.continue();
+      return route.fulfill({ json: query.get('before') ? [] : rows });
+    });
+    const measure = () => [...document.querySelectorAll('.page.active .messages .who a.when')].map((link) => {
+      const box = link.getBoundingClientRect();
+      return { w: Math.round(box.width), h: Math.round(box.height), text: link.textContent, title: link.title };
+    });
+    const seen = [];
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('about:blank');
+      await open(page, `chat/${CHANNEL}`, 500);
+      must(await waitFor(page, () => document.querySelectorAll('[data-chat-scroll] a.when').length === 2, 15000),
+        `the served messages never drew at ${width}px`);
+      const times = await page.evaluate(measure);
+      for (const time of times) {
+        must(time.w >= 44 && time.h >= 44, `a time link is ${time.w} x ${time.h} px at ${width}px`);
+      }
+      const [old, fresh] = times;
+      must(!/ago$/.test(old.text) && /\d/.test(old.text) && old.title.startsWith(old.text),
+        `a three-day-old message says "${old.text}", not its date and time`);
+      must(/ago$/.test(fresh.text), `a five-minute-old message says "${fresh.text}"`);
+      seen.push(`${width}px ${times.map((t) => `${t.w}x${t.h}`).join(' ')} "${old.text}"`);
+    }
+    // The dashboard's feed uses the same line.
+    await page.goto('about:blank');
+    await open(page, 'dashboard', 500);
+    must(await waitFor(page, () => document.querySelectorAll('[data-recent-chat] a.when').length > 0, 15000),
+      'no time link drew on the dashboard');
+    const dash = await page.evaluate(measure);
+    must(dash.every((time) => time.w >= 44 && time.h >= 44),
+      `a dashboard time link is under 44 px: ${dash.map((t) => `${t.w}x${t.h}`).join(' ')}`);
+    return `${seen.join('; ')}; dashboard ${dash.length} at >= 44x44`;
+  });
+
   await journey(context, 'the chat table pages on as you scroll', async (page) => {
     /*
      * #297. The table view stopped at 100 rows: only the reading view

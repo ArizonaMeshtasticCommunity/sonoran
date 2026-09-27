@@ -1718,6 +1718,17 @@ body.chart-staged { overflow: hidden; }
 .messages .who .when {
   margin-inline-start: auto; color: var(--muted); text-decoration: none; flex: none;
 }
+/*
+ * A real tap target (#269). The time link measured 41 x 19 px, and a
+ * page of chat holds twenty of them. The hit area is padded to 44 px
+ * each way (WCAG 2.5.5, and Apple's and Google's own minimum), and the
+ * same amount is taken back as a negative margin, so the line is exactly
+ * as tall as before and the text does not move.
+ */
+.messages .who a.when {
+  display: inline-flex; align-items: center; justify-content: flex-end;
+  min-height: 44px; min-width: 44px; margin-block: -12.5px;
+}
 .messages a.when:hover, .messages a.when:focus-visible { text-decoration: underline; }
 .messages .body { overflow-wrap: anywhere; }
 .messages .body .hash { color: var(--accent); }
