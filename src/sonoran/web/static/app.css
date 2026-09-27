@@ -690,6 +690,30 @@ a.button-link .icon + span { margin-left: .4rem; }
   flex-direction: column;
   gap: 1rem;
 }
+/*
+ * The node page's section chips (#286). Drawn on a phone only, where the
+ * page is one column seven screens long. The row sticks to the top of
+ * the screen and scrolls sideways when six chips do not fit, which they
+ * do not at 320 px; it never widens the page. Each chip is 44 px tall,
+ * the size the mobile review asks of a touch target.
+ *
+ * `scroll-margin-top` stops a panel landing under the row it was
+ * reached from.
+ */
+.node-jump { display: none; }
+@media (max-width: 40rem) {
+  /* Two selectors' worth, to beat `[data-node-body] > *` further down,
+     which would centre the row at 100% instead of taking it to the
+     screen edges. */
+  [data-node-body] > .node-jump {
+    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none;
+    position: sticky; top: 0; z-index: 5;
+    width: auto; margin-inline: -1rem; padding: .4rem 1rem;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .node-jump .chip { flex: 0 0 auto; min-height: 2.75rem; }
+  [data-node-body] [data-jump] { scroll-margin-top: 4rem; }
+}
 /* "View on full map" sits at the right of the heading it belongs to
  * (#193.6), the way the node page's other headings carry a count. */
 h3 .node-map-link { margin-inline-start: auto; font-size: .8rem; font-weight: 400; }

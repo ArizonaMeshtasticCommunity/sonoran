@@ -1688,6 +1688,49 @@ async function main() {
     return out.join('; ');
   });
 
+  await journey(phone, 'a phone jumps to a node page section and keeps the chips (#286)', async (page) => {
+    /*
+     * The packet timeline was past y = 3760 on an iPhone 14 with no way
+     * to reach it but to scroll. Each chip must land its panel just
+     * under the row, with the row still on screen at the top, and give
+     * the panel the focus. The row must not widen the page, and a
+     * desktop must not draw it.
+     */
+    const nodes = await page.request.get(`${BASE}/api/nodes?limit=1`).then((r) => r.json());
+    must(nodes.length, 'no node to open');
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    const drawn = () => Boolean(document.querySelector('[data-jump="timeline"] table, [data-jump="timeline"] .empty'));
+    await waitFor(page, drawn, 15000);
+    const out = [];
+    for (const key of ['timeline', 'links', 'identity']) {
+      await page.locator(`.node-jump [data-jump-to="${key}"]`).tap();
+      await page.waitForTimeout(1200);
+      const at = await page.evaluate((name) => {
+        const panel = document.querySelector(`[data-jump="${name}"]`);
+        const bar = document.querySelector('.node-jump').getBoundingClientRect();
+        return {
+          panel: Math.round(panel.getBoundingClientRect().top),
+          barTop: Math.round(bar.top),
+          barBottom: Math.round(bar.bottom),
+          focused: document.activeElement === panel,
+          scrollY: Math.round(window.scrollY),
+          doc: [document.documentElement.scrollWidth, document.documentElement.clientWidth],
+        };
+      }, key);
+      must(Math.abs(at.barTop) <= 1, `the chips left the top of the screen after ${key}: top ${at.barTop}`);
+      must(at.panel >= at.barBottom - 1 && at.panel <= at.barBottom + 40,
+        `${key} landed at ${at.panel} px, and the chips end at ${at.barBottom}`);
+      must(at.focused, `${key} did not take the focus`);
+      must(at.doc[0] <= at.doc[1] + 1, `the page scrolls sideways: ${at.doc.join('/')}`);
+      out.push(`${key} at ${at.panel} (y ${at.scrollY})`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(300);
+    const wide = await page.evaluate(() => document.querySelector('.node-jump').getBoundingClientRect().height);
+    must(wide === 0, 'the section chips are drawn on a desktop');
+    return out.join(', ');
+  });
+
   await journey(phone, 'a phone can read what a node field means (#256)', async (page) => {
     /*
      * Every Identity and Device field carries the same hint button as a

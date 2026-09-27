@@ -7202,6 +7202,51 @@ async function drawTimeline(target, nodeId, pageHours, types) {
   }
 }
 
+/*
+ * A row of section chips that stays at the top of a phone screen (#286).
+ *
+ * The node page is 13 panels in one column on a phone, 7.1 screens on an
+ * iPhone 14, with the packet timeline past y = 3760 and no way to reach
+ * it but to scroll. The chips are the mobile review's item 21.
+ *
+ * Buttons, not `#` links. The address is this dashboard's router, and a
+ * link to `#node-timeline` would leave the node page for one that does
+ * not exist. Each chip finds its panel when pressed, by `data-jump`,
+ * because Health and Links and routes are swapped for their finished
+ * panels after the first draw. The panel then takes the focus, so a
+ * screen reader goes where the eye went.
+ *
+ * CSS draws the row below 40rem only. A wider screen shows two columns
+ * and the page is short enough to scan.
+ */
+const NODE_JUMPS = [
+  ['identity', 'Identity'], ['health', 'Health'], ['activity', 'Activity'],
+  ['map', 'Map'], ['links', 'Links'], ['timeline', 'Timeline'],
+];
+
+function nodeJumpBar(body) {
+  return el('nav', { class: 'node-jump', 'aria-label': 'Sections of this page' },
+    NODE_JUMPS.map(([key, label]) => el('button', {
+      type: 'button',
+      class: 'chip',
+      'data-jump-to': key,
+      text: label,
+      onclick: () => {
+        const target = $(`[data-jump="${key}"]`, body);
+        if (!target) return;
+        target.setAttribute('tabindex', '-1');
+        target.scrollIntoView({ behavior: REDUCED_MOTION.matches ? 'auto' : 'smooth', block: 'start' });
+        target.focus({ preventScroll: true });
+      },
+    })));
+}
+
+/** Mark a node page panel as the place one of the section chips goes. */
+function jumpTarget(key, panel) {
+  panel.setAttribute('data-jump', key);
+  return panel;
+}
+
 async function loadNodeDetail(nodeId) {
   const page = $('[data-page="node"]');
   const hours = $('[data-node-hours]', page).value || '720';
@@ -7241,12 +7286,13 @@ async function loadNodeDetail(nodeId) {
    * came for — below the fold on a busy node. Both are capped at five
    * rows now and say how many more there are.
    */
-  const health = el('div', { class: 'panel' }, el('p', { class: 'loading', text: 'Loading health checks' }));
-  const routes = el('div', { class: 'panel span-2' },
-    el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' }));
+  const health = jumpTarget('health',
+    el('div', { class: 'panel' }, el('p', { class: 'loading', text: 'Loading health checks' })));
+  const routes = jumpTarget('links', el('div', { class: 'panel span-2' },
+    el('h3', { text: 'Links and routes' }), el('p', { class: 'loading', text: 'Loading' })));
   const history = el('div', { class: 'grid two span-2 history-grid' });
-  const packets = el('div', { class: 'panel span-2 timeline' },
-    el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' }));
+  const packets = jumpTarget('timeline', el('div', { class: 'panel span-2 timeline' },
+    el('h3', { text: 'Packet timeline' }), el('p', { class: 'loading', text: 'Loading' })));
 
   /*
    * The four short panels get a row of their own (#102).
@@ -7275,9 +7321,9 @@ async function loadNodeDetail(nodeId) {
    * the two separated by Activity and Weather.
    */
   const summary = el('div', { class: 'grid summary-row' },
-    identityPanel(node),
+    jumpTarget('identity', identityPanel(node)),
     el('div', { class: 'summary-stack' }, devicePanel(detail), health),
-    activityPanel(detail),
+    jumpTarget('activity', activityPanel(detail)),
     weatherPanel(detail));
 
   /*
@@ -7299,7 +7345,7 @@ async function loadNodeDetail(nodeId) {
    * line on the first screen, which is what the issue asked for.
    */
   // `health` is inside `summary` now, so it is not passed again here.
-  replace(body, summary, nodeMapPanel(detail), el('div', { class: 'grid two' },
+  replace(body, summary, jumpTarget('map', nodeMapPanel(detail)), el('div', { class: 'grid two' },
     routes,
     history,
     messagesPanel(detail),
@@ -7307,6 +7353,8 @@ async function loadNodeDetail(nodeId) {
     heardByPanel(detail.heard_by),
     signalPanel,
     packets));
+  // The chips go first, above the summary, and stick from there (#286).
+  body.prepend(nodeJumpBar(body));
 
   const id = encodeURIComponent(nodeId);
   const [gaps, historyData, routesData] = await getAll([
@@ -7316,8 +7364,8 @@ async function loadNodeDetail(nodeId) {
   ]);
   // The page may have moved on to another node while these loaded.
   if (currentNodeId !== nodeId) return;
-  health.replaceWith(healthPanel(gaps, detail, issuesPanel(gaps)));
-  routes.replaceWith(routesPanel(routesData));
+  health.replaceWith(jumpTarget('health', healthPanel(gaps, detail, issuesPanel(gaps))));
+  routes.replaceWith(jumpTarget('links', routesPanel(routesData)));
   drawNodeHistory(history, historyData);
   const types = (detail.activity.by_portnum || []).map((row) => row.portnum);
   await Promise.all([
