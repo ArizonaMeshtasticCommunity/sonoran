@@ -225,6 +225,22 @@ const PLANNER_SETTLED = () => {
  * `start` runs the prediction. A shared link starts one by itself, and
  * then there is nothing to click.
  */
+/*
+ * The first value a page function returns that is not null, from ONE
+ * call. `waitFor` then a second `evaluate` is two reads, and a page that
+ * re-renders between them hands the second one nothing: "Cannot
+ * destructure property 'value' of null" on the CI runner.
+ */
+async function valueOf(page, read, timeout = 15000, step = 300) {
+  const until = Date.now() + timeout;
+  for (;;) {
+    const got = await page.evaluate(read);
+    if (got != null) return got;
+    if (Date.now() >= until) return null;
+    await page.waitForTimeout(step);
+  }
+}
+
 async function predict(page, start, timeout = 240000) {
   if (start) await start();
   if (!(await waitFor(page, PLANNER_SETTLED, timeout))) {
@@ -535,6 +551,9 @@ async function main() {
       // Written out in full: `page.evaluate` sends the function's text,
       // so it cannot close over a helper defined out here.
       const read = () => {
+        // Not while a render is running: its half-drawn page, or the
+        // previous node's, is not this node's answer.
+        if (loading) return null;
         const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
           .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
         return found ? {
@@ -542,8 +561,9 @@ async function main() {
           detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
         } : null;
       };
-      must(await waitFor(page, read, 15000), `${id}: the furthest tile never drew`);
-      const { value, detail } = await page.evaluate(read);
+      const got = await valueOf(page, read);
+      must(got, `${id}: the furthest tile never drew`);
+      const { value, detail } = got;
       must(value !== '-' && value !== '', `${id} (${kind}): the tile is a bare "${value}"`);
       if (kind === 'exact') {
         must(/^\d[\d.,]*\s?(ft|mi|m|km)$/.test(value), `${id}: an exact distance reads "${value}"`);
@@ -579,6 +599,9 @@ async function main() {
       });
       await page.goto(`${BASE}/?wide=${estimate}#node/${encodeURIComponent(someone)}`, { waitUntil: 'load' });
       const read = () => {
+        // Not while a render is running: its half-drawn page, or the
+        // previous node's, is not this node's answer.
+        if (loading) return null;
         const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
           .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
         return found ? {
@@ -586,8 +609,9 @@ async function main() {
           detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
         } : null;
       };
-      must(await waitFor(page, read, 15000), `${estimate} ± ${error} km: the furthest tile never drew`);
-      const { value, detail } = await page.evaluate(read);
+      const got = await valueOf(page, read);
+      must(got, `${estimate} ± ${error} km: the furthest tile never drew`);
+      const { value, detail } = got;
       must(value.startsWith(`${word} `), `${estimate} ± ${error} km reads "${value}", wanted "${word} ..."`);
       must(/±|rounded by up to/.test(detail), `${estimate} ± ${error} km lost its range: "${detail}"`);
       seen.push(`${estimate}±${error}=${value}`);
