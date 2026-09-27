@@ -265,3 +265,52 @@ def test_the_table_view_is_not_the_pinned_layout() -> None:
     assert "chatTable(chatRows)" in _function("chatDrawTable"), (
         "the table view no longer draws the rows"
     )
+
+
+# --- the overview has no range (#295) ---------------------------------
+
+
+def test_the_overview_hides_the_range() -> None:
+    """Will: the overview is a quick look; the channel pages keep the range."""
+    source = _function("chatHead")
+    assert "[data-chat-range]" in source, "the head does not touch the range control"
+    assert re.search(r"range\.hidden = !channel", source), (
+        "the range is not hidden on the overview (no channel)"
+    )
+
+
+def test_the_overview_asks_for_one_fixed_window() -> None:
+    """The address range is ignored on the overview, whatever it holds."""
+    start = APP.index("PAGES.chat = async (page) => {")
+    body = APP[start : APP.index("\n};\n", start)]
+    code = "\n".join(
+        line
+        for line in re.sub(r"/\*.*?\*/", "", body, flags=re.S).splitlines()
+        if not line.strip().startswith("//")
+    )
+    assert "api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}" in code
+    assert "chatRange()" not in code, "the overview still reads the range in force"
+    assert "chatDrawRange" not in code, "the overview still fills the range boxes"
+    assert re.search(r"const CHAT_OVERVIEW_HOURS = 168;", APP)
+    assert "last ${CHAT_OVERVIEW_WINDOW}" in code, "the overview does not say its window"
+
+
+def test_a_navigation_during_a_draw_is_not_dropped() -> None:
+    """Opening a channel while the overview loaded left "Loading" (#295).
+
+    `render` drops a call while another is in flight. The router's call
+    must be kept and run after, and the overview must not draw over a
+    channel page opened while it loaded. Measured: 3 of 6 loads stuck
+    before, 6 of 6 drawn after.
+    """
+    start = APP.index("async function navigateRender(name)")
+    keep = APP[start : APP.index("\n}\n", start)]
+    assert "pendingRender = name" in keep, "a navigation during a draw is dropped"
+    start = APP.index("async function render(name)")
+    body = APP[start : APP.index("\n}\n", start)]
+    assert "await render(next)" in body, "the kept navigation is never run"
+    assert "await navigateRender(known);" in APP, "the router does not ask to be kept"
+    overview = APP[APP.index("PAGES.chat = async (page) => {") :]
+    assert "if (currentChatChannel) return undefined;" in overview[:3000], (
+        "the overview can draw over a channel page opened while it loaded"
+    )

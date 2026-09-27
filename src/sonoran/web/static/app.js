@@ -7384,6 +7384,9 @@ const CHAT_NEAR_TOP = 240;
  */
 const CHAT_AT_BOTTOM = 48;
 const CHAT_DEFAULT_HOURS = 168;
+/* The overview's one window (#295), and the same window in words. */
+const CHAT_OVERVIEW_HOURS = 168;
+const CHAT_OVERVIEW_WINDOW = '7 days';
 
 let currentChatChannel = null;
 let chatView = 'chat';
@@ -7649,6 +7652,14 @@ function chatHead(page, channel, sub) {
   subtitle.textContent = sub || '';
   subtitle.hidden = !sub;
   $('[data-chat-back]', page).hidden = !channel;
+  /*
+   * The range is for a channel page only (#295). Will: the overview "is
+   * just supposed to be a quick way to see the recent messages and
+   * chats". Hidden, not removed, because the channel pages use the same
+   * markup.
+   */
+  const range = $('[data-chat-range]', page);
+  if (range) range.hidden = !channel;
   const views = $('[data-chat-view]', page);
   views.hidden = !channel;
   for (const button of $$('[data-chat-view-choice]', views)) {
@@ -7974,29 +7985,29 @@ PAGES.chat = async (page) => {
   if (currentChatChannel) return chatChannelPage(page, currentChatChannel);
   // The overview is an ordinary scrolling page, not the pinned chat.
   page.classList.remove('chat-full');
-  chatHead(page, null,
-    'One section for each detected channel on the preset chosen in the menu, grouped by what it '
-    + 'is for. New names land in Custom.');
   /*
-   * The overview counts a WINDOW, not a range.
+   * The overview has a fixed window and no range control (#295).
    *
-   * `/api/chat/overview` takes `hours` and nothing else, and widening it
-   * to a pair of instants is a change to a shared endpoint for the sake of
-   * a list of channel names. The span of the chosen range is used instead,
-   * rounded up to the hour and clamped to what the endpoint accepts, so
-   * the channel list covers at least what the reader asked for.
+   * It used to turn the chosen range into a span of hours, because
+   * `/api/chat/overview` takes `hours` and nothing else. So an end date
+   * did nothing, and a range set here was lost as soon as a channel was
+   * opened. Will asked for the overview to be a quick look at recent
+   * messages, and for the channel pages to keep the range. The window is
+   * said in words, because no control on the page says it any more.
    *
-   * Rounded UP deliberately: a list that showed slightly less than the
-   * range would hide a channel whose only message sits near the edge.
+   * An old link such as `#chat?from=…` shows the same page as `#chat`.
+   * The query is taken out of the address, so the link does not look as
+   * if it holds a range. `replaceState`, so the router does not run again.
    */
-  const range = chatRange();
-  const end = range.to ? range.to.getTime() : Date.now();
-  const start = range.from ? range.from.getTime() : end - CHAT_DEFAULT_HOURS * 3600000;
-  const spanHours = Math.ceil(Math.max(1, (end - start) / 3600000));
-  const hours = String(Math.min(8760, spanHours));
-  chatDrawRange(page);
+  if (window.location.hash.startsWith('#chat?')) window.history.replaceState(null, '', '#chat');
+  chatHead(page, null,
+    `Messages from the last ${CHAT_OVERVIEW_WINDOW}. One section for each detected channel `
+    + 'on the preset chosen in the menu, grouped by what it is for. New names land in Custom.');
   const body = $('[data-chat-body]', page);
-  const data = await get(`api/chat/overview?hours=${hours}`).catch((error) => error);
+  const data = await get(`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}`).catch((error) => error);
+  // A channel was opened while this loaded. Drawing the overview now
+  // would put it over the channel page that is already there.
+  if (currentChatChannel) return undefined;
   if (data instanceof Error) return replace(body, failure(data));
   if (!data.sections.length) {
     return replace(body, empty('No channels have stored messages. Text storage may be off.'));
@@ -9911,6 +9922,27 @@ function drawPresetScope(name) {
   note.textContent = applies ? '' : 'Not used on this page.';
 }
 
+/*
+ * A navigation that arrived while another page was still drawing.
+ *
+ * `render` drops a call while one is in flight, which is right for the
+ * live tick and wrong for the router. Opening a channel while the chat
+ * overview was still loading was dropped, and the reader was left on
+ * "Loading" under a channel address (#295, seen at about one load in
+ * two when the overview took 3.8 s). The router's call is kept here and
+ * run when the drawing in flight ends.
+ */
+let pendingRender = null;
+
+/** Draw a page the router opened, after any draw still in flight. */
+async function navigateRender(name) {
+  if (loading) {
+    pendingRender = name;
+    return;
+  }
+  await render(name);
+}
+
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
@@ -9926,6 +9958,11 @@ async function render(name) {
     loading = false;
     markScrollableTables(page);
     revealHints(page);
+  }
+  if (pendingRender) {
+    const next = pendingRender;
+    pendingRender = null;
+    if (next === currentPage) await render(next);
   }
 }
 
@@ -10078,7 +10115,7 @@ async function route() {
     else link.removeAttribute('aria-current');
   }
   markNavHere(known);
-  await render(known);
+  await navigateRender(known);
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
 }

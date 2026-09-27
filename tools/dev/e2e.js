@@ -803,12 +803,24 @@ async function main() {
      * be linked to -- somebody sharing "what was said last night" would
      * send a link that opened on the default week.
      */
-    await open(page, 'chat');
-    const before = await page.locator('[data-chat-body] .panel').count();
+    /*
+     * Since #295 the range lives on a channel page only, so this finds a
+     * channel from the overview and changes the range there.
+     */
+    await open(page, 'chat', 500);
+    const link = () => {
+      const found = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return found ? decodeURIComponent(found.getAttribute('href').replace('#chat/', '')) : null;
+    };
+    must(await waitFor(page, link, 15000), 'the overview drew no channel to open');
+    const channel = await page.evaluate(link);
+    await open(page, `chat/${encodeURIComponent(channel)}/table`);
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/chat\?/.test(request.url())) asked.push(new URL(request.url()).searchParams.get('since'));
+    });
     await page.click('[data-chat-quick="24"]');
-    await page.waitForTimeout(3500);
-    const after = await page.locator('[data-chat-body] .panel').count();
-    must(after > 0, 'no channel sections after changing the range');
+    await page.waitForTimeout(3000);
     const hash = await page.evaluate(() => window.location.hash);
     must(/[?&]from=/.test(hash), `the range did not reach the address: ${hash}`);
     /*
@@ -817,7 +829,62 @@ async function main() {
      * while somebody watched it, and live would stop appending.
      */
     must(!/[?&]to=/.test(hash), `a quick range should stay open-ended: ${hash}`);
-    return `${before} sections over the default week, ${after} over 24 h`;
+    const since = asked.map((value) => new Date(value).getTime()).filter(Number.isFinite);
+    const day = Date.now() - 24 * 3600000;
+    must(since.some((when) => Math.abs(when - day) < 120000),
+      `the channel was not asked for again over the last 24 h: ${asked.join(', ')}`);
+    return `${channel} asked again from ${new Date(Math.min(...since)).toISOString()}`;
+  });
+
+  await journey(context, 'the chat overview has no range, a channel page has one', async (page) => {
+    /*
+     * #295. Will: the overview "is just supposed to be a quick way to see
+     * the recent messages and chats"; the channel pages keep the range.
+     * An old overview link with a range in it must show the same fixed
+     * window, and say that window in words.
+     */
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/chat\/overview\?/.test(request.url())) asked.push(new URL(request.url()).search);
+    });
+    const shown = () => {
+      const range = document.querySelector('[data-page="chat"] [data-chat-range]');
+      const quick = document.querySelector('[data-page="chat"] [data-chat-quick="24"]');
+      return {
+        range: Boolean(range && range.offsetParent),
+        quick: Boolean(quick && quick.offsetParent),
+        sub: (document.querySelector('[data-chat-sub]') || {}).textContent || '',
+        hash: window.location.hash,
+      };
+    };
+    const seen = [];
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 800 });
+      // A real load each time: from `#chat` to `#chat?from=` is only a
+      // change of fragment, which does not load the page again.
+      await page.goto('about:blank');
+      await open(page, 'chat?from=2026-09-01T00:00:00Z', 500);
+      // Drawn, so no request is still in flight when the page is left.
+      must(await waitFor(page, () => Boolean(document.querySelector(
+        '[data-page="chat"] [data-chat-body] .panel, [data-page="chat"] [data-chat-body] .empty')), 15000),
+      `the overview never drew at ${width}px`);
+      const overview = await page.evaluate(shown);
+      must(!overview.range && !overview.quick, `the range shows on the overview at ${width}px`);
+      must(/last 7 days/.test(overview.sub), `the overview does not say its window: "${overview.sub}"`);
+      must(overview.hash === '#chat', `the old range stayed in the address: ${overview.hash}`);
+      seen.push(`${width}px hidden`);
+    }
+    must(asked.length && asked.every((query) => /[?&]hours=168(&|$)/.test(query)),
+      `the overview asked for another window: ${asked.join(', ')}`);
+    const channel = await page.evaluate(() => {
+      const link = document.querySelector('[data-page="chat"] a.title[href^="#chat/"]');
+      return link ? link.getAttribute('href') : null;
+    });
+    must(channel, 'the overview drew no channel to open');
+    await open(page, channel.slice(1), 3000);
+    const on = await page.evaluate(shown);
+    must(on.range && on.quick, 'the channel page lost its range control');
+    return `${seen.join(', ')}; hours=168 on ${asked.length} request(s); ${channel} shows the range`;
   });
 
   await journey(context, 'the chat reads bottom-up and pages upward', async (page) => {
