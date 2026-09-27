@@ -262,6 +262,45 @@ async function advanced(page) {
   must(shown, 'the Advanced control did not reveal the fields it hides');
 }
 
+/*
+ * The widths a node page table is held to (#255, #260): a phone at the
+ * WCAG reflow floor, a tablet, a small laptop and a desktop. Each one
+ * puts the node page grid on a different number of tracks, so a table
+ * that fits at one says nothing about the next.
+ */
+const TABLE_WIDTHS = [320, 768, 1024, 1440];
+
+/**
+ * Whether one table fits the `.table-wrap` that holds it, at each width.
+ *
+ * The reflow journey below measures the DOCUMENT, and a table scrolling
+ * sideways inside its own wrapper never widens the document -- that is
+ * what the wrapper is for. So the 320 px sweep stayed green over both
+ * tables Will reported. This measures the wrapper.
+ *
+ * (Not the sweep's own title here: `test_settings_and_units.py` finds the
+ * sweep by that title, and a comment quoting it is found first.)
+ *
+ * `find` runs in the page and returns the `.table-wrap`, or null. A
+ * missing wrapper is a failure, never a pass: a panel that drew its empty
+ * state instead of the table has fitted nothing.
+ */
+async function tableFitsAt(page, find, label) {
+  const out = [];
+  for (const width of TABLE_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(400);
+    const size = await page.evaluate(find);
+    must(size, `${label}: no table at ${width} px, so nothing was measured`);
+    must(
+      size.scroll <= size.client + 1,
+      `${label} scrolls sideways at ${width} px: the table is ${size.scroll} px in a ${size.client} px panel`,
+    );
+    out.push(`${width}:${size.scroll}/${size.client}`);
+  }
+  return out.join(' ');
+}
+
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
@@ -292,6 +331,45 @@ async function main() {
     const after = await button.evaluate(rows);
     must(after > before, `rows did not grow (${before} -> ${after})`);
     return `${before} -> ${after} rows`;
+  });
+
+  await journey(context, 'the Activity table fits its panel at every width', async (page) => {
+    /*
+     * #255. The seeded mesh sends mostly telemetry, and "Telemetry" fits
+     * anywhere, so a real node alone would pass this before the fix as
+     * well as after it. The node's own answer is therefore extended with
+     * the three longest labels the dashboard really prints and a count in
+     * the millions -- what a busy node on the live mesh shows -- and the
+     * table is asserted to have drawn them before anything is measured.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=5`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    const LONG = ['UNREADABLE_UNRECORDED', 'TEXT_MESSAGE_COMPRESSED_APP', 'UNREADABLE_PKI'];
+    await page.route(/\/api\/nodes\/[^/]+\/detail\?/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.activity.by_portnum.push(...LONG.map((portnum) => ({ portnum, count: 1234567 })));
+      await route.fulfill({ response, json: body });
+    });
+    // Found by its heading, the thing a reader finds it by, so the
+    // journey does not depend on a hook the fix itself added.
+    const find = () => {
+      const panel = [...document.querySelectorAll('[data-page="node"] .panel')]
+        .find((node) => /^Activity/.test((node.querySelector('h3') || {}).textContent || ''));
+      const wrap = panel && panel.querySelector('.table-wrap');
+      const table = wrap && wrap.querySelector('table');
+      return table ? {
+        scroll: Math.max(table.scrollWidth, wrap.scrollWidth),
+        client: wrap.clientWidth,
+        text: wrap.innerText,
+      } : null;
+    };
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    must(await waitFor(page, find, 15000), 'the Activity table never drew');
+    const { text } = await page.evaluate(find);
+    must(/Unreadable, reason not recorded/.test(text) && /1,234,567/.test(text),
+      'the long labels were not drawn, so this would measure a table that was never stressed');
+    return tableFitsAt(page, find, 'the Activity table');
   });
 
   await journey(context, 'the nodes search narrows the list', async (page) => {

@@ -5447,12 +5447,41 @@ function identityPanel(node) {
       [el('dt', { text: label }), el('dd', { text: value })])));
 }
 
+/*
+ * What the node sent, by type (#255).
+ *
+ * The table scrolled sideways inside its own panel. The panel is one of
+ * four in `.summary-row`, whose tracks go down to 15 rem, so at 1440 px
+ * the table has about 238 px to live in. Every cell was `nowrap`, and
+ * the labels are long: "Unreadable, reason not recorded" alone is wider
+ * than that at this font size. `.table-wrap` did exactly its job and
+ * scrolled, for a two-column table that has no business scrolling.
+ *
+ * Three changes, and each one is needed:
+ *
+ * - The type column WRAPS (`wrap: true`, which `td.wrap` turns into
+ *   `white-space: normal`), so a label takes two lines rather than the
+ *   panel's width. Every label has spaces to break at: `portnumLabel`
+ *   turns the underscores of a port name it does not know into spaces.
+ * - The heading is "Type", not "Packet type". A `nowrap` heading sets
+ *   a floor under its column, and the panel is already titled
+ *   "Activity". The exact wire values still reach the reader through
+ *   the heading's hint button, which `revealHints` builds from each
+ *   cell's `data-exact`.
+ * - The count stays `nowrap` and right-aligned with tabular figures.
+ *   A number broken over two lines reads as two numbers.
+ *
+ * Asserted at 320, 768, 1024 and 1440 px by the e2e journey "the node
+ * page tables fit their panels", which measures the table against its
+ * wrapper. The reflow journey could not catch this: it measures the
+ * document, and a table scrolling inside `.table-wrap` never widens it.
+ */
 function activityPanel(detail) {
   return el('div', { class: 'panel' },
     el('h3', {}, 'Activity',
       el('span', { class: 'muted', text: `${count(detail.activity.packet_count)} packets in ${detail.window_hours} h` })),
     el('div', { class: 'table-wrap' }, table([
-      { label: 'Packet type', cell: (row) => portnumCell(row.portnum) },
+      { label: 'Type', wrap: true, cell: (row) => portnumCell(row.portnum) },
       { label: 'Count', num: true, cell: (row) => count(row.count) },
     ], detail.activity.by_portnum, 'This node sent no packets in the window.')));
 }
