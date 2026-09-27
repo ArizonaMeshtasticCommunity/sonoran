@@ -5392,8 +5392,40 @@ function weatherPanel(detail) {
     list || telemetryEmpty('This node sends no environment telemetry.'));
 }
 
+/*
+ * The Device readings as rows, each with its flag (#254).
+ *
+ * Not through `definitionList`, which the Weather panel and the packet
+ * page share and which has no idea what "bad" is. Same filter as it,
+ * though: a reading the node did not send is not a row, so a missing
+ * value cannot be drawn at all, let alone drawn red.
+ *
+ * A battery above 100 % is the firmware saying "external power"
+ * (`telemetry.proto`: "0-100 (>100 means powered)"). "101 %" read as a
+ * battery charged past full to somebody new to this, so it says so.
+ */
+function deviceRows(device) {
+  return Object.entries(device || {})
+    .filter(([key, value]) => value != null && DEVICE_LABELS[key])
+    .map(([key, value]) => {
+      const [label, format] = DEVICE_LABELS[key];
+      const text = key === 'battery_level' && batteryState(value) === 'mains'
+        ? 'External power' : format(value);
+      return { key, label, text, flag: fieldFlag(key, value) };
+    });
+}
+
+/** Rows as a definition list, the flag on the value it is about. */
+function fieldList(rows) {
+  return el('dl', { class: 'kv fields' }, rows.flatMap(({ label, text, flag }) => [
+    el('dt', { text: label }),
+    fieldValue(text, flag),
+  ]));
+}
+
 function devicePanel(detail) {
-  const list = definitionList(detail.device, DEVICE_LABELS);
+  const rows = deviceRows(detail.device);
+  const list = rows.length ? fieldList(rows) : null;
   return el('div', { class: 'panel' },
     el('h3', {
       'data-label': 'Device',
@@ -5419,32 +5451,59 @@ function messagesPanel(detail) {
       : empty('This node sent no stored messages in the window.'));
 }
 
-function identityPanel(node) {
+/*
+ * The Identity rows (#254).
+ *
+ * Placeholders are capitalised: "Unknown", "Not reported", "Never".
+ * They are values in a list, and the list's other values -- "Yes",
+ * "No", a name -- are capitalised, so a lower-case "unknown" read as a
+ * sentence that had lost its start. #193.4 did the same for Yes and No.
+ *
+ * `ago()` is not used for the placeholder: it answers "never" and
+ * "unknown" in lower case for every page on the site, and here it is
+ * only reached once `last_heard` is known.
+ */
+function identityRows(node) {
   const rows = [
-    ['Node ID', node.node_id],
-    ['Long name', node.long_name || 'not reported'],
-    ['Short name', node.short_name || 'not reported'],
-    ['Hardware', node.hw_model || 'unknown'],
-    ['Role', node.role ? `${roleLabel(node.role)} (${node.role})` : 'unknown'],
+    { key: 'node_id', label: 'Node ID', text: node.node_id },
+    { key: 'long_name', label: 'Long name', text: node.long_name || 'Not reported' },
+    { key: 'short_name', label: 'Short name', text: node.short_name || 'Not reported' },
+    { key: 'hw_model', label: 'Hardware', text: node.hw_model || 'Unknown' },
+    { key: 'role', label: 'Role', text: node.role ? `${roleLabel(node.role)} (${node.role})` : 'Unknown' },
     // Through `yesNo`, not inlined. These two were the reason #193.4
     // could be "fixed" in the helper and still show lower case here.
-    ['Licensed', yesNo(node.is_licensed)],
-    ['MQTT gateway', yesNo(node.is_mqtt_gateway)],
-    ['Channel', node.last_channel || 'unknown'],
-    ['First seen', stamp(node.first_seen)],
-    ['Last heard', node.last_heard ? `${stamp(node.last_heard)} (${ago(node.last_heard)} ago)` : 'never'],
+    // The API always sends a boolean; were it ever absent, the row says
+    // Unknown rather than drawing an empty cell or, worse, "No".
+    { key: 'is_licensed', label: 'Licensed', text: yesNo(node.is_licensed) ?? 'Unknown' },
+    { key: 'is_mqtt_gateway', label: 'MQTT gateway', text: yesNo(node.is_mqtt_gateway) ?? 'Unknown' },
+    { key: 'last_channel', label: 'Channel', text: node.last_channel || 'Unknown' },
+    { key: 'first_seen', label: 'First seen', text: stamp(node.first_seen) },
+    {
+      key: 'last_heard',
+      label: 'Last heard',
+      text: node.last_heard ? `${stamp(node.last_heard)} (${ago(node.last_heard)} ago)` : 'Never',
+    },
   ];
   if (node.position) {
-    rows.push(['Position', `${round(node.position.lat, 5)}, ${round(node.position.lon, 5)}`]);
-    rows.push([
-      'Altitude',
-      node.position.altitude == null ? 'unknown' : SonoranUnits.heightFromM(node.position.altitude),
-    ]);
+    rows.push({
+      key: 'position',
+      label: 'Position',
+      text: `${round(node.position.lat, 5)}, ${round(node.position.lon, 5)}`,
+    });
+    rows.push({
+      key: 'altitude',
+      label: 'Altitude',
+      text: node.position.altitude == null ? 'Unknown' : SonoranUnits.heightFromM(node.position.altitude),
+      flag: altitudeFlag(node),
+    });
   }
+  return rows;
+}
+
+function identityPanel(node) {
   return el('div', { class: 'panel' },
     el('h3', {}, 'Identity'),
-    el('dl', { class: 'kv' }, rows.flatMap(([label, value]) =>
-      [el('dt', { text: label }), el('dd', { text: value })])));
+    fieldList(identityRows(node)));
 }
 
 function activityPanel(detail) {
@@ -5503,6 +5562,183 @@ const HEALTH_STATES = {
 const BATTERY_LOW = 5;
 const BATTERY_WEAK = 35;
 const ON_MAINS_ABOVE = 100;
+
+/*
+ * The one reading of a battery level, for the Power card and the Device
+ * panel both (#254).
+ *
+ * The two used to hold their own comparison, and a red Device row
+ * beside a green Power card is the page contradicting itself. `mains`
+ * is its own answer and not `ok`: the firmware sends 101 for "no
+ * battery, or charging" (`MAGIC_USB_BATTERY_LEVEL` in
+ * src/modules/Telemetry/DeviceTelemetry.cpp), which is not a charge.
+ * No level at all is `unknown`, never `bad` -- see `reading` below.
+ */
+function batteryState(level) {
+  const value = reading(level);
+  if (value == null) return 'unknown';
+  if (value > ON_MAINS_ABOVE) return 'mains';
+  return value > BATTERY_WEAK ? 'ok' : value >= BATTERY_LOW ? 'warn' : 'bad';
+}
+
+/* --- What is bad in Identity and Device (#254) ------------------- */
+
+/*
+ * A value as a number, or null. Refuses null BEFORE any comparison.
+ *
+ * `Number(null)` is 0, and `null < 5` is true, so a node that sent no
+ * battery level would read as a flat battery. That shape has caused
+ * five bugs in this repository. A value we do not have is never a bad
+ * measurement: absent is `null`, and every threshold below starts here.
+ */
+function reading(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/*
+ * Channel use: the firmware's own two lines, not ours.
+ *
+ * meshtastic/firmware src/airtime.h (master at 6d41e27, 2026-08-20):
+ *
+ *     uint8_t max_channel_util_percent = 40;
+ *     uint8_t polite_channel_util_percent = 25;
+ *
+ * `isTxAllowedChannelUtil` in src/airtime.cpp allows a send only while
+ * utilisation is BELOW the figure, so the figure itself is the first
+ * value at which the node holds back. Hence `>=` in `FIELD_FLAGS`.
+ *
+ * - At 25 % most nodes skip their own routine broadcasts: position
+ *   (PositionModule), device telemetry (DeviceTelemetry) and neighbour
+ *   info (NeighborInfoModule) all ask with `polite = true`. Some roles
+ *   are let off one check each: TRACKER and TAK_TRACKER for position,
+ *   sensor and router roles for device telemetry (`isSensorOrRouterRole`).
+ * - At 40 % a node also stops sending NodeInfo (NodeInfoModule asks
+ *   with `polite = false`), which is how its name and hardware reach
+ *   everybody else.
+ *
+ * The figure is the node's own measure of the last minute -- six ten
+ * second slots, `CHANNEL_UTILIZATION_PERIODS` -- of every packet it
+ * sent or heard and of LoRa noise, as `telemetry.proto` says. So it is
+ * mostly a fact about the node's neighbourhood.
+ */
+const CHANNEL_USE_POLITE = 25;
+const CHANNEL_USE_MAX = 40;
+
+/*
+ * Air time sending: OUR judgement, stated as one.
+ *
+ * The firmware sets no limit on it in the US. `isTxAllowedAirUtil`
+ * applies only where the region has a duty cycle below 100 %, and US
+ * is `RDEF(US, 902.0f, 928.0f, 100, ...)` in src/mesh/RadioInterface.cpp.
+ * (EU_868 is 10 %, and there the node stops its metadata at half that.)
+ * A search of the meshtastic/meshtastic documentation repository found
+ * no figure for it either. So:
+ *
+ * - `AIR_TX_HIGH` is tied to the channel line above. A node that sends
+ *   for a quarter of the hour fills, on its own, the share of air at
+ *   which every node that hears it starts skipping its own broadcasts.
+ *   It is the same constant, so the two cannot drift.
+ * - `AIR_TX_CHECK` is a judgement and nothing firmer: one node taking
+ *   two fifths of that shared quarter is worth a look.
+ */
+const AIR_TX_CHECK = 10;
+const AIR_TX_HIGH = CHANNEL_USE_POLITE;
+
+/*
+ * The fields that can be bad, and what each state is called.
+ *
+ * Every flag carries a word as well as a colour and a shape (WCAG
+ * 1.4.1): red alone tells a colour-blind reader nothing, and it tells a
+ * screen reader nothing at all. The glyphs are the health cards', so a
+ * red row and a red card mean the same thing.
+ *
+ * Deliberately NOT here:
+ * - Voltage. The cut-off depends on the cell. The firmware's own table
+ *   (`OCV_ARRAY` in src/power.h) runs 4.19 V to 3.10 V for a Li-ion
+ *   cell and 3.65 V to 2.50 V for LiFePO4, and a two-cell board such as
+ *   the T-Beam 1W reads 6 to 8 V. One figure would be wrong for one of
+ *   them. The battery level is the firmware's own conversion for that
+ *   board, so the page judges the level instead.
+ * - Hardware "Unknown". This page cannot tell a node that never sent a
+ *   NodeInfo from one on a board newer than our vendored protobufs:
+ *   `_enum_name` in ingest/handlers/nodeinfo.py stores both as NULL.
+ *   Red would blame the owner for our own gap.
+ * - Role, firmware and last heard. Role is a judgement about where a
+ *   node stands, not a number. Firmware is not on this page. How old a
+ *   "last heard" may be depends on intervals the owner chose and the
+ *   page cannot see.
+ */
+const FIELD_FLAGS = {
+  channel_utilization(value) {
+    if (value >= CHANNEL_USE_MAX) return { state: 'bad', word: 'Very busy' };
+    if (value >= CHANNEL_USE_POLITE) return { state: 'warn', word: 'Busy' };
+    return null;
+  },
+  air_util_tx(value) {
+    if (value >= AIR_TX_HIGH) return { state: 'bad', word: 'Very chatty' };
+    if (value >= AIR_TX_CHECK) return { state: 'warn', word: 'Chatty' };
+    return null;
+  },
+  battery_level(value) {
+    const state = batteryState(value);
+    if (state === 'bad') return { state, word: 'Nearly flat' };
+    if (state === 'warn') return { state, word: 'Low' };
+    return null;
+  },
+};
+
+/** The flag for one device reading, or null. Null in, null out. */
+function fieldFlag(key, value) {
+  const number = reading(value);
+  if (number == null || !FIELD_FLAGS[key]) return null;
+  return FIELD_FLAGS[key](number);
+}
+
+/*
+ * The one case where a missing value IS the finding (#254).
+ *
+ * Will: "if someone is reporting their position but not Altitude we
+ * should show Unknown as red." A node with no position at all is a
+ * different state -- it is not reporting where it is -- and must not be
+ * red for altitude. Red needs both coordinates AND no altitude.
+ *
+ * Not for TAK and TAK_TRACKER. The firmware gives those roles position
+ * flags without `ALTITUDE_MSL` (`installRoleDefaults` in
+ * src/mesh/NodeDB.cpp), so they send `altitude_hae` in place of
+ * `altitude` (PositionModule.cpp), and ingest keeps only `altitude`.
+ * They DID send a height; red would blame them for what this site
+ * throws away.
+ *
+ * Ingest also stores an altitude of exactly 0 as NULL
+ * (`position.altitude or None`), so a node at sea level reads Unknown.
+ * The lowest ground in Arizona is about 20 m, so on this mesh that
+ * costs nothing, and it is noted here rather than hidden.
+ */
+const ALTITUDE_NOT_OURS = new Set(['TAK', 'TAK_TRACKER']);
+
+function altitudeFlag(node) {
+  const position = node.position;
+  if (!position || reading(position.lat) == null || reading(position.lon) == null) return null;
+  if (position.altitude != null) return null;
+  if (ALTITUDE_NOT_OURS.has(node.role)) return null;
+  return { state: 'bad', word: 'Not sent' };
+}
+
+/**
+ * One value in a definition list, with its flag when it has one.
+ *
+ * The word is visible text, not a `title` or an `aria-label`, so the
+ * accessible name and what a sighted reader sees are the same thing.
+ */
+function fieldValue(text, flag) {
+  if (!flag) return el('dd', { text });
+  const look = HEALTH_STATES[flag.state];
+  return el('dd', { class: `field-flag state-${flag.state}` },
+    el('span', { class: 'field-value', text }), ' ',
+    el('span', { class: 'field-note' },
+      el('span', { class: 'field-glyph', 'aria-hidden': 'true', text: look.glyph }),
+      ` ${flag.word}`));
+}
 
 /** Scroll to the potential issues panel, which holds every card's evidence. */
 function showIssues() {
@@ -5582,12 +5818,14 @@ function healthChecks(gaps, detail) {
   const battery = device.battery_level;
   let powerState = 'unknown';
   let powerMeasure = 'This node sends no device telemetry.';
-  if (battery != null) {
-    if (battery > ON_MAINS_ABOVE) {
+  const band = batteryState(battery);
+  if (band !== 'unknown') {
+    if (band === 'mains') {
       powerState = 'ok';
       powerMeasure = 'On external power.';
     } else {
-      powerState = battery > BATTERY_WEAK ? 'ok' : battery >= BATTERY_LOW ? 'warn' : 'bad';
+      // The Device panel reads the same function, so the two agree.
+      powerState = band;
       powerMeasure = `Battery ${round(battery, 0)} %`
         + (device.voltage != null ? `, ${round(device.voltage, 2)} V` : '')
         + (powerState === 'warn' ? '. Low enough to restart under load.' : '.');

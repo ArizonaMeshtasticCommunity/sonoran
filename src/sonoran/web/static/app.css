@@ -972,6 +972,21 @@ dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1rem; 
 dl.kv dt { color: var(--muted); }
 dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 
+/*
+ * A bad or doubtful value in the node page's Identity and Device
+ * panels (#254).
+ *
+ * The value and its word both take the colour, and the word is there so
+ * the colour is never the only signal (WCAG 1.4.1): "Busy", "Low",
+ * "Not sent" say what red and yellow only hint at. `--warn` and `--bad`
+ * are the tokens the health cards use, and each theme sets them for its
+ * own contrast, so nothing here picks a colour.
+ */
+.field-flag.state-bad { color: var(--bad); }
+.field-flag.state-warn { color: var(--warn); }
+.field-flag .field-note { font-size: .8rem; font-weight: 650; white-space: nowrap; }
+.field-flag .field-glyph { font-weight: 700; }
+
 .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
 /*
  * The dashboard feed sizes to what it holds.

@@ -68,6 +68,13 @@ warn a double square, bad a solid square, unknown a dashed circle.
 The word for unknown uses `--muted`, because `--status-unknown` is
 dim by design and is not a text colour.
 
+The node page's Identity and Device panels (#254) colour a value
+`--warn` or `--bad` as text, which both tokens are rated for above. The
+value always has a word beside it ("Busy", "Low", "Not sent") and the
+health cards' glyph, so rule 1 holds. The thresholds are defined once,
+with their sources, above `FIELD_FLAGS` in `app.js`. A value the node
+did not send is never coloured: absent is not bad.
+
 ## 5. Categorical scale: packet families
 
 The family ramp is the categorical scale. Charts that split by packet
