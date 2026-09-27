@@ -9207,6 +9207,16 @@ function applyTheme(mode) {
   } else {
     root.setAttribute('data-theme', mode);
   }
+  /*
+   * Safari tints its status bar and tab bar with `theme-color` (#253).
+   * The pre-paint script in index.html sets it on load; a switch made
+   * here has to set it again, or a reader who picks light keeps the dark
+   * strip above the page until the next reload. Read back from --bg
+   * rather than written as a literal, so app.css stays the one source.
+   */
+  const tint = document.querySelector('meta[name="theme-color"]');
+  const colour = getComputedStyle(root).getPropertyValue('--bg').trim();
+  if (tint && colour) tint.setAttribute('content', colour);
 }
 
 function wirePresetSwitch() {

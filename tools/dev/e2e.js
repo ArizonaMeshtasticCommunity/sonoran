@@ -1301,6 +1301,60 @@ async function main() {
   await phone.close();
 
   /*
+   * #253: on an iPad, overscrolling past the top showed a band about
+   * 25 px tall. Chromium cannot rubber-band, so this does not reproduce
+   * the band. It measures what the band is made of: the background of
+   * `html` (which was transparent), of `body`, the `--bg` token, and the
+   * `theme-color` Safari tints its bars with (which was dark in both
+   * themes). All four must be one colour, in each theme and after a
+   * switch made through the page's own `applyTheme`.
+   */
+  for (const scheme of ['dark', 'light']) {
+    const themed = await browser.newContext({
+      viewport: { width: 834, height: 1194 }, isMobile: true, hasTouch: true, colorScheme: scheme,
+    });
+    await journey(themed, `the colour behind the page is the page colour (${scheme})`, async (page) => {
+      await open(page, 'dashboard', 1500);
+      const read = () => page.evaluate(() => {
+        const root = document.documentElement;
+        const probe = document.createElement('div');
+        probe.style.color = getComputedStyle(root).getPropertyValue('--bg').trim();
+        document.body.append(probe);
+        const token = getComputedStyle(probe).color;
+        probe.remove();
+        const meta = document.querySelector('meta[name="theme-color"]');
+        probe.style.color = meta ? meta.getAttribute('content') : '';
+        document.body.append(probe);
+        const tint = getComputedStyle(probe).color;
+        probe.remove();
+        return {
+          theme: root.getAttribute('data-theme'),
+          token,
+          html: getComputedStyle(root).backgroundColor,
+          body: getComputedStyle(document.body).backgroundColor,
+          tint,
+        };
+      });
+      const check = (got, when) => {
+        must(got.html === got.token, `${when}: html is ${got.html}, the page colour is ${got.token}`);
+        must(got.body === got.token, `${when}: body is ${got.body}, the page colour is ${got.token}`);
+        must(got.tint === got.token, `${when}: theme-color is ${got.tint}, the page colour is ${got.token}`);
+      };
+      const first = await read();
+      must(first.theme === scheme, `the page opened in ${first.theme}, the system asked for ${scheme}`);
+      check(first, `${scheme} on load`);
+      const other = scheme === 'dark' ? 'light' : 'dark';
+      await page.evaluate((mode) => applyTheme(mode), other);
+      const switched = await read();
+      must(switched.theme === other, `applyTheme('${other}') left the page ${switched.theme}`);
+      must(switched.token !== first.token, 'the two themes have the same page colour, so this proves nothing');
+      check(switched, `after switching to ${other}`);
+      return `${first.token} on load, ${switched.token} after switching; html, body and theme-color agree`;
+    });
+    await themed.close();
+  }
+
+  /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
    * 400 percent zoom the criterion is derived from.
