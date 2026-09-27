@@ -2297,6 +2297,26 @@ tr.row-link:focus-within td { background: var(--panel-2); }
   }
   [data-firehose-table] td:nth-child(n + 6) { display: none; }
 }
+
+/*
+ * "3 new ↑" over the firehose (#280). The holder is sticky and has no
+ * height, so the pill floats at the top of the screen while the table
+ * scrolls under it, and showing it moves no row.
+ */
+.new-pill-anchor {
+  position: sticky; top: .5rem; z-index: 6; height: 0;
+  display: flex; justify-content: center;
+}
+.new-pill {
+  min-height: 44px; padding: 0 1.1rem; border: 0; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent);
+  font: inherit; font-weight: 650; cursor: pointer;
+  box-shadow: 0 2px 10px var(--scroll-shadow);
+}
+.new-pill[hidden] { display: none; }
+/* Where the pill scrolls to: the newest row, clear of the screen edge. */
+[data-firehose-table] { scroll-margin-top: 1rem; }
+.new-pill:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 /*
  * `.open-link` was here, for a per-row "Open >" link. The first cell is
  * the link now and the row is clickable, so the third way to do one thing

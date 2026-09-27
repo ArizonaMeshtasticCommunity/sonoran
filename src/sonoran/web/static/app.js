@@ -8376,6 +8376,84 @@ async function fillFirehoseTypes(page) {
     .map((row) => el('option', { value: portnumLabel(row.name || row.portnum) })));
 }
 
+/*
+ * "3 new ↑": what arrived above a reader who has scrolled down (#280).
+ *
+ * The firehose is newest first and refreshes every 15 s. A reader two
+ * screens down keeps their place, because the browser anchors the
+ * scroll when rows are put in above them (see `redrawLiveTable`), and so
+ * they cannot see that anything arrived. The pill counts the packets put
+ * in above them since they scrolled away, and a tap goes back to the
+ * newest.
+ *
+ * It counts only what a poll ADDED to a page already drawn. A first draw,
+ * a new filter and a return to the page all change the address, and a
+ * change of address starts the count again, so a filter never reads as
+ * 150 new packets.
+ *
+ * Pull to refresh was considered and is not recommended by the review
+ * (§4.5): the page already refreshes itself.
+ */
+const firehoseNew = { count: 0, pill: null, address: null };
+
+/** True when the newest row is above the top of the screen. */
+function firehoseAway(target) {
+  const first = target && target.querySelector('tbody tr');
+  return Boolean(first) && first.getBoundingClientRect().bottom < 0;
+}
+
+function drawFirehosePill() {
+  const pill = firehoseNew.pill;
+  if (!pill) return;
+  pill.hidden = firehoseNew.count === 0;
+  const n = count(firehoseNew.count);
+  pill.textContent = `${n} new ↑`;
+  pill.setAttribute('aria-label', `${n} new packet${firehoseNew.count === 1 ? '' : 's'}. Go to the newest.`);
+}
+
+function resetFirehosePill() {
+  firehoseNew.count = 0;
+  drawFirehosePill();
+}
+
+/*
+ * The pill sits in a sticky holder of no height, so showing it moves no
+ * row: a pill that pushed the table down would move the very row the
+ * reader was reading.
+ */
+function firehosePill(target) {
+  if (firehoseNew.pill && firehoseNew.pill.isConnected) return firehoseNew.pill;
+  const pill = el('button', { type: 'button', class: 'new-pill', hidden: true });
+  pill.addEventListener('click', () => {
+    resetFirehosePill();
+    const behavior = REDUCED_MOTION.matches ? 'auto' : 'smooth';
+    target.scrollIntoView({ block: 'start', behavior });
+  });
+  target.before(el('div', { class: 'new-pill-anchor' }, pill));
+  firehoseNew.pill = pill;
+  window.addEventListener('scroll', () => {
+    if (firehoseNew.count && !firehoseAway(target)) resetFirehosePill();
+  }, { passive: true });
+  window.addEventListener('hashchange', () => {
+    firehoseNew.address = null;
+    resetFirehosePill();
+  });
+  return pill;
+}
+
+/** Count what the poll put in above the reader, from the keys before it. */
+function countFirehoseNew(target, before, rows) {
+  firehosePill(target);
+  // The first draw at an address is the page, not news. The rows left
+  // from another filter or another visit are not the ones it replaces.
+  const address = location.hash;
+  const moved = address !== firehoseNew.address;
+  firehoseNew.address = address;
+  if (moved || !before.size || !firehoseAway(target)) return resetFirehosePill();
+  firehoseNew.count += rows.filter((row) => !before.has(String(row.packet_key))).length;
+  drawFirehosePill();
+}
+
 PAGES.firehose = async (page) => {
   fillFirehoseTypes(page);
   /*
@@ -8456,6 +8534,8 @@ PAGES.firehose = async (page) => {
    */
   const packetHref = (row) =>
     `#packet/${encodeURIComponent(row.from_node)}/${row.packet_key.split(':')[1]}`;
+  // The rows on screen before this poll, for the "N new" pill (#280).
+  const before = new Set(Array.from(target.querySelectorAll('tbody tr'), (row) => row.dataset.rowKey));
   redrawLiveTable(target, rows, (row) => row.packet_key, () => table([
     /*
      * Time first, and it IS the link (Will, 2026-09-26).
@@ -8518,6 +8598,7 @@ PAGES.firehose = async (page) => {
       cell: (row) => count(row.seen_count),
     },
   ], rows, nothing, { rowHref: packetHref }));
+  countFirehoseNew(target, before, rows);
 };
 
 /* --- Traceroutes ------------------------------------------------ */

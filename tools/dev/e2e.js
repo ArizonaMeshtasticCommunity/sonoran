@@ -1785,6 +1785,77 @@ async function main() {
       + 'nearest dot wins a shared tap; 40 px away hits nothing';
   });
 
+  await journey(phone, 'the firehose says how many packets arrived above you (#280)', async (page) => {
+    /*
+     * New packets are put in through a route, so the count is known
+     * without writing to a shared database. `render('firehose')` is the
+     * call the Live timer makes; Live is switched off so no timer poll
+     * lands in the middle.
+     */
+    let extra = 0;
+    await page.route(/\/api\/packets\?/, async (route) => {
+      const response = await route.fetch();
+      const rows = await response.json();
+      if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+      const made = [];
+      for (let n = extra; n > 0; n -= 1) {
+        const [node] = rows[0].packet_key.split(':');
+        made.push({ ...rows[0], packet_key: `${node}:${990000000 + n}`, first_seen_at: new Date().toISOString() });
+      }
+      return route.fulfill({ response, json: [...made, ...rows].slice(0, rows.length) });
+    });
+    await open(page, 'firehose', 1000);
+    must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
+      'the firehose drew too few rows to scroll');
+    await page.evaluate(() => document.querySelector('[data-page="firehose"] [data-live]').setAttribute('aria-pressed', 'false'));
+    const poll = () => page.evaluate(async () => {
+      await render('firehose');
+    });
+    const pill = () => page.evaluate(() => {
+      const one = document.querySelector('[data-page="firehose"] .new-pill');
+      if (!one || one.hidden) return null;
+      const box = one.getBoundingClientRect();
+      return { text: one.textContent, top: Math.round(box.top), height: Math.round(box.height) };
+    });
+
+    // The control: at the top, new packets are in plain sight.
+    extra = 2;
+    await poll();
+    must((await pill()) === null, 'the pill showed for a reader already at the newest packets');
+
+    // Two screens down.
+    await page.evaluate(() => window.scrollTo(0, window.innerHeight * 2.5));
+    await page.waitForTimeout(300);
+    const y0 = await page.evaluate(() => window.scrollY);
+    const row0 = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-firehose-table] tbody tr')];
+      const seen = rows.find((row) => row.getBoundingClientRect().top > 0);
+      return { key: seen.dataset.rowKey, top: Math.round(seen.getBoundingClientRect().top) };
+    });
+    extra = 5;
+    await poll();
+    let shown = await pill();
+    must(shown && /^3 new/.test(shown.text), `after 3 new packets the pill says ${JSON.stringify(shown)}`);
+    must(shown.top >= 0 && shown.top < 80 && shown.height >= 44, `the pill is not at the top of the screen: ${JSON.stringify(shown)}`);
+    const held = await page.evaluate((key) => Math.round(
+      document.querySelector(`[data-firehose-table] tbody tr[data-row-key="${key}"]`).getBoundingClientRect().top), row0.key);
+    must(Math.abs(held - row0.top) <= 2, `the row being read moved from ${row0.top} to ${held} px`);
+    extra = 6;
+    await poll();
+    shown = await pill();
+    must(shown && /^4 new/.test(shown.text), `after one more the pill says ${JSON.stringify(shown)}`);
+
+    await page.click('[data-page="firehose"] .new-pill');
+    await page.waitForTimeout(1200);
+    const after = await page.evaluate(() => {
+      const top = document.querySelector('[data-firehose-table] tbody tr').getBoundingClientRect().top;
+      return { y: window.scrollY, first: Math.round(top), inView: top >= -1 && top < window.innerHeight };
+    });
+    must(after.y < y0 && after.inView, `the pill did not go back to the newest: ${JSON.stringify(after)}`);
+    must((await pill()) === null, 'the pill stayed after going back to the top');
+    return `pill "4 new" at y ${shown.top}, reader's row held to ${Math.abs(held - row0.top)} px, tap went back`;
+  });
+
   await journey(phone, 'the map page opens at its top (#270)', async (page) => {
     /*
      * The map's box was `<div id="map">`, and `#map` is also the page's
