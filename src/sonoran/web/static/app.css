@@ -2989,9 +2989,44 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .route-tile .value { font-size: 1.5rem; font-weight: 650; }
 .route-tile .muted { font-size: .8rem; }
 
+/*
+ * "Who hears it" and "Who it hears" fit their half of the panel (#260).
+ *
+ * The name and the line of evidence under it stack in one cell, and
+ * both wrap. `.node-name .long` is `nowrap` with an ellipsis for the
+ * lists where a name must stay on one line; inside a table cell that
+ * rule is a floor, not a cut, because the cell grows to the whole name
+ * before the ellipsis ever applies. `anywhere` because some names have
+ * no space to break at. See `routesPanel` in app.js.
+ */
+.route-who { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.route-who .muted { font-size: .78rem; }
+.route-list .node-name { flex-wrap: wrap; }
+.route-list .node-name .long { white-space: normal; overflow-wrap: anywhere; }
+/* Less padding between three columns than between eight: the panel is
+   half a page wide at most, and 254 px at a 320 px screen. */
+.route-list th, .route-list td { padding-inline: .45rem; }
+
 /* The charts sit in their own grid so each one keeps a whole cell. */
 .history-grid { margin: 0; grid-column: 1 / -1; }
 .timeline .controls { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
+/*
+ * The packet timeline's controls sit top right, on the title's row
+ * (#259). They wrap under the title when the row is too narrow, which
+ * at 320 px is always, so nothing is pushed off the side of a phone.
+ */
+.timeline-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: .5rem 1rem; margin-bottom: .5rem;
+}
+.timeline-head h3 { margin: 0; }
+/* `max-width` on the group as well as on each control: a `select` is as
+   wide as its longest option, and the group grew to hold it and ran off
+   a 320 px screen before this was added. */
+.timeline .timeline-head .controls {
+  margin: 0 0 0 auto; justify-content: flex-end; min-width: 0; max-width: 100%;
+}
+.timeline-head .controls > * { min-width: 0; max-width: 100%; }
 
 /*
  * The key docked on the live map (#46). It is the same content as the

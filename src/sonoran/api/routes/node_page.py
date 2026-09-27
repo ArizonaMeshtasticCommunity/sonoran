@@ -382,7 +382,18 @@ async def node_routes(
     **A distance needs an exact position at both ends.** A coarse
     position is off by up to kilometres, and a "longest hop" computed
     from one is a guess with a number printed on it. Such pairs are left
-    out of every distance here and counted in `coarse_excluded`.
+    out of every `distance_km` here and counted in `coarse_excluded`.
+
+    **Except as an estimate, with its error bar (#257).** Will asked why
+    so many nodes had no furthest-node distance; most blanks were a
+    rounded position, not a missing one. A row whose pair involves a
+    rounded position carries `approx_distance_km` and
+    `distance_error_km` instead, never `distance_km`, and the furthest
+    tiles rank on either. When a tile still has nothing, its
+    `*_reason` says why, so the page can say what would fix it.
+
+    `hears` and `heard_by` also list gateways that uploaded a packet
+    with no hop used (kind `gateway`): see `_direct_links`.
     """
     node_num = require_node_num(node_id)
     now = datetime.now(UTC)
@@ -435,9 +446,17 @@ async def node_routes(
             elif source == node_num:
                 _note(heard_by, target, "traceroute", 1, snr, trace.seen_at)
 
+    # A gateway that uploaded a packet with no hop used heard the sender
+    # itself (#257). See `_direct_links`.
+    for other, total, snr, last in await _direct_links(session, node_num, since, now, "heard_by"):
+        _note(heard_by, other, "gateway", total, snr, last)
+    for other, total, snr, last in await _direct_links(session, node_num, since, now, "hears"):
+        _note(hears, other, "gateway", total, snr, last)
+
     involved = {node_num} | set(hears) | set(heard_by)
     involved |= {end for source, target, _ in segments for end in (source, target)}
     positions = await exact_positions(session, involved)
+    placed = await placed_positions(session, involved)
     names = await resolve_names(session, involved)
 
     coarse_excluded = 0
@@ -464,6 +483,7 @@ async def node_routes(
         rows = []
         for other, facts in found.items():
             distance = _distance(positions, node_num, other)
+            rough = None if distance is not None else _approximate(placed, node_num, other)
             rows.append(
                 _named(names, other)
                 | {
@@ -472,6 +492,10 @@ async def node_routes(
                     "kinds": sorted(facts["kinds"]),
                     "last": facts["last"],
                     "distance_km": distance,
+                    # Both None unless a rounded position is involved, and
+                    # never set beside `distance_km`: one row, one claim.
+                    "approx_distance_km": rough[0] if rough else None,
+                    "distance_error_km": rough[1] if rough else None,
                 }
             )
         rows.sort(key=lambda row: (-int(row["count"]), str(row["node_id"])))  # type: ignore[call-overload]
@@ -479,14 +503,27 @@ async def node_routes(
 
     hears_rows = listed(hears)
     heard_by_rows = listed(heard_by)
+    furthest_heard_by = _furthest(heard_by_rows)
+    furthest_heard = _furthest(hears_rows)
+    own = node_num in placed
+    quiet = not heard_by_rows and await _sent_nothing(session, node_num, since, now)
     return {
         "window_hours": hours,
         "position": positions.get(node_num) is not None,
+        # Whether it has a usable position at all, exact or rounded. The
+        # field above keeps its meaning: exact only.
+        "position_known": own,
         "hears": hears_rows,
         "heard_by": heard_by_rows,
         "longest_segment": longest,
-        "furthest_heard_by": _furthest(heard_by_rows),
-        "furthest_heard": _furthest(hears_rows),
+        "furthest_heard_by": furthest_heard_by,
+        "furthest_heard": furthest_heard,
+        "furthest_heard_by_reason": None
+        if furthest_heard_by
+        else _no_distance_reason(heard_by_rows, own, quiet=quiet),
+        "furthest_heard_reason": None
+        if furthest_heard
+        else _no_distance_reason(hears_rows, own, quiet=False),
         "coarse_excluded": coarse_excluded,
         "traces_read": len(traces),
         "trace_limit_reached": len(traces) >= ROUTE_TRACE_LIMIT,
@@ -516,9 +553,45 @@ def _named(names: dict[int, dict[str, str | None]], node_num: int) -> dict[str, 
     return {"node_id": format_node_id(node_num), "display_name": name_of(names, node_num)}
 
 
+def _reach(row: dict[str, object]) -> float | None:
+    """The distance a row is ranked by: exact, or else the estimate."""
+    value = row.get("distance_km")
+    if value is None:
+        value = row.get("approx_distance_km")
+    return None if value is None else float(value)  # type: ignore[arg-type]
+
+
 def _furthest(rows: list[dict[str, object]]) -> dict[str, object] | None:
-    placed = [row for row in rows if row.get("distance_km") is not None]
-    return max(placed, key=lambda row: row["distance_km"]) if placed else None  # type: ignore[arg-type, return-value]
+    """Return the most distant row, exact or estimated (#257).
+
+    Ranked by the best estimate of each distance. An estimate carries
+    its error bar in the same row, so the page cannot print it as a
+    precise figure. Exact rows are NOT preferred: a partner "about
+    190 km" away is further than an exact 5 km one on any honest
+    reading, and ranking exact rows first would make the tile answer a
+    narrower question than its label asks.
+    """
+    ranked = [(reach, row) for row in rows if (reach := _reach(row)) is not None]
+    return max(ranked, key=lambda pair: pair[0])[1] if ranked else None
+
+
+def _no_distance_reason(rows: list[dict[str, object]], own: bool, *, quiet: bool) -> str:
+    """Say why a furthest-node tile has no distance, as a code (#257).
+
+    The page turns the code into a sentence and says what would fix it.
+    Called only when no row has a distance of either kind.
+
+    - `quiet`: it sent nothing in the window, so nothing could hear it.
+    - `no_link`: nothing recorded a single hop to or from it.
+    - `no_position`: it shares no usable position of its own. Checked
+      before its partners, because theirs cannot help without its own.
+    - `partners_no_position`: every node at the other end shares none.
+    """
+    if not rows:
+        return "quiet" if quiet else "no_link"
+    if not own:
+        return "no_position"
+    return "partners_no_position"
 
 
 async def exact_positions(
@@ -543,6 +616,126 @@ async def exact_positions(
         for node, lat, lon, bits in rows
         if position_confidence(lat, lon, bits, MIN_SITE_PRECISION_BITS)[0] == "exact"
     }
+
+
+async def placed_positions(
+    session: AsyncSession, node_nums: set[int]
+) -> dict[int, tuple[float, float, float]]:
+    """Return every usable position, exact or rounded, with its doubt in km.
+
+    `exact_positions` stays the only source of a distance printed as a
+    figure. This one feeds the estimates beside it (#257): a rounded
+    position still says roughly where a node is, and the firmware's
+    precision table (`positions.PRECISION_DEVIATION_M`) says how
+    roughly. An exact position counts as no doubt, which is the rule
+    every exact distance on this page already applies. A position with
+    no usable coordinates is left out.
+    """
+    if not node_nums:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                Node.node_num, Node.last_lat, Node.last_lon, Node.last_position_precision_bits
+            ).where(Node.node_num.in_(node_nums))
+        )
+    ).all()
+    out: dict[int, tuple[float, float, float]] = {}
+    for node, lat, lon, bits in rows:
+        state, deviation = position_confidence(lat, lon, bits, MIN_SITE_PRECISION_BITS)
+        if state == "none":
+            continue
+        doubt = 0.0 if state == "exact" else (deviation or 0.0) / 1000.0
+        out[node] = (float(lat), float(lon), doubt)
+    return out
+
+
+def _approximate(
+    placed: dict[int, tuple[float, float, float]], first: int, second: int
+) -> tuple[float, float] | None:
+    """Return a distance from a rounded position, and how far off it can be.
+
+    The error bar is the SUM of the two ends' doubts, because each end
+    may have been moved in the worst direction. That is a bound, not a
+    standard deviation, which is the honest reading of a rounding: the
+    firmware says the node is within that distance and nothing more.
+
+    None when either end has no position, and when neither is rounded:
+    that pair has a real distance and belongs in `distance_km`.
+    """
+    one, two = placed.get(first), placed.get(second)
+    if one is None or two is None:
+        return None
+    error = one[2] + two[2]
+    if error <= 0:
+        return None
+    return (round(float(distance_km(one[0], one[1], two[0], two[1])), 2), round(error, 2))
+
+
+async def _direct_links(
+    session: AsyncSession, node_num: int, since: datetime, now: datetime, side: str
+) -> list[tuple[int, int, float | None, datetime | None]]:
+    """Return the gateways that heard this node directly, or the reverse.
+
+    #257: a node heard by nine gateways with no hop used showed no
+    "furthest node that heard it", because this page read only neighbor
+    reports and traceroutes. An upload with no hop used is a single hop
+    by definition, and its signal reading belongs to that hop (AGENTS.md
+    9.5), so it is as much a link as a neighbor report is.
+
+    `heard_by`: gateways that uploaded this node's packets directly.
+    `hears`: senders whose packets this node, as a gateway, uploaded
+    directly. A node's own uploads are never a link (9.5.1), and
+    `_direct` already leaves them out.
+
+    Each packet counts once per pair, however many times it was
+    uploaded: one gateway uploads the same packet many times (9.5.1).
+    """
+    heard_by = side == "heard_by"
+    mine = PacketSeen.from_node_num if heard_by else PacketSeen.gateway_node_num
+    other = PacketSeen.gateway_node_num if heard_by else PacketSeen.from_node_num
+    rows = (
+        await session.execute(
+            select(
+                other,
+                func.count(func.distinct(PacketSeen.packet_id)),
+                func.max(PacketSeen.rx_snr),
+                func.max(PacketSeen.seen_at),
+            )
+            .select_from(PacketSeen)
+            .join(
+                Packet,
+                and_(
+                    Packet.from_node_num == PacketSeen.from_node_num,
+                    Packet.packet_id == PacketSeen.packet_id,
+                ),
+            )
+            .where(
+                mine == node_num,
+                PacketSeen.seen_at >= since,
+                PacketSeen.seen_at <= now,
+                _direct(),
+            )
+            .group_by(other)
+        )
+    ).all()
+    return [(int(who), int(total), snr, last) for who, total, snr, last in rows]
+
+
+async def _sent_nothing(
+    session: AsyncSession, node_num: int, since: datetime, now: datetime
+) -> bool:
+    """True when the node sent no packet at all in the window."""
+    found = await session.scalar(
+        select(Packet.packet_id)
+        .where(
+            Packet.from_node_num == node_num,
+            Packet.first_seen_at >= since,
+            Packet.first_seen_at <= now,
+        )
+        .limit(1)
+    )
+    return found is None
 
 
 def _distance(positions: dict[int, tuple[float, float]], first: int, second: int) -> float | None:

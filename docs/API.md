@@ -154,6 +154,19 @@ Query parameters:
   `gateways`, `snr`, `rssi`. Nulls sort last, whichever the order.
 - `order` — `desc` (default) or `asc`.
 - `offset`, `limit` — paging. Default limit 100. Maximum 500.
+- `before` — a cursor: the rows after the last row of a previous page,
+  in the same order. Every non-empty answer carries the cursor for its
+  last row in the `X-Next-Before` header. A short page is the end.
+  The cursor is opaque, and it carries the `sort` and `order` it was
+  made under: under any other it returns 422, so a later page cannot
+  come back in a different order. Invalid cursors return 422.
+
+Use `before`, not `offset`, to page (#259). Packets arrive all the
+time, and a packet that arrives between two offset pages moves a row
+from one page to the next, so it is shown twice, or it is skipped.
+A cursor names the last row, so a new packet cannot move it. Ties are
+broken by `first_seen_at`, then `from_node`, then `packet_id`, so the
+order is total.
 
 A sort by `hops`, `gateways`, `snr` or `rssi` has to summarise every
 observation in the window before it can order anything. It needs
@@ -220,26 +233,44 @@ Returns the route and neighbour widgets of the node page (#55).
 
 Query parameters: `hours` — default 24, at most 720.
 
-Response: `window_hours`, `position`, `hears`, `heard_by`,
-`longest_segment`, `furthest_heard_by`, `furthest_heard`,
+Response: `window_hours`, `position`, `position_known`, `hears`,
+`heard_by`, `longest_segment`, `furthest_heard_by`, `furthest_heard`,
+`furthest_heard_by_reason`, `furthest_heard_reason`,
 `coarse_excluded`, `traces_read`, `trace_limit_reached`, `hop_depth`.
 
-- `hears` — nodes this node heard: its own neighbour reports, and
-  traceroute hops that arrived at it. `heard_by` — nodes that heard it:
-  their neighbour reports that name it, and traceroute hops that left
-  it. Item: `node_id`, `display_name`, `count`, `best_snr`, `kinds`,
-  `last`, `distance_km`.
+- `position` — true when the node's own position is exact.
+  `position_known` — true when it has a usable position at all, exact or
+  rounded.
+- `hears` — nodes this node heard: its own neighbour reports, traceroute
+  hops that arrived at it, and packets it uploaded as a gateway with no
+  hop used. `heard_by` — nodes that heard it: their neighbour reports
+  that name it, traceroute hops that left it, and gateways that uploaded
+  its packets with no hop used. Item: `node_id`, `display_name`,
+  `count`, `best_snr`, `kinds` (`neighbor`, `traceroute`, `gateway`),
+  `last`, `distance_km`, `approx_distance_km`, `distance_error_km`.
+  A `gateway` count is distinct packets, not uploads.
 - `longest_segment` — the longest single hop of any traceroute the node
   took part in: `from`, `to`, `distance_km`, `snr`.
 - `furthest_heard_by` and `furthest_heard` — the most distant row of
-  each list.
+  each list, ranked by `distance_km` or, when that is null,
+  `approx_distance_km`.
+- `furthest_heard_by_reason` and `furthest_heard_reason` — null when
+  the tile has a distance. Otherwise one of `quiet` (it sent nothing in
+  the window), `no_link` (no single-hop link on record), `no_position`
+  (it has no usable position) or `partners_no_position` (no node at the
+  other end has one).
 - `hop_depth` — `packets`, `median`, and `counts` of `hops` and
   `packets`: the fewest hops each packet took to the nearest gateway.
   The node's own uploads are left out.
 
-A distance needs an exact position at both ends, by the rule the gaps
-page uses. A pair with a coarse or missing position has no distance and
-is counted in `coarse_excluded`. At most the newest 2000 traceroutes
+`distance_km` needs an exact position at both ends, by the rule the
+gaps page uses. A pair with a coarse or missing position has no
+`distance_km`, and a traceroute segment of that kind is counted in
+`coarse_excluded`. A pair where both positions are usable and at least
+one is rounded has `approx_distance_km` instead, with
+`distance_error_km`: the sum of the two ends' precision deviations from
+the firmware table, which bounds how far the rounding can move the
+distance. The two are never both set on one row. At most the newest 2000 traceroutes
 are read, and `trace_limit_reached` says when that cap was hit.
 
 ### 3.4 `GET /api/nodes/{node_id}/heard-by`

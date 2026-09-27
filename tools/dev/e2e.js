@@ -262,6 +262,45 @@ async function advanced(page) {
   must(shown, 'the Advanced control did not reveal the fields it hides');
 }
 
+/*
+ * The widths a node page table is held to (#255, #260): a phone at the
+ * WCAG reflow floor, a tablet, a small laptop and a desktop. Each one
+ * puts the node page grid on a different number of tracks, so a table
+ * that fits at one says nothing about the next.
+ */
+const TABLE_WIDTHS = [320, 768, 1024, 1440];
+
+/**
+ * Whether one table fits the `.table-wrap` that holds it, at each width.
+ *
+ * The reflow journey below measures the DOCUMENT, and a table scrolling
+ * sideways inside its own wrapper never widens the document -- that is
+ * what the wrapper is for. So the 320 px sweep stayed green over both
+ * tables Will reported. This measures the wrapper.
+ *
+ * (Not the sweep's own title here: `test_settings_and_units.py` finds the
+ * sweep by that title, and a comment quoting it is found first.)
+ *
+ * `find` runs in the page and returns the `.table-wrap`, or null. A
+ * missing wrapper is a failure, never a pass: a panel that drew its empty
+ * state instead of the table has fitted nothing.
+ */
+async function tableFitsAt(page, find, label) {
+  const out = [];
+  for (const width of TABLE_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(400);
+    const size = await page.evaluate(find);
+    must(size, `${label}: no table at ${width} px, so nothing was measured`);
+    must(
+      size.scroll <= size.client + 1,
+      `${label} scrolls sideways at ${width} px: the table is ${size.scroll} px in a ${size.client} px panel`,
+    );
+    out.push(`${width}:${size.scroll}/${size.client}`);
+  }
+  return out.join(' ');
+}
+
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
@@ -292,6 +331,230 @@ async function main() {
     const after = await button.evaluate(rows);
     must(after > before, `rows did not grow (${before} -> ${after})`);
     return `${before} -> ${after} rows`;
+  });
+
+  await journey(context, 'the Activity table fits its panel at every width', async (page) => {
+    /*
+     * #255. The seeded mesh sends mostly telemetry, and "Telemetry" fits
+     * anywhere, so a real node alone would pass this before the fix as
+     * well as after it. The node's own answer is therefore extended with
+     * the three longest labels the dashboard really prints and a count in
+     * the millions -- what a busy node on the live mesh shows -- and the
+     * table is asserted to have drawn them before anything is measured.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=5`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    const LONG = ['UNREADABLE_UNRECORDED', 'TEXT_MESSAGE_COMPRESSED_APP', 'UNREADABLE_PKI'];
+    await page.route(/\/api\/nodes\/[^/]+\/detail\?/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.activity.by_portnum.push(...LONG.map((portnum) => ({ portnum, count: 1234567 })));
+      await route.fulfill({ response, json: body });
+    });
+    // Found by its heading, the thing a reader finds it by, so the
+    // journey does not depend on a hook the fix itself added.
+    const find = () => {
+      const panel = [...document.querySelectorAll('[data-page="node"] .panel')]
+        .find((node) => /^Activity/.test((node.querySelector('h3') || {}).textContent || ''));
+      const wrap = panel && panel.querySelector('.table-wrap');
+      const table = wrap && wrap.querySelector('table');
+      return table ? {
+        scroll: Math.max(table.scrollWidth, wrap.scrollWidth),
+        client: wrap.clientWidth,
+        text: wrap.innerText,
+      } : null;
+    };
+    await page.goto(`${BASE}/#node/${encodeURIComponent(nodes[0].node_id)}`, { waitUntil: 'load' });
+    must(await waitFor(page, find, 15000), 'the Activity table never drew');
+    const { text } = await page.evaluate(find);
+    must(/Unreadable, reason not recorded/.test(text) && /1,234,567/.test(text),
+      'the long labels were not drawn, so this would measure a table that was never stressed');
+    return tableFitsAt(page, find, 'the Activity table');
+  });
+
+  await journey(context, 'the Who hears it table fits its panel at every width', async (page) => {
+    /*
+     * #260. On the node heard by the most nodes, as the issue asks: the
+     * rows come from `/routes`, so that is what is compared. One row's
+     * name is then replaced with a long name that has no space in it --
+     * names like that are ordinary on this mesh -- because a table that
+     * fits only short names has not been shown to fit.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=40`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    let busiest = null;
+    for (const node of nodes) {
+      const id = encodeURIComponent(node.node_id);
+      const routes = await (await page.request.get(`${BASE}/api/nodes/${id}/routes?hours=720`)).json();
+      const heard = (routes.heard_by || []).length;
+      if (!busiest || heard > busiest.heard) busiest = { id: node.node_id, heard };
+    }
+    must(busiest && busiest.heard > 0, 'no node on this instance is heard by any other node');
+    const LONG_NAME = 'UTOPIA-PLANITIA-G3-RIDGELINE-REPEATER';
+    await page.route(/\/api\/nodes\/[^/]+\/routes\?/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (body.heard_by && body.heard_by.length) body.heard_by[0].display_name = LONG_NAME;
+      await route.fulfill({ response, json: body });
+    });
+    const find = () => {
+      const heading = [...document.querySelectorAll('[data-page="node"] h4')]
+        .find((node) => /^Who hears it/.test(node.textContent));
+      const wrap = heading && heading.parentElement.querySelector('.table-wrap');
+      const table = wrap && wrap.querySelector('table');
+      return table ? {
+        scroll: Math.max(table.scrollWidth, wrap.scrollWidth),
+        client: wrap.clientWidth,
+        text: wrap.innerText,
+      } : null;
+    };
+    await page.goto(`${BASE}/#node/${encodeURIComponent(busiest.id)}`, { waitUntil: 'load' });
+    must(await waitFor(page, find, 15000), 'the Who hears it table never drew');
+    must((await page.evaluate(find)).text.includes(LONG_NAME),
+      'the long name was not drawn, so this would measure a table that was never stressed');
+    const fits = await tableFitsAt(page, find, 'the Who hears it table');
+    return `${busiest.id}, heard by ${busiest.heard}: ${fits}`;
+  });
+
+  await journey(context, 'a furthest-node tile shows a distance or says why not', async (page) => {
+    /*
+     * #257. Every node shows a distance -- with a range when a position
+     * is rounded -- or a sentence saying why there is none. Never a bare
+     * "-", and never a precise-looking figure from a rounded position.
+     *
+     * One node of each kind the API reports is opened: an exact distance,
+     * an estimate, and each reason for none. The kinds come from /routes,
+     * so the tiles are checked against what they were given rather than
+     * against a count written here.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=40`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    const kinds = new Map();
+    for (const node of nodes) {
+      const routes = await (await page.request.get(
+        `${BASE}/api/nodes/${encodeURIComponent(node.node_id)}/routes?hours=720`)).json();
+      const row = routes.furthest_heard_by;
+      const kind = !row ? `reason:${routes.furthest_heard_by_reason}`
+        : row.distance_km != null ? 'exact' : 'estimate';
+      if (!kinds.has(kind)) kinds.set(kind, node.node_id);
+    }
+    must(kinds.has('estimate'), `no node here has an estimated distance; kinds found: ${[...kinds.keys()].join(', ')}`);
+    must([...kinds.keys()].some((kind) => kind.startsWith('reason:')),
+      'no node here lacks a distance, so the reason sentences were never exercised');
+    const seen = [];
+    for (const [kind, id] of kinds) {
+      await page.goto(`${BASE}/#node/${encodeURIComponent(id)}`, { waitUntil: 'load' });
+      // Written out in full: `page.evaluate` sends the function's text,
+      // so it cannot close over a helper defined out here.
+      const read = () => {
+        const found = [...document.querySelectorAll('[data-page="node"] .route-tile')]
+          .find((node) => /^Furthest node that heard it/i.test(node.querySelector('.label').textContent));
+        return found ? {
+          value: found.querySelector('.value').textContent.trim(),
+          detail: [...found.querySelectorAll('.muted')].map((node) => node.textContent).join(' '),
+        } : null;
+      };
+      must(await waitFor(page, read, 15000), `${id}: the furthest tile never drew`);
+      const { value, detail } = await page.evaluate(read);
+      must(value !== '-' && value !== '', `${id} (${kind}): the tile is a bare "${value}"`);
+      if (kind === 'exact') {
+        must(/^\d[\d.,]*\s?(ft|mi|m|km)$/.test(value), `${id}: an exact distance reads "${value}"`);
+      } else if (kind === 'estimate') {
+        must(/^(about|under) /.test(value), `${id}: an estimate is printed as a plain figure: "${value}"`);
+        must(/±|rounded by up to/.test(detail), `${id}: an estimate has no range beside it: "${detail}"`);
+      } else {
+        must(value === 'Not known', `${id} (${kind}): no distance, yet the tile reads "${value}"`);
+        must(detail.length > 40, `${id} (${kind}): no sentence says why: "${detail}"`);
+      }
+      seen.push(`${kind}=${value}`);
+    }
+    return seen.join('; ');
+  });
+
+  await journey(context, 'the packet timeline scrolls on by cursor', async (page) => {
+    /*
+     * #259. Four claims, each checked on the running page:
+     *   1. the explanation is behind an info control on the title, and
+     *      "LAST 720 H" is gone;
+     *   2. the window control is on the title's row, at its right;
+     *   3. scrolling to the foot loads the next page with `before=`, never
+     *      `offset=`, and carries the sort -- watched on the requests, the
+     *      only place a client-side shortcut cannot hide;
+     *   4. the 7-day rule is still enforced and says so.
+     * The node with the most packets is used, so that there IS a second
+     * page to scroll to; the journey says so when no node has one.
+     */
+    const nodes = await (await page.request.get(`${BASE}/api/nodes?limit=40`)).json();
+    must(Array.isArray(nodes) && nodes.length, 'the instance has no nodes to open');
+    let busiest = null;
+    for (const node of nodes) {
+      const answer = await page.request.get(
+        `${BASE}/api/nodes/${encodeURIComponent(node.node_id)}/packets?hours=720&limit=1`);
+      const total = Number(answer.headers()['x-total-count'] || 0);
+      if (!busiest || total > busiest.total) busiest = { id: node.node_id, total };
+    }
+    must(busiest.total > 50, `no node has more than one page of packets (most: ${busiest.total}), so paging cannot be seen`);
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/nodes\/[^/]+\/packets\?/.test(request.url())) asked.push(request.url());
+    });
+    await page.goto(`${BASE}/#node/${encodeURIComponent(busiest.id)}`, { waitUntil: 'load' });
+    const panel = page.locator('[data-page="node"] .timeline');
+    must(await waitFor(page, () => document.querySelectorAll('[data-page="node"] .timeline tbody tr').length > 0, 20000),
+      'the packet timeline drew no rows');
+
+    // 1. The sentence moved, not deleted, and the window label is gone.
+    const hint = await panel.locator('h3').getAttribute('data-hint');
+    must(/^A packet is one transmission/.test(hint || ''), `the title carries no explanation: ${hint}`);
+    must(/7 days or less/.test(hint), 'the 7-day rule is no longer explained on the title');
+    must(await panel.locator('h3 .hint-open').count() === 1, 'the title has no info control to open it');
+    const text = await panel.innerText();
+    must(!/A packet is one transmission/.test(text), 'the explanation is still printed in the panel');
+    must(!/last \d+ h/i.test(text), 'the "LAST 720 H" label is still there');
+
+    // 2. The window control on the title's row, right-aligned.
+    const title = await panel.locator('h3').boundingBox();
+    const control = await panel.locator('[data-timeline-hours]').boundingBox();
+    const box = await panel.boundingBox();
+    must(control, 'there is no window control in the panel');
+    must(Math.abs((control.y + control.height / 2) - (title.y + title.height / 2)) < 20,
+      `the window control is not on the title's row (title y=${Math.round(title.y)}, control y=${Math.round(control.y)})`);
+    const gap = (box.x + box.width) - (control.x + control.width);
+    must(gap < 40, `the window control is not at the right of the panel: ${Math.round(gap)} px from its edge`);
+
+    // 4, first half: at 30 days the observation sorts are refused and say why.
+    const hops = panel.locator('th[data-label="Hops"]');
+    must(await hops.locator('.sort-button').count() === 0, 'Hops is sortable over 30 days');
+    must(/7 days or less/.test(await hops.getAttribute('data-hint') || ''), 'Hops says nothing about why it cannot sort');
+
+    // 3. Sort, then scroll, and read the requests.
+    await panel.locator('th[data-label="Type"] .sort-button').click();
+    // The redraw is asynchronous, so wait for the NEW heading: the old
+    // rows are still there for a moment and would satisfy "rows > 0".
+    must(await waitFor(page, () => {
+      const th = document.querySelector('[data-page="node"] .timeline th[data-label="Type"]');
+      return th && th.getAttribute('aria-sort') !== 'none'
+        && document.querySelectorAll('[data-page="node"] .timeline tbody tr').length > 0;
+    }, 15000), 'sorting by type drew nothing');
+    const before = await panel.locator('tbody tr').count();
+    asked.length = 0;
+    await panel.locator('[data-timeline-more]').scrollIntoViewIfNeeded();
+    must(await waitFor(page, () => document.querySelectorAll('[data-page="node"] .timeline tbody tr').length > 50, 15000),
+      `scrolling to the foot loaded nothing more (${before} rows)`);
+    const after = await panel.locator('tbody tr').count();
+    const paged = asked.filter((url) => /[?&]before=/.test(url));
+    must(paged.length > 0, `no request carried before=: ${asked.join(' ') || 'no request at all'}`);
+    must(paged.every((url) => /[?&]sort=type\b/.test(url)), `a page lost the sort: ${paged.join(' ')}`);
+    must(!asked.some((url) => /[?&]offset=/.test(url)), `a page was asked for by offset: ${asked.join(' ')}`);
+    const hrefs = await panel.locator('tbody tr a.linky').evaluateAll((links) => links.map((a) => a.getAttribute('href')));
+    must(new Set(hrefs).size === hrefs.length, 'a packet appears twice after paging');
+    const status = await panel.locator('[data-timeline-more] [role="status"]').innerText();
+
+    // 4, second half: choosing 7 days in the panel brings the sort back.
+    await panel.locator('[data-timeline-hours]').selectOption('168');
+    must(await waitFor(page, () => !!document.querySelector('[data-page="node"] .timeline th[data-label="Hops"] .sort-button'), 15000),
+      'Hops is still not sortable at 7 days');
+    return `${busiest.id}: ${before} -> ${after} rows by scrolling, ${paged.length} page(s) by cursor with the sort; "${status}"`;
   });
 
   await journey(context, 'the nodes search narrows the list', async (page) => {

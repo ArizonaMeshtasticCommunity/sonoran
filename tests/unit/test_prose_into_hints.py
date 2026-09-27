@@ -98,9 +98,17 @@ def test_the_reason_a_number_is_missing_stays_visible() -> None:
     reads as a fact. The "Furthest node" tiles say why they are empty
     (#193.7) and that sentence must not be swept into a hint by this
     change.
+
+    #257 changed which sentences those are: a rounded position of its
+    own now gives an estimate, so "Its own position is rounded" is gone,
+    and each reason the API names has a sentence and a fix in
+    `NO_DISTANCE`. The rule pinned here is unchanged: the reason is drawn
+    as visible text on the tile, not as a hint.
     """
     app = _code("app.js")
-    assert "Its own position is rounded, so no distance can be measured." in app
+    assert "It shares no position, so no distance can be measured." in app
+    assert "return twoLine('Not known', why, fix);" in app
+    assert "el('span', { class: 'muted', text: first })" in app
 
 
 # --- #192 ----------------------------------------------------------
