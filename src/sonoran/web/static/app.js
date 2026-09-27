@@ -1863,7 +1863,9 @@ function ensureMap() {
    */
   map.on('zoomend', () => {
     const level = map.getZoom();
-    for (const [marker, row] of mapState.marks || []) marker.setStyle(nodeStyle(row, level));
+    for (const { marker, row } of (mapState.marks || new Map()).values()) {
+      marker.setStyle(nodeStyle(row, level));
+    }
   });
   if (CONFIG.tileUrl) {
     L.tileLayer(CONFIG.tileUrl, {
@@ -1902,29 +1904,77 @@ function ensureMap() {
   return map;
 }
 
+/** What a node's bubble on the map says. Built when it is opened. */
+function mapNodePopup(row) {
+  return el('div', {},
+    el('div', { style: 'font-weight:650' }, row.display_name || row.node_id),
+    el('div', { class: 'muted', style: 'font-size:.8rem' },
+      `${row.node_id} - heard ${ago(row.last_heard)} ago`),
+    el('div', { style: `font-size:.8rem;color:${nodeColour(row)}` },
+      roleLabel(row.role) + (row.is_mqtt_gateway ? ', MQTT gateway' : '')),
+    row.hw_model ? el('div', { class: 'muted', style: 'font-size:.8rem', text: row.hw_model }) : null,
+    el('button', { class: 'linky', type: 'button', text: 'Open node detail', onclick: () => openNode(row.node_id) }));
+}
+
+/*
+ * Bring the node dots up to date with `rows`, in place (#264).
+ *
+ * This used to start with `mapState.nodes.clearLayers()` and build every
+ * marker again. The live timer calls it every fifteen seconds through
+ * `render('map')`, and a Leaflet popup belongs to its marker, so a
+ * reader who had opened a node's bubble lost it at the next refresh --
+ * reported by StarSkream as "the bubble auto-closes". It is the chat's
+ * bug again (see `chatAppendNew`): a live refresh that REDRAWS instead
+ * of UPDATING throws away whatever the reader had open.
+ *
+ * So `mapState.marks` holds one marker per node id across refreshes:
+ *
+ * - a node still present keeps its marker. It moves only if its
+ *   position changed (`setLatLng` fires `move`, and Leaflet carries an
+ *   open popup along with it) and is restyled, because its role, its
+ *   age and the focus mark can all change between polls;
+ * - a node that is new gets a marker;
+ * - a node that is gone, or that the role filter now hides, loses its
+ *   marker. If its bubble was the open one, the bubble closes because
+ *   the node really went away, not as a side effect of redrawing.
+ *
+ * The popup content is a function, so it is built when opened (see
+ * `test_popups_are_built_on_open.py`) and reads the entry's CURRENT row:
+ * a bubble opened after a refresh says what that refresh said. A bubble
+ * already open is not rebuilt, because rebuilding it would drop the
+ * keyboard focus of a reader tabbed onto "Open node detail".
+ */
 function drawMapNodes(rows) {
-  mapState.nodes.clearLayers();
   const bounds = [];
   const zoom = mapState.map ? mapState.map.getZoom() : undefined;
-  // Every marker drawn this pass, so a zoom change can restyle them
-  // without refetching or rebuilding the layer (#196).
-  mapState.marks = [];
+  // One entry per node id, kept between refreshes. A zoom change also
+  // restyles through it, without refetching or rebuilding (#196).
+  if (!(mapState.marks instanceof Map)) mapState.marks = new Map();
+  const marks = mapState.marks;
+  const seen = new Set();
   for (const row of rows) {
     if (row.lat == null || row.lon == null) continue;
     if (!passesRoleFilter(row)) continue;
     bounds.push([row.lat, row.lon]);
-    const marker = L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom));
-    mapState.marks.push([marker, row]);
-    const popup = el('div', {},
-      el('div', { style: 'font-weight:650' }, row.display_name || row.node_id),
-      el('div', { class: 'muted', style: 'font-size:.8rem' },
-        `${row.node_id} - heard ${ago(row.last_heard)} ago`),
-      el('div', { style: `font-size:.8rem;color:${nodeColour(row)}` },
-        roleLabel(row.role) + (row.is_mqtt_gateway ? ', MQTT gateway' : '')),
-      row.hw_model ? el('div', { class: 'muted', style: 'font-size:.8rem', text: row.hw_model }) : null,
-      el('button', { class: 'linky', type: 'button', text: 'Open node detail', onclick: () => openNode(row.node_id) }));
-    marker.bindPopup(popup);
-    marker.addTo(mapState.nodes);
+    seen.add(row.node_id);
+    const held = marks.get(row.node_id);
+    if (held) {
+      held.row = row;
+      const at = held.marker.getLatLng();
+      if (at.lat !== row.lat || at.lng !== row.lon) held.marker.setLatLng([row.lat, row.lon]);
+      held.marker.setStyle(nodeStyle(row, zoom));
+      continue;
+    }
+    const entry = { marker: L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom)), row };
+    entry.marker.bindPopup(() => mapNodePopup(entry.row));
+    entry.marker.addTo(mapState.nodes);
+    marks.set(row.node_id, entry);
+  }
+  for (const [nodeId, entry] of marks) {
+    if (seen.has(nodeId)) continue;
+    // `removeLayer` fires `remove`, which closes this marker's popup.
+    mapState.nodes.removeLayer(entry.marker);
+    marks.delete(nodeId);
   }
   return bounds;
 }
@@ -3133,7 +3183,7 @@ PAGES.map = async (page) => {
   if (mapFocus) {
     const wanted = mapFocus.nodeId;
     const found = nodes.find((row) => row.node_id === wanted);
-    const target = (mapState.marks || []).find(([, row]) => row.node_id === wanted);
+    const target = mapState.marks ? mapState.marks.get(wanted) : null;
     if (found && found.lat != null && found.lon != null) {
       map.setView([found.lat, found.lon], MAP_FOCUS_ZOOM);
       /*
@@ -3142,7 +3192,10 @@ PAGES.map = async (page) => {
        * A popup was the obvious choice and does not survive. The live
        * map polls, `drawMapNodes` clears the layer, and the popup goes
        * with it -- measured, it was already closed six seconds after
-       * the link was followed.
+       * the link was followed. Since #264 the layer is updated in
+       * place and a popup would survive, but the mark is still the
+       * better answer: it needs no click to dismiss, hides no
+       * neighbour, and holds through every zoom.
        *
        * `focusNodeId` is read by `nodeStyle`, so the mark is reapplied
        * on every redraw and on every zoom change. A thicker ring in the
@@ -3151,7 +3204,7 @@ PAGES.map = async (page) => {
        * follow).
        */
       mapState.focusNodeId = found.node_id;
-      if (target) target[0].setStyle(nodeStyle(found, map.getZoom()));
+      if (target) target.marker.setStyle(nodeStyle(found, map.getZoom()));
       mapState.fitted = true;
     } else {
       /*

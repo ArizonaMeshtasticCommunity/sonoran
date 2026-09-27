@@ -979,6 +979,12 @@ seconds after following the link. The mark is recomputed inside
 `nodeStyle`, so it is reapplied on every redraw and zoom change, and it
 is a width *and* a hue so it survives a greyscale render.
 
+Later (#264): the clearing itself was the bug for every reader, not just
+for a focus link. A bubble the reader opened by clicking also closed on
+the next Live refresh. `drawMapNodes` now keeps one marker per node id
+and updates it in place, so a popup survives a refresh; the focus mark
+stays a style because it needs no click to dismiss and hides nothing.
+
 ### The part that matters most: #193 items 1 and 2 were not fixed by #207
 
 I claimed them from reading the CSS. Measuring the rendered page found

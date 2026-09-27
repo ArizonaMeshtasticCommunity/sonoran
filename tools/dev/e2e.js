@@ -710,6 +710,128 @@ async function main() {
     return `panel with ${total} controls, Escape exits`;
   });
 
+  await journey(context, 'a node bubble on the map survives live refreshes', async (page) => {
+    /*
+     * #264, reported by StarSkream: open a node's bubble on the map, and
+     * the next live refresh closed it. `drawMapNodes` cleared the layer
+     * and built every marker again, and a Leaflet popup dies with its
+     * marker.
+     *
+     * The map draws on a canvas (`preferCanvas`), so a dot has no DOM
+     * element to click. The bubble is opened the way a click opens it,
+     * `openPopup()` on the node's own marker, found through
+     * `window.SonoranMap`, which is the map's published console handle.
+     * The bubble itself IS in the DOM, and that is what is asserted.
+     *
+     * The node list is served through a route here so that one node can
+     * move and another can vanish without writing to a shared database.
+     * Everything else about the refresh is the page's own: `render('map')`
+     * is exactly what the Live timer calls, and `nodeCache.at = 0` only
+     * expires the two-minute node cache so the next render refetches.
+     */
+    const edits = { move: null, drop: null };
+    await page.route(/\/api\/map\/nodes(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      let rows = await response.json();
+      if (edits.drop) rows = rows.filter((row) => row.node_id !== edits.drop);
+      if (edits.move) {
+        rows = rows.map((row) => (row.node_id === edits.move
+          ? { ...row, lat: row.lat + 0.05, lon: row.lon + 0.05 } : row));
+      }
+      return route.fulfill({ response, json: rows });
+    });
+    await open(page, 'map', 4000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size >= 2, 20000), 'the map drew fewer than two nodes');
+
+    const picked = await page.evaluate(() => {
+      const [a, b] = [...window.SonoranMap.marks.entries()];
+      window.__e2eBubble = a[1].marker;
+      a[1].marker.openPopup();
+      const at = b[1].marker.getLatLng();
+      return { open: a[0], moved: b[0], lat: at.lat, lon: at.lng };
+    });
+    const BUBBLE = () => {
+      const bubble = document.querySelector('[data-page="map"] .leaflet-popup');
+      return Boolean(bubble && /Open node detail/.test(bubble.textContent));
+    };
+    // Leaflet fades a closed popup out and takes it from the DOM 200 ms
+    // later, so a bubble read at once after it closed is still there.
+    // Every DOM reading below waits past that fade first.
+    const FADE_MS = 600;
+    must(await page.evaluate(BUBBLE), 'opening a node did not show its bubble');
+
+    // One refresh from the Live timer itself, unprompted: wait for the
+    // map's traffic request that only the timer's `render('map')` sends.
+    let ticks = 0;
+    page.on('request', (request) => {
+      if (/\/api\/map\/traffic/.test(request.url())) ticks += 1;
+    });
+    const deadline = Date.now() + 40000;
+    while (ticks < 1 && Date.now() < deadline) await page.waitForTimeout(500);
+    must(ticks >= 1, 'the Live timer did not refresh the map within 40 s');
+    await page.waitForTimeout(1500);
+    must(await page.evaluate(BUBBLE), 'the bubble closed when the Live timer refreshed the map');
+    const timed = ticks;
+
+    // Then three more through the same call, with fresh rows each time
+    // and one OTHER node moved.
+    edits.move = picked.moved;
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      await page.evaluate(async () => {
+        nodeCache.at = 0;
+        await render('map');
+      });
+    }
+    await page.waitForTimeout(FADE_MS);
+    const after = await page.evaluate(({ open, moved }) => {
+      const marks = window.SonoranMap.marks;
+      const bubble = marks.get(open);
+      const at = marks.get(moved) && marks.get(moved).marker.getLatLng();
+      return {
+        same: Boolean(bubble) && bubble.marker === window.__e2eBubble,
+        popupOpen: Boolean(bubble) && bubble.marker.isPopupOpen(),
+        lat: at && at.lat,
+        lon: at && at.lng,
+      };
+    }, picked);
+    must(await page.evaluate(BUBBLE), 'the bubble closed after three live refreshes');
+    must(after.same && after.popupOpen, 'the open node was rebuilt rather than updated in place');
+    must(
+      Math.abs(after.lat - (picked.lat + 0.05)) < 1e-9 && Math.abs(after.lon - (picked.lon + 0.05)) < 1e-9,
+      `a node that moved stayed where it was (${picked.lat},${picked.lon} -> ${after.lat},${after.lon})`,
+    );
+
+    // The zoom still restyles the dots that are kept (#196).
+    const radii = await page.evaluate(async ({ moved }) => {
+      const { map, marks } = window.SonoranMap;
+      const marker = marks.get(moved).marker;
+      const before = marker.options.radius;
+      await new Promise((done) => {
+        map.once('zoomend', done);
+        map.setZoom(map.getZoom() >= 12 ? 6 : 14, { animate: false });
+      });
+      return { before, after: marker.options.radius };
+    }, picked);
+    must(radii.before !== radii.after, `zooming did not restyle the dots (radius ${radii.before} both times)`);
+
+    // A node that really went away takes its open bubble with it.
+    edits.drop = picked.open;
+    await page.evaluate(async () => {
+      nodeCache.at = 0;
+      await render('map');
+    });
+    const gone = await page.evaluate(({ open }) => ({
+      held: window.SonoranMap.marks.has(open),
+      onMap: window.SonoranMap.map.hasLayer(window.__e2eBubble),
+    }), picked);
+    must(!gone.held && !gone.onMap, 'a node missing from the refresh is still drawn');
+    await page.waitForTimeout(FADE_MS);
+    must(!(await page.evaluate(BUBBLE)), 'the bubble of a node that went away is still open');
+    return `bubble held through ${timed} timer + 3 forced refreshes; moved node moved; `
+      + `zoom radius ${radii.before} -> ${radii.after}; gone node closed its bubble`;
+  });
+
   await journey(context, 'a traceroute opens', async (page) => {
     await open(page, 'traceroutes', 4000);
     const link = page.locator('[data-page="traceroutes"] .linky').first();
