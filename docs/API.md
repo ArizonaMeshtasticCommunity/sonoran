@@ -40,9 +40,15 @@ A request over the budget gets 429 with `Retry-After` in seconds. The
 page, `/static/` and `/health` are never counted. The first refusal of
 a caller in each minute is logged at WARNING.
 
-A caller is the portal user in `Remote-User`, which Caddy sets from
-Authelia and replaces on every request. A request with no user is
-counted by its client address. uvicorn reads that address from
+A caller is its client address. `API_RATE_USER_HEADER` can name a
+header that holds the signed-in user instead, so one reader is one
+budget from any address. Set it **only** to a header the login proxy
+replaces on every request. A header that the proxy passes through is
+written by the caller, and a new name on each request is a new budget
+on each request. The proxy is not the same on every deployment:
+development uses Caddy and Authelia, which replace `Remote-User`, and
+production uses Keycloak. So the setting has no default. A request
+without the header is counted by its address. uvicorn reads that address from
 `X-Forwarded-For` only when the proxy is in `FORWARDED_ALLOW_IPS`. On
 this deployment that is the Docker gateway of the API container,
 `172.18.0.1`, because Caddy reaches the API through it. Without the

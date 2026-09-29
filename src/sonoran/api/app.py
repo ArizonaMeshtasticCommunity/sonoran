@@ -419,6 +419,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             RateLimitMiddleware,
             general=Budget(settings.api_rate_burst, settings.api_rate_per_second),
             tiles=Budget(settings.api_tile_rate_burst, settings.api_tile_rate_per_second),
+            user_header=settings.api_rate_user_header,
         )
     app.add_middleware(SecurityHeadersMiddleware)
     # Compress what is worth compressing.

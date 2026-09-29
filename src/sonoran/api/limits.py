@@ -12,12 +12,16 @@ once in 15 seconds. The refill is the sustained rate. Both are far
 above any page, several tabs included, and a caller over the budget is
 told when to come back (429 with `Retry-After`), not refused for long.
 
-**Who a caller is.** The portal (Authelia, through Caddy) names the
-signed-in user in `Remote-User`, and Caddy replaces that header on
-every request it forwards. So one reader is one budget, whatever
-address they come from. A request with no user is keyed on its client
-address, which `FORWARDED_ALLOW_IPS` makes the real one (see
-`docs/API.md`).
+**Who a caller is.** By default, the client address, which
+`FORWARDED_ALLOW_IPS` makes the real one (see `docs/API.md` 1.1).
+
+`API_RATE_USER_HEADER` can name a header that holds the signed-in
+user, so one reader is one budget from any address. **Name it only
+when the proxy in front replaces that header on every request.** A
+header the proxy passes through is one the caller writes, and a
+caller that writes a new name on each request has a new budget on
+each request. The login proxy differs between deployments (Authelia on
+development, Keycloak on production), so there is no default.
 
 **Tiles are counted apart.** The coverage map and the planner fetch
 map tiles in hundreds when a reader pans or zooms. They are cheap,
@@ -94,9 +98,9 @@ class Buckets:
         self._held.clear()
 
 
-def caller(scope: Scope) -> str:
-    """The key of a request's budget: the portal user, else the address."""
-    user = Headers(scope=scope).get("remote-user", "").strip()
+def caller(scope: Scope, user_header: str = "") -> str:
+    """The key of a request's budget: the trusted user, else the address."""
+    user = Headers(scope=scope).get(user_header, "").strip() if user_header else ""
     if user:
         return f"user:{user}"
     client = scope.get("client")
@@ -111,8 +115,11 @@ class RateLimitMiddleware:
     wait, and the health check is what keeps the container alive.
     """
 
-    def __init__(self, app: ASGIApp, *, general: Budget, tiles: Budget) -> None:
+    def __init__(
+        self, app: ASGIApp, *, general: Budget, tiles: Budget, user_header: str = ""
+    ) -> None:
         self.app = app
+        self.user_header = user_header
         self.general = Buckets(general)
         self.tiles = Buckets(tiles)
         self._warned: OrderedDict[str, float] = OrderedDict()
@@ -124,7 +131,7 @@ class RateLimitMiddleware:
         if not path.startswith("/api/"):
             await self.app(scope, receive, send)
             return
-        who = caller(scope)
+        who = caller(scope, self.user_header)
         buckets = self.tiles if path.startswith(TILE_PREFIXES) else self.general
         now = time.monotonic()
         wait = buckets.take(who, now)

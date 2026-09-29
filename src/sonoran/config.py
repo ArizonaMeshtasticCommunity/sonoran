@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     api_rate_per_second: float = 3.0
     api_tile_rate_burst: float = 3000.0
     api_tile_rate_per_second: float = 30.0
+    # A header naming the signed-in user, to key the budget on the user
+    # instead of the address. Empty keys on the address. Set it ONLY to
+    # a header the login proxy replaces on every request: a header it
+    # passes through lets a caller pick a new budget per request.
+    # Development (Caddy and Authelia) sets `Remote-User`.
+    api_rate_user_header: str = ""
 
     # The timezone every time on the page is shown in.
     #

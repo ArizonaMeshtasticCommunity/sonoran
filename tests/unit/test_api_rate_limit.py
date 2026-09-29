@@ -75,8 +75,8 @@ def test_the_page_static_files_and_health_are_never_limited() -> None:
 
 
 def test_each_portal_user_has_a_budget_of_their_own() -> None:
-    """Caddy passes the signed-in user in `Remote-User`."""
-    client = _client(api_rate_burst=1, api_rate_per_second=0.01)
+    """With a trusted user header, a budget follows the user."""
+    client = _client(api_rate_burst=1, api_rate_per_second=0.01, api_rate_user_header="Remote-User")
     assert client.get("/api/version", headers={"Remote-User": "will"}).status_code == 200
     assert client.get("/api/version", headers={"Remote-User": "will"}).status_code == 429
     assert client.get("/api/version", headers={"Remote-User": "tyler"}).status_code == 200
@@ -91,8 +91,9 @@ def test_tiles_spend_their_own_budget() -> None:
         api_tile_rate_per_second=0.01,
     )
     assert client.get("/api/version").status_code == 200
-    tile = "/api/terrain/page/N33W113"
-    assert client.get(tile).status_code != 429
+    # Not a tile name, so it is refused before anything is fetched.
+    tile = "/api/terrain/page/nonsense"
+    assert client.get(tile).status_code == 422
     assert client.get(tile).status_code == 429
 
 
@@ -114,3 +115,10 @@ def test_a_base_path_does_not_hide_the_api_from_the_budget() -> None:
 def test_the_budget_can_be_turned_off() -> None:
     client = _client(api_rate_limit_enabled=False, api_rate_burst=1, api_rate_per_second=0.01)
     assert all(client.get("/api/version").status_code == 200 for _ in range(5))
+
+
+def test_a_user_header_is_not_believed_unless_it_is_configured() -> None:
+    """Otherwise a caller writes a new name per request for a new budget."""
+    client = _client(api_rate_burst=1, api_rate_per_second=0.01)
+    assert client.get("/api/version", headers={"Remote-User": "a"}).status_code == 200
+    assert client.get("/api/version", headers={"Remote-User": "b"}).status_code == 429
