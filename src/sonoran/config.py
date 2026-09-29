@@ -120,8 +120,13 @@ class Settings(BaseSettings):
     # dozen pages opened together, and 3 a second is 10,800 an hour.
     # No reader reaches that. A script copying the database does.
     # Tiles have their own, larger budget, because a map fetches them
-    # in hundreds. Off turns every budget off.
-    api_rate_limit_enabled: bool = True
+    # in hundreds.
+    #
+    # **Off by default.** Behind a proxy whose address is not in
+    # `FORWARDED_ALLOW_IPS`, every reader has the proxy's address and
+    # all of them share one budget, which a busy page would feel. Turn
+    # it on where the API is known to see real client addresses.
+    api_rate_limit_enabled: bool = False
     api_rate_burst: float = 300.0
     api_rate_per_second: float = 3.0
     api_tile_rate_burst: float = 3000.0

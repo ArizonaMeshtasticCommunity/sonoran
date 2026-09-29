@@ -5,6 +5,69 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.09.27.2 — 2026-09-27
+
+1 pull request merged, 37 issues closed.
+
+#### New features
+
+- Batch 3 — units everywhere, phone layout, stats range, chat, nodes, traceroutes (38 issues) (#303) — done: #246, #249, #250, #251, #257, #266, #267, #268, #269, #270, #271, #272, #273, #274, #275, #276, #277, #278, #279, #280, #281, #284, #285, #286, #287, #288, #289, #290, #291, #292, #295, #296, #297, #298, #299, #300, #301
+  A big usability batch. Units follow your setting everywhere, and phones get a sticky top bar, cards and bottom sheets. Statistics gets a date range, the dashboard counts a rolling 24 hours, and chat is simpler. Traceroutes and node pages are laid out better, and the node page's links read every traceroute. Desktop can collapse the sidebar to icons.
+
+#### Known
+
+- **The node page's "Links and routes" panel is slow on this instance.** It takes 7 to 29 s uncached, and the node page's health panel and charts wait for it. Most of that is two older queries that join `packet_seen` to `packet` over 30 days, run six times per request, not this release's change to read every traceroute (about 0.6 s of it). Repeat visits within the cache window are fast. It's filed as its own issue for the next batch, with the measurements.
+- Checked in emulation only: real touch, iOS Safari toolbars, iPad Safari, VoiceOver, Windows High Contrast.
+
+#### Issues
+
+- Done: #246 The planner's typed heights read in metres while the rest of the site reads in feet
+- Done: #249 test_tooltip_escaping cannot fail on a formatter that returns implicitly
+- Done: #250 Nodes list pages on offset, which can skip a row once the page refreshes on a timer
+- Done: #251 Applying a node filter hides the panel and drops keyboard focus to the document
+- Done: #257 Node page: why many nodes show no furthest-heard distance, and what to show instead
+- Done: #266 Mobile (P1): Map dots: give them a finger-sized hit area on touch screens
+- Done: #267 Mobile (P1): Key touch sizing to `(pointer: coarse)`, not width
+- Done: #268 Mobile (P1): Enlarge the fixed-size controls on touch
+- Done: #269 Mobile (P1): Chat timestamps: a real tap target, and the exact time on tap
+- Done: #270 Mobile (P1): Stop the map page scrolling itself on load, or say why it does
+- Done: #271 Mobile (P1): A compact sticky top bar on phones
+- Done: #272 Mobile (P2): Nodes list as cards on phones
+- Done: #273 Mobile (P2): Firehose rows as cards on phones
+- Done: #274 Mobile (P2): Traceroutes table: sticky first column and priority columns
+- Done: #275 Mobile (P2): Fold page-head controls behind a *Filters* button on phones
+- Done: #276 Mobile (P2): Make title-only meanings reachable by tap
+- Done: #277 Mobile (P2): Load ECharts only on pages that draw a chart
+- Done: #278 Mobile (P2): Dashboard stat cards as one compact row
+- Done: #279 Mobile (P2): Move the drawer's Preset and Settings above the fold
+- Done: #280 Mobile (P3): A "N new" pill on the firehose when scrolled away from the top
+- Done: #281 Mobile (P3): Map node detail as a non-modal bottom sheet on phones
+- Done: #284 Mobile (P3): Reduced motion for charts and map zoom
+- Done: #285 Mobile (P3): A `prefers-contrast: more` block
+- Done: #286 Mobile (P3): Node page: in-page navigation on phones
+- Done: #287 Mobile (P3): iPad portrait: fix the node page's three-column squeeze
+- Done: #288 Traceroute detail: put Route, Path There and Path Back as the three widgets on top (feature)
+- Done: #289 Traceroute detail: make "Open this trace in the mesh-graph" a button at the top right of the drawing (feature)
+- Done: #290 Node page: Links and routes reads only the newest 2,000 traceroutes; read the whole window (feature)
+- Done: #291 Units: Statistics is stuck in km; convert every distance and temperature site-wide from Settings (bug)
+- Done: #292 Dashboard: show the four headline stats over a rolling last 24 hours (feature)
+- Done: #295 Chat: take the date range off the main chat page; channel pages keep theirs (feature)
+- Done: #296 Dashboard: clean up Latest messages, show 5, add a View all messages button to Chat (feature)
+- Done: #297 Chat: MediumFast "view all" loads only by scrolling, overcounts, and the table view cannot load more (bug)
+- Done: #298 Nodes list: column-header tooltips make the table scroll sideways (bug)
+- Done: #299 Page headers: Coverage and Graph wrap the title and controls onto two lines (bug)
+- Done: #300 Sidebar: let desktop users collapse the navigation to icons only (feature)
+- Done: #301 Nodes list: the filter badge shows 2 on first load when no filter is selected (bug)
+- Worked on: #294 Statistics: add a date-range control with quick buttons, default last 30 days rolling (feature)
+- Worked on: #261 Review the whole site for phones and tablets, and research current mobile UI patterns
+
+#### Thank you
+
+- **Will**, for the reports behind this batch and for answering the open questions.
+- **@logans-stuff**, for the CI hardware, and the runs that caught two layouts that only broke on Linux fonts.
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.09.27...v2026.09.27.2
+
 ## v2026.09.27 — 2026-09-27
 
 **`main` now matches the live site.** PR #302 merged the batch released as [v2026.09.26.2](https://github.com/ArizonaMeshtasticCommunity/sonoran/releases/tag/v2026.09.26.2) into `main`, and s.azmsh.dev was redeployed from `main` (4bd8b97) on 2026-09-27 at about 07:30 UTC. From here on, deploy from `main` again.

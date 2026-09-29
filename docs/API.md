@@ -54,7 +54,10 @@ this deployment that is the Docker gateway of the API container,
 `172.18.0.1`, because Caddy reaches the API through it. Without the
 setting every caller has the gateway's address and shares one budget.
 
-`API_RATE_LIMIT_ENABLED=false` turns every budget off.
+**Off by default.** `API_RATE_LIMIT_ENABLED=true` turns it on. Turn it
+on only where the API sees real client addresses: behind a proxy that
+is not in `FORWARDED_ALLOW_IPS`, every reader has the proxy's address,
+and all of them share one budget.
 
 ## 2. System endpoints
 

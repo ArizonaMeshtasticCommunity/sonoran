@@ -11,6 +11,7 @@ from sonoran.config import Settings
 
 
 def _client(**overrides: object) -> TestClient:
+    overrides.setdefault("api_rate_limit_enabled", True)
     settings = Settings(_env_file=None, **overrides)  # type: ignore[arg-type]
     return TestClient(create_app(settings))
 
@@ -48,7 +49,6 @@ def test_the_table_of_callers_is_bounded() -> None:
 def test_the_defaults_leave_a_reader_well_clear() -> None:
     """A dozen dashboard pages at once, at 25 answers each, fit the burst."""
     settings = Settings(_env_file=None)
-    assert settings.api_rate_limit_enabled
     assert settings.api_rate_burst >= 12 * 25
     # The live views poll once in 15 seconds. Far below the refill.
     assert settings.api_rate_per_second >= 1.0
@@ -102,6 +102,7 @@ def test_a_base_path_does_not_hide_the_api_from_the_budget() -> None:
     app = create_app(
         Settings(
             _env_file=None,
+            api_rate_limit_enabled=True,
             web_base_path="/sonoran",
             api_rate_burst=1,
             api_rate_per_second=0.01,
@@ -122,3 +123,10 @@ def test_a_user_header_is_not_believed_unless_it_is_configured() -> None:
     client = _client(api_rate_burst=1, api_rate_per_second=0.01)
     assert client.get("/api/version", headers={"Remote-User": "a"}).status_code == 200
     assert client.get("/api/version", headers={"Remote-User": "b"}).status_code == 429
+
+
+def test_the_budget_is_off_unless_a_deployment_turns_it_on() -> None:
+    """Behind a proxy with no `FORWARDED_ALLOW_IPS`, all would share one."""
+    assert Settings(_env_file=None).api_rate_limit_enabled is False
+    client = TestClient(create_app(Settings(_env_file=None, api_rate_burst=1)))
+    assert all(client.get("/api/version").status_code == 200 for _ in range(5))
