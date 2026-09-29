@@ -107,10 +107,10 @@ class Settings(BaseSettings):
     # How long one node's links and routes are held (#304).
     #
     # `/api/nodes/{id}/routes` reads every upload of the node over the
-    # window. On a busy gateway that was 5 to 8 seconds on production,
-    # nearly all of it one join of `packet_seen` to `packet`. Its lists
-    # cover up to thirty days, and five minutes more or less of them
-    # changes no row a reader looks at. Zero holds nothing.
+    # window, which was 5 to 8 seconds on a busy gateway before revision
+    # 0017 (see `api/sightings.py`). Its lists cover up to thirty days,
+    # and five minutes more or less of them changes no row a reader
+    # looks at. Zero holds nothing.
     routes_cache_seconds: float = 300.0
 
     # The request budget of each API caller (`api/limits.py`). A token

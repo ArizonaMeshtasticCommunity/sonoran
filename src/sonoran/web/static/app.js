@@ -7701,7 +7701,7 @@ async function loadNodeDetail(nodeId) {
    * `routes` is asked for now and waited for on its own (#304).
    *
    * It reads every upload of the node over the window, and on a busy
-   * node that took 7 to 29 seconds uncached on production. It was in
+   * node that took 7 to 29 seconds uncached on s.azmsh.dev. It was in
    * the same `getAll` as `gaps` and `history`, so the health panel and
    * the history charts, which need neither, waited for it as well.
    * Only the Links panel needs it, and that panel fills in when it

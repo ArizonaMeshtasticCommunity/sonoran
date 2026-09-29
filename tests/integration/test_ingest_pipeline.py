@@ -283,8 +283,26 @@ async def _replay_many_gateways(timescale_url: str) -> None:
                 .select_from(PacketSeen)
                 .where(PacketSeen.from_node_num == sender, PacketSeen.packet_id == packet_id)
             )
+            starts = set(
+                (
+                    await session.scalars(
+                        select(PacketSeen.hop_start).where(
+                            PacketSeen.from_node_num == sender, PacketSeen.packet_id == packet_id
+                        )
+                    )
+                ).all()
+            )
+            packet_start = await session.scalar(
+                select(Packet.hop_start).where(
+                    Packet.from_node_num == sender, Packet.packet_id == packet_id
+                )
+            )
         assert bodies == 1, "the packet body is stored once"
         assert observations >= 4, "every relay keeps its own observation"
+        # Each sighting keeps its header's hop start, so a reader can tell
+        # a direct one without joining `packet` (#304).
+        assert packet_start == envelope.packet.hop_start
+        assert starts == {packet_start}, "every sighting carries the packet's hop start"
     finally:
         await engine.dispose()
 

@@ -331,9 +331,16 @@ were read. `trace_limit_reached` is gone with the limit. The answer is
 held for `ROUTES_CACHE_SECONDS` (default 300) for each node and window.
 
 This is the slowest answer on the node page. On a busy gateway it took
-5 to 8 seconds uncached on production (#304), nearly all of it one join
-of `packet_seen` to `packet` for the uploads the node made as a
-gateway. So the page does not wait for it: the health panel and the
+5 to 8 seconds uncached on s.azmsh.dev (#304). The time was reading the
+node's sightings out of the `packet_seen` heap, where they are spread
+over about 100,000 pages; the join to `packet` was not the cost.
+Revision 0017 makes the two time indexes of `packet_seen` covering and
+keeps `hop_start` on each sighting, so these queries read the index
+alone (`api/sightings.py`). Measured on a copy of the busiest gateway's
+rows, the slowest query went from 5.1 s to 0.33 s at once, and to
+0.07 s once rows written before 0017 expire.
+
+The page does not wait for it either way: the health panel and the
 history charts draw when their own answers arrive, and the Links panel
 fills in when this one does.
 

@@ -163,6 +163,7 @@ async def _store_opaque(
         rx_rssi=packet.rx_rssi or None,
         rx_snr=packet.rx_snr or None,
         hop_limit=packet.hop_limit or None,
+        hop_start=packet.hop_start or None,
         seen_at=message.received_at,
     )
     stored = await store_packet(session, packet_input, observation_input)
@@ -266,6 +267,7 @@ async def process_message(
         rx_rssi=packet.rx_rssi or None,
         rx_snr=packet.rx_snr or None,
         hop_limit=packet.hop_limit or None,
+        hop_start=packet.hop_start or None,
         seen_at=message.received_at,
     )
     stored = await store_packet(session, packet_input, observation_input)

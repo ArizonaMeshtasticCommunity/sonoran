@@ -166,6 +166,25 @@ One row per observation of a packet. Hypertable on `seen_at`.
 
 | Column | Type | Notes |
 |--------|------|-------|
+| `id` | bigint | generated |
+| `packet_pk` | bigint | unused. Always NULL. See the note in section 1 |
+| `from_node_num` | bigint | not null. With `packet_id`, the packet this observes |
+| `packet_id` | bigint | not null |
+| `gateway_node_num` | bigint | not null. The node that uploaded it |
+| `mqtt_topic` | text | not null |
+| `channel` | text | nullable |
+| `rx_rssi` | integer | nullable. The last hop into the gateway (AGENTS.md 9.5) |
+| `rx_snr` | double | nullable. The last hop into the gateway |
+| `hop_limit` | integer | nullable. Hops left when the gateway heard it |
+| `hop_start` | integer | nullable. The same header's hop start, so `hop_start = hop_limit` says direct without a join (#304). NULL on rows written before revision 0017, which are not backfilled: read them through `api/sightings.py`, which joins those to `packet` |
+| `seen_at` | timestamptz | not null. partition key |
+
+### 3.5 `traceroute`
+
+Parsed traceroute data. Hypertable on `seen_at`.
+
+| Column | Type | Notes |
+|--------|------|-------|
 | `packet_id` | bigint | the Meshtastic packet ID. Join with the node column |
 | `packet_pk` | bigint | unused. Always NULL. See the note in section 1 |
 | `request_id` | bigint | the request this reply answers. mesh-graph keys a trace on it. nullable |
@@ -349,6 +368,11 @@ Keep indexes minimal. Each index slows inserts.
 - `packet_key`: index on `first_seen_at`.
 - `packet`: dedup unique key (above). Index on (`from_node_num`, `first_seen_at` desc).
 - `packet_seen`: index on (`from_node_num`, `seen_at` desc). Index on (`gateway_node_num`, `seen_at` desc).
+  Both are covering since revision 0017: they INCLUDE `from_node_num`, `packet_id`,
+  `gateway_node_num`, `rx_snr`, `rx_rssi`, `hop_limit` and `hop_start`
+  (`models.SIGHTING_INCLUDE`). A node's rows are spread over the whole heap, and
+  reading them there took 5 s for a busy gateway; from the index alone it took
+  tens of milliseconds (#304).
   Index on (`from_node_num`, `packet_id`, `seen_at` desc) for joining to packets.
 - `traceroute`: index on (`from_node_num`, `seen_at` desc). Index on (`to_node_num`, `seen_at` desc).
   Index on (`channel`, `seen_at` desc). Index on (`from_node_num`, `packet_id`).

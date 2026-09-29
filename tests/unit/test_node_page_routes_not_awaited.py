@@ -1,6 +1,6 @@
 """The node page draws health and history without waiting on `routes` (#304).
 
-`/api/nodes/{id}/routes` took 7 to 29 seconds uncached on production.
+`/api/nodes/{id}/routes` took 7 to 29 seconds uncached on s.azmsh.dev.
 It was fetched in one `getAll` with `gaps` and `history`, so the health
 panel and the charts, which need neither, waited for it too.
 """

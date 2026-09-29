@@ -132,6 +132,19 @@ class Packet(Base):
     )
 
 
+# What the node page reads from a sighting, carried in both time
+# indexes of `packet_seen` so it never visits the heap (#304).
+SIGHTING_INCLUDE = [
+    "from_node_num",
+    "packet_id",
+    "gateway_node_num",
+    "rx_snr",
+    "rx_rssi",
+    "hop_limit",
+    "hop_start",
+]
+
+
 class PacketSeen(Base):
     """One row per observation of a packet. Hypertable on seen_at."""
 
@@ -147,6 +160,9 @@ class PacketSeen(Base):
     rx_rssi: Mapped[int | None] = mapped_column(Integer)
     rx_snr: Mapped[float | None] = mapped_column(Double)
     hop_limit: Mapped[int | None] = mapped_column(Integer)
+    # The same header's hop start, so "direct" needs no join (#304).
+    # NULL on rows written before revision 0017. See `api/sightings.py`.
+    hop_start: Mapped[int | None] = mapped_column(Integer)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
@@ -158,8 +174,22 @@ class PacketSeen(Base):
             "seen_at",
             name="uq_packet_seen_observation",
         ),
-        Index("ix_packet_seen_from_time", "from_node_num", seen_at.desc()),
-        Index("ix_packet_seen_gateway_time", "gateway_node_num", seen_at.desc()),
+        # Covering (#304): a node's sightings are scattered over the
+        # whole heap, and reading them there took 5 s on a busy gateway.
+        # The INCLUDE columns let the node page read the index alone.
+        # See revision 0017 and `api/sightings.py`.
+        Index(
+            "ix_packet_seen_from_time",
+            "from_node_num",
+            seen_at.desc(),
+            postgresql_include=SIGHTING_INCLUDE,
+        ),
+        Index(
+            "ix_packet_seen_gateway_time",
+            "gateway_node_num",
+            seen_at.desc(),
+            postgresql_include=SIGHTING_INCLUDE,
+        ),
         # The API joins observations to packets by the deduplication key.
         Index("ix_packet_seen_natural_key", "from_node_num", "packet_id", seen_at.desc()),
     )

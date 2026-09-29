@@ -49,6 +49,10 @@ class ObservationInput:
     rx_snr: float | None
     hop_limit: int | None
     seen_at: datetime
+    # From the same header as `hop_limit`, so a reader can tell a direct
+    # sighting without joining `packet` (#304). Last, with a default,
+    # so a caller that has none still builds one.
+    hop_start: int | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,7 @@ async def store_packet(
             rx_rssi=observation.rx_rssi,
             rx_snr=observation.rx_snr,
             hop_limit=observation.hop_limit,
+            hop_start=observation.hop_start,
             seen_at=observation.seen_at,
         )
     )

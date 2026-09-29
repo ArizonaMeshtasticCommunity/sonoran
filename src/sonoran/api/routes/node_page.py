@@ -25,6 +25,7 @@ from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.routes.gaps import read_assessment
 from sonoran.api.routes.graph import _mentions, _trace_links
+from sonoran.api.sightings import direct, sightings
 from sonoran.config import Settings
 from sonoran.db.models import DeviceMetrics, NeighborMetrics, Node, Packet, PacketSeen, Traceroute
 from sonoran.decode.portnums import traffic_label
@@ -301,45 +302,26 @@ async def _packet_series(
     }
 
 
-def _direct() -> Any:
-    """Return the rule for an observation that measured this node itself.
-
-    No hop used, and a gateway that is not the node. See AGENTS.md 9.5
-    and 9.5.1, and `_heard_by` in `routes/nodes.py`, which applies the
-    same rule.
-    """
-    return and_(
-        Packet.hop_start == PacketSeen.hop_limit,
-        PacketSeen.from_node_num != PacketSeen.gateway_node_num,
-    )
-
-
 async def _direct_signal(
     session: AsyncSession, node_num: int, since: datetime, now: datetime, width: int
 ) -> list[dict[str, object]]:
-    bucket = _bucket(PacketSeen.seen_at, width, since).label("bucket")
-    joined = and_(
-        Packet.from_node_num == PacketSeen.from_node_num,
-        Packet.packet_id == PacketSeen.packet_id,
+    seen = sightings(
+        PacketSeen.from_node_num == node_num,
+        PacketSeen.seen_at >= since,
+        PacketSeen.seen_at <= now,
     )
+    bucket = _bucket(seen.c.seen_at, width, since).label("bucket")
     rows = (
         await session.execute(
             select(
-                PacketSeen.gateway_node_num,
+                seen.c.gateway_node_num,
                 bucket,
-                func.avg(PacketSeen.rx_snr),
-                func.avg(PacketSeen.rx_rssi),
+                func.avg(seen.c.rx_snr),
+                func.avg(seen.c.rx_rssi),
                 func.count(),
             )
-            .select_from(PacketSeen)
-            .join(Packet, joined)
-            .where(
-                PacketSeen.from_node_num == node_num,
-                PacketSeen.seen_at >= since,
-                PacketSeen.seen_at <= now,
-                _direct(),
-            )
-            .group_by(PacketSeen.gateway_node_num, bucket)
+            .where(direct(seen))
+            .group_by(seen.c.gateway_node_num, bucket)
             .order_by(bucket)
         )
     ).all()
@@ -716,36 +698,24 @@ async def _direct_links(
     `heard_by`: gateways that uploaded this node's packets directly.
     `hears`: senders whose packets this node, as a gateway, uploaded
     directly. A node's own uploads are never a link (9.5.1), and
-    `_direct` already leaves them out.
+    `sightings.direct` already leaves them out.
 
     Each packet counts once per pair, however many times it was
     uploaded: one gateway uploads the same packet many times (9.5.1).
     """
     heard_by = side == "heard_by"
     mine = PacketSeen.from_node_num if heard_by else PacketSeen.gateway_node_num
-    other = PacketSeen.gateway_node_num if heard_by else PacketSeen.from_node_num
+    seen = sightings(mine == node_num, PacketSeen.seen_at >= since, PacketSeen.seen_at <= now)
+    other = seen.c.gateway_node_num if heard_by else seen.c.from_node_num
     rows = (
         await session.execute(
             select(
                 other,
-                func.count(func.distinct(PacketSeen.packet_id)),
-                func.max(PacketSeen.rx_snr),
-                func.max(PacketSeen.seen_at),
+                func.count(func.distinct(seen.c.packet_id)),
+                func.max(seen.c.rx_snr),
+                func.max(seen.c.seen_at),
             )
-            .select_from(PacketSeen)
-            .join(
-                Packet,
-                and_(
-                    Packet.from_node_num == PacketSeen.from_node_num,
-                    Packet.packet_id == PacketSeen.packet_id,
-                ),
-            )
-            .where(
-                mine == node_num,
-                PacketSeen.seen_at >= since,
-                PacketSeen.seen_at <= now,
-                _direct(),
-            )
+            .where(direct(seen))
             .group_by(other)
         )
     ).all()
@@ -784,25 +754,17 @@ async def _hop_depth(
     The node's own uploads are left out: they took no hop because they
     never crossed the air (AGENTS.md 9.5.1).
     """
+    seen = sightings(
+        PacketSeen.from_node_num == node_num,
+        PacketSeen.gateway_node_num != node_num,
+        PacketSeen.seen_at >= since,
+        PacketSeen.seen_at <= now,
+        PacketSeen.hop_limit.is_not(None),
+    )
     fewest = (
-        select(func.min(Packet.hop_start - PacketSeen.hop_limit).label("hops"))
-        .select_from(PacketSeen)
-        .join(
-            Packet,
-            and_(
-                Packet.from_node_num == PacketSeen.from_node_num,
-                Packet.packet_id == PacketSeen.packet_id,
-            ),
-        )
-        .where(
-            PacketSeen.from_node_num == node_num,
-            PacketSeen.gateway_node_num != node_num,
-            PacketSeen.seen_at >= since,
-            PacketSeen.seen_at <= now,
-            Packet.hop_start.is_not(None),
-            PacketSeen.hop_limit.is_not(None),
-        )
-        .group_by(PacketSeen.packet_id)
+        select(func.min(seen.c.hop_start - seen.c.hop_limit).label("hops"))
+        .where(seen.c.hop_start.is_not(None))
+        .group_by(seen.c.packet_id)
         .subquery()
     )
     rows = (
