@@ -403,13 +403,13 @@ async def node_routes(
     with no hop used (kind `gateway`): see `_direct_links`.
 
     Every traceroute in the window that names the node is read (#290).
-    The answer is held for `stats_cache_seconds`, keyed on everything
+    The answer is held for `routes_cache_seconds`, keyed on everything
     that changes it: the node and the window.
     """
     node_num = require_node_num(node_id)
     return await _routes_cache.get(
         f"{node_num}|{hours}",
-        request.app.state.settings.stats_cache_seconds,
+        request.app.state.settings.routes_cache_seconds,
         lambda: _node_routes(session, node_num, hours),
     )
 

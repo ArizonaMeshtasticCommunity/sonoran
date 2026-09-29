@@ -18,6 +18,37 @@ It uses ASD-STE100 Simplified Technical English.
    - `limit`: maximum rows. Default 100. Maximum 500.
 7. Errors return a JSON object: `{"error": "message"}`.
 8. The base path is `/api`.
+9. Each caller has a request budget. See 1.1.
+
+### 1.1 Request budget
+
+The API is read-only and sits behind the login portal. The risk is a
+script that copies the whole database through it. Each caller therefore
+has a token bucket (`sonoran/api/limits.py`):
+
+| Paths | At once | Sustained | Settings |
+|---|---|---|---|
+| `/api/coverage/tiles/`, `/api/embed/tiles/`, `/api/terrain/page/` | 3000 | 30 a second | `API_TILE_RATE_BURST`, `API_TILE_RATE_PER_SECOND` |
+| Every other `/api/` path | 300 | 3 a second | `API_RATE_BURST`, `API_RATE_PER_SECOND` |
+
+A reader does not reach these numbers. One dashboard page asks for 10
+to 25 answers, and the live views poll once in 15 seconds. Tiles have
+their own budget, because a map fetches them in hundreds, and a map
+must not spend the budget of the rest of the page.
+
+A request over the budget gets 429 with `Retry-After` in seconds. The
+page, `/static/` and `/health` are never counted. The first refusal of
+a caller in each minute is logged at WARNING.
+
+A caller is the portal user in `Remote-User`, which Caddy sets from
+Authelia and replaces on every request. A request with no user is
+counted by its client address. uvicorn reads that address from
+`X-Forwarded-For` only when the proxy is in `FORWARDED_ALLOW_IPS`. On
+this deployment that is the Docker gateway of the API container,
+`172.18.0.1`, because Caddy reaches the API through it. Without the
+setting every caller has the gateway's address and shares one budget.
+
+`API_RATE_LIMIT_ENABLED=false` turns every budget off.
 
 ## 2. System endpoints
 
@@ -291,7 +322,14 @@ or as a hop either way (#290). There is no row limit: a limit decides
 what evidence exists (AGENTS.md 9.19), and the newest 2000 used to be
 about a tenth of the busiest node's 30 days. `traces_read` is how many
 were read. `trace_limit_reached` is gone with the limit. The answer is
-held for `STATS_CACHE_SECONDS` for each node and window.
+held for `ROUTES_CACHE_SECONDS` (default 300) for each node and window.
+
+This is the slowest answer on the node page. On a busy gateway it took
+5 to 8 seconds uncached on production (#304), nearly all of it one join
+of `packet_seen` to `packet` for the uploads the node made as a
+gateway. So the page does not wait for it: the health panel and the
+history charts draw when their own answers arrive, and the Links panel
+fills in when this one does.
 
 The panel takes no `channel`, so a node on two presets has both in one
 list (AGENTS.md 9.7).
