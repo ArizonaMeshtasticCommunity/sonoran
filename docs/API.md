@@ -492,7 +492,8 @@ Returns the current coverage run.
 state for a new deployment, not a fault.
 
 The response carries the manifest of the run: `generated_at`, `bounds`
-of the whole region, `data_bounds` of the coverage itself, `min_zoom`
+of the run's grid (the whole degrees its sites reach, inside the
+terrain region; `docs/COVERAGE.md` 6), `data_bounds` of the coverage itself, `min_zoom`
 and `max_zoom`, `active_hours`, the receiver the map assumes, `has_terrain`,
 `has_landcover`, `missing_terrain_tiles`, and one entry for each modem
 preset with its node counts, its covered area, and the sites it used.
@@ -501,9 +502,16 @@ preset with its node counts, its covered area, and the sites it used.
 run. A page uses the same value when it asks `/api/map/nodes` for the
 optional node layer.
 
-A page must open on `data_bounds`, not on `bounds`. The region covers
-every degree the terrain service serves, which is far more ground than
-any mesh reaches.
+A page must open on `data_bounds`, not on `bounds`. The grid is whole
+degrees and runs a site's full radius past it, which is more ground
+than the mesh covers.
+
+Each site in `presets[].nodes` carries `position_deviation_m`: how far
+its position may be from the node, in metres, when the node shared
+only a rounded one and `COVERAGE_MIN_PRECISION_BITS` let it in. It is
+null for an exact position or one given in `config/nodes.yaml`. A site
+with a value is drawn around its rounded point, so its footprint is
+approximate.
 
 ### 3A.2 `GET /api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`
 

@@ -199,6 +199,16 @@ A raster is therefore **placed** on the region grid at a whole cell
 offset, not resampled onto it. Resampling would blur every ridge line
 the model worked to find.
 
+**A run's grid covers only what its sites reach.** It is the box of
+whole degrees around every site's footprint (`COVERAGE_RADIUS_KM`, a
+little wider east and west because a degree of longitude narrows),
+inside the terrain region (`footprint_grid` in `jobs/coverage.py`). It
+used to be the whole region, 9,600 by 9,600 cells, whatever the sites
+reached; see 9.2 for what that cost. It stays on whole degrees, so a
+land cover page still lands on a whole cell offset. A node inside the
+region but outside the box is sampled as no coverage, not as unknown,
+because no site reaches it.
+
 Levels are held the way the engine reports them: one unsigned byte,
 `dBm = byte - 200`, and zero meaning no run reached the cell. A signed
 byte reaches only -128 and the sensitivity of Long fast is -139 dBm.
@@ -578,6 +588,18 @@ different languages and nothing else connects them.
 `COVERAGE_MIN_PRECISION_BITS` may be set to zero by a deployment that
 reads its own broker, where every position arrives at full precision.
 
+**Or lowered on purpose, to draw the backbone that shares only a
+rounded position.** s.azmsh.dev sets 13 (2026-09-29): 31 routers were
+left out at 16, among them Towers 2 near Wickenburg, and the map drew
+nothing west of it. 13 keeps every position of 2.9 km or better and
+still refuses the broker's coarsest. Such a site is predicted from its
+rounded point, so its footprint can sit on the wrong side of a ridge,
+which is the cost above. It is not hidden: each site in
+`presets[].nodes` carries `position_deviation_m`, set only for a
+rounded position, and the page can say the footprint is approximate.
+An operator position in `config/nodes.yaml` is still the fix, and a
+site given one carries no deviation.
+
 ### 9.1.2.2 Predicting from the nodes that repeat
 
 The map predicts from routers and repeaters because only a node that
@@ -683,9 +705,20 @@ hold serves nearly every read.
 | One terrain page | 2.7 MB |
 | The terrain hold in one process | 43 MB, whatever the size of the region |
 | One region grid of Arizona | 88 MB |
-| A preset being built | Two grids, and a third while it is rendered |
+| One footprint grid of this mesh (6) | About 40 to 66 MB |
+| A preset being built | Three layers and the receiver loss, clutter charged in place |
 
 `_build` releases the grids of a preset before it starts the next one.
+
+**The limit is the whole container.** `JOBS_MEMORY_LIMIT` (640 MB on
+s.azmsh.dev) covers the jobs process and its engine worker together.
+With region-sized grids the jobs process held five 88 MB layers at a
+preset's peak (three layers, the receiver loss, and a copy made while
+each was charged for clutter), and with the engine's heap beside it the
+kernel killed the run in its first preset, twice on 2026-09-29. The run
+then counts as tried, so the map went a day without a new one. The
+footprint grid (6) and charging in place bring that peak to four
+smaller layers.
 
 A worker that dies still takes the whole pool with it. That now costs
 time and not the run: the preset is predicted again in the jobs process

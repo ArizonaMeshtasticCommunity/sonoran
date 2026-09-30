@@ -19,11 +19,12 @@ sites themselves are divided over worker processes.
 """
 
 import asyncio
+import math
 import multiprocessing
 import os
 import time
 from collections import Counter, OrderedDict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
@@ -245,6 +246,10 @@ def group_by_preset(
         latitude, longitude = given if given else (node.last_lat, node.last_lon)
         if latitude is None or longitude is None:
             continue
+        # Allowed, and still rounded: `COVERAGE_MIN_PRECISION_BITS` may
+        # be set below the exact threshold on purpose. Say so on the
+        # site, so the manifest can mark its footprint as approximate.
+        rounded = given is None and not is_precise_enough(node.last_position_precision_bits)
         site = make_site(
             settings,
             identifier,
@@ -254,6 +259,9 @@ def group_by_preset(
             longitude,
             profile,
             preset,
+            position_deviation_m=(
+                precision_deviation_m(node.last_position_precision_bits) if rounded else None
+            ),
         )
         groups.setdefault(preset.key, []).append(site)
 
@@ -289,6 +297,64 @@ def tiles_around(site: Site, radius_km: float) -> set[str]:
         for latitude in range(lat_from, lat_to + 1)
         for longitude in range(lon_from, lon_to + 1)
     }
+
+
+# Added to each site's reach before it is snapped to whole degrees, so a
+# footprint that ends exactly on a degree line is never cut by it.
+FOOTPRINT_MARGIN_DEG = 0.05
+
+
+def footprint_grid(settings: Settings, sites: Iterable[Site]) -> Grid:
+    """Return the grid of whole degrees that every site's footprint fits in.
+
+    The run used to make its grid over the whole terrain region, 9,600 by
+    9,600 cells, whatever the sites reached. Each layer of it is 88 MB,
+    and a preset holds five at once while it is charged for clutter. With
+    the engine's own heap beside it, that passed the 640 MB the jobs
+    container is given, and the kernel killed the run in its first
+    preset (2026-09-29, twice).
+
+    Nothing can be drawn outside this box: each site predicts out to
+    `COVERAGE_RADIUS_KM` and no further, and `blit_max` clips to the
+    grid anyway. It stays on whole degrees, so a land cover page still
+    lands on a whole cell offset (`coverage/grid.py` 6), and inside the
+    terrain region. With no site at all it is the whole region, as
+    before.
+    """
+    region = (
+        settings.terrain_lat_min,
+        settings.terrain_lat_max,
+        settings.terrain_lon_min,
+        settings.terrain_lon_max,
+    )
+    reach_lat = settings.coverage_radius_km / 111.0 + FOOTPRINT_MARGIN_DEG
+    south = north = west = east = None
+    for site in sites:
+        # A degree of longitude narrows towards the pole, so the reach
+        # east and west is wider than north and south. Taken at the
+        # footprint's edge nearest the pole, which is the widest.
+        edge = min(abs(site.latitude) + reach_lat, 89.0)
+        reach_lon = (
+            settings.coverage_radius_km / (111.0 * math.cos(math.radians(edge)))
+            + FOOTPRINT_MARGIN_DEG
+        )
+        lat_from = math.floor(site.latitude - reach_lat)
+        lat_to = math.floor(site.latitude + reach_lat)
+        lon_from = math.floor(site.longitude - reach_lon)
+        lon_to = math.floor(site.longitude + reach_lon)
+        south = lat_from if south is None else min(south, lat_from)
+        north = lat_to if north is None else max(north, lat_to)
+        west = lon_from if west is None else min(west, lon_from)
+        east = lon_to if east is None else max(east, lon_to)
+    if south is None or north is None or west is None or east is None:
+        return region_grid(*region)
+    lat_min = max(region[0], south)
+    lat_max = min(region[1], north)
+    lon_min = max(region[2], west)
+    lon_max = min(region[3], east)
+    if lat_min > lat_max or lon_min > lon_max:
+        return region_grid(*region)
+    return region_grid(lat_min, lat_max, lon_min, lon_max)
 
 
 async def ensure_terrain(settings: Settings, names: Sequence[str]) -> set[str]:
@@ -623,6 +689,8 @@ def _predict(
                 "clutter_height_m": site.clutter_height_m,
                 "clutter_loss_db": round(site.clutter_loss_db, 1),
                 "calibrated": site.profile.is_measured,
+                # Set only for a rounded position. See `Site`.
+                "position_deviation_m": site.position_deviation_m,
                 "cells_set": added_down,
                 "cells_set_uplink": added_up,
             }
@@ -756,12 +824,15 @@ def _charge_receiver(levels: Levels, loss: Levels | None) -> Levels:
     A cell nothing reached stays unreached, as in `_shift`. Turning a
     hole into a very weak signal would draw coverage that is not there.
 
-    It works a strip of rows at a time into one output grid. See
+    It works a strip of rows at a time, in place, so the layer passed in
+    becomes the answer and no second grid is made. See
     `_CHARGE_ROWS` for why.
     """
     if loss is None:
         return levels
-    out = np.empty_like(levels)
+    # In place. Every caller replaces its layer with the answer, and a
+    # second output grid was one more 88 MB layer at the peak.
+    out = levels
     for top in range(0, levels.shape[0], _CHARGE_ROWS):
         rows = slice(top, top + _CHARGE_ROWS)
         strip = levels[rows]
@@ -837,6 +908,7 @@ def _sample_nodes(
     points: Sequence[NodePoint],
     grid: Grid,
     layers: dict[str, Levels],
+    region: Grid | None = None,
 ) -> dict[str, dict[str, int]]:
     """Return the level of each layer at each node inside the grid.
 
@@ -852,6 +924,12 @@ def _sample_nodes(
     sampled: dict[str, dict[str, int]] = {}
     for node_num, latitude, longitude in points:
         if not grid.holds(latitude, longitude):
+            # Outside the footprint grid but inside the region is known,
+            # not unknown: every site's reach is inside the grid, so no
+            # prediction reaches such a node (`footprint_grid`). It was
+            # a zero when the grid was the whole region, and it stays one.
+            if region is not None and region.holds(latitude, longitude):
+                sampled[str(node_num)] = {layer: NO_COVERAGE for layer in layers}
             continue
         row = grid.row_of(latitude)
         column = grid.column_of(longitude)
@@ -879,6 +957,7 @@ def _build_site_set(
     missing_all: set[str],
     points: Sequence[NodePoint] = (),
     node_levels: dict[str, dict[str, object]] | None = None,
+    region: Grid | None = None,
 ) -> list[store.PresetSummary]:
     """Run every preset of one site set and write its tiles.
 
@@ -948,6 +1027,7 @@ def _build_site_set(
                     points,
                     grid,
                     {"usable": usable, "downlink": downlink, "uplink": uplink},
+                    region,
                 )
 
         summaries.append(
@@ -998,11 +1078,22 @@ def _build(
     allowed = plans[0].allowed
     groups = plans[0].groups
     coarse = plans[0].coarse
-    grid = region_grid(
+    region = region_grid(
         settings.terrain_lat_min,
         settings.terrain_lat_max,
         settings.terrain_lon_min,
         settings.terrain_lon_max,
+    )
+    # Only the ground the sites can reach. See `footprint_grid`.
+    grid = footprint_grid(
+        settings, (site for plan in plans for sites in plan.groups.values() for site in sites)
+    )
+    logger.info(
+        "coverage grid %s by %s cells (%s MB a layer), %.0f%% of the region",
+        grid.width,
+        grid.height,
+        grid.cells // 1_000_000,
+        100.0 * grid.cells / region.cells,
     )
     # Clear anything a previous run left behind. See
     # `store.clear_pending`: a run that dies is never published, so
@@ -1020,7 +1111,7 @@ def _build(
     node_levels: dict[str, dict[str, object]] = {}
     for plan in plans:
         summaries = _build_site_set(
-            settings, plan, grid, rx_loss, root, workers, missing_all, points, node_levels
+            settings, plan, grid, rx_loss, root, workers, missing_all, points, node_levels, region
         )
         set_summaries.append(
             store.SiteSetSummary(
