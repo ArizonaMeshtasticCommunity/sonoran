@@ -104,6 +104,40 @@ class Settings(BaseSettings):
     # afford.
     stats_cache_seconds: float = 30.0
 
+    # How long one node's links and routes are held (#304).
+    #
+    # `/api/nodes/{id}/routes` reads every upload of the node over the
+    # window, which was 5 to 8 seconds on a busy gateway before revision
+    # 0017 (see `api/sightings.py`). Its lists cover up to thirty days,
+    # and five minutes more or less of them changes no row a reader
+    # looks at. Zero holds nothing.
+    routes_cache_seconds: float = 300.0
+
+    # The request budget of each API caller (`api/limits.py`). A token
+    # bucket: `burst` requests at once, then `per_second` sustained.
+    #
+    # One dashboard page asks for 10 to 25 answers, so 300 at once is a
+    # dozen pages opened together, and 3 a second is 10,800 an hour.
+    # No reader reaches that. A script copying the database does.
+    # Tiles have their own, larger budget, because a map fetches them
+    # in hundreds.
+    #
+    # **Off by default.** Behind a proxy whose address is not in
+    # `FORWARDED_ALLOW_IPS`, every reader has the proxy's address and
+    # all of them share one budget, which a busy page would feel. Turn
+    # it on where the API is known to see real client addresses.
+    api_rate_limit_enabled: bool = False
+    api_rate_burst: float = 300.0
+    api_rate_per_second: float = 3.0
+    api_tile_rate_burst: float = 3000.0
+    api_tile_rate_per_second: float = 30.0
+    # A header naming the signed-in user, to key the budget on the user
+    # instead of the address. Empty keys on the address. Set it ONLY to
+    # a header the login proxy replaces on every request: a header it
+    # passes through lets a caller pick a new budget per request.
+    # Development (Caddy and Authelia) sets `Remote-User`.
+    api_rate_user_header: str = ""
+
     # The timezone every time on the page is shown in.
     #
     # Arizona does not observe daylight saving, so it sits on MST all

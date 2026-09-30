@@ -32,6 +32,8 @@ from sonoran.api.dependencies import (
 )
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
 from sonoran.api.schemas import NodeSummary
+from sonoran.api.sightings import direct as direct_sighting
+from sonoran.api.sightings import sightings
 from sonoran.config import Settings
 from sonoran.coverage.store import calibration_offsets
 from sonoran.db.models import (
@@ -175,30 +177,19 @@ async def _heard_by(
     and then offers the node's own reading as a radio link to itself. It
     must not count as direct. See AGENTS.md 9.5.1.
     """
-    direct = and_(
-        Packet.hop_start == PacketSeen.hop_limit,
-        PacketSeen.from_node_num != PacketSeen.gateway_node_num,
-    )
+    seen = sightings(PacketSeen.from_node_num == node_num, PacketSeen.seen_at >= since)
+    heard = direct_sighting(seen)
     statement = (
         select(
-            PacketSeen.gateway_node_num,
+            seen.c.gateway_node_num,
             func.count().label("total"),
-            func.count().filter(direct).label("direct_count"),
-            func.max(PacketSeen.seen_at).label("last_heard"),
-            func.avg(PacketSeen.rx_snr).filter(direct).label("avg_snr"),
-            func.max(PacketSeen.rx_snr).filter(direct).label("best_snr"),
-            func.avg(PacketSeen.rx_rssi).filter(direct).label("avg_rssi"),
+            func.count().filter(heard).label("direct_count"),
+            func.max(seen.c.seen_at).label("last_heard"),
+            func.avg(seen.c.rx_snr).filter(heard).label("avg_snr"),
+            func.max(seen.c.rx_snr).filter(heard).label("best_snr"),
+            func.avg(seen.c.rx_rssi).filter(heard).label("avg_rssi"),
         )
-        .select_from(PacketSeen)
-        .join(
-            Packet,
-            and_(
-                Packet.from_node_num == PacketSeen.from_node_num,
-                Packet.packet_id == PacketSeen.packet_id,
-            ),
-        )
-        .where(PacketSeen.from_node_num == node_num, PacketSeen.seen_at >= since)
-        .group_by(PacketSeen.gateway_node_num)
+        .group_by(seen.c.gateway_node_num)
         .order_by(func.count().desc())
     )
     rows = (await session.execute(statement)).all()

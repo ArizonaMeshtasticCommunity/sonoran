@@ -22,6 +22,7 @@ from starlette.types import Scope
 
 from sonoran import __version__
 from sonoran.api.html import as_script_json
+from sonoran.api.limits import Budget, RateLimitMiddleware
 from sonoran.api.routes.chat import router as chat_router
 from sonoran.api.routes.coverage import router as coverage_router
 from sonoran.api.routes.embed import router as embed_router
@@ -411,6 +412,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # at INFO and held the same address. Both mitigations are here so
     # that removing one and leaving the other is a visible edit.
     quieten_http_client()
+    # Each caller's request budget (`api/limits.py`). Added before the
+    # headers, so it runs inside them and a 429 carries them too.
+    if settings.api_rate_limit_enabled:
+        app.add_middleware(
+            RateLimitMiddleware,
+            general=Budget(settings.api_rate_burst, settings.api_rate_per_second),
+            tiles=Budget(settings.api_tile_rate_burst, settings.api_tile_rate_per_second),
+            user_header=settings.api_rate_user_header,
+        )
     app.add_middleware(SecurityHeadersMiddleware)
     # Compress what is worth compressing.
     #

@@ -2382,3 +2382,76 @@ def test_the_route_widgets_read_every_traceroute_in_the_window(  # type: ignore[
     assert hears["!000026ae"]["count"] == 2100, "each report is counted, not the newest 2000"
     assert "!000026af" in hears, "a link seen only twenty days ago is still a link"
     assert hears["!000026af"]["count"] == 1
+
+
+def test_a_sighting_is_direct_by_its_own_hop_start_or_else_its_packets(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """The node page reads `packet_seen.hop_start`, and joins only old rows (#304).
+
+    Revision 0017 writes each sighting's own `hop_start`. Rows written
+    before it hold NULL and are never backfilled, so they must still be
+    judged by their packet's. 9921 sends two packets:
+
+    - packet 1, `packet.hop_start` 3: 9922 hears it direct by its own
+      value, 9923 direct by the packet's (an old row), 9924 two hops
+      away, and 9921 uploads it itself.
+    - packet 2, `packet.hop_start` NULL: 9924 hears it direct, which only
+      its own value can say.
+    """
+    sender = 9921
+    now = datetime.now(UTC)
+    sightings = (
+        # packet, gateway, own hop_start, hop_limit
+        (1, 9922, 3, 3),
+        (1, 9923, None, 3),
+        (1, 9924, 3, 1),
+        (1, 9921, 3, 3),
+        (2, 9924, 3, 3),
+    )
+    try:
+        with migrated_engine.begin() as connection:
+            for packet_id, hop_start in ((1, 3), (2, None)):
+                connection.execute(
+                    text(
+                        "INSERT INTO packet (from_node_num, packet_id, portnum, channel, "
+                        "hop_start, want_ack, first_seen_at) "
+                        "VALUES (:n, :pid, 1, 'LongFast', :hs, false, :now)"
+                    ),
+                    {"n": sender, "pid": packet_id, "hs": hop_start, "now": now},
+                )
+            for packet_id, gateway, hop_start, hop_limit in sightings:
+                connection.execute(
+                    text(
+                        "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                        "mqtt_topic, channel, rx_snr, hop_limit, hop_start, seen_at) "
+                        "VALUES (:n, :pid, :gw, 'msh/test', 'LongFast', 5.0, :hl, :hs, :now)"
+                    ),
+                    {
+                        "n": sender,
+                        "pid": packet_id,
+                        "gw": gateway,
+                        "hl": hop_limit,
+                        "hs": hop_start,
+                        "now": now,
+                    },
+                )
+        app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+        with TestClient(app) as client:
+            routes = client.get(f"/api/nodes/!{sender:08x}/routes?hours=24").json()
+            heard = client.get(f"/api/nodes/!{sender:08x}/heard-by?hours=24").json()
+    finally:
+        _forget_node(migrated_engine, sender)
+
+    linked = {row["node_id"]: row["count"] for row in routes["heard_by"]}
+    assert linked == {"!000026c2": 1, "!000026c3": 1, "!000026c4": 1}, (
+        "9922 by its own hop_start, 9923 by its packet's, 9924 by its own on packet 2 "
+        "only; the sender's own upload is never a link"
+    )
+    assert routes["hop_depth"]["counts"] == [{"hops": 0, "packets": 2}]
+
+    direct = {row["node_id"]: (row["count"], row["direct_count"]) for row in heard}
+    assert direct["!000026c2"] == (1, 1)
+    assert direct["!000026c3"] == (1, 1), "an old row is judged by its packet"
+    assert direct["!000026c4"] == (2, 1), "two hops on packet 1, direct on packet 2"
+    assert direct["!000026c1"] == (1, 0), "a node's own upload is not a direct link"

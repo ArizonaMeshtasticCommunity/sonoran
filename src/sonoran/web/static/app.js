@@ -7697,20 +7697,34 @@ async function loadNodeDetail(nodeId) {
   body.prepend(nodeJumpBar(body));
 
   const id = encodeURIComponent(nodeId);
-  const [gaps, historyData, routesData] = await getAll([
+  /*
+   * `routes` is asked for now and waited for on its own (#304).
+   *
+   * It reads every upload of the node over the window, and on a busy
+   * node that took 7 to 29 seconds uncached on s.azmsh.dev. It was in
+   * the same `getAll` as `gaps` and `history`, so the health panel and
+   * the history charts, which need neither, waited for it as well.
+   * Only the Links panel needs it, and that panel fills in when it
+   * comes.
+   */
+  const routesLoad = getAll([`api/nodes/${id}/routes?hours=${hours}`]);
+  const [gaps, historyData] = await getAll([
     `api/nodes/${id}/gaps`,
     `api/nodes/${id}/history?hours=${hours}`,
-    `api/nodes/${id}/routes?hours=${hours}`,
   ]);
   // The page may have moved on to another node while these loaded.
   if (currentNodeId !== nodeId) return;
   health.replaceWith(jumpTarget('health', healthPanel(gaps, detail, issuesPanel(gaps))));
-  routes.replaceWith(jumpTarget('links', routesPanel(routesData)));
   drawNodeHistory(history, historyData);
+  const drawRoutes = routesLoad.then(([routesData]) => {
+    if (currentNodeId !== nodeId) return;
+    routes.replaceWith(jumpTarget('links', routesPanel(routesData)));
+  });
   const types = (detail.activity.by_portnum || []).map((row) => row.portnum);
   await Promise.all([
     drawSignalChart($('[data-signal-chart]', body), nodeId, hours),
     drawTimeline(packets, nodeId, hours, types),
+    drawRoutes,
   ]);
 }
 
