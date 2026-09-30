@@ -66,7 +66,7 @@ database is first created, and changing `.env` later does not change them.
 [Configuration](#️-configuration) below says what each setting is.
 
 > [!IMPORTANT]
-> **Proxmox / VM Users:** Modern NumPy requires `x86-64-v2` CPU instructions. If deploying on a VM, set your VM's CPU Type to `host` (instead of the default `kvm64` or similar) to prevent the `web`, `ingest`, and `jobs` containers from crashing.
+> **Proxmox / VM Users:** Modern NumPy requires `x86-64-v2` CPU instructions. If deploying on a VM, set your VM's CPU type to a model that includes the required instruction sets (such as SSE4.1 and SSE4.2), or pass through the native `host` CPU if suitable for your environment. Leaving it on a default like `kvm64` will cause the `web`, `ingest`, and `jobs` containers to crash.
 
 Then open the dashboard at **<http://localhost:8000>**. If you included the `graph` profile, the mesh-graph engine is at **<http://localhost:8080>**.
 
