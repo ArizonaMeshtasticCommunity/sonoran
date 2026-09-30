@@ -119,7 +119,11 @@ async def list_packets(
     #
     # This is the shape `map.py` already uses for the same reason; see
     # the note there about a correlated read.
-    picked = select(Packet.id.label("pk")).order_by(Packet.first_seen_at.desc()).limit(limit)
+    picked = (
+        select(Packet.id.label("pk"), Packet.first_seen_at.label("at"))
+        .order_by(Packet.first_seen_at.desc())
+        .limit(limit)
+    )
     if portnum is not None:
         picked = picked.where(Packet.portnum == _parse_portnum(portnum))
     if from_node:
@@ -134,12 +138,31 @@ async def list_packets(
         picked = picked.where(Packet.first_seen_at < before)
     page = picked.cte("page")
 
-    count = func.count(PacketSeen.id).label("seen_count")
+    # Counted for each row of the page, never as a join.
+    #
+    # The CTE above does not fence anything: PostgreSQL inlines it, and
+    # with the count as a LEFT JOIN it was free to join every packet to
+    # every observation first and apply the page last. On 2026-09-30 it
+    # did exactly that: a parallel hash of all 7.7M `packet_seen` rows,
+    # which overflowed the database container's 64 MB `/dev/shm`, and
+    # the firehose answered 500 on every load. A correlated count is at
+    # most `limit` index probes on `ix_packet_seen_natural_key`,
+    # whatever the planner thinks of the tables. Same answer: zero for a
+    # packet nobody uploaded, as the LEFT JOIN gave.
+    #
+    # The page is joined back on its time as well as its id, so each
+    # lookup reads one chunk of `packet` rather than every one.
+    seen_count = (
+        select(func.count())
+        .select_from(PacketSeen)
+        .where(_same_packet(Packet, PacketSeen))
+        .correlate(Packet)
+        .scalar_subquery()
+        .label("seen_count")
+    )
     statement = (
-        select(Packet, count)
-        .join(page, page.c.pk == Packet.id)
-        .outerjoin(PacketSeen, _same_packet(Packet, PacketSeen))
-        .group_by(Packet.id, Packet.first_seen_at)
+        select(Packet, seen_count)
+        .join(page, and_(page.c.pk == Packet.id, page.c.at == Packet.first_seen_at))
         .order_by(Packet.first_seen_at.desc())
     )
     rows = (await session.execute(statement)).all()
