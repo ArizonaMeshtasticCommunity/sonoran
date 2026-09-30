@@ -5,6 +5,27 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.09.30 — 2026-09-30
+
+1 pull request merged.
+
+#### Fixes
+
+- Coverage runs fit their container; rounded routers can be sites (marked approximate) (#318) by @logans-stuff
+  - The coverage map can include routers and repeating nodes that share only an approximate position (such as around Wickenburg) where a deployment allows it, and marks them as approximate.
+  - The list of rounded positions on the coverage page shows only the preset you are viewing.
+  - Coverage runs need less memory, so they stop failing on small servers.
+
+#### Issues
+
+- Worked on: #315 Wickenburg on the coverage map
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.09.29...v2026.09.30
+
 ## v2026.09.29 — 2026-09-29
 
 1 pull request merged.

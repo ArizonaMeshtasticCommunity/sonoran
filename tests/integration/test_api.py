@@ -2455,3 +2455,49 @@ def test_a_sighting_is_direct_by_its_own_hop_start_or_else_its_packets(  # type:
     assert direct["!000026c3"] == (1, 1), "an old row is judged by its packet"
     assert direct["!000026c4"] == (2, 1), "two hops on packet 1, direct on packet 2"
     assert direct["!000026c1"] == (1, 0), "a node's own upload is not a direct link"
+
+
+def test_the_firehose_counts_each_packets_uploads(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """`seen_count` is the uploads of each packet on the page, zero included.
+
+    The count used to be a LEFT JOIN, and on 2026-09-30 the planner
+    joined every packet to every observation to answer it. It is a
+    correlated count now; this pins that the answer did not change.
+    """
+    sender = 9931
+    now = datetime.now(UTC)
+    uploads = {1: 0, 2: 1, 3: 3}
+    try:
+        with migrated_engine.begin() as connection:
+            for packet_id, total in uploads.items():
+                connection.execute(
+                    text(
+                        "INSERT INTO packet (from_node_num, packet_id, portnum, channel, "
+                        "want_ack, first_seen_at) "
+                        "VALUES (:n, :pid, 1, 'FirehoseTest', false, :at)"
+                    ),
+                    {"n": sender, "pid": packet_id, "at": now - timedelta(seconds=packet_id)},
+                )
+                for gateway in range(total):
+                    connection.execute(
+                        text(
+                            "INSERT INTO packet_seen (from_node_num, packet_id, "
+                            "gateway_node_num, mqtt_topic, channel, seen_at) "
+                            "VALUES (:n, :pid, :gw, 'msh/test', 'FirehoseTest', :at)"
+                        ),
+                        {"n": sender, "pid": packet_id, "gw": 9940 + gateway, "at": now},
+                    )
+        app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+        with TestClient(app) as client:
+            rows = client.get("/api/packets?channel=FirehoseTest&limit=10").json()
+            top = client.get("/api/packets?channel=FirehoseTest&limit=2").json()
+    finally:
+        _forget_node(migrated_engine, sender)
+
+    counted = [(row["packet_key"], row["seen_count"]) for row in rows]
+    assert counted == [(f"{sender}:1", 0), (f"{sender}:2", 1), (f"{sender}:3", 3)]
+    assert [row["packet_key"] for row in top] == [f"{sender}:1", f"{sender}:2"], (
+        "newest first, and the limit holds"
+    )
