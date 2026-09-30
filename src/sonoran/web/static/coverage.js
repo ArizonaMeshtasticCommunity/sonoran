@@ -819,7 +819,14 @@
     const panel = $('[data-coverage-coarse-panel]', page);
     const host = $('[data-coverage-coarse]', page);
     if (!panel || !host) return;
-    const sites = (state.summary && state.summary.coarse_sites) || [];
+    /*
+     * Only the preset on screen (#315). The list used to be every
+     * preset's, so a LongFast router sat in the MediumFast view, and
+     * the two presets cannot hear each other. A manifest written before
+     * the field existed has no preset on its entries, and keeps them.
+     */
+    const sites = ((state.summary && state.summary.coarse_sites) || [])
+      .filter((site) => !site.preset || site.preset === state.preset);
     panel.hidden = !sites.length;
     if (!sites.length) return;
 

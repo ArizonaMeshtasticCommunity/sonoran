@@ -148,3 +148,25 @@ def test_an_operator_position_is_never_marked_approximate(tmp_path: Path) -> Non
     (site,) = groups["MEDIUM_FAST"]
     assert site.position_deviation_m is None
     assert (site.latitude, site.longitude) == (34.2, -112.4)
+
+
+def test_a_coarse_site_names_its_preset(tmp_path: Path) -> None:
+    """The page lists only the preset on screen (#315).
+
+    mr 2.7.15 is heard on LongFast only, and it sat in the MediumFast
+    view's list, because the list carried no preset at all.
+    """
+    rounded = _router(1, 15)
+    _, _, coarse = coverage.group_by_preset(_settings(tmp_path), [rounded], parse_overrides(""))
+    assert coarse[0]["preset"] == "MediumFast"
+
+
+def test_the_page_lists_coarse_sites_for_the_preset_on_screen() -> None:
+    script = (Path(__file__).parents[2] / "src/sonoran/web/static/coverage.js").read_text(
+        encoding="utf-8"
+    )
+    body = script[script.index("function drawCoarse(") :]
+    body = body[: body.index("\n  }\n")]
+    assert "site.preset === state.preset" in body
+    # An older manifest has no preset on its entries and keeps them.
+    assert "!site.preset" in body

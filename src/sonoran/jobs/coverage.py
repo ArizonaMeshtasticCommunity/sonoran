@@ -226,6 +226,10 @@ def group_by_preset(
             ):
                 coarse.append(
                     {
+                        # The preset it was heard on. LongFast and
+                        # MediumFast cannot hear each other, and the page
+                        # lists only the preset on screen (#315).
+                        "preset": preset.name,
                         "node_id": identifier,
                         "display_name": node.long_name or node.short_name or identifier,
                         "role": role_name(node.role),

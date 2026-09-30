@@ -574,8 +574,10 @@ their own router is, and a position given there is used as exact.
 **And the page names them, not just the count.** "Give each one a
 latitude and longitude in config/nodes.yaml" is not something anybody
 can act on without knowing which ones. The manifest carries
-`coarse_sites` — up to `COARSE_REPORT_LIMIT` of them, coarsest first —
-and the coverage page renders a block ready to paste into
+`coarse_sites` — up to `COARSE_REPORT_LIMIT` of them, coarsest first,
+each with the `preset` it was heard on —
+and the coverage page renders, for the preset on screen only, a block
+ready to paste into
 `config/nodes.yaml`, with the rounded position filled in as a starting
 point and the deviation in the comment beside each name.
 
