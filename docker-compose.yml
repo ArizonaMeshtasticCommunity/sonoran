@@ -86,7 +86,7 @@ services:
       timeout: 5s
       retries: 10
 
-  api:
+  web:
     build: .
     restart: unless-stopped
     logging: *logging
@@ -133,10 +133,11 @@ services:
     # reverse proxy in front of it. A
     # deployment that needs another address says so in its override.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${WEB_BIND_IP:-127.0.0.1}:${WEB_BIND_PORT:-8000}:${WEB_PORT:-8000}"
 
   migrate:
     build: .
+    restart: "no"
     logging: *logging
     command: ["alembic", "upgrade", "head"]
     env_file: .env
@@ -269,6 +270,7 @@ services:
     #   docker manifest inspect ghcr.io/ianmcorvidae/mesh-graph:latest
     image: ghcr.io/ianmcorvidae/mesh-graph:latest@sha256:7126a91d0952e1f0cb1a456ba661cdb8562aa95781bfc6a507f5d375ba2510c2
     restart: unless-stopped
+    profiles: ["graph"]
     logging: *logging
     # No `env_file`. This is the one service in the stack that is not
     # our code, and `.env` holds the Postgres superuser password, four
@@ -291,15 +293,15 @@ services:
     entrypoint: ["sh", "-c"]
     volumes:
       - meshgraph_data:/data
-      - ./mesh-graph.config.toml:/config.toml:ro
+      - ./config:/config:ro
     # Loopback only, as for the api above.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${GRAPH_BIND_IP:-127.0.0.1}:${GRAPH_BIND_PORT:-8080}:${GRAPH_PORT:-8080}"
     # Writes the broker, port and login into a copy of the config.
     # `broker` in mesh-graph.config.toml is replaced by MQTT_HOST, so
     # the host and port come from the environment like the ingest's do,
     # and are not a second copy of the broker address that can disagree.
-    command: ["awk -v host=\"$$MQTT_HOST\" -v port=\"$$MQTT_PORT\" -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^broker[[:space:]]*=/{print \"broker = \\\"\" host \"\\\"\"; next} {print} /^\\[mqtt\\]/{print \"port = \" port; print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"}' /config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]
+    command: ["awk -v host=\"$$MQTT_HOST\" -v port=\"$$MQTT_PORT\" -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^broker[[:space:]]*=/{print \"broker = \\\"\" host \"\\\"\"; next} {print} /^\\[mqtt\\]/{print \"port = \" port; print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"}' /config/mesh-graph.config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]
 
   backup:
     # A daily logical dump of the database, kept in rotation. See
