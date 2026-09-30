@@ -216,11 +216,14 @@ def test_charging_the_receiver_in_strips_matches_one_pass() -> None:
     moved = np.clip(levels.astype(np.int16) - loss.astype(np.int16), MIN_LEVEL, MAX_LEVEL)
     expected = np.where(levels == NO_COVERAGE, NO_COVERAGE, moved).astype(np.uint8)
 
+    holes = levels == NO_COVERAGE
     found = coverage._charge_receiver(levels, loss)
     assert found.dtype == np.uint8
     assert np.array_equal(found, expected)
     # A hole stays a hole, and a covered cell never falls into one.
-    assert np.array_equal(found == NO_COVERAGE, levels == NO_COVERAGE)
+    assert np.array_equal(found == NO_COVERAGE, holes)
+    # In place: no second 88 MB grid at the peak of a run.
+    assert found is levels
 
 
 def test_no_land_cover_leaves_a_layer_untouched() -> None:

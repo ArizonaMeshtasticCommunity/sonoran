@@ -5,6 +5,26 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.09.29 — 2026-09-29
+
+1 pull request merged.
+
+#### New features
+
+- Per-caller API request budget; node page reads sightings from covering indexes (part of #304) (#316) by @logans-stuff
+  - Node pages open without waiting for "Links and routes". Once this release's database update has run, the links panel itself loads in under a second instead of 5 to 30.
+  - An optional per-caller limit on API requests, to slow down bulk scraping. It is off unless a deployment turns it on, and normal use is far below it.
+
+#### Issues
+
+- Worked on: #304 Node page: health panel and Links wait up to 29 s on /routes (packet_seen joins), measured on production
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.09.27.2...v2026.09.29
+
 ## v2026.09.27.2 — 2026-09-27
 
 1 pull request merged, 37 issues closed.

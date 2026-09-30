@@ -269,5 +269,9 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      # No setup-buildx-action. It made a new BuildKit container for every
+      # job, with an empty cache, and asked it for GPU access, which the
+      # runners refuse and it retried without. Docker's built-in builder
+      # reads `# syntax=docker/dockerfile:1` too, and uses the cache the
+      # runners share, so unchanged layers are not fetched again.
       - run: docker build -t sonoran:ci .

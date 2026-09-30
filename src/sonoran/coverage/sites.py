@@ -76,6 +76,12 @@ class Site:
     # loss at this end of every path, so it is charged once here
     # rather than inside the engine. See `coverage/clutter.py`.
     clutter_loss_db: float = 0.0
+    # How far the position predicted from may be from the node, in
+    # metres, when the node shared only a rounded one. None for a
+    # position that is exact or that an operator gave. A footprint from
+    # a rounded position is drawn around the rounded point, so the page
+    # needs this to say the footprint is approximate.
+    position_deviation_m: float | None = None
 
     @property
     def sort_key(self) -> float:
@@ -102,6 +108,7 @@ def make_site(
     longitude: float,
     profile: RadioProfile,
     preset: ModemPreset,
+    position_deviation_m: float | None = None,
 ) -> Site:
     """Return a site, with the clutter around it worked out."""
     around = clutter_at(settings, latitude, longitude)
@@ -119,6 +126,7 @@ def make_site(
         clutter_height_m=around,
         clutter_diffracting=diffracting,
         clutter_loss_db=terminal_loss_db(around, height, DEFAULT_FREQUENCY_MHZ, diffracting),
+        position_deviation_m=position_deviation_m,
     )
 
 
