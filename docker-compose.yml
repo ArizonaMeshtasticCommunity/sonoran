@@ -69,10 +69,13 @@ services:
     image: timescale/timescaledb-ha:pg17
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     environment:
       POSTGRES_DB: azmsh
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       # The timescaledb-ha image keeps PGDATA at /home/postgres/pgdata,
       # not /var/lib/postgresql/data. Mounting the volume on the wrong
@@ -90,6 +93,9 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - default
+      - sonoran-internal
     command: ["sonoran-api"]
     # Ask the application, not the port.
     #
@@ -139,6 +145,8 @@ services:
     build: .
     restart: "no"
     logging: *logging
+    networks:
+      - sonoran-internal
     command: ["alembic", "upgrade", "head"]
     env_file: .env
     # The one service that holds the superuser, because it is the one
@@ -165,6 +173,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     command: ["sonoran-ingest"]
     env_file: .env
     # INSERT and UPDATE on the payload tables, and nothing else.
@@ -189,6 +199,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     profiles: ["rf"]
     command: ["sonoran-rf-ingest"]
     env_file: .env
@@ -205,6 +217,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     command: ["sonoran-jobs"]
     env_file: .env
     # Contain the coverage job's memory to the container that uses it.
@@ -272,6 +286,8 @@ services:
     restart: unless-stopped
     profiles: ["graph"]
     logging: *logging
+    networks:
+      - sonoran-internal
     # No `env_file`. This is the one service in the stack that is not
     # our code, and `.env` holds the Postgres superuser password, four
     # database DSNs, the three role passwords and the Meshtastic channel
@@ -317,6 +333,8 @@ services:
       dockerfile: tools/backup.Dockerfile
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     # No `env_file`, for the same reason as mesh-graph: this service
     # gets the one credential it uses, and nothing else from `.env`.
     environment:
@@ -358,3 +376,7 @@ volumes:
   terrain_cache:
   landcover_cache:
   coverage_cache:
+
+networks:
+  sonoran-internal:
+    internal: true
