@@ -3,7 +3,8 @@
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Path, HTTPException, Request
+from starlette.responses import Response
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -548,3 +549,32 @@ async def traceroute_paths(
         "trace_count": len(traces),
         "traces": traces,
     }
+
+@router.get("/heatmap/tiles/{z}/{x}/{y}.png")
+async def heatmap_tile(
+    request: Request,
+    z: int = Path(ge=0, le=16),
+    x: int = Path(ge=0),
+    y: int = Path(ge=0),
+) -> Response:
+    """Return one empirical activity heatmap tile."""
+    from pathlib import Path as FilePath
+    settings = request.app.state.settings
+    
+    # Matches the path written by activity_heatmap job
+    # cache_dir / "all" / "all" / "empirical_heatmap" / z / x / y.png
+    tile_path = FilePath(settings.coverage_cache_dir) / "all" / "all" / "empirical_heatmap" / str(z) / str(x) / f"{y}.png"
+    
+    try:
+        png = tile_path.read_bytes()
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="no heatmap data here")
+        
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=3600",
+        },
+    )
+

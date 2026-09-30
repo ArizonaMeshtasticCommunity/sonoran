@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.jobs import calibrate, coverage, gaps, gaps_siting, rf_rollup, snapshots
+from sonoran.jobs import activity_heatmap, calibrate, coverage, gaps, gaps_siting, rf_rollup, snapshots
 from sonoran.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -199,6 +199,23 @@ def build_tasks(settings: Settings) -> list[Task]:
             next_delay=_delay_to_next_utc_day,
         )
     ]
+    
+    async def heatmap_run() -> None:
+        engine = make_engine(settings.database_url_jobs)
+        factory = make_session_factory(engine)
+        try:
+            async with factory() as session:
+                await activity_heatmap.run_once(session, settings)
+        finally:
+            await engine.dispose()
+            
+    tasks.append(
+        Task(
+            name="activity_heatmap",
+            run=heatmap_run,
+            next_delay=_delay_to_next_utc_day,
+        )
+    )
 
     if settings.coverage_enabled:
         last_calibration: float | None = None

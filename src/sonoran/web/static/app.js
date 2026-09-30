@@ -3433,6 +3433,7 @@ PAGES.map = async (page) => {
 
   const minutes = $('[data-traffic-minutes]', page).value || '15';
   const showTraffic = $('[data-show-traffic]', page).getAttribute('aria-pressed') === 'true';
+  const showHeatmap = $('[data-show-heatmap]', page).getAttribute('aria-pressed') === 'true';
   const showLinks = $('[data-show-links]', page).getAttribute('aria-pressed') === 'true';
   const showTraces = $('[data-show-traces]', page).getAttribute('aria-pressed') === 'true';
 
@@ -3607,6 +3608,24 @@ PAGES.map = async (page) => {
   const positions = new Map(
     nodes.filter((row) => row.lat != null && row.lon != null)
       .map((row) => [row.node_id, [row.lat, row.lon]]));
+      
+  // Activity Heatmap
+  if (showHeatmap) {
+    if (!mapState.heatmapTiles) {
+      mapState.heatmapTiles = L.tileLayer('api/map/heatmap/tiles/{z}/{x}/{y}.png', {
+        className: 'coverage-tiles',
+        minZoom: 0,
+        maxZoom: 16,
+        maxNativeZoom: 14, // Past this zoom, just stretch the pixels
+        errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+      });
+    }
+    if (!map.hasLayer(mapState.heatmapTiles)) mapState.heatmapTiles.addTo(map);
+  } else {
+    if (mapState.heatmapTiles && map.hasLayer(mapState.heatmapTiles)) {
+      map.removeLayer(mapState.heatmapTiles);
+    }
+  }
 
   /*
    * The watchdog.
