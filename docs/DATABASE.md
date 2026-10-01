@@ -312,7 +312,8 @@ The design is `docs/design/rf-map.md`.
 
 | Table | Kind | One row per | Kept |
 |---|---|---|---|
-| `rf_station` | plain | station, from its heartbeat: rounded position, kinds, counts, `last_seen` | always |
+| `rf_station` | plain | location (one station on the map): rounded position, `last_seen` of any source, and the registry fields `display_name`, `owner`, `registered_sources`, `registry_at`. `last_seen` is NULL for a location in the registry with no heartbeat yet. Kinds and counts are kept for an agent that sends no source | always |
+| `rf_source` | plain | (`station_id`, `source`): one Pi or decoder, from its own heartbeat: kinds, counts, agent version, `last_seen`. `-` is an agent that sends no source. Revision 0018 (#305) | always |
 | `rf_track` | hypertable on `bucket` | (`kind`, `thing_id`, 20 s bucket), across every station; the loudest hearing wins | 2 days |
 | `rf_heard` | hypertable on `bucket` | (`station_id`, `kind`, `thing_id`, 5 min bucket): hearings, best level, where | 14 days |
 | `rf_latest` | plain | (`kind`, `thing_id`): the newest point, updated in place | always |
@@ -445,6 +446,11 @@ The rules:
   last good backup. The container healthcheck fails when that backup is
   older than the interval plus 12 hours. Look at `docker compose ps`: an
   `unhealthy` backup service means the backups have stopped.
+- `failures` in the backup directory counts the failed attempts since
+  the last good backup. The healthcheck also fails when it reaches
+  `BACKUP_FAIL_LIMIT` (default 3, about 45 minutes at the default
+  retry). Without it, a backup that fails on each retry stays healthy
+  for 36 hours (#244). A good backup removes the file.
 - After a restart, the service waits out the rest of the interval if the
   last good backup is recent. A container that restarts often does not
   dump the database each time.

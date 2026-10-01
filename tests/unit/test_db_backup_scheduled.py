@@ -75,7 +75,8 @@ def _run(env: dict[str, str], mode: str, **extra: str) -> subprocess.CompletedPr
 
 
 def _backups(env: dict[str, str]) -> list[str]:
-    return sorted(os.listdir(env["BACKUP_DIR"]))
+    """The files in the backup directory, without the failure counter."""
+    return sorted(f for f in os.listdir(env["BACKUP_DIR"]) if f != "failures")
 
 
 def _dumps(env: dict[str, str]) -> list[str]:
@@ -225,6 +226,44 @@ def test_check_passes_on_a_fresh_backup_and_fails_on_a_stale_one(env: dict[str, 
 
     (status / "last-good").write_text(f"{now - 10800}\nazmsh-x.dump\n", encoding="utf-8")
     assert _run(env, "check", BACKUP_STALE_SECONDS="7200").returncode == 1
+
+
+@needs_gnu_date
+def test_check_fails_after_failed_attempts_in_a_row(env: dict[str, str]) -> None:
+    """#244: a backup that fails on each retry is found in a few retries.
+
+    The last good backup is fresh, so the age test alone passes for the
+    next 36 hours. The failure count must fail `check` first.
+    """
+    directory = Path(env["BACKUP_DIR"])
+    directory.mkdir()
+    now = int(time.time())
+    (directory / "last-good").write_text(f"{now - 60}\nazmsh-x.dump\n", encoding="utf-8")
+
+    for expected in (1, 2):
+        assert _run(env, "once", STUB_DUMP_FAIL="1").returncode != 0
+        assert (directory / "failures").read_text(encoding="utf-8").strip() == str(expected)
+        assert _run(env, "check", BACKUP_FAIL_LIMIT="3").returncode == 0
+
+    assert _run(env, "once", STUB_DUMP_FAIL="1").returncode != 0
+    done = _run(env, "check", BACKUP_FAIL_LIMIT="3")
+    assert done.returncode == 1
+    assert "the last 3 backups failed" in done.stdout
+
+    # 0 turns the count off, and only the age decides.
+    assert _run(env, "check", BACKUP_FAIL_LIMIT="0").returncode == 0
+
+
+@needs_gnu_date
+def test_a_good_backup_clears_the_failure_count(env: dict[str, str]) -> None:
+    directory = Path(env["BACKUP_DIR"])
+    for _ in range(3):
+        _run(env, "once", STUB_DUMP_FAIL="1")
+    assert (directory / "failures").exists()
+
+    assert _run(env, "once").returncode == 0
+    assert not (directory / "failures").exists()
+    assert _run(env, "check", BACKUP_FAIL_LIMIT="3").returncode == 0
 
 
 def test_an_unknown_mode_is_refused(env: dict[str, str]) -> None:

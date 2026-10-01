@@ -13,12 +13,19 @@ the whole message invalid: a point with a bad latitude is not a point.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NamedTuple
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.json_schema import models_json_schema
 
 STATION_ID = re.compile(r"^[a-z0-9-]{3,32}$")
+# One Pi or decoder at a location (#305). A location is what the map
+# shows as one station. Each source has its own broker login and its
+# own heartbeat on `rf/v1/<station>/status/<source>`.
+SOURCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,15}$")
+# The `rf_source` key of an agent that sends no source. It is not a
+# valid source id, so no agent can send it.
+NO_SOURCE = "-"
 # An ICAO address as readsb prints it. A leading `~` marks an address
 # that is not an ICAO one, such as a TIS-B target.
 ICAO = re.compile(r"^~?[0-9a-f]{6}$")
@@ -216,6 +223,9 @@ def _station_id(value: str) -> str:
 
 
 StationId = Annotated[str, Field(pattern=STATION_ID.pattern)]
+# Optional in every message. An agent that does not send it is the
+# location's only source, as before #305.
+SourceId = Annotated[str | None, Field(pattern=SOURCE_ID.pattern)]
 
 
 class Batch(_Model):
@@ -223,6 +233,7 @@ class Batch(_Model):
 
     v: Literal[1]
     station: StationId
+    source: SourceId = None
     kind: Kind
     sent: AwareDatetime
     obs: Annotated[list[Observation], Field(max_length=MAX_OBS)]
@@ -237,10 +248,17 @@ class Counts(_Model):
 
 
 class Status(_Model):
-    """The heartbeat, published retained on `rf/v1/<station>/status`."""
+    """The heartbeat, published retained.
+
+    An agent with a `source` publishes it on
+    `rf/v1/<station>/status/<source>`, so the sources of one location do
+    not overwrite each other's heartbeat. An agent without one publishes
+    it on `rf/v1/<station>/status`.
+    """
 
     v: Literal[1]
     station: StationId
+    source: SourceId = None
     sent: AwareDatetime
     lat: Annotated[float | None, Field(ge=-90, le=90)] = None
     lon: Annotated[float | None, Field(ge=-180, le=180)] = None
@@ -272,6 +290,7 @@ class Spectrum(_Model):
 
     v: Literal[1]
     station: StationId
+    source: SourceId = None
     kind: Literal["spectrum"]
     # The start of the minute summarised.
     t: AwareDatetime
@@ -292,21 +311,66 @@ class Spectrum(_Model):
         return self
 
 
+MAX_DISPLAY_NAME = 64
+MAX_REGISTRY_SOURCES = 32
+
+
+class Registry(_Model):
+    """A location's entry in the registry, on `rf/v1/<station>/registry`.
+
+    The registrar publishes it, retained, when a location or its tokens
+    change (#305). The broker lets nobody else publish to this topic, so
+    a station cannot claim a name or an owner. `sources` are the
+    sources that hold a login now. An empty retained message removes
+    the entry.
+    """
+
+    v: Literal[1]
+    station: StationId
+    sent: AwareDatetime
+    display_name: Annotated[str, Field(min_length=1, max_length=MAX_DISPLAY_NAME)]
+    # The owner's name as the community knows it. Never an account id.
+    owner: Annotated[str | None, Field(max_length=MAX_DISPLAY_NAME)] = None
+    sources: Annotated[
+        list[Annotated[str, Field(pattern=SOURCE_ID.pattern)]],
+        Field(max_length=MAX_REGISTRY_SOURCES),
+    ] = []
+
+
 class TopicError(ValueError):
-    """The topic is not an `rf/v1/<station>/<kind>` topic."""
+    """The topic is not an RF topic."""
 
 
-def parse_topic(topic: str) -> tuple[str, str]:
-    """Return (station, kind or `status`) from an RF topic."""
+class Topic(NamedTuple):
+    """An RF topic, split.
+
+    `kind` is an observation kind, `spectrum`, `status` or `registry`.
+    `source` is set only for a heartbeat on `status/<source>`.
+    """
+
+    station: str
+    kind: str
+    source: str | None = None
+
+
+def parse_topic(topic: str) -> Topic:
+    """Split an RF topic.
+
+    The topics are `rf/v1/<station>/<kind>` and, for a source's own
+    heartbeat, `rf/v1/<station>/status/<source>`.
+    """
     parts = topic.split("/")
-    if len(parts) != 4 or parts[0] != "rf" or parts[1] != "v1":
+    if len(parts) not in (4, 5) or parts[0] != "rf" or parts[1] != "v1":
         raise TopicError(topic)
     station, kind = parts[2], parts[3]
+    source = parts[4] if len(parts) == 5 else None
+    if source is not None and (kind != "status" or not SOURCE_ID.match(source)):
+        raise TopicError(topic)
     try:
         _station_id(station)
     except ValueError as exc:
         raise TopicError(topic) from exc
-    return station, kind
+    return Topic(station, kind, source)
 
 
 def json_schema() -> dict[str, object]:
@@ -316,7 +380,12 @@ def json_schema() -> dict[str, object]:
     length. `Spectrum` checks it; an agent must too.
     """
     _, top = models_json_schema(
-        [(Batch, "validation"), (Status, "validation"), (Spectrum, "validation")],
+        [
+            (Batch, "validation"),
+            (Status, "validation"),
+            (Spectrum, "validation"),
+            (Registry, "validation"),
+        ],
         ref_template="#/$defs/{model}",
     )
     return {
@@ -324,12 +393,15 @@ def json_schema() -> dict[str, object]:
         "title": "rf-agent message, version 1",
         "description": (
             "Published by rf-agent. Observations go to rf/v1/<station>/<kind>, "
-            "the heartbeat to rf/v1/<station>/status, retained, and a minute of "
-            "the 900 MHz band to rf/v1/<station>/spectrum. "
+            "the heartbeat to rf/v1/<station>/status/<source> (or "
+            "rf/v1/<station>/status without a source), retained, and a minute of "
+            "the 900 MHz band to rf/v1/<station>/spectrum. The registrar alone "
+            "publishes the Registry to rf/v1/<station>/registry, retained. "
             "See docs/design/rf-map.md section 4. Generated from sonoran/rf/schema.py."
         ),
         # A message with `obs` is a batch, one of kind `spectrum` is a
-        # spectrum, and anything else is a heartbeat. Not `oneOf`: a
+        # spectrum, one with `display_name` is a registry entry, and
+        # anything else is a heartbeat. Not `oneOf`: a
         # heartbeat ignores unknown fields, so every batch would also pass
         # as one, and `anyOf` would let a batch with bad observations
         # through as a "heartbeat". sonoran itself decides by the topic;
@@ -339,7 +411,11 @@ def json_schema() -> dict[str, object]:
         "else": {
             "if": {"required": ["kind"], "properties": {"kind": {"const": "spectrum"}}},
             "then": {"$ref": "#/$defs/Spectrum"},
-            "else": {"$ref": "#/$defs/Status"},
+            "else": {
+                "if": {"required": ["display_name"]},
+                "then": {"$ref": "#/$defs/Registry"},
+                "else": {"$ref": "#/$defs/Status"},
+            },
         },
         "$defs": top["$defs"],
     }

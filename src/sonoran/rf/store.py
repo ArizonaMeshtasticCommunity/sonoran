@@ -21,16 +21,18 @@ from sqlalchemy import CursorResult, Executable, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.db.models import RfHeard, RfLatest, RfSpectrum, RfStation, RfTrack
+from sonoran.db.models import RfHeard, RfLatest, RfSource, RfSpectrum, RfStation, RfTrack
 from sonoran.rf.schema import (
     APRS_ALIAS,
     APRS_OBJECT,
     APRS_STATION,
     HEARD_PRECISION_M,
+    NO_SOURCE,
     STORED_KINDS,
     THING_ID,
     Batch,
     Observation,
+    Registry,
     Spectrum,
     Status,
 )
@@ -133,12 +135,28 @@ async def store_spectrum(
     )
 
 
+async def _upsert_station(session: AsyncSession, station: str, values: dict[str, object]) -> None:
+    inserted = await _inserted(
+        session,
+        insert(RfStation)
+        .values(station_id=station, **values)
+        .on_conflict_do_nothing(index_elements=["station_id"]),
+    )
+    if not inserted:
+        await session.execute(
+            update(RfStation).where(RfStation.station_id == station).values(**values)
+        )
+
+
 async def store_status(session: AsyncSession, status: Status, received: datetime) -> None:
-    """Record a station's heartbeat."""
-    values = {
-        "lat": status.lat,
-        "lon": status.lon,
-        "precision_m": status.precision_m,
+    """Record a heartbeat: the source's own row, and the location's.
+
+    Each source of a location has its own row in `rf_source` (#305). The
+    location keeps the newest position and time of any source. An agent
+    that sends no source also keeps the location's kinds and counts, as
+    before #305, so an older API still reads them.
+    """
+    source_values = {
         "kinds": list(status.kinds),
         "agent_version": status.agent_version,
         "heard": status.counts.heard,
@@ -146,16 +164,56 @@ async def store_status(session: AsyncSession, status: Status, received: datetime
         "dropped": status.counts.dropped,
         "last_seen": received,
     }
+    source = status.source or NO_SOURCE
     inserted = await _inserted(
         session,
-        insert(RfStation)
-        .values(station_id=status.station, **values)
-        .on_conflict_do_nothing(index_elements=["station_id"]),
+        insert(RfSource)
+        .values(station_id=status.station, source=source, **source_values)
+        .on_conflict_do_nothing(index_elements=["station_id", "source"]),
     )
     if not inserted:
         await session.execute(
-            update(RfStation).where(RfStation.station_id == status.station).values(**values)
+            update(RfSource)
+            .where(RfSource.station_id == status.station, RfSource.source == source)
+            .values(**source_values)
         )
+
+    values: dict[str, object] = {"last_seen": received}
+    if status.source is None:
+        values.update(source_values)
+        values.update(lat=status.lat, lon=status.lon, precision_m=status.precision_m)
+    elif status.lat is not None:
+        # A source with no position must not erase the one another
+        # source of the location sent.
+        values.update(lat=status.lat, lon=status.lon, precision_m=status.precision_m)
+    await _upsert_station(session, status.station, values)
+
+
+async def store_registry(
+    session: AsyncSession, station: str, registry: Registry | None, received: datetime
+) -> None:
+    """Record a location's registry entry, or remove it when None.
+
+    The location may not have sent a heartbeat yet. Its row is then made
+    with no `last_seen`, so it shows as registered and silent.
+    """
+    if registry is None:
+        await session.execute(
+            update(RfStation)
+            .where(RfStation.station_id == station)
+            .values(display_name=None, owner=None, registered_sources=None, registry_at=None)
+        )
+        return
+    await _upsert_station(
+        session,
+        station,
+        {
+            "display_name": registry.display_name,
+            "owner": registry.owner,
+            "registered_sources": sorted(set(registry.sources)),
+            "registry_at": received,
+        },
+    )
 
 
 def _point(obs: Observation, when: datetime, station: str) -> dict[str, object]:

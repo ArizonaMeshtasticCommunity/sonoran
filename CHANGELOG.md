@@ -5,6 +5,21 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.09.30.2 — 2026-09-30
+
+1 pull request merged.
+
+#### Fixes
+
+- Firehose 500 — count each packet's uploads per row, never as a join (#319) by @logans-stuff
+  - The packet firehose loads again. It failed with "Request failed (500)" from early on 30 September.
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.09.30...v2026.09.30.2
+
 ## v2026.09.30 — 2026-09-30
 
 1 pull request merged.

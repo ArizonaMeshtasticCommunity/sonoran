@@ -2100,13 +2100,25 @@ any Meshtastic count.
 
 ### 12.1 `GET /api/rf/stations`
 
-Every station: `station`, `lat` and `lon` rounded by the agent,
-`precision_m` (by how much), `kinds`, `agent_version`, `last_seen`,
-`online` (a heartbeat in the last five minutes), `counts` since the
-heartbeat before: `heard`, `sent`, and `dropped` by thinning, and
-`spectrum_last`, the newest minute of the 900 MHz band the station sent
-in the last day, or null. A sweeper is known by what it sends, not by
-the kinds its heartbeat lists.
+Every location. A location is one station on the map. It can have
+more than one source: one Pi or decoder each, with its own login and
+heartbeat (#305).
+
+Each item: `station`, `display_name` and `owner` from the registry
+(null when the location is not in it), `registered`, `lat` and `lon`
+rounded by the agent, `precision_m` (by how much), `kinds` (of every
+source heard from in the last day), `agent_version`, `last_seen` (null
+before the first heartbeat), `online` (a heartbeat from any source in
+the last five minutes), `counts` since the heartbeat before: `heard`,
+`sent`, and `dropped` by thinning, summed over the sources that report
+now, and `spectrum_last`, the newest minute of the 900 MHz band the
+station sent in the last day, or null. A sweeper is known by what it
+sends, not by the kinds its heartbeat lists.
+
+`sources` lists each source: `source` (null for an agent that sends
+none), `kinds`, `agent_version`, `last_seen`, `online`, `counts`, and
+`registered`, true when the source holds a login now. A source in the
+registry that has not sent a heartbeat has `last_seen` null.
 
 ### 12.2 `GET /api/rf/latest`
 

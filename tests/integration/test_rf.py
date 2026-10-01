@@ -16,15 +16,24 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from sonoran.api.app import create_app
 from sonoran.config import Settings
-from sonoran.rf.schema import Batch, Spectrum, Status
-from sonoran.rf.store import Rules, Tally, store_batch, store_spectrum, store_status
+from sonoran.rf.schema import Batch, Registry, Spectrum, Status
+from sonoran.rf.store import (
+    Rules,
+    Tally,
+    store_batch,
+    store_registry,
+    store_spectrum,
+    store_status,
+)
 from tests.integration.conftest import role_url
 
 
 @pytest.fixture
 def clean(migrated_engine):  # type: ignore[no-untyped-def]
     with migrated_engine.begin() as connection:
-        connection.execute(text("TRUNCATE rf_station, rf_track, rf_heard, rf_latest, rf_spectrum"))
+        connection.execute(
+            text("TRUNCATE rf_station, rf_source, rf_track, rf_heard, rf_latest, rf_spectrum")
+        )
     yield
 
 
@@ -39,8 +48,12 @@ def _obs(icao: str, when: datetime, rssi: float | None, lat: float = 33.5) -> di
 
 
 async def _write(
-    timescale_url: str, *messages: Batch | Status, rules: Rules | None = None
+    timescale_url: str,
+    *messages: Batch | Status | Registry | str,
+    rules: Rules | None = None,
 ) -> list[Tally]:
+    """Write each message as the ingest role. A bare station id removes
+    that station's registry entry, as an empty retained message does."""
     engine = create_async_engine(role_url(timescale_url, "azmsh_ingest"))
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tallies: list[Tally] = []
@@ -50,6 +63,10 @@ async def _write(
                 received = datetime.now(UTC)
                 if isinstance(message, Status):
                     await store_status(session, message, received)
+                elif isinstance(message, Registry):
+                    await store_registry(session, message.station, message, received)
+                elif isinstance(message, str):
+                    await store_registry(session, message, None, received)
                 else:
                     tallies.append(await store_batch(session, message, received, rules or Rules()))
                 await session.commit()
@@ -496,3 +513,116 @@ def test_the_spectrum_api_buckets_a_long_window_and_keeps_bursts(  # type: ignor
     # The station has no heartbeat, so it is not listed; spectrum alone
     # does not invent a station.
     assert all(item["station"] != "west-site" for item in stations)
+
+
+def _beat(station: str, source: str | None, kinds: list[str], heard: int) -> Status:
+    body: dict[str, object] = {
+        "v": 1,
+        "station": station,
+        "sent": datetime.now(UTC),
+        "lat": 33.4,
+        "lon": -111.9,
+        "precision_m": 1000,
+        "kinds": kinds,
+        "agent_version": "0.4.0",
+        "counts": {"heard": heard, "sent": heard, "dropped": 0},
+    }
+    if source:
+        body["source"] = source
+    return Status.model_validate(body)
+
+
+def _registry(station: str, sources: list[str]) -> Registry:
+    return Registry.model_validate(
+        {
+            "v": 1,
+            "station": station,
+            "sent": datetime.now(UTC),
+            "display_name": "Tempe roof",
+            "owner": "Logan",
+            "sources": sources,
+        }
+    )
+
+
+def test_two_sources_make_one_location_with_both_listed(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """#305: an ADS-B Pi and a sweeper Pi at one site are one station.
+
+    Written as the ingest role, so this also proves the 0018 grants. A
+    sweeper with no position must not erase the ADS-B Pi's position.
+    """
+    sweeper = _beat("tempe-roof", "sweeper", [], 0)
+    sweeper = sweeper.model_copy(update={"lat": None, "lon": None, "precision_m": None})
+    asyncio.run(
+        _write(
+            timescale_url,
+            _registry("tempe-roof", ["adsb-pi", "sweeper", "spare"]),
+            _beat("tempe-roof", "adsb-pi", ["adsb", "uat"], 40),
+            sweeper,
+            # A second heartbeat updates the row, it does not add one.
+            _beat("tempe-roof", "adsb-pi", ["adsb", "uat"], 50),
+        )
+    )
+    assert len(_rows(migrated_engine, "SELECT 1 FROM rf_source")) == 2
+
+    with _client(timescale_url) as client:
+        stations = client.get("/api/rf/stations").json()
+
+    assert len(stations) == 1
+    site = stations[0]
+    assert site["station"] == "tempe-roof"
+    assert site["display_name"] == "Tempe roof" and site["owner"] == "Logan"
+    assert site["registered"] is True and site["online"] is True
+    assert (site["lat"], site["lon"]) == (33.4, -111.9)
+    assert site["kinds"] == ["adsb", "uat"]
+    assert site["counts"] == {"heard": 50, "sent": 50, "dropped": 0}
+    by_name = {s["source"]: s for s in site["sources"]}
+    assert set(by_name) == {"adsb-pi", "sweeper", "spare"}
+    assert by_name["adsb-pi"]["online"] is True
+    assert by_name["spare"]["last_seen"] is None, "registered, no heartbeat yet"
+    assert all(s["registered"] for s in site["sources"])
+
+
+def test_a_location_in_the_registry_shows_before_its_first_heartbeat(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    asyncio.run(_write(timescale_url, _registry("new-site", ["pi"])))
+    with _client(timescale_url) as client:
+        site = client.get("/api/rf/stations").json()[0]
+    assert site["station"] == "new-site"
+    assert site["last_seen"] is None and site["online"] is False
+    assert site["lat"] is None
+
+
+def test_removing_a_registry_entry_keeps_the_station_and_its_heartbeats(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    asyncio.run(
+        _write(
+            timescale_url,
+            _registry("tempe-roof", ["adsb-pi"]),
+            _beat("tempe-roof", "adsb-pi", ["adsb"], 5),
+            "tempe-roof",
+        )
+    )
+    with _client(timescale_url) as client:
+        site = client.get("/api/rf/stations").json()[0]
+    assert site["registered"] is False and site["display_name"] is None
+    assert [s["source"] for s in site["sources"]] == ["adsb-pi"]
+    assert site["sources"][0]["registered"] is False
+
+
+def test_an_agent_without_a_source_still_reads_as_before(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """The agents in the field send no source. Their station is unchanged."""
+    asyncio.run(_write(timescale_url, _beat("north-site", None, ["adsb", "aprs"], 7)))
+    rows = _rows(migrated_engine, "SELECT kinds, heard FROM rf_station")
+    assert rows == [(["adsb", "aprs"], 7)]
+    with _client(timescale_url) as client:
+        site = client.get("/api/rf/stations").json()[0]
+    assert site["kinds"] == ["adsb", "aprs"]
+    assert site["counts"]["heard"] == 7
+    assert [s["source"] for s in site["sources"]] == [None]

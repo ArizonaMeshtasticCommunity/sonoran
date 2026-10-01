@@ -24,9 +24,10 @@
 #   loop    (default) back up when due, then once per interval, for ever
 #   once    take one backup now, then prune
 #   prune   remove the backups that the rotation does not keep
-#   check   exit 0 if the last good backup is recent, 1 if not. The
-#           compose healthcheck runs this, so a stopped backup shows as
-#           an unhealthy container in `docker ps`.
+#   check   exit 0 if the last good backup is recent and the last
+#           attempts did not all fail, 1 if not. The compose
+#           healthcheck runs this, so a stopped or failing backup shows
+#           as an unhealthy container in `docker ps`.
 #
 # Environment:
 #   BACKUP_DIR               where the files go. Default: /backups
@@ -39,6 +40,10 @@
 #   BACKUP_RETRY_SECONDS     the wait after a failed backup. Default: 900
 #   BACKUP_STALE_SECONDS     the age at which `check` fails.
 #                            Default: the interval plus 12 hours
+#   BACKUP_FAIL_LIMIT        how many failed attempts in a row make
+#                            `check` fail, before the backup is stale.
+#                            Default: 3 (about 45 minutes at the
+#                            default retry). 0 turns this off.
 
 set -euo pipefail
 
@@ -49,11 +54,18 @@ KEEP_WEEKLY="${BACKUP_KEEP_WEEKLY:-4}"
 INTERVAL="${BACKUP_INTERVAL_SECONDS:-86400}"
 RETRY="${BACKUP_RETRY_SECONDS:-900}"
 STALE="${BACKUP_STALE_SECONDS:-$((INTERVAL + 43200))}"
+FAIL_LIMIT="${BACKUP_FAIL_LIMIT:-3}"
 export PGDATABASE
 
 # The file that records the last good backup. Line 1 is its time in
 # epoch seconds. Line 2 is its file name.
 STATUS="$BACKUP_DIR/last-good"
+
+# The number of failed attempts since the last good backup. A backup
+# that fails on each retry is not stale until the interval plus the
+# grace has passed, which is 36 hours by default. This file finds it
+# after a few retries instead (issue #244).
+FAILURES="$BACKUP_DIR/failures"
 
 # Only files with exactly this name are part of the rotation. A dump
 # that a person made by hand, with any other name, is never removed.
@@ -175,18 +187,28 @@ prune() {
   done
 }
 
+failure_count() {
+  if [[ -r "$FAILURES" ]]; then
+    head -1 "$FAILURES" | tr -dc '0-9'
+  fi
+}
+
 attempt() {
+  local failed
   if take_backup; then
+    rm -f "$FAILURES"
     prune
     return 0
   fi
-  log "the backup failed"
+  failed=$(($(failure_count || true) + 1))
+  printf '%s\n' "$failed" >"$FAILURES.tmp" && mv "$FAILURES.tmp" "$FAILURES"
+  log "the backup failed ($failed in a row)"
   rm -f "$BACKUP_DIR"/.partial-*
   return 1
 }
 
 check() {
-  local last
+  local last failed
   last="$(last_good_epoch)"
   if [[ -z "$last" ]]; then
     echo "no good backup yet"
@@ -195,6 +217,11 @@ check() {
   local age=$(($(date -u +%s) - last))
   if ((age > STALE)); then
     echo "the last good backup is ${age}s old"
+    return 1
+  fi
+  failed="$(failure_count)"
+  if ((FAIL_LIMIT > 0 && ${failed:-0} >= FAIL_LIMIT)); then
+    echo "the last ${failed} backups failed; the last good one is ${age}s old"
     return 1
   fi
   echo "the last good backup is ${age}s old"

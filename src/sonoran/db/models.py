@@ -495,6 +495,33 @@ class RfStation(Base):
     heard: Mapped[int | None] = mapped_column(Integer)
     sent: Mapped[int | None] = mapped_column(Integer)
     dropped: Mapped[int | None] = mapped_column(Integer)
+    # The newest heartbeat of any source. None for a location that is in
+    # the registry and has sent no heartbeat yet.
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # From the registry (#305). None when the location is not in it.
+    display_name: Mapped[str | None] = mapped_column(Text)
+    owner: Mapped[str | None] = mapped_column(Text)
+    # The sources that hold a broker login now.
+    registered_sources: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    registry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RfSource(Base):
+    """One row per source of a location, from that source's heartbeat (#305).
+
+    A source is one Pi or decoder with its own broker login. An agent
+    that sends no source is stored as `NO_SOURCE`.
+    """
+
+    __tablename__ = "rf_source"
+
+    station_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    kinds: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    agent_version: Mapped[str | None] = mapped_column(Text)
+    heard: Mapped[int | None] = mapped_column(Integer)
+    sent: Mapped[int | None] = mapped_column(Integer)
+    dropped: Mapped[int | None] = mapped_column(Integer)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

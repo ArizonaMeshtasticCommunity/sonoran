@@ -9,14 +9,16 @@ import pytest
 from pydantic import ValidationError
 
 from sonoran.config import Settings
-from sonoran.rf.ingest import decode, rules_from
+from sonoran.rf.ingest import Removed, decode, rules_from
 from sonoran.rf.schema import (
     KINDS,
     MAX_RAW_CHARS,
+    NO_SOURCE,
     STORED_KINDS,
     THING_ID,
     Batch,
     Observation,
+    Registry,
     Spectrum,
     Status,
     TopicError,
@@ -135,9 +137,20 @@ def test_a_heartbeat_is_read_with_its_counts() -> None:
 
 
 def test_topics_name_a_station_and_a_kind() -> None:
-    assert parse_topic("rf/v1/tempe-roof/adsb") == ("tempe-roof", "adsb")
-    assert parse_topic("rf/v1/tempe-roof/status") == ("tempe-roof", "status")
-    for bad in ("msh/US/AZ/2/e/LongFast/!1", "rf/v2/tempe-roof/adsb", "rf/v1/Bad Name/adsb"):
+    assert parse_topic("rf/v1/tempe-roof/adsb") == ("tempe-roof", "adsb", None)
+    assert parse_topic("rf/v1/tempe-roof/status") == ("tempe-roof", "status", None)
+    assert parse_topic("rf/v1/tempe-roof/status/sweeper") == ("tempe-roof", "status", "sweeper")
+    assert parse_topic("rf/v1/tempe-roof/registry") == ("tempe-roof", "registry", None)
+    for bad in (
+        "msh/US/AZ/2/e/LongFast/!1",
+        "rf/v2/tempe-roof/adsb",
+        "rf/v1/Bad Name/adsb",
+        # Only a heartbeat has a source in its topic.
+        "rf/v1/tempe-roof/adsb/sweeper",
+        "rf/v1/tempe-roof/status/Bad Source",
+        "rf/v1/tempe-roof/status/",
+        "rf/v1/tempe-roof/status/a/b",
+    ):
         with pytest.raises(TopicError):
             parse_topic(bad)
 
@@ -545,3 +558,69 @@ def test_the_rf_page_has_a_table_with_the_raw_frame_beside_the_decoded() -> None
         assert f"label: {label}" in rf, label
     # The raw frame is set as text inside <code>, like every other cell.
     assert "el('code', { class: 'rf-raw', text })" in rf
+
+
+def _status(**extra: object) -> dict[str, object]:
+    return {"v": 1, "station": "tempe-roof", "sent": "2026-10-01T18:00:00Z", **extra}
+
+
+def test_a_heartbeat_names_the_source_its_topic_names() -> None:
+    """#305: each source of a location has its own retained heartbeat.
+
+    A source named in the message must be the one in the topic, so one
+    Pi cannot overwrite another's heartbeat by naming it.
+    """
+    ok = decode("rf/v1/tempe-roof/status/sweeper", json.dumps(_status(source="sweeper")).encode())
+    assert isinstance(ok, Status) and ok.source == "sweeper"
+
+    legacy = decode("rf/v1/tempe-roof/status", json.dumps(_status()).encode())
+    assert isinstance(legacy, Status) and legacy.source is None
+
+    for topic, body in (
+        ("rf/v1/tempe-roof/status/sweeper", _status(source="adsb-pi")),
+        ("rf/v1/tempe-roof/status/sweeper", _status()),
+        ("rf/v1/tempe-roof/status", _status(source="sweeper")),
+    ):
+        with pytest.raises(ValueError, match="source"):
+            decode(topic, json.dumps(body).encode())
+
+
+def test_a_bad_source_id_is_refused() -> None:
+    for bad in ("Sweeper", "-x", "a" * 17, "a/b", NO_SOURCE):
+        with pytest.raises(ValueError):
+            Status.model_validate(_status(source=bad))
+
+
+def test_a_batch_and_a_spectrum_may_name_their_source() -> None:
+    """Additive: an older agent that sends none still validates."""
+    assert Batch.model_validate({**_batch(), "source": "adsb-pi"}).source == "adsb-pi"
+    assert Batch.model_validate(_batch()).source is None
+
+
+def test_a_registry_entry_is_read_and_an_empty_one_removes_it() -> None:
+    body = {
+        "v": 1,
+        "station": "tempe-roof",
+        "sent": "2026-10-01T18:00:00Z",
+        "display_name": "Tempe roof",
+        "owner": "Logan",
+        "sources": ["adsb-pi", "sweeper"],
+    }
+    entry = decode("rf/v1/tempe-roof/registry", json.dumps(body).encode())
+    assert isinstance(entry, Registry)
+    assert entry.sources == ["adsb-pi", "sweeper"]
+
+    removed = decode("rf/v1/tempe-roof/registry", b"")
+    assert isinstance(removed, Removed) and removed.station == "tempe-roof"
+
+    with pytest.raises(ValueError, match="station"):
+        decode("rf/v1/other-site/registry", json.dumps(body).encode())
+    with pytest.raises(ValueError):
+        Registry.model_validate({**body, "sources": ["Bad Source"]})
+    with pytest.raises(ValueError):
+        Registry.model_validate({**body, "display_name": ""})
+
+
+def test_an_empty_payload_on_another_topic_is_still_invalid() -> None:
+    with pytest.raises(ValueError):
+        decode("rf/v1/tempe-roof/status", b"")

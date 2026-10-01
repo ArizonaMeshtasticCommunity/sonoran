@@ -326,6 +326,7 @@ services:
       BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-7}
       BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-4}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_FAIL_LIMIT: ${BACKUP_FAIL_LIMIT:-3}
     # The uid that writes the files. The default is the postgres user of
     # the image. Under rootless Docker, set 0: root in the container is
     # the account that runs Docker, so the files on the host belong to
