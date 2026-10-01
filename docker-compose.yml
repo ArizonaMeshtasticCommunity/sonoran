@@ -72,7 +72,7 @@ services:
     networks:
       sonoran-internal:
         aliases:
-          - db-${COOLIFY_RESOURCE_UUID}
+          - ${DB_HOSTNAME:-timescaledb}
     environment:
       POSTGRES_DB: azmsh
       POSTGRES_USER: postgres
@@ -163,7 +163,7 @@ services:
     # as `docker compose up -d timescaledb` as well.
     environment:
       <<: *no-credentials
-      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db-${COOLIFY_RESOURCE_UUID}:5432/azmsh
+      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@${DB_HOSTNAME:-timescaledb}:5432/azmsh
       AZMSH_INGEST_PASSWORD: ${AZMSH_INGEST_PASSWORD:-}
       AZMSH_API_PASSWORD: ${AZMSH_API_PASSWORD:-}
       AZMSH_JOBS_PASSWORD: ${AZMSH_JOBS_PASSWORD:-}
@@ -340,7 +340,7 @@ services:
     # No `env_file`, for the same reason as mesh-graph: this service
     # gets the one credential it uses, and nothing else from `.env`.
     environment:
-      PGHOST: db-${COOLIFY_RESOURCE_UUID}
+      PGHOST: ${DB_HOSTNAME:-timescaledb}
       PGUSER: postgres
       PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       PGDATABASE: azmsh
