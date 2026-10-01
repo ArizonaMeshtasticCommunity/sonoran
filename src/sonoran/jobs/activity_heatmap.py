@@ -323,7 +323,7 @@ def run() -> None:
     import asyncio
 
     settings = get_settings()
-    configure_logging(settings)
+    configure_logging(settings.log_level)
     engine = make_engine(settings.database_url_jobs)
     factory = make_session_factory(engine)
 
