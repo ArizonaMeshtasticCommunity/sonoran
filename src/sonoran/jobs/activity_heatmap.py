@@ -126,6 +126,20 @@ async def _fetch_aggregated_data(session: AsyncSession) -> list[tuple[float, flo
         
     return final_data
 
+def blur_grid(grid: npt.NDArray[np.float32], iterations: int = 2) -> npt.NDArray[np.float32]:
+    """Apply a simple 3x3 box blur to soften hard edges."""
+    out = grid.copy()
+    for _ in range(iterations):
+        padded = np.pad(out, 1, mode='edge')
+        out = (
+            padded[1:-1, 1:-1] * 4 +
+            padded[:-2, 1:-1] +
+            padded[2:, 1:-1] +
+            padded[1:-1, :-2] +
+            padded[1:-1, 2:]
+        ) / 8.0
+    return out
+
 def _build_grids(
     settings: Settings, 
     data: list[tuple[float, float, int, float, int]]
@@ -139,7 +153,7 @@ def _build_grids(
     )
     
     dist_grid = np.zeros((grid.height, grid.width), dtype=np.float32)
-    count_grid = np.zeros((grid.height, grid.width), dtype=np.int32)
+    count_grid = np.zeros((grid.height, grid.width), dtype=np.float32)
     
     for lat, lon, prec, dist, count in data:
         # Convert lat/lon to grid row/col
@@ -168,14 +182,18 @@ def _build_grids(
         block_count = count_grid[r_start:r_end, c_start:c_end]
         block_count += count
         
+    # Soften edges
+    dist_grid = blur_grid(dist_grid, iterations=2)
+    count_grid = blur_grid(count_grid, iterations=2)
+        
     return grid, dist_grid, count_grid
 
 def sample_heatmap_tile(
     dist_grid: npt.NDArray[np.float32], 
-    count_grid: npt.NDArray[np.int32], 
+    count_grid: npt.NDArray[np.float32], 
     grid: Grid, 
     tile
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.int32]]:
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Sample the grids for a specific web mercator tile."""
     latitudes = tile_latitudes(tile)
     longitudes = tile_longitudes(tile)
@@ -195,15 +213,15 @@ def sample_heatmap_tile(
     
     return (
         np.where(inside, patch_dist, 0.0).astype(np.float32),
-        np.where(inside, patch_count, 0).astype(np.int32)
+        np.where(inside, patch_count, 0.0).astype(np.float32)
     )
 
-def _render_tile(dist: npt.NDArray[np.float32], count: npt.NDArray[np.int32]) -> npt.NDArray[np.uint8]:
+def _render_tile(dist: npt.NDArray[np.float32], count: npt.NDArray[np.float32]) -> npt.NDArray[np.uint8]:
     """Render a patch of distance and count into an RGBA tile."""
     height, width = dist.shape
     image = np.zeros((height, width, 4), dtype=np.uint8)
     
-    active = count > 0
+    active = count > 0.1
     if not active.any():
         return image
         
@@ -213,7 +231,7 @@ def _render_tile(dist: npt.NDArray[np.float32], count: npt.NDArray[np.int32]) ->
     
     # Scale count to alpha
     # 1 packet = MIN_ALPHA, MAX_PACKETS_OPACITY packets = MAX_ALPHA
-    alpha_fraction = np.clip((count.astype(np.float32) - 1) / max(1, MAX_PACKETS_OPACITY - 1), 0.0, 1.0)
+    alpha_fraction = np.clip((count - 1.0) / max(1.0, MAX_PACKETS_OPACITY - 1.0), 0.0, 1.0)
     alpha = MIN_ALPHA + alpha_fraction * (MAX_ALPHA - MIN_ALPHA)
     
     image[..., 3] = np.where(active, alpha.astype(np.uint8), 0)

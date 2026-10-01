@@ -230,20 +230,23 @@
      * encodes the braces, and Leaflet then asks for a tile literally
      * named `%7Bz%7D`. Resolve the part before them, then append.
      */
-    const base = api(
-      `api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`,
-    );
+    const isHeatmap = state.layer === 'empirical_heatmap';
+    const base = isHeatmap 
+      ? api(`api/map/heatmap/tiles/`)
+      : api(`api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`);
+
+    const bounds = isHeatmap
+      ? null
+      : L.latLngBounds([summary.bounds[0], summary.bounds[1]], [summary.bounds[2], summary.bounds[3]]);
+
     state.tiles = L.tileLayer(
       `${base}{z}/{x}/{y}.png`,
       {
         minZoom: 0,
         maxZoom: 19,
-        minNativeZoom: summary.min_zoom,
-        maxNativeZoom: summary.max_zoom,
-        bounds: L.latLngBounds(
-          [summary.bounds[0], summary.bounds[1]],
-          [summary.bounds[2], summary.bounds[3]],
-        ),
+        minNativeZoom: isHeatmap ? 0 : summary.min_zoom,
+        maxNativeZoom: isHeatmap ? 14 : summary.max_zoom,
+        bounds: bounds,
         opacity: state.signalOpacity,
         // A tile that was never written is ground no node reaches. That
         // is a 404 and it must not log an error for every empty square.
@@ -364,9 +367,10 @@
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
     const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
+    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap', label: 'Activity Heatmap (30 days)' }];
     replace(
       host,
-      (state.summary.layers || []).map((layer) =>
+      layers.map((layer) =>
         el('option', { value: layer.key, text: layer.label })),
     );
     host.value = state.layer;
@@ -482,14 +486,19 @@
       return;
     }
     legend.hidden = false;
-    const floor = preset.sensitivity_dbm;
-    const layer = (state.summary.layers || []).find((item) => item.key === state.layer);
-    $('[data-coverage-legend-title]', legend).textContent = layer ? layer.label : 'Signal';
-    $('[data-coverage-floor]', legend).textContent = `${floor} dBm`;
-    // The span comes from the run, so the legend cannot drift from
-    // the tiles it describes. See coverage/render.py.
-    const span = Number(state.summary.ramp_span_db) || 0;
-    $('[data-coverage-ceiling]', legend).textContent = `${floor + span} dBm`;
+    
+    if (state.layer === 'empirical_heatmap') {
+      $('[data-coverage-legend-title]', legend).textContent = 'Max Gateway Distance';
+      $('[data-coverage-floor]', legend).textContent = '0 km';
+      $('[data-coverage-ceiling]', legend).textContent = '32+ km';
+    } else {
+      const floor = preset.sensitivity_dbm;
+      const layer = (state.summary.layers || []).find((item) => item.key === state.layer);
+      $('[data-coverage-legend-title]', legend).textContent = layer ? layer.label : 'Signal';
+      $('[data-coverage-floor]', legend).textContent = `${floor} dBm`;
+      const span = Number(state.summary.ramp_span_db) || 0;
+      $('[data-coverage-ceiling]', legend).textContent = `${floor + span} dBm`;
+    }
   }
 
   function statTile(value, label, delta) {
@@ -511,14 +520,22 @@
       replace(host);
       return;
     }
-    replace(
-      host,
-      statTile(number(preset.site_count), 'Sites predicted from',
-        preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
-      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area', 'Both directions'),
-      statTile(SonoranUnits.areaFromKm2(preset.downlink_area_km2) || '-', 'Heard area', 'One direction only'),
-      statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
-    );
+    
+    if (state.layer === 'empirical_heatmap') {
+      replace(
+        host,
+        statTile('30', 'Days included', 'Rolling window')
+      );
+    } else {
+      replace(
+        host,
+        statTile(number(preset.site_count), 'Sites predicted from',
+          preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
+        statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area', 'Both directions'),
+        statTile(SonoranUnits.areaFromKm2(preset.downlink_area_km2) || '-', 'Heard area', 'One direction only'),
+        statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
+      );
+    }
   }
 
   function flag(good, text) {
@@ -608,6 +625,12 @@
     const sub = $('[data-coverage-sub]', page);
     const summary = state.summary;
     if (!sub || !summary || !summary.available) return;
+    
+    if (state.layer === 'empirical_heatmap') {
+      sub.textContent = 'Actual radio activity over the last 30 days, colored by maximum gateway distance.';
+      return;
+    }
+    
     sub.textContent = shownIsDiagnostic()
       ? `Diagnostic view: predicted from ${shownRoles().join(', ') || 'every role'}.`
       : 'Where the mesh reaches, predicted from the routers and repeaters that carry it.';
@@ -632,13 +655,20 @@
   }
 
   function drawAssumes(page) {
+    const panel = page.querySelector('.coverage-assumes');
     const host = $('[data-coverage-assumes]', page);
     if (!host) return;
     const summary = state.summary;
     if (!summary || !summary.available) {
+      if (panel) panel.hidden = false;
       replace(host, el('p', { text: 'No coverage run has been made yet.' }));
       return;
     }
+    if (state.layer === 'empirical_heatmap') {
+      if (panel) panel.hidden = true;
+      return;
+    }
+    if (panel) panel.hidden = false;
     const missing = (summary.missing_terrain_tiles || []).length;
     replace(
       host,
@@ -819,6 +849,12 @@
     const panel = $('[data-coverage-coarse-panel]', page);
     const host = $('[data-coverage-coarse]', page);
     if (!panel || !host) return;
+    
+    if (state.layer === 'empirical_heatmap') {
+      panel.hidden = true;
+      return;
+    }
+
     /*
      * Only the preset on screen (#315). The list used to be every
      * preset's, so a LongFast router sat in the MediumFast view, and
@@ -869,6 +905,12 @@
   function drawSites(page) {
     const host = $('[data-coverage-sites]', page);
     if (!host) return;
+    
+    if (state.layer === 'empirical_heatmap') {
+      replace(host, el('p', { class: 'muted', text: 'This layer shows historical activity from all gateways, not a specific site set.' }));
+      return;
+    }
+
     const preset = state.summary && presetOf(state.summary, state.preset);
     const nodes = (preset && preset.nodes) || [];
     if (!nodes.length) {
