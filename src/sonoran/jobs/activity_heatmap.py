@@ -135,18 +135,33 @@ async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int,
         
     return final_data
 
-def blur_grid(grid: npt.NDArray[np.float32], iterations: int = 2) -> npt.NDArray[np.float32]:
-    """Apply a simple 3x3 box blur to soften hard edges."""
-    out = grid.copy()
+def box_blur(grid: npt.NDArray[np.float32], radius: int) -> npt.NDArray[np.float32]:
+    """Fast 2D box blur using integral images (O(N) independent of radius)."""
+    if radius <= 0:
+        return grid
+        
+    # Y-axis blur
+    padded_y = np.pad(grid, ((radius, radius), (0, 0)), mode='edge')
+    integral_y = np.cumsum(padded_y, axis=0)
+    integral_y = np.vstack([np.zeros((1, grid.shape[1]), dtype=integral_y.dtype), integral_y])
+    
+    W = 2 * radius + 1
+    out_y = (integral_y[W:] - integral_y[:-W]) / W
+    
+    # X-axis blur
+    padded_x = np.pad(out_y, ((0, 0), (radius, radius)), mode='edge')
+    integral_x = np.cumsum(padded_x, axis=1)
+    integral_x = np.hstack([np.zeros((out_y.shape[0], 1), dtype=integral_x.dtype), integral_x])
+    
+    out_xy = (integral_x[:, W:] - integral_x[:, :-W]) / W
+    
+    return out_xy
+
+def blur_grid(grid: npt.NDArray[np.float32], radius: int = 15, iterations: int = 3) -> npt.NDArray[np.float32]:
+    """Apply multiple passes of a box blur to approximate a Gaussian blur."""
+    out = grid
     for _ in range(iterations):
-        padded = np.pad(out, 1, mode='edge')
-        out = (
-            padded[1:-1, 1:-1] * 4 +
-            padded[:-2, 1:-1] +
-            padded[2:, 1:-1] +
-            padded[1:-1, :-2] +
-            padded[1:-1, 2:]
-        ) / 8.0
+        out = box_blur(out, radius)
     return out
 
 def local_max_pool(grid: npt.NDArray[np.float32], radius_cells: int = 177) -> npt.NDArray[np.float32]:
@@ -214,10 +229,10 @@ def _build_grids(
         block_count = count_grid[r_start:r_end, c_start:c_end]
         block_count += 1.0
         
-    count_grid = blur_grid(count_grid, iterations=2)
+    count_grid = blur_grid(count_grid)
     relative_grids = {}
     for g_name in models:
-        s_grid = blur_grid(score_grids[g_name], iterations=2)
+        s_grid = blur_grid(score_grids[g_name])
         local_potential = local_max_pool(s_grid, radius_cells=177)
         relative_grids[g_name] = np.clip(s_grid / local_potential, 0.0, 1.0)
         
