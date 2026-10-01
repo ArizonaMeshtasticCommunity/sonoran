@@ -90,6 +90,7 @@ async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int,
         .where(PositionMetrics.time >= since)
         .where(PositionMetrics.latitude.is_not(None))
         .where(PositionMetrics.longitude.is_not(None))
+        .where((PositionMetrics.location_source != "LOC_MANUAL") | PositionMetrics.location_source.is_(None))
     )
     
     result = await session.execute(query)
