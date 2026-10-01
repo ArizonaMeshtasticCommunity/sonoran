@@ -1,128 +1,135 @@
-"""Empirical activity heatmap based on position metrics and gateway reception.
-
-Generates raster map tiles showing where position packets have successfully
-reached the mesh over a rolling 30-day window, driven by ground-truth data.
-Color represents maximum distance reached, and opacity represents packet count.
-"""
-
-import math
-import struct
-import zlib
 from collections import defaultdict
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
+import struct
+import zlib
 
 import numpy as np
 import numpy.typing as npt
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings
 from sonoran.coverage import store
-from sonoran.coverage.grid import Grid, region_grid
-from sonoran.coverage.render import tiles_for_grid, tile_latitudes, tile_longitudes
-from sonoran.db.models import Node, PacketSeen, PositionMetrics
+from sonoran.coverage.grid import Grid, region_grid, tiles_for_grid, tile_latitudes, tile_longitudes
+from sonoran.db.models import PacketSeen, PositionMetrics
 from sonoran.logging import get_logger
-from sonoran.positions import precision_deviation_m
 
 logger = get_logger(__name__)
 
-# Constants for heatmap rendering
-TILE_SIZE = 256
-MAX_DISTANCE_KM = 32.0  # Approx 20 miles for max green color
-MAX_PACKETS_OPACITY = 10  # Packets needed for 100% opacity
-MIN_ALPHA = 51  # 20% opacity for 1 packet
-MAX_ALPHA = 235 # Roughly 92% max opacity (matches COVER_ALPHA)
+MIN_ALPHA = 40
+MAX_ALPHA = 210
+MAX_PACKETS_OPACITY = 50.0
 
-RAMP = (
-    (0xFF, 0x2D, 0x55), # Red (0 km)
-    (0xFF, 0x7A, 0x00), # Orange
-    (0xFF, 0xE6, 0x00), # Yellow
-    (0x00, 0xD9, 0x8B), # Light Green
-    (0x00, 0xA8, 0xFF), # Blue (Max distance)
-)
-
-def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calculate the great circle distance in kilometers between two points."""
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+def precision_deviation_m(precision_bits: int) -> float:
+    """Calculate the rough deviation in meters for a given geohash precision."""
+    if precision_bits >= 32:
+        return 0.0
+    return (180.0 / (2 ** precision_bits)) * 111320.0
 
 def _ramp_colour(fraction: npt.NDArray[np.float32]) -> npt.NDArray[np.uint8]:
-    """Return the ramp colour for each value, from 0 to 1."""
-    stops = np.array(RAMP, dtype=np.float32)
-    last = len(RAMP) - 1
-    position = np.clip(fraction, 0.0, 1.0) * last
-    lower = np.floor(position).astype(np.int32)
-    upper = np.minimum(lower + 1, last)
-    weight = (position - lower)[..., None]
-    mixed = stops[lower] * (1.0 - weight) + stops[upper] * weight
-    return mixed.astype(np.uint8)
+    """Map a fraction 0.0-1.0 to the coverage color ramp."""
+    RAMP = np.array([
+        [255, 45, 85],
+        [255, 122, 0],
+        [255, 230, 0],
+        [0, 217, 139],
+        [0, 168, 255]
+    ], dtype=np.uint8)
+    
+    stops = len(RAMP) - 1
+    scaled = fraction * stops
+    index = np.clip(np.floor(scaled).astype(int), 0, stops - 1)
+    remainder = (scaled - index)[..., np.newaxis]
+    
+    c1 = RAMP[index]
+    c2 = RAMP[index + 1]
+    
+    blended = c1 * (1.0 - remainder) + c2 * remainder
+    return blended.astype(np.uint8)
 
 def write_png(image: npt.NDArray[np.uint8]) -> bytes:
-    """Return an RGBA image as a PNG file."""
-    height, width = image.shape[0], image.shape[1]
-    rows = np.concatenate(
-        [np.zeros((height, 1), dtype=np.uint8), image.reshape(height, width * 4)], axis=1
-    )
-    body = zlib.compress(rows.tobytes(), level=6)
-
-    def chunk(kind: bytes, payload: bytes) -> bytes:
-        head = struct.pack(">I", len(payload)) + kind
-        return head + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
-
-    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
-    return (
-        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", body) + chunk(b"IEND", b"")
-    )
-
-async def _fetch_aggregated_data(session: AsyncSession) -> list[tuple[float, float, int, float, int]]:
-    """Fetch position metrics from last 30 days and calculate max distance and packet counts."""
-    since = datetime.now(UTC) - timedelta(days=30)
+    """Write an RGBA array to a PNG stream."""
+    height, width, _ = image.shape
     
-    # We do a join to get packet origin and gateway destination
-    # We fetch rows and calculate distance in python to avoid relying on PostGIS
+    ihdr = b"IHDR" + struct.pack("!IIBB000", width, height, 8, 6)
+    ihdr_crc = struct.pack("!I", zlib.crc32(ihdr) & 0xFFFFFFFF)
+    
+    raw = np.empty((height, width * 4 + 1), dtype=np.uint8)
+    raw[:, 0] = 0
+    raw[:, 1:] = image.reshape(height, width * 4)
+    
+    idat = b"IDAT" + zlib.compress(raw.tobytes(), level=1)
+    idat_crc = struct.pack("!I", zlib.crc32(idat) & 0xFFFFFFFF)
+    
+    iend = b"IEND"
+    iend_crc = struct.pack("!I", zlib.crc32(iend) & 0xFFFFFFFF)
+    
+    return b"\x89PNG\r\n\x1a\n" + struct.pack("!I", len(ihdr) - 4) + ihdr + ihdr_crc + \
+           struct.pack("!I", len(idat) - 4) + idat + idat_crc + \
+           b"\x00\x00\x00\x00" + iend + iend_crc
+
+async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int, float, float, float]]:
+    """Fetch position metrics and calculate the three relative scores for each packet."""
+    since = datetime.now(UTC) - timedelta(days=30)
     
     query = (
         select(
             PositionMetrics.latitude,
             PositionMetrics.longitude,
             PositionMetrics.precision_bits,
-            Node.last_lat,
-            Node.last_lon,
-            PositionMetrics.packet_id
+            PositionMetrics.packet_id,
+            PacketSeen.gateway_node_num,
+            PacketSeen.hop_start,
+            PacketSeen.hop_limit
         )
         .join(PacketSeen, 
               (PositionMetrics.packet_id == PacketSeen.packet_id) & 
               (PositionMetrics.node_num == PacketSeen.from_node_num))
-        .join(Node, PacketSeen.gateway_node_num == Node.node_num)
         .where(PositionMetrics.time >= since)
         .where(PositionMetrics.latitude.is_not(None))
         .where(PositionMetrics.longitude.is_not(None))
-        .where(Node.last_lat.is_not(None))
-        .where(Node.last_lon.is_not(None))
     )
     
     result = await session.execute(query)
     
-    # Aggregate in memory: (lat, lon, precision_bits) -> dict(packet_ids: set, max_dist: float)
-    agg = defaultdict(lambda: {"packets": set(), "max_dist": 0.0})
-    for lat, lon, prec, g_lat, g_lon, pkt_id in result:
-        key = (lat, lon, prec)
-        dist = haversine(lat, lon, g_lat, g_lon)
-        cell = agg[key]
-        cell["packets"].add(pkt_id)
-        if dist > cell["max_dist"]:
-            cell["max_dist"] = dist
+    packets = {}
+    for lat, lon, prec, pkt_id, gw_num, hop_start, hop_limit in result:
+        if hop_start is None or hop_limit is None:
+            continue
             
-    # Return as list of (lat, lon, precision, max_dist, count)
+        if pkt_id not in packets:
+            packets[pkt_id] = (lat, lon, prec, hop_start, {})
+            
+        hops_used = hop_start - hop_limit
+        gateways = packets[pkt_id][4]
+        
+        if gw_num not in gateways or hops_used < gateways[gw_num]:
+            gateways[gw_num] = hops_used
+            
     final_data = []
-    for (lat, lon, prec), data in agg.items():
-        final_data.append((lat, lon, prec or 32, data["max_dist"], len(data["packets"])))
+    
+    for _, (lat, lon, prec, hop_start, gateways) in packets.items():
+        if not gateways:
+            continue
+            
+        raw_count = float(len(gateways))
+        
+        multiplier = 5.0 / max(1, hop_start)
+        multiplier_score = float(raw_count * multiplier)
+        
+        weighted_score = 0.0
+        for hops in gateways.values():
+            if hops <= 0:
+                weighted_score += 10.0
+            elif hops <= 2:
+                weighted_score += 5.0
+            elif hops <= 4:
+                weighted_score += 2.0
+            else:
+                weighted_score += 1.0
+                
+        final_data.append((lat, lon, prec, raw_count, multiplier_score, weighted_score))
         
     return final_data
 
@@ -140,11 +147,37 @@ def blur_grid(grid: npt.NDArray[np.float32], iterations: int = 2) -> npt.NDArray
         ) / 8.0
     return out
 
+def local_max_pool(grid: npt.NDArray[np.float32], radius_cells: int = 177) -> npt.NDArray[np.float32]:
+    """Find the local maximum over a given radius using block downsampling."""
+    block_size = max(1, (radius_cells * 2) // 10)
+    
+    h, w = grid.shape
+    pad_h = (block_size - (h % block_size)) % block_size
+    pad_w = (block_size - (w % block_size)) % block_size
+    
+    padded = np.pad(grid, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
+    ph, pw = padded.shape
+    
+    coarse = padded.reshape(ph // block_size, block_size, pw // block_size, block_size).max(axis=(1, 3))
+    
+    window = 10
+    offset = window // 2
+    coarse_padded = np.pad(coarse, offset, mode='edge')
+    coarse_max = np.zeros_like(coarse)
+    
+    for i in range(window):
+        for j in range(window):
+            coarse_max = np.maximum(coarse_max, coarse_padded[i:i+coarse.shape[0], j:j+coarse.shape[1]])
+            
+    upsampled = np.repeat(np.repeat(coarse_max, block_size, axis=0), block_size, axis=1)
+    
+    return np.maximum(upsampled[:h, :w], 1.0)
+
 def _build_grids(
     settings: Settings, 
-    data: list[tuple[float, float, int, float, int]]
-) -> tuple[Grid, npt.NDArray[np.float32], npt.NDArray[np.int32]]:
-    """Build the region grids for distance and packet count."""
+    data: list[tuple[float, float, int, float, float, float]]
+) -> tuple[Grid, dict[str, npt.NDArray[np.float32]], npt.NDArray[np.float32]]:
+    """Build the region grids and return normalized grids for each model."""
     grid = region_grid(
         settings.terrain_lat_min,
         settings.terrain_lat_max,
@@ -152,21 +185,18 @@ def _build_grids(
         settings.terrain_lon_max
     )
     
-    dist_grid = np.zeros((grid.height, grid.width), dtype=np.float32)
+    models = ["raw", "multiplier", "weighted"]
+    score_grids = {m: np.zeros((grid.height, grid.width), dtype=np.float32) for m in models}
     count_grid = np.zeros((grid.height, grid.width), dtype=np.float32)
     
-    for lat, lon, prec, dist, count in data:
-        # Convert lat/lon to grid row/col
+    for lat, lon, prec, raw_s, mul_s, w_s in data:
         row = grid.row_of(lat)
         col = grid.column_of(lon)
         
         if row < 0 or row >= grid.height or col < 0 or col >= grid.width:
             continue
             
-        # Determine deviation in meters based on precision bits
         dev_m = precision_deviation_m(prec)
-        # 1 degree lat is approx 111320 meters. Grid is 1200 cells/deg.
-        # So 1 cell is approx 111320 / 1200 = 92.7 meters.
         cell_size_m = 111320.0 / grid.cells_per_degree
         radius_cells = max(0, int(round((dev_m or 0) / cell_size_m)))
         
@@ -175,21 +205,24 @@ def _build_grids(
         c_start = max(0, col - radius_cells)
         c_end = min(grid.width, col + radius_cells + 1)
         
-        # We take the max distance across overlaps, and sum the packet counts
-        block_dist = dist_grid[r_start:r_end, c_start:c_end]
-        np.maximum(block_dist, dist, out=block_dist)
-        
+        for g_name, score in zip(models, [raw_s, mul_s, w_s]):
+            block = score_grids[g_name][r_start:r_end, c_start:c_end]
+            np.maximum(block, score, out=block)
+            
         block_count = count_grid[r_start:r_end, c_start:c_end]
-        block_count += count
+        block_count += 1.0
         
-    # Soften edges
-    dist_grid = blur_grid(dist_grid, iterations=2)
     count_grid = blur_grid(count_grid, iterations=2)
+    relative_grids = {}
+    for g_name in models:
+        s_grid = blur_grid(score_grids[g_name], iterations=2)
+        local_potential = local_max_pool(s_grid, radius_cells=177)
+        relative_grids[g_name] = np.clip(s_grid / local_potential, 0.0, 1.0)
         
-    return grid, dist_grid, count_grid
+    return grid, relative_grids, count_grid
 
 def sample_heatmap_tile(
-    dist_grid: npt.NDArray[np.float32], 
+    rel_grid: npt.NDArray[np.float32], 
     count_grid: npt.NDArray[np.float32], 
     grid: Grid, 
     tile
@@ -207,72 +240,63 @@ def sample_heatmap_tile(
     safe_rows = np.clip(rows, 0, grid.height - 1)
     safe_columns = np.clip(columns, 0, grid.width - 1)
 
-    patch_dist = dist_grid[safe_rows[:, None], safe_columns[None, :]]
+    patch_rel = rel_grid[safe_rows[:, None], safe_columns[None, :]]
     patch_count = count_grid[safe_rows[:, None], safe_columns[None, :]]
     inside = inside_rows[:, None] & inside_columns[None, :]
     
     return (
-        np.where(inside, patch_dist, 0.0).astype(np.float32),
+        np.where(inside, patch_rel, 0.0).astype(np.float32),
         np.where(inside, patch_count, 0.0).astype(np.float32)
     )
 
-def _render_tile(dist: npt.NDArray[np.float32], count: npt.NDArray[np.float32]) -> npt.NDArray[np.uint8]:
-    """Render a patch of distance and count into an RGBA tile."""
-    height, width = dist.shape
+def _render_tile(rel_score: npt.NDArray[np.float32], count: npt.NDArray[np.float32]) -> npt.NDArray[np.uint8]:
+    """Render a patch of relative score and count into an RGBA tile."""
+    height, width = rel_score.shape
     image = np.zeros((height, width, 4), dtype=np.uint8)
     
     active = count > 0.1
     if not active.any():
         return image
         
-    # Scale distance to [0.0, 1.0] for the color ramp
-    fraction = np.clip(dist / MAX_DISTANCE_KM, 0.0, 1.0)
-    image[..., :3] = _ramp_colour(fraction)
+    image[..., :3] = _ramp_colour(rel_score)
     
-    # Scale count to alpha
-    # 1 packet = MIN_ALPHA, MAX_PACKETS_OPACITY packets = MAX_ALPHA
     alpha_fraction = np.clip((count - 1.0) / max(1.0, MAX_PACKETS_OPACITY - 1.0), 0.0, 1.0)
     alpha = MIN_ALPHA + alpha_fraction * (MAX_ALPHA - MIN_ALPHA)
     
     image[..., 3] = np.where(active, alpha.astype(np.uint8), 0)
     return image
 
-async def run_once(session: AsyncSession, settings: Settings) -> None:
-    """Generate the empirical heatmap tiles."""
-    logger.info("activity heatmap: starting")
+async def run_once(session: Any, settings: Settings) -> None:
+    """Entry point for the scheduled job."""
     start = datetime.now(UTC)
     
-    # 1. Fetch data
-    data = await _fetch_aggregated_data(session)
-    logger.info(f"activity heatmap: fetched {len(data)} unique aggregated positions")
-    
+    data = await _fetch_position_metrics(session)
     if not data:
-        logger.info("activity heatmap: no data found")
+        logger.info("activity heatmap: no data found in the last 30 days")
         return
 
-    # 2. Build grids
-    grid, dist_grid, count_grid = _build_grids(settings, data)
+    grid, relative_grids, count_grid = _build_grids(settings, data)
     
-    # 3. Render and write tiles
     cache_dir = Path(settings.coverage_cache_dir)
-    layer = "empirical_heatmap"
     preset = "all"
     site_set = "all"
     written = 0
     
-    for zoom in range(settings.coverage_min_zoom, settings.coverage_max_zoom + 1):
-        for tile in tiles_for_grid(grid, zoom):
-            patch_dist, patch_count = sample_heatmap_tile(dist_grid, count_grid, grid, tile)
-            image = _render_tile(patch_dist, patch_count)
-            if not image[..., 3].any():
-                continue
-            store.write_tile(
-                cache_dir, preset, site_set, layer, tile.zoom, tile.x, tile.y, write_png(image)
-            )
-            written += 1
+    for layer, rel_grid in relative_grids.items():
+        layer_name = f"empirical_heatmap_{layer}"
+        for zoom in range(settings.coverage_min_zoom, settings.coverage_max_zoom + 1):
+            for tile in tiles_for_grid(grid, zoom):
+                patch_rel, patch_count = sample_heatmap_tile(rel_grid, count_grid, grid, tile)
+                image = _render_tile(patch_rel, patch_count)
+                if not image[..., 3].any():
+                    continue
+                store.write_tile(
+                    cache_dir, preset, site_set, layer_name, tile.zoom, tile.x, tile.y, write_png(image)
+                )
+                written += 1
             
     took = (datetime.now(UTC) - start).total_seconds()
-    logger.info("activity heatmap: wrote %s tiles in %.1fs", written, took)
+    logger.info("activity heatmap: wrote %s tiles across 3 models in %.1fs", written, took)
 
 def run() -> None:
     """Console script entry point for running once manually."""
@@ -282,11 +306,11 @@ def run() -> None:
     import asyncio
 
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings)
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
 
     async def main() -> None:
-        engine = make_engine(settings.database_url_jobs)
-        factory = make_session_factory(engine)
         try:
             async with factory() as session:
                 await run_once(session, settings)
@@ -294,4 +318,3 @@ def run() -> None:
             await engine.dispose()
 
     asyncio.run(main())
-

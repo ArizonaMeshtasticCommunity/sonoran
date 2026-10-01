@@ -230,9 +230,10 @@
      * encodes the braces, and Leaflet then asks for a tile literally
      * named `%7Bz%7D`. Resolve the part before them, then append.
      */
-    const isHeatmap = state.layer === 'empirical_heatmap';
+    const isHeatmap = state.layer.startsWith('empirical_heatmap');
+    const heatmapModel = isHeatmap ? state.layer.replace('empirical_heatmap_', '') : null;
     const base = isHeatmap 
-      ? api(`api/map/heatmap/tiles/`)
+      ? api(`api/map/heatmap/${heatmapModel}/`)
       : api(`api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`);
 
     const bounds = isHeatmap
@@ -367,7 +368,7 @@
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
     const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
-    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap', label: 'Activity Heatmap (30 days)' }];
+    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap_raw', label: 'Heatmap: Raw Gateways' }, { key: 'empirical_heatmap_multiplier', label: 'Heatmap: Hop Multiplier' }, { key: 'empirical_heatmap_weighted', label: 'Heatmap: Hop Weighted' }];
     replace(
       host,
       layers.map((layer) =>
@@ -487,10 +488,10 @@
     }
     legend.hidden = false;
     
-    if (state.layer === 'empirical_heatmap') {
-      $('[data-coverage-legend-title]', legend).textContent = 'Max Gateway Distance';
-      $('[data-coverage-floor]', legend).textContent = '0 km';
-      $('[data-coverage-ceiling]', legend).textContent = '32+ km';
+    if (state.layer.startsWith('empirical_heatmap')) {
+      $('[data-coverage-legend-title]', legend).textContent = 'Relative Local Performance';
+      $('[data-coverage-floor]', legend).textContent = '0%';
+      $('[data-coverage-ceiling]', legend).textContent = '100%';
     } else {
       const floor = preset.sensitivity_dbm;
       const layer = (state.summary.layers || []).find((item) => item.key === state.layer);
@@ -521,7 +522,7 @@
       return;
     }
     
-    if (state.layer === 'empirical_heatmap') {
+    if (state.layer.startsWith('empirical_heatmap')) {
       replace(
         host,
         statTile('30', 'Days included', 'Rolling window')
@@ -626,7 +627,7 @@
     const summary = state.summary;
     if (!sub || !summary || !summary.available) return;
     
-    if (state.layer === 'empirical_heatmap') {
+    if (state.layer.startsWith('empirical_heatmap')) {
       sub.textContent = 'Actual radio activity over the last 30 days, colored by maximum gateway distance.';
       return;
     }
@@ -664,7 +665,7 @@
       replace(host, el('p', { text: 'No coverage run has been made yet.' }));
       return;
     }
-    if (state.layer === 'empirical_heatmap') {
+    if (state.layer.startsWith('empirical_heatmap')) {
       if (panel) panel.hidden = true;
       return;
     }
@@ -850,7 +851,7 @@
     const host = $('[data-coverage-coarse]', page);
     if (!panel || !host) return;
     
-    if (state.layer === 'empirical_heatmap') {
+    if (state.layer.startsWith('empirical_heatmap')) {
       panel.hidden = true;
       return;
     }
@@ -906,7 +907,7 @@
     const host = $('[data-coverage-sites]', page);
     if (!host) return;
     
-    if (state.layer === 'empirical_heatmap') {
+    if (state.layer.startsWith('empirical_heatmap')) {
       replace(host, el('p', { class: 'muted', text: 'This layer shows historical activity from all gateways, not a specific site set.' }));
       return;
     }

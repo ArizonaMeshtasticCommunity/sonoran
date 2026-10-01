@@ -550,9 +550,10 @@ async def traceroute_paths(
         "traces": traces,
     }
 
-@router.get("/heatmap/tiles/{z}/{x}/{y}.png")
+@router.get("/heatmap/{model}/{z}/{x}/{y}.png")
 async def heatmap_tile(
     request: Request,
+    model: str = Path(...),
     z: int = Path(ge=0, le=16),
     x: int = Path(ge=0),
     y: int = Path(ge=0),
@@ -561,9 +562,13 @@ async def heatmap_tile(
     from pathlib import Path as FilePath
     settings = request.app.state.settings
     
+    if model not in ("raw", "multiplier", "weighted"):
+        raise HTTPException(status_code=404, detail="Unknown heatmap model")
+        
+    layer_name = f"empirical_heatmap_{model}"
+    
     # Matches the path written by activity_heatmap job
-    # cache_dir / "all" / "all" / "empirical_heatmap" / z / x / y.png
-    tile_path = FilePath(settings.coverage_cache_dir) / "all" / "all" / "empirical_heatmap" / str(z) / str(x) / f"{y}.png"
+    tile_path = FilePath(settings.coverage_cache_dir) / "all" / "all" / layer_name / str(z) / str(x) / f"{y}.png"
     
     try:
         png = tile_path.read_bytes()
