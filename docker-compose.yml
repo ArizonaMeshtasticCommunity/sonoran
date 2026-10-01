@@ -70,7 +70,9 @@ services:
     restart: unless-stopped
     logging: *logging
     networks:
-      - sonoran-internal
+      sonoran-internal:
+        aliases:
+          - db-${COOLIFY_RESOURCE_UUID}
     environment:
       POSTGRES_DB: azmsh
       POSTGRES_USER: postgres
