@@ -14,9 +14,9 @@ from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session
-from sonoran.db.models import RfHeard, RfLatest, RfSpectrum, RfStation, RfTrack
+from sonoran.db.models import RfHeard, RfLatest, RfSource, RfSpectrum, RfStation, RfTrack
 from sonoran.radio.channels import US_END_HZ, US_START_HZ, all_channels
-from sonoran.rf.schema import HEARD_PRECISION_M, KINDS, STATION_ID, STORED_KINDS
+from sonoran.rf.schema import HEARD_PRECISION_M, KINDS, NO_SOURCE, STATION_ID, STORED_KINDS
 
 router = APIRouter(prefix="/api/rf", tags=["rf"])
 
@@ -24,6 +24,8 @@ KIND = "^(adsb|uat|aprs|sonde|ism)$"
 # A station that has not sent a heartbeat for this long is shown as
 # silent. The agent sends one a minute (design 3.3).
 ONLINE = timedelta(minutes=5)
+# A source silent for longer no longer adds its kinds to its location.
+SOURCE_FRESH = timedelta(hours=24)
 # The receiver layer's grid, in degrees: about 2 km in Arizona. Fine
 # enough to draw where a station hears, coarse enough to send a day.
 CELL_DEG = 0.02
@@ -58,11 +60,72 @@ async def kinds() -> dict[str, list[str]]:
     return {"known": list(KINDS), "stored": sorted(STORED_KINDS), "views": ["spectrum"]}
 
 
+def _online(last_seen: datetime | None, now: datetime) -> bool:
+    return last_seen is not None and now - last_seen <= ONLINE
+
+
+def _counts(row: RfStation | RfSource) -> dict[str, int | None]:
+    return {"heard": row.heard, "sent": row.sent, "dropped": row.dropped}
+
+
+def _sources(station: RfStation, rows: list[RfSource], now: datetime) -> list[dict[str, object]]:
+    """Return a location's sources: each one that sent a heartbeat, and
+    each one in the registry that has not sent one yet."""
+    registered = set(station.registered_sources or [])
+    out: list[dict[str, object]] = [
+        {
+            # None is an agent that sends no source.
+            "source": None if row.source == NO_SOURCE else row.source,
+            "kinds": row.kinds or [],
+            "agent_version": row.agent_version,
+            "last_seen": row.last_seen,
+            "online": _online(row.last_seen, now),
+            "counts": _counts(row),
+            "registered": row.source in registered,
+        }
+        for row in rows
+    ]
+    heard_from = {row.source for row in rows}
+    for name in sorted(registered - heard_from):
+        out.append(
+            {
+                "source": name,
+                "kinds": [],
+                "agent_version": None,
+                "last_seen": None,
+                "online": False,
+                "counts": {"heard": None, "sent": None, "dropped": None},
+                "registered": True,
+            }
+        )
+    return out
+
+
+def _summed(rows: list[RfSource], now: datetime) -> dict[str, int | None]:
+    """The counts of a location: the sum over its sources that report now."""
+    live = [row for row in rows if _online(row.last_seen, now)]
+    if not live:
+        return {"heard": None, "sent": None, "dropped": None}
+    return {
+        name: sum(getattr(row, name) or 0 for row in live) for name in ("heard", "sent", "dropped")
+    }
+
+
 @router.get("/stations")
 async def stations(session: AsyncSession = Depends(get_session)) -> list[dict[str, object]]:
-    """Return every station, its rounded position, and when it last reported."""
+    """Return every location, its rounded position, and its sources.
+
+    A location is one station on the map (#305). Its kinds are those of
+    every source heard from in the last day, and its counts are the sum
+    over the sources that report now.
+    """
     now = datetime.now(UTC)
     rows = (await session.scalars(select(RfStation).order_by(RfStation.station_id))).all()
+    by_station: dict[str, list[RfSource]] = {}
+    for source in (
+        await session.scalars(select(RfSource).order_by(RfSource.station_id, RfSource.source))
+    ).all():
+        by_station.setdefault(source.station_id, []).append(source)
     # The newest minute of the band each station sent in the last day.
     # A heartbeat lists the kinds a station serves, but a sweeper runs
     # beside the agent and is known by what it sends, not what it says.
@@ -76,23 +139,38 @@ async def stations(session: AsyncSession = Depends(get_session)) -> list[dict[st
             )
         ).all()
     }
-    return [
-        {
-            "station": row.station_id,
-            "lat": row.lat,
-            "lon": row.lon,
-            # The agent rounded the position by this much before sending it.
-            "precision_m": row.precision_m,
-            "kinds": row.kinds or [],
-            "agent_version": row.agent_version,
-            "last_seen": row.last_seen,
-            "online": now - row.last_seen <= ONLINE,
-            # Since the heartbeat before: a thinned picture says so.
-            "counts": {"heard": row.heard, "sent": row.sent, "dropped": row.dropped},
-            "spectrum_last": swept.get(row.station_id),
-        }
-        for row in rows
-    ]
+    out: list[dict[str, object]] = []
+    for row in rows:
+        sources = by_station.get(row.station_id, [])
+        if sources:
+            fresh = [s for s in sources if now - s.last_seen <= SOURCE_FRESH]
+            kinds = sorted({kind for s in fresh for kind in (s.kinds or [])})
+            counts = _summed(sources, now)
+        else:
+            # A station whose last heartbeat came before #305.
+            kinds = row.kinds or []
+            counts = _counts(row)
+        out.append(
+            {
+                "station": row.station_id,
+                "display_name": row.display_name,
+                "owner": row.owner,
+                "registered": row.registry_at is not None,
+                "lat": row.lat,
+                "lon": row.lon,
+                # The agent rounded the position by this much before sending it.
+                "precision_m": row.precision_m,
+                "kinds": kinds,
+                "agent_version": row.agent_version,
+                "last_seen": row.last_seen,
+                "online": _online(row.last_seen, now),
+                # Since the heartbeat before: a thinned picture says so.
+                "counts": counts,
+                "spectrum_last": swept.get(row.station_id),
+                "sources": _sources(row, sources, now),
+            }
+        )
+    return out
 
 
 @router.get("/latest")

@@ -395,11 +395,28 @@
       el('div', { class: 'muted', text: `heard ${ago(row.t)} by ${row.station}` }));
   }
 
+  /* One line per source of a location (#305): its name, whether it
+     reports, and what it serves. An agent that sends no source has the
+     name null and reads as "agent". */
+  function sourceLine(source) {
+    const name = source.source || 'agent';
+    const state = source.online ? 'reporting'
+      : source.last_seen ? `silent since ${ago(source.last_seen)}` : 'no heartbeat yet';
+    const kinds = (source.kinds || []).join(', ');
+    return el('div', { text: `${name}: ${state}${kinds ? ` · ${kinds}` : ''}` });
+  }
+
   function stationTooltip(row) {
     const counts = row.counts || {};
+    const sources = row.sources || [];
     return el('div', { class: 'rf-tip' },
-      el('strong', { text: row.station }),
-      el('div', { text: row.online ? 'reporting' : `silent since ${ago(row.last_seen)}` }),
+      el('strong', { text: row.display_name || row.station }),
+      row.display_name ? el('div', { class: 'muted', text: row.station }) : null,
+      row.owner ? el('div', { class: 'muted', text: `run by ${row.owner}` }) : null,
+      el('div', {
+        text: row.online ? 'reporting'
+          : row.last_seen ? `silent since ${ago(row.last_seen)}` : 'no heartbeat yet',
+      }),
       el('div', { text: (row.kinds || []).join(', ') || 'no kinds reported' }),
       counts.heard == null ? null
         : el('div', { text: `last minute: heard ${counts.heard}, sent ${counts.sent}, thinned ${counts.dropped}` }),
@@ -410,6 +427,10 @@
         })
         : null,
       row.spectrum_last ? el('div', { text: `sweeps the 900 MHz band, newest minute ${ago(row.spectrum_last)}` }) : null,
+      // One source says nothing a line above has not. Two or more are
+      // listed, so a Pi that went quiet shows beside the one that did not.
+      sources.length > 1 ? el('div', { class: 'muted', text: `${sources.length} sources:` }) : null,
+      ...(sources.length > 1 ? sources.map(sourceLine) : []),
       el('div', { class: 'muted', text: 'Click to show where it hears aircraft.' }));
   }
 

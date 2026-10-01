@@ -24,8 +24,8 @@ from pydantic import ValidationError
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.logging import configure_logging, get_logger
-from sonoran.rf.schema import Batch, Spectrum, Status, TopicError, parse_topic
-from sonoran.rf.store import Rules, store_batch, store_spectrum, store_status
+from sonoran.rf.schema import Batch, Registry, Spectrum, Status, TopicError, parse_topic
+from sonoran.rf.store import Rules, store_batch, store_registry, store_spectrum, store_status
 
 logger = get_logger(__name__)
 
@@ -75,21 +75,38 @@ async def _messages(settings: Settings) -> AsyncIterator[tuple[str, bytes]]:
             delay = min(delay * 2, 60)
 
 
-def decode(topic: str, payload: bytes) -> Batch | Status | Spectrum:
+class Removed:
+    """An empty retained registry message: the location left the registry."""
+
+    def __init__(self, station: str) -> None:
+        self.station = station
+
+
+Message = Batch | Status | Spectrum | Registry | Removed
+
+
+def decode(topic: str, payload: bytes) -> Message:
     """Parse and validate one message.
 
     Raises `TopicError` or `ValueError` for a message that is not one. A
     message must name the station its topic names: the broker already
     lets a station publish only to its own topic, and this checks it
-    again rather than trust one control.
+    again rather than trust one control. A heartbeat must name the
+    source its topic names, for the same reason (#305).
     """
-    station, kind = parse_topic(topic)
+    station, kind, source = parse_topic(topic)
+    if kind == "registry" and not payload:
+        return Removed(station)
     data = json.loads(payload)
-    message: Batch | Status | Spectrum
+    message: Batch | Status | Spectrum | Registry
     if kind == "status":
         message = Status.model_validate(data)
+        if message.source != source:
+            raise ValueError(f"heartbeat names source {message.source!r} on the {source!r} topic")
     elif kind == "spectrum":
         message = Spectrum.model_validate(data)
+    elif kind == "registry":
+        message = Registry.model_validate(data)
     else:
         message = Batch.model_validate(data)
     if message.station != station:
@@ -118,7 +135,13 @@ async def main() -> None:
                 continue
             async with session_factory() as session:
                 try:
-                    if isinstance(message, Spectrum):
+                    if isinstance(message, Removed):
+                        await store_registry(session, message.station, None, received)
+                        totals["registry"] += 1
+                    elif isinstance(message, Registry):
+                        await store_registry(session, message.station, message, received)
+                        totals["registry"] += 1
+                    elif isinstance(message, Spectrum):
                         new = await store_spectrum(session, message, received, rules)
                         totals["spectrum" if new else "spectrum_repeat"] += 1
                     elif isinstance(message, Status):
