@@ -53,7 +53,7 @@ def write_png(image: npt.NDArray[np.uint8]) -> bytes:
     """Write an RGBA array to a PNG stream."""
     height, width, _ = image.shape
     
-    ihdr = b"IHDR" + struct.pack("!IIBB000", width, height, 8, 6)
+    ihdr = b"IHDR" + struct.pack("!IIBBBBB", width, height, 8, 6, 0, 0, 0)
     ihdr_crc = struct.pack("!I", zlib.crc32(ihdr) & 0xFFFFFFFF)
     
     raw = np.empty((height, width * 4 + 1), dtype=np.uint8)
