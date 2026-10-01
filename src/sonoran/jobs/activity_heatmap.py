@@ -11,7 +11,8 @@ from sqlalchemy import select
 
 from sonoran.config import Settings
 from sonoran.coverage import store
-from sonoran.coverage.grid import Grid, region_grid, tiles_for_grid, tile_latitudes, tile_longitudes
+from sonoran.coverage.grid import Grid, region_grid
+from sonoran.coverage.render import tiles_for_grid, tile_latitudes, tile_longitudes
 from sonoran.db.models import PacketSeen, PositionMetrics
 from sonoran.logging import get_logger
 
