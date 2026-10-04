@@ -317,6 +317,7 @@ The design is `docs/design/rf-map.md`.
 | `rf_track` | hypertable on `bucket` | (`kind`, `thing_id`, 20 s bucket), across every station; the loudest hearing wins | 2 days |
 | `rf_heard` | hypertable on `bucket` | (`station_id`, `kind`, `thing_id`, 5 min bucket): hearings, best level, where | 14 days |
 | `rf_latest` | plain | (`kind`, `thing_id`): the newest point, updated in place | always |
+| `rf_spectrum_hour` | hypertable on `t` | (`station_id`, hour, bin layout): each finished hour rolled up from `rf_spectrum` by the jobs process every 10 minutes, with the same per-bin rules as a waterfall row; `minutes` says how many minutes it holds. Read by the 3 and 7 day windows. Revision 0019 | 14 days |
 | `rf_spectrum` | hypertable on `t` | (`station_id`, minute): `p50`, `p95`, `peak` and `busy` arrays, one entry per bin, NULL for a bin not swept. Revision 0014 | 14 days |
 
 `sonoran-rf-ingest` writes as `azmsh_ingest`. It holds INSERT and UPDATE

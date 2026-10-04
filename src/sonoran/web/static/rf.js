@@ -840,7 +840,7 @@
       el('span', { text: 'quiet' }),
       el('span', { class: 'rf-ramp', style: `background:linear-gradient(to right, ${BAND_RAMP.join(', ')})` }),
       el('span', { text: 'loud, for this station' }),
-      el('span', { class: 'muted', text: ` · newest at the top · each row ${data.bucket_minutes} min · grey: not swept` }));
+      el('span', { class: 'muted', text: ` · newest at the top · each row ${data.bucket_minutes >= 60 ? `${data.bucket_minutes / 60} h` : `${data.bucket_minutes} min`} · grey: not swept` }));
   }
 
   function drawBusy(page) {

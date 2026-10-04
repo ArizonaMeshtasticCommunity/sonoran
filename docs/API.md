@@ -2153,7 +2153,7 @@ it. A relayed sender, an object, and a position its sender blurred past
 ### 12.5 `GET /api/rf/spectrum/{station}`
 
 One station's minutes of the 900 MHz band, for the waterfall (design
-7.4). `hours` is 1 to 24, default 6. 422 for a name that is not a
+7.4). `hours` is 1 to 168, default 6. 422 for a name that is not a
 station ID.
 
 Response: `station`, `hours`, `bucket_minutes`, `f_start_hz`, `bin_hz`,
@@ -2165,6 +2165,10 @@ window has no layout fields and an empty `rows`.
   answer holds more than 240 rows. In a bucket a bin keeps the median of
   its medians, the highest 95th percentile (a burst is never averaged
   away) and the mean busy share.
+- A window longer than 24 hours reads the hourly rollup
+  (`rf_spectrum_hour`), one row an hour, built the same way by the jobs
+  process every 10 minutes. `bucket_minutes` is 60, and the window ends
+  at the newest finished hour, which `newest` names.
 - `p50` is the noise floor. A mesh packet is a short burst, so it does
   not move the median of a minute's sweeps. `p95` shows the bursts, our
   own traffic included.

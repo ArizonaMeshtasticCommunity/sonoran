@@ -32,7 +32,10 @@ from tests.integration.conftest import role_url
 def clean(migrated_engine):  # type: ignore[no-untyped-def]
     with migrated_engine.begin() as connection:
         connection.execute(
-            text("TRUNCATE rf_station, rf_source, rf_track, rf_heard, rf_latest, rf_spectrum")
+            text(
+                "TRUNCATE rf_station, rf_source, rf_track, rf_heard, rf_latest, "
+                "rf_spectrum, rf_spectrum_hour"
+            )
         )
     yield
 
@@ -626,3 +629,68 @@ def test_an_agent_without_a_source_still_reads_as_before(
     assert site["kinds"] == ["adsb", "aprs"]
     assert site["counts"]["heard"] == 7
     assert [s["source"] for s in site["sources"]] == [None]
+
+
+async def _rollup(timescale_url: str, now: datetime) -> int:
+    """Run the hourly rollup as the jobs role, as if it were `now`."""
+    from sonoran.jobs import rf_rollup
+
+    engine = create_async_engine(role_url(timescale_url, "azmsh_jobs"))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            return await rf_rollup.run_once(session, now=now)
+    finally:
+        await engine.dispose()
+
+
+def test_the_hourly_rollup_keeps_bursts_and_feeds_the_week_view(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """The 3 and 7 day windows read hours rolled up by the jobs role.
+
+    The ingest's clock guard stores an old stamp at the time it arrived,
+    so the minutes are written now and the rollup is run as if it were
+    two hours later, when their hour is finished.
+    """
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    minutes = [
+        _minute("west-site", now - timedelta(minutes=i), [-500, -500, -500], [0, 0, 0])
+        for i in range(8)
+    ]
+    minutes[3] = _minute("west-site", now - timedelta(minutes=3), [-500, -300, -500], [0, 80, 0])
+    asyncio.run(_write_spectrum(timescale_url, *minutes))
+
+    later = now + timedelta(hours=2)
+    built = asyncio.run(_rollup(timescale_url, later))
+    rows = _rows(migrated_engine, "SELECT minutes, p50, p95, busy FROM rf_spectrum_hour")
+    # Eight minutes fall in one hour, or two when they straddle the hour.
+    assert built == len(rows) and 1 <= len(rows) <= 2
+    assert sum(row[0] for row in rows) == 8
+    loud = max(rows, key=lambda row: row[2][1])
+    assert loud[2][1] == -260, "the highest 95th percentile in the hour is kept"
+    assert loud[1][1] == -500, "the median of the medians ignores one loud minute"
+    assert loud[3][1] == round(80 / loud[0]), "busy is the mean over the hour's minutes"
+
+    # Run again: the recent hours are built again, never twice over.
+    asyncio.run(_rollup(timescale_url, later))
+    assert len(_rows(migrated_engine, "SELECT 1 FROM rf_spectrum_hour")) == len(rows)
+
+    with _client(timescale_url) as client:
+        week = client.get("/api/rf/spectrum/west-site?hours=168").json()
+        three = client.get("/api/rf/spectrum/west-site?hours=72").json()
+        too_long = client.get("/api/rf/spectrum/west-site?hours=169")
+    assert week["bucket_minutes"] == 60 and three["bucket_minutes"] == 60
+    assert len(week["rows"]) == len(rows)
+    assert week["bins"] == 3 and week["sweeps_per_minute"] == 12
+    assert max(row["p95"][1] for row in week["rows"]) == -260
+    assert too_long.status_code == 422
+
+
+def test_the_rollup_finds_nothing_to_do_without_minutes(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    assert asyncio.run(_rollup(timescale_url, datetime.now(UTC))) == 0
+    with _client(timescale_url) as client:
+        week = client.get("/api/rf/spectrum/west-site?hours=168").json()
+    assert week == {"station": "west-site", "hours": 168, "bucket_minutes": 60, "rows": []}

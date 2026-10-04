@@ -7,16 +7,25 @@ fetched, and a thing that is not in these answers was not heard by us.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import Float, and_, case, cast, func, or_, select, true
-from sqlalchemy.dialects.postgresql import aggregate_order_by
+from sqlalchemy import Float, and_, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session
-from sonoran.db.models import RfHeard, RfLatest, RfSource, RfSpectrum, RfStation, RfTrack
+from sonoran.db.models import (
+    RfHeard,
+    RfLatest,
+    RfSource,
+    RfSpectrum,
+    RfSpectrumHour,
+    RfStation,
+    RfTrack,
+)
 from sonoran.radio.channels import US_END_HZ, US_START_HZ, all_channels
 from sonoran.rf.schema import HEARD_PRECISION_M, KINDS, NO_SOURCE, STATION_ID, STORED_KINDS
+from sonoran.rf.spectrum_sql import bin_rows
 
 router = APIRouter(prefix="/api/rf", tags=["rf"])
 
@@ -298,10 +307,27 @@ async def heard(
 SPECTRUM_MAX_ROWS = 240
 
 
+# Windows longer than this read the hourly rollup (`rf_spectrum_hour`),
+# one row an hour, instead of every minute.
+SPECTRUM_MINUTE_HOURS = 24
+
+
+def _spectrum_rows(rows: Any) -> list[dict[str, object]]:
+    return [
+        {
+            "t": when,
+            "p50": [None if v is None else int(v) for v in p50],
+            "p95": [None if v is None else int(v) for v in p95],
+            "busy": [None if v is None else int(v) for v in busy],
+        }
+        for when, p50, p95, busy, *_ in rows
+    ]
+
+
 @router.get("/spectrum/{station}")
 async def spectrum(
     station: str,
-    hours: int = Query(default=6, ge=1, le=24),
+    hours: int = Query(default=6, ge=1, le=168),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return one station's minutes of the 900 MHz band, for the waterfall.
@@ -321,13 +347,19 @@ async def spectrum(
     buckets in the database, so a day is a few hundred rows and not
     1,440. In a bucket each bin keeps the median of its medians, the
     highest 95th percentile, so a burst is never averaged away, and the
-    mean busy share.
+    mean busy share (`rf/spectrum_sql.py`).
 
-    Only minutes with the station's newest bin layout are used. A change
+    A window longer than `SPECTRUM_MINUTE_HOURS` reads the hourly rollup
+    instead, one row an hour, built the same way by the jobs process. It
+    ends at the last hour the rollup has finished.
+
+    Only rows with the station's newest bin layout are used. A change
     of sweep range starts a new picture rather than mixing two.
     """
     if not STATION_ID.fullmatch(station):
         raise HTTPException(status_code=422, detail="not a station id")
+    if hours > SPECTRUM_MINUTE_HOURS:
+        return await _spectrum_hours(session, station, hours)
     since = datetime.now(UTC) - timedelta(hours=hours)
     layout = (
         await session.execute(
@@ -348,43 +380,16 @@ async def spectrum(
     if layout is None:
         return {"station": station, "hours": hours, "bucket_minutes": minutes, "rows": []}
     f_start, bin_hz, bins, gain_db, sweeps, newest = layout
-
-    bins_of = (
-        func.unnest(RfSpectrum.p50, RfSpectrum.p95, RfSpectrum.busy)
-        .table_valued("p50", "p95", "busy", with_ordinality="i")
-        .render_derived()
-    )
-    bucket = func.time_bucket(timedelta(minutes=minutes), RfSpectrum.t).label("bucket")
-    per_bin = (
-        select(
-            bucket,
-            bins_of.c.i,
-            func.percentile_disc(0.5).within_group(bins_of.c.p50).label("p50"),
-            func.max(bins_of.c.p95).label("p95"),
-            func.round(func.avg(bins_of.c.busy)).label("busy"),
-        )
-        .select_from(RfSpectrum)
-        .join(bins_of, true())
-        .where(
-            RfSpectrum.station_id == station,
-            RfSpectrum.t >= since,
-            RfSpectrum.f_start_hz == f_start,
-            RfSpectrum.bin_hz == bin_hz,
-            func.cardinality(RfSpectrum.p95) == bins,
-        )
-        .group_by(bucket, bins_of.c.i)
-        .subquery()
-    )
     rows = (
         await session.execute(
-            select(
-                per_bin.c.bucket,
-                func.array_agg(aggregate_order_by(per_bin.c.p50, per_bin.c.i)),
-                func.array_agg(aggregate_order_by(per_bin.c.p95, per_bin.c.i)),
-                func.array_agg(aggregate_order_by(per_bin.c.busy, per_bin.c.i)),
+            bin_rows(
+                func.time_bucket(timedelta(minutes=minutes), RfSpectrum.t),
+                RfSpectrum.station_id == station,
+                RfSpectrum.t >= since,
+                RfSpectrum.f_start_hz == f_start,
+                RfSpectrum.bin_hz == bin_hz,
+                func.cardinality(RfSpectrum.p95) == bins,
             )
-            .group_by(per_bin.c.bucket)
-            .order_by(per_bin.c.bucket)
         )
     ).all()
     return {
@@ -397,15 +402,66 @@ async def spectrum(
         "gain_db": gain_db,
         "sweeps_per_minute": sweeps,
         "newest": newest,
-        "rows": [
-            {
-                "t": when,
-                "p50": list(p50),
-                "p95": list(p95),
-                "busy": [None if b is None else int(b) for b in busy],
-            }
-            for when, p50, p95, busy in rows
-        ],
+        "rows": _spectrum_rows(rows),
+    }
+
+
+async def _spectrum_hours(session: AsyncSession, station: str, hours: int) -> dict[str, object]:
+    """The waterfall from the hourly rollup: one row per hour, oldest first."""
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    layout = (
+        await session.execute(
+            select(
+                RfSpectrumHour.f_start_hz,
+                RfSpectrumHour.bin_hz,
+                RfSpectrumHour.bins,
+                RfSpectrumHour.gain_db,
+                RfSpectrumHour.t,
+            )
+            .where(RfSpectrumHour.station_id == station, RfSpectrumHour.t >= since)
+            .order_by(RfSpectrumHour.t.desc())
+            .limit(1)
+        )
+    ).first()
+    if layout is None:
+        return {"station": station, "hours": hours, "bucket_minutes": 60, "rows": []}
+    f_start, bin_hz, bins, gain_db, newest = layout
+    rows = (
+        await session.execute(
+            select(
+                RfSpectrumHour.t,
+                RfSpectrumHour.p50,
+                RfSpectrumHour.p95,
+                RfSpectrumHour.busy,
+            )
+            .where(
+                RfSpectrumHour.station_id == station,
+                RfSpectrumHour.t >= since,
+                RfSpectrumHour.f_start_hz == f_start,
+                RfSpectrumHour.bin_hz == bin_hz,
+                RfSpectrumHour.bins == bins,
+            )
+            .order_by(RfSpectrumHour.t)
+        )
+    ).all()
+    sweeps = await session.scalar(
+        select(RfSpectrum.sweeps)
+        .where(RfSpectrum.station_id == station, RfSpectrum.t >= since)
+        .order_by(RfSpectrum.t.desc())
+        .limit(1)
+    )
+    return {
+        "station": station,
+        "hours": hours,
+        "bucket_minutes": 60,
+        "f_start_hz": f_start,
+        "bin_hz": bin_hz,
+        "bins": bins,
+        "gain_db": gain_db,
+        "sweeps_per_minute": sweeps,
+        # The start of the newest finished hour: the window ends there.
+        "newest": newest,
+        "rows": _spectrum_rows(rows),
     }
 
 

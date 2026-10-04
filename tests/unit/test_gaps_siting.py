@@ -600,7 +600,8 @@ def test_the_siting_half_runs_inside_the_coverage_cycle(monkeypatch) -> None:  #
 def test_the_siting_half_is_never_registered_as_a_peer_task() -> None:
     tasks = scheduler.build_tasks(_settings(coverage_enabled=True, gaps_enabled=True))
 
-    assert [task.name for task in tasks] == ["snapshot", "coverage", "gaps"]
+    # rf-rollup is plain SQL, no engine, so it may stand beside coverage.
+    assert [task.name for task in tasks] == ["snapshot", "coverage", "gaps", "rf-rollup"]
 
 
 def test_the_siting_half_can_be_turned_off_on_its_own(monkeypatch) -> None:  # type: ignore[no-untyped-def]
