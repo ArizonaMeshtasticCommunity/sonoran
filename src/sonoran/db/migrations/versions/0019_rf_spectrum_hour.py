@@ -4,7 +4,9 @@ The waterfall reads every minute in its window, bin by bin. A week of
 one station at 25 kHz bins is about 10 million values per page view,
 which is too much for a small box once a minute. The jobs process rolls
 each finished hour up once, with the same per-bin rules as a waterfall
-row, and the 3 and 7 day windows read these rows instead.
+row, and the 3 and 7 day windows read these rows instead. Each hour
+also keeps every bin's loudest moment and the minute it happened, so a
+short transmission is never averaged away and can be found again.
 
 It keeps 14 days, like `rf_spectrum`, which it is built from.
 `azmsh_jobs` writes it; `azmsh_api` reads it.
@@ -40,6 +42,8 @@ def upgrade() -> None:
         sa.Column("p50", ARRAY(sa.SmallInteger()), nullable=False),
         sa.Column("p95", ARRAY(sa.SmallInteger()), nullable=False),
         sa.Column("busy", ARRAY(sa.SmallInteger()), nullable=False),
+        sa.Column("peak", ARRAY(sa.SmallInteger()), nullable=False),
+        sa.Column("peak_min", ARRAY(sa.SmallInteger()), nullable=False),
         sa.Column("computed_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("station_id", "t", "f_start_hz", "bin_hz", "bins"),
     )

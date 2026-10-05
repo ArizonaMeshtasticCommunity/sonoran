@@ -3,7 +3,8 @@
 The 3 and 7 day waterfalls read these rows instead of every minute
 (revision 0019). Each hour is built with the same per-bin rules as a
 waterfall row (`rf/spectrum_sql.py`): the median of the minute medians,
-the highest 95th percentile and the mean busy share.
+the highest 95th percentile, the mean busy share, and the loudest moment
+with the minute it happened.
 
 Each run:
 
@@ -115,7 +116,7 @@ async def build_hour(session: AsyncSession, key: HourKey, now: datetime) -> bool
     ).first()
     if row is None:
         return False
-    _, p50, p95, busy, minutes = row
+    _, p50, p95, busy, minutes, peak, peak_min = row
 
     def ints(values: list[object]) -> list[int | None]:
         return [None if v is None else int(v) for v in values]  # type: ignore[call-overload]
@@ -126,6 +127,8 @@ async def build_hour(session: AsyncSession, key: HourKey, now: datetime) -> bool
         "p50": ints(p50),
         "p95": ints(p95),
         "busy": ints(busy),
+        "peak": ints(peak),
+        "peak_min": ints(peak_min),
         "computed_at": now,
     }
     statement = insert(RfSpectrumHour).values(

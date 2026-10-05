@@ -663,7 +663,9 @@ def test_the_hourly_rollup_keeps_bursts_and_feeds_the_week_view(
 
     later = now + timedelta(hours=2)
     built = asyncio.run(_rollup(timescale_url, later))
-    rows = _rows(migrated_engine, "SELECT minutes, p50, p95, busy FROM rf_spectrum_hour")
+    rows = _rows(
+        migrated_engine, "SELECT minutes, p50, p95, busy, peak, peak_min, t FROM rf_spectrum_hour"
+    )
     # Eight minutes fall in one hour, or two when they straddle the hour.
     assert built == len(rows) and 1 <= len(rows) <= 2
     assert sum(row[0] for row in rows) == 8
@@ -671,6 +673,10 @@ def test_the_hourly_rollup_keeps_bursts_and_feeds_the_week_view(
     assert loud[2][1] == -260, "the highest 95th percentile in the hour is kept"
     assert loud[1][1] == -500, "the median of the medians ignores one loud minute"
     assert loud[3][1] == round(80 / loud[0]), "busy is the mean over the hour's minutes"
+    # The loudest moment, and the minute of the hour it happened in.
+    assert loud[4][1] == -300 + 90, "peak keeps the loudest single moment"
+    loud_minute = now - timedelta(minutes=3)
+    assert loud[5][1] == int((loud_minute - loud[6]).total_seconds() // 60)
 
     # Run again: the recent hours are built again, never twice over.
     asyncio.run(_rollup(timescale_url, later))
@@ -684,7 +690,45 @@ def test_the_hourly_rollup_keeps_bursts_and_feeds_the_week_view(
     assert len(week["rows"]) == len(rows)
     assert week["bins"] == 3 and week["sweeps_per_minute"] == 12
     assert max(row["p95"][1] for row in week["rows"]) == -260
+    assert max(row["peak"][1] for row in week["rows"]) == -210
+    assert all(len(row["peak_min"]) == 3 for row in week["rows"])
     assert too_long.status_code == 422
+
+
+def test_full_resolution_is_two_hours_of_minutes_from_the_last_three_days(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    minutes = [
+        _minute("west-site", now - timedelta(minutes=i), [-500, -500, -500], [0, 0, 0])
+        for i in range(8)
+    ]
+    minutes[3] = _minute("west-site", now - timedelta(minutes=3), [-500, -300, -500], [0, 80, 0])
+    asyncio.run(_write_spectrum(timescale_url, *minutes))
+    start = (now - timedelta(minutes=30)).isoformat()
+    with _client(timescale_url) as client:
+        full = client.get("/api/rf/spectrum/west-site", params={"start": start}).json()
+        empty = client.get(
+            "/api/rf/spectrum/west-site",
+            params={"start": (now - timedelta(days=2)).isoformat()},
+        ).json()
+        too_old = client.get(
+            "/api/rf/spectrum/west-site",
+            params={"start": (now - timedelta(days=3, minutes=5)).isoformat()},
+        )
+        future = client.get(
+            "/api/rf/spectrum/west-site",
+            params={"start": (now + timedelta(hours=1)).isoformat()},
+        )
+        naive = client.get("/api/rf/spectrum/west-site", params={"start": "2026-10-04T12:00:00"})
+    assert full["bucket_minutes"] == 1 and full["hours"] == 2
+    assert len(full["rows"]) == 8, "one row per minute"
+    assert "peak_min" not in full["rows"][0], "a one-minute row needs no peak minute"
+    assert max(row["peak"][1] for row in full["rows"]) == -210
+    assert empty["rows"] == [] and empty["bucket_minutes"] == 1
+    assert too_old.status_code == 422
+    assert future.status_code == 422
+    assert naive.status_code == 422
 
 
 def test_the_rollup_finds_nothing_to_do_without_minutes(

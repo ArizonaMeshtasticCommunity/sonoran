@@ -549,6 +549,11 @@ class RfSpectrumHour(Base):
     p50: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
     p95: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
     busy: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    # The loudest single moment of each bin in the hour, and the minute
+    # of the hour (0 to 59) it happened in, so a short transmission can
+    # be found again at full resolution.
+    peak: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    peak_min: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (PrimaryKeyConstraint("station_id", "t", "f_start_hz", "bin_hz", "bins"),)

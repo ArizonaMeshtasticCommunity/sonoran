@@ -2153,13 +2153,19 @@ it. A relayed sender, an object, and a position its sender blurred past
 ### 12.5 `GET /api/rf/spectrum/{station}`
 
 One station's minutes of the 900 MHz band, for the waterfall (design
-7.4). `hours` is 1 to 168, default 6. 422 for a name that is not a
-station ID.
+7.4). `hours` is 1 to 168, default 6. `start`, an ISO time with a zone
+in the last 3 days, asks for full resolution instead: the 2 hours from
+`start`, one row per minute, and `hours` is ignored. 422 for a name that
+is not a station ID, or a `start` outside the last 3 days or without a
+zone.
 
 Response: `station`, `hours`, `bucket_minutes`, `f_start_hz`, `bin_hz`,
 `bins`, `gain_db`, `sweeps_per_minute`, `newest`, and `rows`, oldest
-first. Each row: `t`, and per bin `p50`, `p95` and `busy`. An empty
-window has no layout fields and an empty `rows`.
+first. Each row: `t`, and per bin `p50`, `p95`, `busy` and `peak`, the
+loudest single moment. A row longer than a minute also has `peak_min`:
+per bin, the minute, counted from `t`, of that loudest moment, so a
+short transmission seen in a long window can be opened at full
+resolution. An empty window has no layout fields and an empty `rows`.
 
 - A window longer than 240 minutes is bucketed in the database, so no
   answer holds more than 240 rows. In a bucket a bin keeps the median of

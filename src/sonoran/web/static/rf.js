@@ -760,7 +760,11 @@
   /* The presets drawn on the busy chart before a reader picks others. */
   const BAND_DEFAULT_CHANNELS = new Set(['LongFast', 'MediumFast']);
 
-  const band = { station: null, hours: '6', view: 'p50', data: null, channels: null, drawnAt: 0, wired: false, where: null };
+  const band = { station: null, hours: '6', view: 'p50', data: null, channels: null, drawnAt: 0, wired: false, where: null, start: null };
+  // Full resolution: two hours from any minute of the last three days.
+  // The API refuses anything else (FULL_RESOLUTION_* in routes/rf.py).
+  const FULL_HOURS = 2;
+  const FULL_DAYS = 3;
 
   function rampColour(fraction) {
     const f = Math.max(0, Math.min(1, fraction));
@@ -892,9 +896,11 @@
   }
 
   function explain(page) {
-    const text = band.view === 'p50'
-      ? 'The median of each minute’s sweeps: the noise floor. A mesh packet is a short burst, so it does not move the median. A bright column here is something on the air most of the time.'
-      : 'The 95th percentile of each minute’s sweeps: the bursts. Our own packets show here, inside the marked channels. A burst outside every mark is something else.';
+    const text = {
+      p50: 'The median of each minute’s sweeps: the noise floor. A mesh packet is a short burst, so it does not move the median. A bright column here is something on the air most of the time.',
+      p95: 'The 95th percentile of each minute’s sweeps: the bursts. Our own packets show here, inside the marked channels. A burst outside every mark is something else.',
+      peak: 'The loudest single moment in each bin. Nothing short is averaged away here: a transmitter that keyed once shows. In a row longer than a minute, point at it to see when it peaked, and click to open those two hours at full resolution.',
+    }[band.view];
     $('[data-rf-band-explain]', page).textContent = text
       + ' Levels are relative to this station’s own receiver and never compare two stations.';
   }
@@ -941,13 +947,70 @@
       button);
   }
 
+  const HOVER_HINT = 'Point at the waterfall for a frequency, time and level. Click a row to see its two hours at full resolution.';
+
+  /* A time in the reader's own clock: "Sat 14:37". */
+  function when(value) {
+    return new Date(value).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  /* `datetime-local` wants the reader's local time, without a zone. */
+  function localInput(date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  /* Open two hours at full resolution, kept inside the span the API allows. */
+  function openFull(page, stations, from) {
+    const now = Date.now();
+    const earliest = now - FULL_DAYS * 86400000 + 60000;
+    const latest = now - FULL_HOURS * 3600000;
+    const start = new Date(Math.min(Math.max(from.getTime(), earliest), Math.max(latest, earliest)));
+    start.setSeconds(0, 0);
+    $('[data-rf-band-start]', page).value = localInput(start);
+    band.start = start.toISOString();
+    drawBand(page, stations, true);
+  }
+
+  /* The row and bin under the pointer, newest row at the top. */
+  function cellAt(event) {
+    const data = band.data;
+    if (!data || !data.rows.length) return null;
+    const box = event.currentTarget.getBoundingClientRect();
+    const x = Math.floor(((event.clientX - box.left) / box.width) * data.bins);
+    const y = Math.floor(((event.clientY - box.top) / box.height) * data.rows.length);
+    const row = data.rows[data.rows.length - 1 - Math.min(Math.max(y, 0), data.rows.length - 1)];
+    const bin = Math.min(Math.max(x, 0), data.bins - 1);
+    const offset = band.view === 'peak' && row.peak_min ? row.peak_min[bin] : null;
+    const peakAt = offset == null ? null : new Date(Date.parse(row.t) + offset * 60000);
+    return { row, bin, peakAt };
+  }
+
+  function pointAt(page, event) {
+    const cell = cellAt(event);
+    if (!cell) return;
+    const data = band.data;
+    const hz = data.f_start_hz + (cell.bin + 0.5) * data.bin_hz;
+    const level = cell.row[band.view][cell.bin];
+    const length = data.bucket_minutes >= 60 ? `${data.bucket_minutes / 60} h` : `${data.bucket_minutes} min`;
+    const parts = [
+      `${(hz / 1e6).toFixed(3)} MHz`,
+      data.bucket_minutes > 1 ? `${length} from ${when(cell.row.t)}` : when(cell.row.t),
+      level == null ? 'not swept' : `${(level / 10).toFixed(1)} dB`,
+    ];
+    if (cell.peakAt) parts.push(`loudest at ${cell.peakAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+    if (data.bucket_minutes > 1) parts.push('click for full resolution');
+    $('[data-rf-band-hover]', page).textContent = parts.join(' · ');
+  }
+
   async function drawBand(page, stations, force) {
     const panel = $('[data-rf-band]', page);
     if (!panel) return;
     const sweepers = stations.filter((station) => station.spectrum_last);
     panel.hidden = !sweepers.length;
     if (!sweepers.length) return;
-    if (!force && band.data && Date.now() - band.drawnAt < BAND_REFRESH_MS) return;
+    // Full resolution shows a past span; it is not refreshed on a timer.
+    if (!force && band.data && (band.start || Date.now() - band.drawnAt < BAND_REFRESH_MS)) return;
 
     const picker = $('[data-rf-band-station]', page);
     if (!band.station || !sweepers.some((s) => s.station === band.station)) band.station = sweepers[0].station;
@@ -956,7 +1019,24 @@
     if (!band.wired) {
       band.wired = true;
       picker.addEventListener('change', () => { band.station = picker.value; drawBand(page, stations, true); });
-      $('[data-rf-band-hours]', page).addEventListener('change', (event) => { band.hours = event.target.value; drawBand(page, stations, true); });
+      $('[data-rf-band-hours]', page).addEventListener('change', (event) => { band.hours = event.target.value; band.start = null; drawBand(page, stations, true); });
+      const startInput = $('[data-rf-band-start]', page);
+      $('[data-rf-band-zoom]', page).addEventListener('click', () => {
+        if (!startInput.value) return;
+        openFull(page, stations, new Date(startInput.value));
+      });
+      $('[data-rf-band-back]', page).addEventListener('click', () => { band.start = null; drawBand(page, stations, true); });
+      const canvas = $('[data-rf-band-canvas]', page);
+      canvas.addEventListener('mousemove', (event) => pointAt(page, event));
+      canvas.addEventListener('mouseleave', () => { $('[data-rf-band-hover]', page).textContent = HOVER_HINT; });
+      canvas.addEventListener('click', (event) => {
+        const cell = cellAt(event);
+        if (!cell || band.data.bucket_minutes <= 1) return;
+        // Centre the two hours on the loudest moment when it is known,
+        // on the middle of the row otherwise.
+        const centre = cell.peakAt || new Date(Date.parse(cell.row.t) + band.data.bucket_minutes * 30000);
+        openFull(page, stations, new Date(centre.getTime() - (FULL_HOURS / 2) * 3600000));
+      });
       for (const button of page.querySelectorAll('[data-rf-band-view]')) {
         button.addEventListener('click', () => {
           band.view = button.dataset.rfBandView;
@@ -972,20 +1052,26 @@
     drawWhere(page, stations.find((row) => row.station === band.station));
     try {
       if (!band.channels) band.channels = (await getJson('api/rf/channels')).body.channels;
-      band.data = (await getJson(`api/rf/spectrum/${encodeURIComponent(band.station)}?hours=${band.hours}`)).body;
+      const query = band.start ? `start=${encodeURIComponent(band.start)}` : `hours=${band.hours}`;
+      band.data = (await getJson(`api/rf/spectrum/${encodeURIComponent(band.station)}?${query}`)).body;
     } catch (error) {
       $('[data-rf-band-note]', page).textContent = `could not be loaded: ${error.message}`;
       return;
     }
     band.drawnAt = Date.now();
     const note = $('[data-rf-band-note]', page);
+    $('[data-rf-band-back]', page).hidden = !band.start;
+    const span = band.start
+      ? `the two hours from ${when(band.start)}`
+      : `the last ${band.hours >= 72 ? `${band.hours / 24} days` : `${band.hours} h`}`;
     if (!band.data.rows.length) {
-      note.textContent = `${band.station} sent no minute of the band in the last ${band.hours} h`;
+      note.textContent = `${band.station} sent no minute of the band in ${span}`;
       return;
     }
     note.textContent = `${band.station}, ${mhz(band.data.f_start_hz)} to `
       + `${mhz(band.data.f_start_hz + band.data.bins * band.data.bin_hz)}, `
-      + `${band.data.bin_hz / 1000} kHz bins, gain ${Number(band.data.gain_db).toFixed(1)} dB, newest ${ago(band.data.newest)}`;
+      + `${band.data.bin_hz / 1000} kHz bins, gain ${Number(band.data.gain_db).toFixed(1)} dB, `
+      + (band.start ? `full resolution, ${span}` : `newest ${ago(band.data.newest)}`);
     drawWaterfall(page);
     drawBusy(page);
   }

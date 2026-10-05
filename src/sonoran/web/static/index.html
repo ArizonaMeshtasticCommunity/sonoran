@@ -733,7 +733,18 @@
               <span class="segmented" role="group" aria-label="Level shown">
                 <button type="button" class="toggle" data-rf-band-view="p50" aria-pressed="true">Noise floor (median)</button>
                 <button type="button" class="toggle" data-rf-band-view="p95" aria-pressed="false">Bursts (95th percentile)</button>
+                <button type="button" class="toggle" data-rf-band-view="peak" aria-pressed="false">Peaks (loudest)</button>
               </span>
+            </div>
+            <!-- Full resolution: any two hours of the last three days, one
+                 row per minute. Clicking a row of a longer window opens
+                 the two hours around it. -->
+            <div class="controls rf-zoom">
+              <label class="muted">Full resolution, 2 h from
+                <input type="datetime-local" step="60" data-rf-band-start aria-label="Start of the two hours">
+              </label>
+              <button type="button" class="toggle" data-rf-band-zoom>Show</button>
+              <button type="button" class="toggle" data-rf-band-back hidden>Back to the window</button>
             </div>
             <!-- Where the samples were taken: the station's rounded
                  position and by how much, or a plain "not shared". A
@@ -745,6 +756,7 @@
               <canvas data-rf-band-canvas></canvas>
               <div class="rf-marks" data-rf-band-marks></div>
             </div>
+            <p class="muted rf-hover" data-rf-band-hover aria-live="polite">Point at the waterfall for a frequency, time and level. Click a row to see its two hours at full resolution.</p>
             <div class="rf-scale" data-rf-band-scale></div>
             <h4>How busy each part of the band is</h4>
             <p class="sub">The share of sweeps in which a bin stood 6 dB above its own median. Inside a mesh channel that is mostly our own packets. <strong>Outside every mesh channel</strong> it is something else on the band.</p>
