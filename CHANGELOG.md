@@ -5,6 +5,28 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.01 — 2026-10-01
+
+1 pull request merged.
+
+#### New features
+
+- Locations with several sources and a registry; backup failure count (#321) by @logans-stuff
+  - The RF map can show one receiver site made of several Pis, with each Pi's health in the station's tooltip.
+  - The backup service now reports unhealthy within about 45 minutes when backups keep failing, not after 36 hours.
+
+#### Issues
+
+- Worked on: #305 RF: minted tokens so one location can have many Pis/sources, managed by its owner (Redbot + MQTT) (reported by @logans-stuff)
+- Worked on: #244 Backups have been failing since 2026-09-25: TOAST corruption in one rf_spectrum chunk, and nothing alerts on it
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.09.30.2...v2026.10.01
+
 ## v2026.09.30.2 — 2026-09-30
 
 1 pull request merged.

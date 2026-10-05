@@ -2153,18 +2153,28 @@ it. A relayed sender, an object, and a position its sender blurred past
 ### 12.5 `GET /api/rf/spectrum/{station}`
 
 One station's minutes of the 900 MHz band, for the waterfall (design
-7.4). `hours` is 1 to 24, default 6. 422 for a name that is not a
-station ID.
+7.4). `hours` is 1 to 168, default 6. `start`, an ISO time with a zone
+in the last 3 days, asks for full resolution instead: the 2 hours from
+`start`, one row per minute, and `hours` is ignored. 422 for a name that
+is not a station ID, or a `start` outside the last 3 days or without a
+zone.
 
 Response: `station`, `hours`, `bucket_minutes`, `f_start_hz`, `bin_hz`,
 `bins`, `gain_db`, `sweeps_per_minute`, `newest`, and `rows`, oldest
-first. Each row: `t`, and per bin `p50`, `p95` and `busy`. An empty
-window has no layout fields and an empty `rows`.
+first. Each row: `t`, and per bin `p50`, `p95`, `busy` and `peak`, the
+loudest single moment. A row longer than a minute also has `peak_min`:
+per bin, the minute, counted from `t`, of that loudest moment, so a
+short transmission seen in a long window can be opened at full
+resolution. An empty window has no layout fields and an empty `rows`.
 
 - A window longer than 240 minutes is bucketed in the database, so no
   answer holds more than 240 rows. In a bucket a bin keeps the median of
   its medians, the highest 95th percentile (a burst is never averaged
   away) and the mean busy share.
+- A window longer than 24 hours reads the hourly rollup
+  (`rf_spectrum_hour`), one row an hour, built the same way by the jobs
+  process every 10 minutes. `bucket_minutes` is 60, and the window ends
+  at the newest finished hour, which `newest` names.
 - `p50` is the noise floor. A mesh packet is a short burst, so it does
   not move the median of a minute's sweeps. `p95` shows the bursts, our
   own traffic included.
@@ -2180,6 +2190,12 @@ way the firmware does: `slot = djb2(name) % slots`, centre `902 MHz +
 bandwidth / 2 + slot × bandwidth`. `sonoran/radio/channels.py`.
 
 Response: `region`, `start_hz`, `end_hz`, and `channels`, lowest first:
-`name`, `label`, `bandwidth_hz`, `slot`, `centre_hz`, `low_hz`,
-`high_hz`. LongFast is 906.875 MHz, MediumFast 913.125 MHz.
+`name`, `label`, `bandwidth_hz`, `slot` (the index, from 0),
+`centre_hz`, `low_hz`, `high_hz`, and `custom`. LongFast is 906.875 MHz,
+MediumFast 913.125 MHz.
+
+Channels the mesh set itself come from `RF_CUSTOM_CHANNELS`, such as
+`MediumFast:18`, with `custom` true and a name such as `MediumFast slot
+18`. The slot counts from 1, as the app and the frequency slot calculator
+count it: MediumFast slot 18 is 906.375 MHz.
 

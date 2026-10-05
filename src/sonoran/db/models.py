@@ -525,6 +525,40 @@ class RfSource(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class RfSpectrumHour(Base):
+    """One hour of the 900 MHz band from one station, rolled up from its minutes.
+
+    Built by the jobs process (`jobs/rf_rollup.py`) with the same per-bin
+    rules as a waterfall row (`rf/spectrum_sql.py`), so the 3 and 7 day
+    windows read a few hundred rows instead of every minute. One row per
+    station, hour and bin layout; minutes of another layout in the same
+    hour make a row of their own.
+    """
+
+    __tablename__ = "rf_spectrum_hour"
+
+    station_id: Mapped[str] = mapped_column(Text)
+    # The start of the hour.
+    t: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    f_start_hz: Mapped[int] = mapped_column(BigInteger)
+    bin_hz: Mapped[int] = mapped_column(Integer)
+    bins: Mapped[int] = mapped_column(Integer)
+    gain_db: Mapped[float] = mapped_column(REAL)
+    # How many minutes the hour holds. Fewer than 60 is a gap in the data.
+    minutes: Mapped[int] = mapped_column(Integer)
+    p50: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    p95: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    busy: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    # The loudest single moment of each bin in the hour, and the minute
+    # of the hour (0 to 59) it happened in, so a short transmission can
+    # be found again at full resolution.
+    peak: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    peak_min: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (PrimaryKeyConstraint("station_id", "t", "f_start_hz", "bin_hz", "bins"),)
+
+
 class RfTrack(Base):
     """One point per thing heard, per time bucket, across every station.
 

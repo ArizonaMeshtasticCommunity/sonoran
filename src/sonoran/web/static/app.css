@@ -4365,3 +4365,10 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   .page-head.dense .sub { display: none; }
   .page-head.dense .controls { margin-left: 0; }
 }
+.rf-zoom { margin-top: .35rem; }
+.rf-zoom input[type="datetime-local"] { margin-left: .35rem; }
+.rf-hover { min-height: 1.3em; margin: .35rem 0 0; font-size: .8rem; }
+.rf-waterfall canvas { cursor: crosshair; }
+/* A slot the mesh set itself: solid, so it reads apart from the defaults. */
+.rf-mark.custom { border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); background: rgb(255 255 255 / .06); }
+.rf-tick.channel.custom { color: var(--accent); }

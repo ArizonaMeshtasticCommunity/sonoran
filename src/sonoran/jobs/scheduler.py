@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.jobs import calibrate, coverage, gaps, gaps_siting, snapshots
+from sonoran.jobs import calibrate, coverage, gaps, gaps_siting, rf_rollup, snapshots
 from sonoran.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +42,9 @@ logger = get_logger(__name__)
 # quickly. Long enough that a task failing every time does not fill the
 # log.
 RETRY_SECONDS = 300.0
+
+# How often finished hours of the 900 MHz band are rolled up.
+RF_ROLLUP_SECONDS = 600.0
 
 
 @dataclass
@@ -273,6 +276,19 @@ def build_tasks(settings: Settings) -> list[Task]:
         )
     else:
         logger.info("the coverage gaps job is turned off")
+
+    # Its own clock: plain SQL over a few hours a run, no engine, so it
+    # may run beside a coverage build.
+    async def rf_rollup_run() -> None:
+        engine = make_engine(settings.database_url_jobs)
+        factory = make_session_factory(engine)
+        try:
+            async with factory() as session:
+                await rf_rollup.run_once(session)
+        finally:
+            await engine.dispose()
+
+    tasks.append(Task(name="rf-rollup", run=rf_rollup_run, next_delay=lambda: RF_ROLLUP_SECONDS))
 
     return tasks
 

@@ -509,6 +509,10 @@ class Settings(BaseSettings):
     # so empty means NONE pass. The agent applies its own ISM_ALLOW, and
     # this applies it again (design 8).
     rf_ism_allow: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Channels this mesh set itself, marked on the waterfall beside every
+    # preset's default: `Preset:slot`, comma separated, slots counted from
+    # 1 as the app numbers them, such as `MediumFast:18`.
+    rf_custom_channels: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     # Logging.
     log_level: str = "INFO"
@@ -518,6 +522,7 @@ class Settings(BaseSettings):
         "rf_topics",
         "rf_hidden_ids",
         "rf_ism_allow",
+        "rf_custom_channels",
         "channel_keys",
         "core_channels",
         "embed_frame_ancestors",
@@ -528,6 +533,19 @@ class Settings(BaseSettings):
         """Accept comma-separated strings for list settings."""
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("rf_custom_channels", mode="after")
+    @classmethod
+    def check_custom_channels(cls, value: list[str]) -> list[str]:
+        """Refuse a channel that is not `Preset:slot` in the band, at start.
+
+        A typo must stop the API, not draw a mark in the wrong place.
+        """
+        from sonoran.radio.channels import custom_channel
+
+        for spec in value:
+            custom_channel(spec)
         return value
 
 
