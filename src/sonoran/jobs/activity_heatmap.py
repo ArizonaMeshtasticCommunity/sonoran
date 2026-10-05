@@ -186,9 +186,13 @@ def local_max_pool(grid: npt.NDArray[np.float32], radius_cells: int = 177) -> np
         for j in range(window):
             coarse_max = np.maximum(coarse_max, coarse_padded[i:i+coarse.shape[0], j:j+coarse.shape[1]])
             
-    upsampled = np.repeat(np.repeat(coarse_max, block_size, axis=0), block_size, axis=1)
+    upsampled = np.repeat(np.repeat(coarse_max, block_size, axis=0), block_size, axis=1)[:h, :w]
     
-    return np.maximum(upsampled[:h, :w], 1.0)
+    # Smooth the step-function block edges so colors transition cleanly
+    smoothed = box_blur(upsampled, radius=block_size)
+    smoothed = box_blur(smoothed, radius=block_size)
+    
+    return np.maximum(smoothed, 1.0)
 
 def _build_grids(
     settings: Settings, 
@@ -213,21 +217,10 @@ def _build_grids(
         if row < 0 or row >= grid.height or col < 0 or col >= grid.width:
             continue
             
-        dev_m = precision_deviation_m(prec)
-        cell_size_m = 111320.0 / grid.cells_per_degree
-        radius_cells = max(0, int(round((dev_m or 0) / cell_size_m)))
-        
-        r_start = max(0, row - radius_cells)
-        r_end = min(grid.height, row + radius_cells + 1)
-        c_start = max(0, col - radius_cells)
-        c_end = min(grid.width, col + radius_cells + 1)
-        
         for g_name, score in zip(models, [raw_s, mul_s, w_s]):
-            block = score_grids[g_name][r_start:r_end, c_start:c_end]
-            np.maximum(block, score, out=block)
+            score_grids[g_name][row, col] = max(score_grids[g_name][row, col], score)
             
-        block_count = count_grid[r_start:r_end, c_start:c_end]
-        block_count += 1.0
+        count_grid[row, col] += 1.0
         
     # Clip count_grid so chatty nodes don't bleed massive opacity through the blur
     np.clip(count_grid, 0.0, 100.0, out=count_grid)
