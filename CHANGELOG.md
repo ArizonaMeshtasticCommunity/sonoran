@@ -5,6 +5,24 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.05 — 2026-10-05
+
+1 pull request merged.
+
+#### New features
+
+- Long waterfalls, full resolution for any 2 hours, peaks, custom channel marks (#323) by @logans-stuff
+  - The RF page's 900 MHz waterfall can show the last 3 or 7 days, one row per hour.
+  - A new "Peaks" view keeps the loudest moment in every row. Pointing at the waterfall shows the frequency, time and level, and when a long row peaked.
+  - Full resolution: open any 2 hours of the last 3 days minute by minute, or click a row of a longer view to jump to the 2 hours around its peak.
+  - The waterfall marks the mesh's own channel slots, such as MediumFast slot 18, beside each preset's default.
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.01...v2026.10.05
+
 ## v2026.10.01 — 2026-10-01
 
 1 pull request merged.
