@@ -313,6 +313,12 @@ async def run_once(session: Any, settings: Settings) -> None:
     site_set = "all"
     written = 0
     
+    import shutil
+    for layer in relative_grids.keys():
+        layer_dir = cache_dir / preset / site_set / f"empirical_heatmap_{layer}"
+        if layer_dir.exists():
+            shutil.rmtree(layer_dir, ignore_errors=True)
+            
     for layer, rel_grid in relative_grids.items():
         layer_name = f"empirical_heatmap_{layer}"
         for zoom in range(settings.coverage_min_zoom, settings.coverage_max_zoom + 1):
