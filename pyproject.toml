@@ -61,6 +61,9 @@ sonoran-gaps-once = "sonoran.jobs.gaps:run"
 sonoran-gaps-siting-once = "sonoran.jobs.gaps_siting:run"
 # What rf-agent stations publish. See docs/design/rf-map.md.
 sonoran-rf-ingest = "sonoran.rf.ingest:run"
+# Remove one RF station's data after its login is revoked. A dry run
+# unless --yes. Run it in the migrate service, which holds the owner.
+sonoran-rf-purge = "sonoran.rf.purge:run"
 
 [build-system]
 requires = ["hatchling"]

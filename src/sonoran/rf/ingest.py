@@ -58,8 +58,12 @@ def _client(settings: Settings) -> aiomqtt.Client:
     )
 
 
-async def _messages(settings: Settings) -> AsyncIterator[tuple[str, bytes]]:
-    """Yield (topic, payload), reconnecting after a broker error."""
+async def _messages(settings: Settings) -> AsyncIterator[tuple[str, bytes, bool]]:
+    """Yield (topic, payload, retained), reconnecting after a broker error.
+
+    `retained` is true for a message the broker replays on subscribe,
+    such as a station's last heartbeat, possibly long after it was sent.
+    """
     delay = 1
     while True:
         try:
@@ -68,11 +72,23 @@ async def _messages(settings: Settings) -> AsyncIterator[tuple[str, bytes]]:
                     await client.subscribe(topic)
                 delay = 1
                 async for message in client.messages:
-                    yield str(message.topic), bytes(message.payload)
+                    yield str(message.topic), bytes(message.payload), bool(message.retain)
         except aiomqtt.MqttError as exc:
             logger.warning("RF broker connection failed: %s; retry in %s seconds", exc, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 60)
+
+
+def heard_at(status: Status, received: datetime, retained: bool) -> datetime:
+    """When a heartbeat says its station was last heard.
+
+    A live heartbeat is heard when it arrives. A retained one is the
+    broker replaying the last heartbeat, perhaps of a station revoked or
+    dead for days: it was heard when it was sent, never later than now.
+    Taking the arrival time would show a dead station as online after
+    every ingest restart.
+    """
+    return min(status.sent, received) if retained else received
 
 
 class Removed:
@@ -125,7 +141,7 @@ async def main() -> None:
     totals: Counter[str] = Counter()
     reported = datetime.now(UTC)
     try:
-        async for topic, payload in _messages(settings):
+        async for topic, payload, retained in _messages(settings):
             received = datetime.now(UTC)
             try:
                 message = decode(topic, payload)
@@ -145,7 +161,7 @@ async def main() -> None:
                         new = await store_spectrum(session, message, received, rules)
                         totals["spectrum" if new else "spectrum_repeat"] += 1
                     elif isinstance(message, Status):
-                        await store_status(session, message, received)
+                        await store_status(session, message, heard_at(message, received, retained))
                         totals["status"] += 1
                     else:
                         tally = await store_batch(session, message, received, rules)
