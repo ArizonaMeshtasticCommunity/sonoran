@@ -445,7 +445,7 @@ def test_rf_never_counts_as_meshtastic(timescale_url: str, migrated_engine, clea
     assert kinds == {
         "known": ["adsb", "uat", "aprs", "sonde", "ism"],
         "stored": ["adsb", "aprs", "ism", "sonde", "uat"],
-        "views": ["spectrum"],
+        "views": ["spectrum", "sweeps", "custom"],
     }
 
 
@@ -1036,7 +1036,7 @@ def test_a_station_cannot_take_shared_points_with_claims(
     assert latest[0].station_id != "liar-site"
     # A clock a minute ahead holds nothing: the shared time is when we got it.
     early = _rows(migrated_engine, "SELECT t, received_at FROM rf_latest WHERE thing_id = 'cccccc'")
-    assert early[0].t <= early[0].received_at
+    assert early[0][0] <= early[0][1]
 
 
 def _mod(station: str, mod: str, points: list[dict[str, object]]) -> Custom:

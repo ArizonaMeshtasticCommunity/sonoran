@@ -281,21 +281,23 @@ async def custom(
     response.headers["X-Total-Count"] = str(total or 0)
     out: list[dict[str, object]] = []
     for row in rows:
-        here = row.placement == "heard_here"
+        # By name: a Row's `t` is the Row itself, as a tuple.
+        item = row._mapping
+        here = item["placement"] == "heard_here"
         out.append(
             {
-                "station": row.station_id,
-                "source": None if row.source == NO_SOURCE else row.source,
-                "mod": row.mod,
-                "id": row.thing_id,
-                "t": row.t,
-                "sent_t": row.sent_t,
-                "received_at": row.received_at,
-                "placement": row.placement,
-                "lat": row.station_lat if here else row.lat,
-                "lon": row.station_lon if here else row.lon,
-                "precision_m": row.station_precision_m if here else None,
-                "meta": row.meta or {},
+                "station": item["station_id"],
+                "source": None if item["source"] == NO_SOURCE else item["source"],
+                "mod": item["mod"],
+                "id": item["thing_id"],
+                "t": item["t"],
+                "sent_t": item["sent_t"],
+                "received_at": item["received_at"],
+                "placement": item["placement"],
+                "lat": item["station_lat"] if here else item["lat"],
+                "lon": item["station_lon"] if here else item["lon"],
+                "precision_m": item["station_precision_m"] if here else None,
+                "meta": item["meta"] or {},
             }
         )
     return out
