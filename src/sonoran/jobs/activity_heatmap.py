@@ -227,17 +227,22 @@ def _build_grids(
         # the active threshold.
         count_grid[row, col] = min(count_grid[row, col] + MAX_PACKETS_OPACITY, MAX_PACKETS_OPACITY)
         
-    count_grid = blur_grid(count_grid)
     relative_grids = {}
     for g_name in models:
         raw_s = score_grids[g_name]
-        mask = (raw_s > 0).astype(np.float32)
+        # Weight the score by the count mass so they spread identically
+        weighted_s = raw_s * count_grid
+        score_grids[g_name] = blur_grid(weighted_s)
         
-        blurred_s = blur_grid(raw_s)
-        blurred_mask = blur_grid(mask)
+    count_grid = blur_grid(count_grid)
+    
+    for g_name in models:
+        blurred_s = score_grids[g_name]
         
-        # Normalize the blurred score so colors extend outward without dropping to 0
-        s_grid = np.divide(blurred_s, blurred_mask, out=np.zeros_like(blurred_s), where=blurred_mask > 0.001)
+        # Normalize by the exact same grid that controls opacity.
+        # This prevents color dropoff (blue halos) where the opacity
+        # outlasts a weaker binary mask.
+        s_grid = np.divide(blurred_s, count_grid, out=np.zeros_like(blurred_s), where=count_grid > 0.001)
         
         local_potential = local_max_pool(s_grid, radius_cells=177)
         relative = np.divide(s_grid, local_potential, out=np.zeros_like(s_grid), where=local_potential > 0.001)
