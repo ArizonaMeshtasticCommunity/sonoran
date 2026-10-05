@@ -2190,6 +2190,12 @@ way the firmware does: `slot = djb2(name) % slots`, centre `902 MHz +
 bandwidth / 2 + slot × bandwidth`. `sonoran/radio/channels.py`.
 
 Response: `region`, `start_hz`, `end_hz`, and `channels`, lowest first:
-`name`, `label`, `bandwidth_hz`, `slot`, `centre_hz`, `low_hz`,
-`high_hz`. LongFast is 906.875 MHz, MediumFast 913.125 MHz.
+`name`, `label`, `bandwidth_hz`, `slot` (the index, from 0),
+`centre_hz`, `low_hz`, `high_hz`, and `custom`. LongFast is 906.875 MHz,
+MediumFast 913.125 MHz.
+
+Channels the mesh set itself come from `RF_CUSTOM_CHANNELS`, such as
+`MediumFast:18`, with `custom` true and a name such as `MediumFast slot
+18`. The slot counts from 1, as the app and the frequency slot calculator
+count it: MediumFast slot 18 is 906.375 MHz.
 

@@ -828,14 +828,14 @@
     const left = (hz) => `${((hz - data.f_start_hz) / width) * 100}%`;
     const inSweep = (band.channels || []).filter((c) => c.high_hz > data.f_start_hz && c.low_hz < data.f_start_hz + width);
     marks.replaceChildren(...inSweep.map((c) => el('span', {
-      class: 'rf-mark', title: `${c.label}: ${mhz(c.centre_hz)}, ${c.bandwidth_hz / 1000} kHz`,
+      class: c.custom ? 'rf-mark custom' : 'rf-mark', title: `${c.label}: ${mhz(c.centre_hz)}, ${c.bandwidth_hz / 1000} kHz${c.custom ? ', set by this mesh' : ''}`,
       style: `left:${left(c.low_hz)};width:calc(${left(c.high_hz)} - ${left(c.low_hz)})`,
     })));
     // Neighbouring presets sit a few hundred kHz apart, so the names go
     // on three rows, in turn from low to high, and do not overlap. The
     // band's edges are written under the waterfall instead.
     axis.replaceChildren(...inSweep.map((c, index) => el('span', {
-      class: `rf-tick channel row-${index % 3}`, style: `left:${left(c.centre_hz)}`, text: c.name,
+      class: `rf-tick channel row-${index % 3}${c.custom ? ' custom' : ''}`, style: `left:${left(c.centre_hz)}`, text: c.name,
     })));
     scale.replaceChildren(
       el('span', { class: 'rf-edges' },
@@ -874,8 +874,11 @@
         return [Date.parse(row.t), values.length ? values.reduce((a, b) => a + b, 0) / values.length : null];
       }),
     });
+    // A channel the mesh set itself is one it uses, so it is shown at once.
+    const custom = new Set((band.channels || []).filter((c) => c.custom).map((c) => `${c.name} (ours)`));
     const selected = Object.fromEntries(series.map((item) => [item.name,
-      item.name === 'Outside our channels' || BAND_DEFAULT_CHANNELS.has(item.name.replace(' (ours)', ''))]));
+      item.name === 'Outside our channels' || custom.has(item.name)
+      || BAND_DEFAULT_CHANNELS.has(item.name.replace(' (ours)', ''))]));
     let chart = window.echarts.getInstanceByDom(target);
     if (!chart) chart = window.echarts.init(target, null, { renderer: 'canvas' });
     const css = getComputedStyle(document.documentElement);

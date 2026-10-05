@@ -23,7 +23,7 @@ from sonoran.db.models import (
     RfStation,
     RfTrack,
 )
-from sonoran.radio.channels import US_END_HZ, US_START_HZ, all_channels
+from sonoran.radio.channels import US_END_HZ, US_START_HZ, all_channels, custom_channel
 from sonoran.rf.schema import HEARD_PRECISION_M, KINDS, NO_SOURCE, STATION_ID, STORED_KINDS
 from sonoran.rf.spectrum_sql import bin_rows
 
@@ -518,12 +518,14 @@ async def _spectrum_hours(
 
 
 @router.get("/channels")
-async def channels() -> dict[str, object]:
-    """Return where each Meshtastic preset's default channel sits in the band.
+async def channels(request: Request) -> dict[str, object]:
+    """Return where each Meshtastic preset's default channel sits in the band,
+    and every channel this mesh set itself (`RF_CUSTOM_CHANNELS`).
 
     Computed the way the firmware computes it (`sonoran.radio.channels`),
     for the US region, so the waterfall's marks are never typed by hand.
     """
+    custom = [custom_channel(spec) for spec in request.app.state.settings.rf_custom_channels]
     return {
         "region": "US",
         "start_hz": US_START_HZ,
@@ -537,7 +539,8 @@ async def channels() -> dict[str, object]:
                 "centre_hz": item.centre_hz,
                 "low_hz": item.low_hz,
                 "high_hz": item.high_hz,
+                "custom": item.custom,
             }
-            for item in all_channels()
+            for item in sorted([*all_channels(), *custom], key=lambda c: c.centre_hz)
         ],
     }

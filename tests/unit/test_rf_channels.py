@@ -21,3 +21,57 @@ def test_the_published_us_frequencies_come_out() -> None:
 def test_every_channel_is_inside_the_us_band() -> None:
     for channel in all_channels():
         assert 902_000_000 <= channel.low_hz < channel.high_hz <= 928_000_000, channel.name
+
+
+def test_a_custom_slot_is_numbered_from_one_as_the_app_numbers_it() -> None:
+    """`MediumFast:18` is channel_num 18, slot index 17, as the frequency
+    slot calculator (heypete/meshtastic_frequency_slot_calculator) has it."""
+    from sonoran.radio.channels import custom_channel
+
+    slot18 = custom_channel("MediumFast:18")
+    assert slot18.centre_hz == 906_375_000
+    assert (slot18.low_hz, slot18.high_hz) == (906_250_000, 906_500_000)
+    assert slot18.custom and slot18.name == "MediumFast slot 18"
+    # Slot 45 is MediumFast's own default: the two rules agree.
+    assert custom_channel("mediumfast:45").centre_hz == 913_125_000
+    assert custom_channel("LongFast:20").centre_hz == 906_875_000
+
+
+def test_a_bad_custom_slot_is_refused() -> None:
+    import pytest
+
+    from sonoran.radio.channels import custom_channel
+
+    for bad in ("MediumFast", "Nope:3", "MediumFast:0", "MediumFast:105", "MediumFast:x"):
+        with pytest.raises(ValueError):
+            custom_channel(bad)
+
+
+def test_a_bad_custom_channel_setting_stops_the_api_at_start() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from sonoran.config import Settings
+
+    assert Settings(_env_file=None, rf_custom_channels="MediumFast:18").rf_custom_channels == [
+        "MediumFast:18"
+    ]
+    with pytest.raises(ValidationError, match="slots 1 to 104"):
+        Settings(_env_file=None, rf_custom_channels="MediumFast:200")
+
+
+def test_the_channels_api_lists_custom_slots_beside_the_defaults() -> None:
+    from fastapi.testclient import TestClient
+
+    from sonoran.api.app import create_app
+    from sonoran.config import Settings
+
+    settings = Settings(_env_file=None, rf_custom_channels="MediumFast:18")
+    with TestClient(create_app(settings)) as client:
+        body = client.get("/api/rf/channels").json()
+    by_name = {c["name"]: c for c in body["channels"]}
+    assert by_name["MediumFast slot 18"]["centre_hz"] == 906_375_000
+    assert by_name["MediumFast slot 18"]["custom"] is True
+    assert by_name["MediumFast"]["custom"] is False
+    centres = [c["centre_hz"] for c in body["channels"]]
+    assert centres == sorted(centres), "lowest frequency first"
