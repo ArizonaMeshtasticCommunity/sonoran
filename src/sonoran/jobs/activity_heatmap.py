@@ -217,10 +217,19 @@ def _build_grids(
         if row < 0 or row >= grid.height or col < 0 or col >= grid.width:
             continue
             
+        radius_cells = 15
+        
+        r_start = max(0, row - radius_cells)
+        r_end = min(grid.height, row + radius_cells + 1)
+        c_start = max(0, col - radius_cells)
+        c_end = min(grid.width, col + radius_cells + 1)
+        
         for g_name, score in zip(models, [raw_s, mul_s, w_s]):
-            score_grids[g_name][row, col] = max(score_grids[g_name][row, col], score)
+            block = score_grids[g_name][r_start:r_end, c_start:c_end]
+            np.maximum(block, score, out=block)
             
-        count_grid[row, col] += 1.0
+        block_count = count_grid[r_start:r_end, c_start:c_end]
+        block_count += 1.0
         
     # Clip count_grid so chatty nodes don't bleed massive opacity through the blur
     np.clip(count_grid, 0.0, 100.0, out=count_grid)
