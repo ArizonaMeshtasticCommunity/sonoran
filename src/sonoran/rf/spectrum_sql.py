@@ -1,4 +1,4 @@
-"""The per-bin summary of the 900 MHz band, shared by the API and the jobs.
+"""The per-bin summary of a swept range, shared by the API and the jobs.
 
 A waterfall row covers one or more minutes. Each bin keeps the median of
 its minute medians (the noise floor), the highest 95th percentile, so a
@@ -26,7 +26,7 @@ def bin_rows(bucket: ColumnElement[Any], *where: ColumnElement[bool]) -> Select[
     (bucket, p50[], p95[], busy[], minutes, peak[], peak_min[])
 
     `bucket` groups minutes, such as `time_bucket('1 hour', t)`. `where`
-    picks the minutes: one station, one bin layout, a time range.
+    picks the minutes: one station, one range, a time range.
     `peak_min` is the minute, counted from the start of the row, in which
     each bin was loudest; None where the bin was never swept.
     """

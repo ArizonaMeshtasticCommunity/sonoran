@@ -27,6 +27,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Double,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -523,21 +524,24 @@ class RfSource(Base):
     sent: Mapped[int | None] = mapped_column(Integer)
     dropped: Mapped[int | None] = mapped_column(Integer)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # What the source's sweepers run, as its heartbeat reports it (#324).
+    # A claim, shown as one. None when the agent reports nothing.
+    sweeps: Mapped[list | None] = mapped_column(JSONB)
 
 
 class RfSpectrumHour(Base):
-    """One hour of the 900 MHz band from one station, rolled up from its minutes.
+    """One hour of one swept range from one station, rolled up from its minutes.
 
     Built by the jobs process (`jobs/rf_rollup.py`) with the same per-bin
     rules as a waterfall row (`rf/spectrum_sql.py`), so the 3 and 7 day
     windows read a few hundred rows instead of every minute. One row per
-    station, hour and bin layout; minutes of another layout in the same
-    hour make a row of their own.
+    station, source, hour and range (#324).
     """
 
     __tablename__ = "rf_spectrum_hour"
 
     station_id: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
     # The start of the hour.
     t: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     f_start_hz: Mapped[int] = mapped_column(BigInteger)
@@ -556,7 +560,9 @@ class RfSpectrumHour(Base):
     peak_min: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (PrimaryKeyConstraint("station_id", "t", "f_start_hz", "bin_hz", "bins"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("station_id", "source", "t", "f_start_hz", "bin_hz", "bins"),
+    )
 
 
 class RfTrack(Base):
@@ -564,8 +570,10 @@ class RfTrack(Base):
 
     Two stations that hear the same aircraft make one point, not two:
     the identity is (`kind`, `thing_id`, `bucket`), the way (`from_node_num`,
-    `packet_id`) is for Meshtastic. The point kept is the one heard
-    loudest. Which stations heard it lives in `rf_heard`.
+    `packet_id`) is for Meshtastic. The point kept is the first one
+    received, unless a station of a higher trust level sends one. The
+    level a station reports is never what decides (#324). Which stations
+    heard it lives in `rf_heard`.
     """
 
     __tablename__ = "rf_track"
@@ -583,6 +591,11 @@ class RfTrack(Base):
     rssi_db: Mapped[float | None] = mapped_column(REAL)
     station_id: Mapped[str] = mapped_column(Text)
     meta: Mapped[dict | None] = mapped_column(JSONB)
+    # Which login sent the point kept, its trust when it was kept, and
+    # when Sonoran received it (#324). See `rf/store.py`.
+    source: Mapped[str | None] = mapped_column(Text)
+    trust: Mapped[int] = mapped_column(SmallInteger, server_default="1")
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         PrimaryKeyConstraint("kind", "thing_id", "bucket"),
@@ -616,7 +629,11 @@ class RfHeard(Base):
 
 
 class RfLatest(Base):
-    """The newest point of each thing heard. Updated in place."""
+    """The newest point of each thing heard. Updated in place.
+
+    "Newest" is by a time no later than when Sonoran received the point,
+    so a station whose clock runs ahead cannot hold it (#324).
+    """
 
     __tablename__ = "rf_latest"
 
@@ -632,10 +649,17 @@ class RfLatest(Base):
     rssi_db: Mapped[float | None] = mapped_column(REAL)
     station_id: Mapped[str] = mapped_column(Text)
     meta: Mapped[dict | None] = mapped_column(JSONB)
+    source: Mapped[str | None] = mapped_column(Text)
+    trust: Mapped[int] = mapped_column(SmallInteger, server_default="1")
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class RfSpectrum(Base):
-    """One minute of the 900 MHz band from one station.
+    """One minute of one swept range from one station.
+
+    A range is (`source`, `f_start_hz`, `bin_hz`, `bins`). A station may
+    send several in the same minute: two dongles, or one taking turns
+    (#324). `name` is the station's own label for the range, if any.
 
     Bin `i` covers `f_start_hz + i * bin_hz`. Levels are tenths of a dB
     relative to the dongle's full scale: they compare one station with
@@ -647,10 +671,14 @@ class RfSpectrum(Base):
     __tablename__ = "rf_spectrum"
 
     station_id: Mapped[str] = mapped_column(Text)
+    # `NO_SOURCE` for an agent that sends none.
+    source: Mapped[str] = mapped_column(Text, server_default="-")
     # The start of the minute summarised.
     t: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     f_start_hz: Mapped[int] = mapped_column(BigInteger)
     bin_hz: Mapped[int] = mapped_column(Integer)
+    bins: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str | None] = mapped_column(Text)
     sweeps: Mapped[int] = mapped_column(Integer)
     gain_db: Mapped[float] = mapped_column(REAL)
     p50: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
@@ -659,7 +687,86 @@ class RfSpectrum(Base):
     busy: Mapped[list[int | None]] = mapped_column(ARRAY(SmallInteger))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (PrimaryKeyConstraint("station_id", "t"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("station_id", "source", "f_start_hz", "bin_hz", "bins", "t"),
+        Index("ix_rf_spectrum_station_t", "station_id", t.desc()),
+    )
+
+
+class RfCustom(Base):
+    """One point from a member's own mod (#324, section 6).
+
+    Kept per station and never merged across stations: a mod's data is
+    its station's claim, and no shared layer takes it. `thing_id` is the
+    mod's own id. `placement` says where it may be drawn: `reported` (its
+    own position, unverified), `heard_here` (the station's rounded
+    position), or `none` (the table only).
+    """
+
+    __tablename__ = "rf_custom"
+
+    station_id: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    mod: Mapped[str] = mapped_column(Text)
+    thing_id: Mapped[str] = mapped_column(Text)
+    # The mod's own time, after the clock guard (design 5.3).
+    t: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The time the mod sent, as it sent it, so a wrong clock shows.
+    sent_t: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    placement: Mapped[str] = mapped_column(Text)
+    lat: Mapped[float | None] = mapped_column(Double)
+    lon: Mapped[float | None] = mapped_column(Double)
+    meta: Mapped[dict | None] = mapped_column(JSONB)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("station_id", "mod", "thing_id", "t"),
+        Index("ix_rf_custom_station_t", "station_id", t.desc()),
+    )
+
+
+class RfTrust(Base):
+    """An operator's trust level for a station or one of its sources (#324).
+
+    Set with `sonoran-rf-trust`, never by a message. A station with no
+    row is `new`. `source` is `*` for every source of the station.
+    """
+
+    __tablename__ = "rf_trust"
+
+    station_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    trust: Mapped[int] = mapped_column(SmallInteger)
+    note: Mapped[str | None] = mapped_column(Text)
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RfHiddenMod(Base):
+    """A member's mod an operator has hidden from every viewer (#324)."""
+
+    __tablename__ = "rf_hidden_mod"
+
+    station_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    mod: Mapped[str] = mapped_column(Text, primary_key=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RfOperatorLog(Base):
+    """Every change an operator makes to a station: trust, hiding, purging.
+
+    Written by the operator commands, as the database owner. No
+    application role can read or change it.
+    """
+
+    __tablename__ = "rf_operator_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    actor: Mapped[str] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text)
+    station_id: Mapped[str] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
 
 
 # The ingest role has INSERT and UPDATE rights only. Disable PostgreSQL

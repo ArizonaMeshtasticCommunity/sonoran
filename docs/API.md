@@ -2091,7 +2091,7 @@ operator) are never stored and never returned.
 
 `known`, every kind a station may send, `stored`, the kinds the
 ingest keeps today, and `views`, the things kept that are not
-observation kinds (`spectrum`). The RF page draws its sources list from
+observation kinds (`spectrum`, `sweeps`, `custom`). The RF page draws its sources list from
 it, so a source whose phase has not landed reads as "not stored yet".
 
 RF is separate from Meshtastic everywhere: its own tables, its own
@@ -2111,14 +2111,19 @@ source heard from in the last day), `agent_version`, `last_seen` (null
 before the first heartbeat), `online` (a heartbeat from any source in
 the last five minutes), `counts` since the heartbeat before: `heard`,
 `sent`, and `dropped` by thinning, summed over the sources that report
-now, and `spectrum_last`, the newest minute of the 900 MHz band the
-station sent in the last day, or null. A sweeper is known by what it
-sends, not by the kinds its heartbeat lists.
+now, `spectrum_last`, the newest minute of any range the station swept
+in the last day, or null, and `trust`: `new`, `trusted` or
+`quarantined`, set by an operator, never by the station (#324). A
+sweeper is known by what it sends, not by the kinds its heartbeat lists.
 
 `sources` lists each source: `source` (null for an agent that sends
-none), `kinds`, `agent_version`, `last_seen`, `online`, `counts`, and
-`registered`, true when the source holds a login now. A source in the
-registry that has not sent a heartbeat has `last_seen` null.
+none), `kinds`, `agent_version`, `last_seen`, `online`, `counts`,
+`registered`, true when the source holds a login now, and `sweeps`, what
+the source reports it sweeps: `tool`, `tool_version`, `name`,
+`f_start_hz`, `f_end_hz`, `bin_hz`, `gain_db`, `interval_s`, `ppm`,
+`dwell_s` and `command`. It is what the station says about itself, and
+is shown as such. A source in the registry that has not sent a heartbeat
+has `last_seen` null.
 
 ### 12.2 `GET /api/rf/latest`
 
@@ -2152,20 +2157,27 @@ it. A relayed sender, an object, and a position its sender blurred past
 
 ### 12.5 `GET /api/rf/spectrum/{station}`
 
-One station's minutes of the 900 MHz band, for the waterfall (design
+One station's minutes of one swept range, for the waterfall (design
 7.4). `hours` is 1 to 168, default 6. `start`, an ISO time with a zone
 in the last 3 days, asks for full resolution instead: the 2 hours from
-`start`, one row per minute, and `hours` is ignored. 422 for a name that
-is not a station ID, or a `start` outside the last 3 days or without a
-zone.
+`start`, one row per minute, and `hours` is ignored. `range` picks one
+of the station's ranges, as 12.5.1 names it; without it, the range of
+the newest minute in the window. 422 for a name that is not a station
+ID, a `range` that is not one, or a `start` outside the last 3 days or
+without a zone.
 
-Response: `station`, `hours`, `bucket_minutes`, `f_start_hz`, `bin_hz`,
-`bins`, `gain_db`, `sweeps_per_minute`, `newest`, and `rows`, oldest
-first. Each row: `t`, and per bin `p50`, `p95`, `busy` and `peak`, the
-loudest single moment. A row longer than a minute also has `peak_min`:
-per bin, the minute, counted from `t`, of that loudest moment, so a
-short transmission seen in a long window can be opened at full
-resolution. An empty window has no layout fields and an empty `rows`.
+Response: `station`, `hours`, `range` (`id`, `source`, `name`,
+`f_start_hz`, `f_end_hz`, `bin_hz`, `bins`), `bucket_minutes`,
+`f_start_hz`, `bin_hz`, `bins`, `gain_db`, `sweeps_per_minute`,
+`newest`, and `rows`, oldest first: every row of the window. Each row:
+`t`, `minutes` (how many minutes of the range it holds), and per bin
+`p50`, `p95`, `busy` and `peak`, the loudest single moment. A row longer
+than a minute also has `peak_min`: per bin, the minute, counted from `t`,
+of that loudest moment, so a short transmission seen in a long window
+can be opened at full resolution. A row with `minutes` 0 holds no sweep
+of the range and has no levels: it is **not swept**, never quiet. A
+dongle that takes turns between ranges makes many (#324). An empty
+window has no layout fields and an empty `rows`.
 
 - A window longer than 240 minutes is bucketed in the database, so no
   answer holds more than 240 rows. In a bucket a bin keeps the median of
@@ -2180,8 +2192,45 @@ resolution. An empty window has no layout fields and an empty `rows`.
   own traffic included.
 - Levels are tenths of a dB relative to that station's receiver. They
   compare one station with itself and never two stations.
-- Only minutes with the station's newest layout (start, bin width, bin
-  count) are used.
+- One range at a time: two ranges are never mixed in one answer.
+
+### 12.5.1 `GET /api/rf/spectrum/{station}/ranges`
+
+Every range the station swept in the last `days` (1 to 14, default 7),
+newest first, for the waterfall's picker (#324). Each: `id`
+(`source:f_start_hz:bin_hz:bins`, `-` for an agent that sends no
+source), `source`, `name` (the station's label), `f_start_hz`,
+`f_end_hz`, `bin_hz`, `bins`, `newest` and `minutes`.
+
+### 12.5.2 `GET /api/rf/sweeps`
+
+What is being swept: every range any station swept in the last `hours`
+(1 to 336, default 24), lowest first, for the "what is being swept"
+chart (#324). Each: `station`, `display_name`, the fields of a range
+(12.5.1), `gain_db`, `newest`, `minutes`, and `reported`, the matching
+entry of what the source reports it sweeps (12.1), or null. A range a
+source reports and sent no minute of is listed with `minutes` 0 and `id`
+null.
+
+### 12.5.3 `GET /api/rf/custom`
+
+The newest point of each thing members' mods sent in the last `minutes`
+(1 to 1440, default 60), newest first (#324). `station` and `mod` narrow
+it; `limit` is 1 to 5000, default 2000, and the count of the whole window
+is in `X-Total-Count`.
+
+Each: `station`, `source`, `mod`, `id`, `t` (the mod's time after the
+clock guard), `sent_t` (the time it sent), `received_at` (ours),
+`placement`, `lat`, `lon`, `precision_m`, and `meta`. `placement` is
+`reported` (the position the mod sent), `heard_here` (the station's
+rounded position, with its `precision_m`), or `none` (no position: the
+table only).
+
+Every point is one station's unverified claim, never part of a shared
+layer. A mod an operator hid (`sonoran-rf-trust hide-mod`) and every mod
+of a quarantined station or source are left out. Text in `meta` arrives
+without invisible or direction-changing characters, and the page shows
+it as text only.
 
 ### 12.6 `GET /api/rf/channels`
 

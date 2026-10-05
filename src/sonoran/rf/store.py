@@ -21,16 +21,27 @@ from sqlalchemy import CursorResult, Executable, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sonoran.db.models import RfHeard, RfLatest, RfSource, RfSpectrum, RfStation, RfTrack
+from sonoran.db.models import (
+    RfCustom,
+    RfHeard,
+    RfLatest,
+    RfSource,
+    RfSpectrum,
+    RfStation,
+    RfTrack,
+)
+from sonoran.rf.guard import NEW, QUARANTINED, Guard
 from sonoran.rf.schema import (
     APRS_ALIAS,
     APRS_OBJECT,
     APRS_STATION,
+    CUSTOM_ID,
     HEARD_PRECISION_M,
     NO_SOURCE,
     STORED_KINDS,
     THING_ID,
     Batch,
+    Custom,
     Observation,
     Registry,
     Spectrum,
@@ -40,6 +51,10 @@ from sonoran.rf.schema import (
 # The receiver layer's resolution. Five minutes per thing per station is
 # enough to draw where a station hears, and keeps `rf_heard` small.
 HEARD_BUCKET = timedelta(minutes=5)
+# A shared "latest" point older than this may be replaced by a newer one
+# from a station of lower trust, so a thing the trusted station stopped
+# hearing does not stay frozen on the map.
+LATEST_STALE = timedelta(seconds=60)
 
 
 async def _inserted(session: AsyncSession, statement: Executable) -> bool:
@@ -77,6 +92,11 @@ class Tally:
     relayed: int = 0
     rejected: int = 0
     kind_not_stored: int = 0
+    # Stored for the station's own view, kept out of the shared layers:
+    # implausible (`guard.doubtful`), or from a quarantined station.
+    doubtful: int = 0
+    withheld: int = 0
+    over_quota: int = 0
     reasons: list[str] = field(default_factory=list)
 
 
@@ -100,29 +120,48 @@ def guarded_time(stamped: datetime, received: datetime, rules: Rules) -> tuple[d
     return stamped, False
 
 
-# The spectrum grid: one row per station per minute (design 4.2).
+# The spectrum grid: one row per range per minute (design 4.2, #324).
 SPECTRUM_MINUTE = timedelta(minutes=1)
+
+
+def spectrum_minute(spectrum: Spectrum, received: datetime, rules: Rules) -> datetime:
+    """The minute a spectrum message is stored under.
+
+    The station's own `t`, floored to the minute, unless its clock is
+    out, when it is the minute we received it in, as for every other RF
+    point (design 5.3).
+    """
+    stamped, _ = guarded_time(spectrum.t, received, rules)
+    return floor_time(stamped, SPECTRUM_MINUTE)
+
+
+def range_key(spectrum: Spectrum) -> tuple[str, int, int, int]:
+    """What names one swept range of a station: source, start, bin, bins."""
+    return (spectrum.source or NO_SOURCE, spectrum.f_start_hz, spectrum.bin_hz, len(spectrum.p95))
 
 
 async def store_spectrum(
     session: AsyncSession, spectrum: Spectrum, received: datetime, rules: Rules
 ) -> bool:
-    """Store one minute of the band. True when it was new.
+    """Store one minute of one range. True when it was new.
 
-    The minute is the station's own `t`, floored to the minute, unless
-    its clock is out, when it is the minute we received it in, as for
-    every other RF point (design 5.3). A second message for the same
-    station and minute is a repeat and is ignored.
+    The key is the station, the range (`range_key`) and the minute
+    (`spectrum_minute`). A station that sweeps two ranges keeps both. A
+    second message for the same range and minute is a repeat and is
+    ignored.
     """
-    stamped, _ = guarded_time(spectrum.t, received, rules)
+    source, f_start, bin_hz, bins = range_key(spectrum)
     return await _inserted(
         session,
         insert(RfSpectrum)
         .values(
             station_id=spectrum.station,
-            t=floor_time(stamped, SPECTRUM_MINUTE),
-            f_start_hz=spectrum.f_start_hz,
-            bin_hz=spectrum.bin_hz,
+            source=source,
+            t=spectrum_minute(spectrum, received, rules),
+            f_start_hz=f_start,
+            bin_hz=bin_hz,
+            bins=bins,
+            name=spectrum.name,
             sweeps=spectrum.sweeps,
             gain_db=spectrum.gain_db,
             p50=list(spectrum.p50),
@@ -131,7 +170,9 @@ async def store_spectrum(
             busy=list(spectrum.busy),
             received_at=received,
         )
-        .on_conflict_do_nothing(index_elements=["station_id", "t"]),
+        .on_conflict_do_nothing(
+            index_elements=["station_id", "source", "f_start_hz", "bin_hz", "bins", "t"]
+        ),
     )
 
 
@@ -148,14 +189,20 @@ async def _upsert_station(session: AsyncSession, station: str, values: dict[str,
         )
 
 
-async def store_status(session: AsyncSession, status: Status, received: datetime) -> None:
+async def store_status(
+    session: AsyncSession, status: Status, received: datetime, guard: Guard | None = None
+) -> None:
     """Record a heartbeat: the source's own row, and the location's.
 
     Each source of a location has its own row in `rf_source` (#305). The
     location keeps the newest position and time of any source. An agent
     that sends no source also keeps the location's kinds and counts, as
-    before #305, so an older API still reads them.
+    before #305, so an older API still reads them. What the source says
+    it sweeps is kept as it said it (#324). The guard learns where the
+    station is, for its reach check.
     """
+    if guard is not None:
+        guard.note_position(status.station, status.lat, status.lon, status.precision_m)
     source_values = {
         "kinds": list(status.kinds),
         "agent_version": status.agent_version,
@@ -165,17 +212,18 @@ async def store_status(session: AsyncSession, status: Status, received: datetime
         "last_seen": received,
     }
     source = status.source or NO_SOURCE
+    sweeps = [sweep.model_dump(exclude_none=True) for sweep in status.sweeps] or None
     inserted = await _inserted(
         session,
         insert(RfSource)
-        .values(station_id=status.station, source=source, **source_values)
+        .values(station_id=status.station, source=source, sweeps=sweeps, **source_values)
         .on_conflict_do_nothing(index_elements=["station_id", "source"]),
     )
     if not inserted:
         await session.execute(
             update(RfSource)
             .where(RfSource.station_id == status.station, RfSource.source == source)
-            .values(**source_values)
+            .values(sweeps=sweeps, **source_values)
         )
 
     values: dict[str, object] = {"last_seen": received}
@@ -216,8 +264,18 @@ async def store_registry(
     )
 
 
-def _point(obs: Observation, when: datetime, station: str) -> dict[str, object]:
+def _point(
+    obs: Observation,
+    when: datetime,
+    station: str,
+    source: str | None = None,
+    trust: int = NEW,
+    received: datetime | None = None,
+) -> dict[str, object]:
     return {
+        "source": source,
+        "trust": trust,
+        "received_at": received,
         "t": when,
         "lat": obs.lat,
         "lon": obs.lon,
@@ -234,14 +292,20 @@ def _point(obs: Observation, when: datetime, station: str) -> dict[str, object]:
 async def _store_track(
     session: AsyncSession, kind: str, obs: Observation, bucket: datetime, point: dict[str, object]
 ) -> None:
-    """Keep one point per thing per bucket: the one heard loudest."""
+    """Keep one point per thing per bucket: the first received.
+
+    A station of higher trust replaces it. The loudest point used to win,
+    and the level is a number the station reports, so a modified agent
+    that claimed `rssi_db: 50` won every shared point, other stations'
+    aircraft included (#324). Nothing a station says decides it now.
+    """
     inserted = await _inserted(
         session,
         insert(RfTrack)
         .values(kind=kind, thing_id=obs.id, bucket=bucket, **point)
         .on_conflict_do_nothing(index_elements=["kind", "thing_id", "bucket"]),
     )
-    if inserted or obs.rssi_db is None:
+    if inserted:
         return
     await session.execute(
         update(RfTrack)
@@ -249,7 +313,7 @@ async def _store_track(
             RfTrack.kind == kind,
             RfTrack.thing_id == obs.id,
             RfTrack.bucket == bucket,
-            or_(RfTrack.rssi_db.is_(None), RfTrack.rssi_db < obs.rssi_db),
+            RfTrack.trust < point["trust"],
         )
         .values(**point)
     )
@@ -388,7 +452,12 @@ def aprs_meta(obs: Observation) -> dict[str, object]:
 async def _store_latest(
     session: AsyncSession, kind: str, obs: Observation, point: dict[str, object]
 ) -> None:
-    """Keep the newest point of each thing."""
+    """Keep the newest point of each thing.
+
+    Its time is never later than when we received it (`shared_time`), so
+    a clock that runs ahead holds nothing. A station of lower trust
+    replaces the point only once it is `LATEST_STALE` old.
+    """
     inserted = await _inserted(
         session,
         insert(RfLatest)
@@ -403,6 +472,10 @@ async def _store_latest(
             RfLatest.kind == kind,
             RfLatest.thing_id == obs.id,
             RfLatest.t < point["t"],
+            or_(
+                RfLatest.trust <= point["trust"],
+                RfLatest.t < cast(datetime, point["t"]) - LATEST_STALE,
+            ),
         )
         .values(**point)
     )
@@ -428,17 +501,43 @@ def ism_model(obs: Observation) -> str | None:
     return model
 
 
+def shared_time(stamped: datetime, received: datetime) -> datetime:
+    """The time a point takes in the shared layers: never after we got it.
+
+    The clock guard lets a stamp run up to a minute ahead, which is fair
+    for a station's own view. In a shared layer that minute would let a
+    clock that runs ahead hold "latest" against every honest station.
+    """
+    return min(stamped, received)
+
+
 async def store_batch(
-    session: AsyncSession, batch: Batch, received: datetime, rules: Rules
+    session: AsyncSession,
+    batch: Batch,
+    received: datetime,
+    rules: Rules,
+    guard: Guard | None = None,
 ) -> Tally:
-    """Store one batch of observations. Returns what happened to each."""
+    """Store one batch of observations. Returns what happened to each.
+
+    With a `guard`, each station is held to its quota, a quarantined
+    station adds nothing to the shared layers, and an implausible point
+    is kept out of them (`Guard.doubtful`). Each is still counted as heard
+    by its station, so the station's own view keeps it.
+    """
     tally = Tally()
     if batch.kind not in STORED_KINDS:
         # A kind the contract names and this sonoran does not store yet.
         tally.kind_not_stored = len(batch.obs)
         return tally
     id_rule = THING_ID[batch.kind]
-    for obs in batch.obs:
+    observations = list(batch.obs)
+    if guard is not None:
+        allowed = guard.allow_points(batch.station, len(observations), received)
+        tally.over_quota = len(observations) - allowed
+        observations = observations[:allowed]
+    trust = guard.trust_of(batch.station, batch.source) if guard is not None else NEW
+    for obs in observations:
         if not id_rule.match(obs.id):
             tally.rejected += 1
             tally.reasons.append(f"not a {batch.kind} id: {obs.id!r}")
@@ -471,12 +570,85 @@ async def store_batch(
         mapped = mapped.model_copy(update={"meta": stored_meta(batch.kind, obs)})
         when, retimed = guarded_time(obs.t, received, rules)
         tally.retimed += int(retimed)
-        # The map takes every packet, relayed or not: the position is
-        # the sender's own report.
-        point = _point(mapped, when, batch.station)
-        await _store_track(session, batch.kind, mapped, floor_time(when, rules.bucket), point)
+        shared = shared_time(when, received)
+        doubt = None
+        if guard is not None:
+            doubt = guard.doubtful(batch.kind, batch.station, obs.id, obs.lat, obs.lon, shared)
+        if doubt is not None:
+            tally.doubtful += 1
+            tally.reasons.append(f"{batch.kind} {obs.id}: {doubt}")
+            # Counted as heard, but it places no cell: its position is
+            # the thing in doubt.
+            heard = [Hearing(h.thing_id, h.rssi_db, None, None) for h in heard]
+        elif trust == QUARANTINED:
+            tally.withheld += 1
+        else:
+            # The map takes every packet, relayed or not: the position is
+            # the sender's own report.
+            point = _point(mapped, shared, batch.station, batch.source, trust, received)
+            await _store_track(session, batch.kind, mapped, floor_time(shared, rules.bucket), point)
+            await _store_latest(session, batch.kind, mapped, point)
+            if guard is not None:
+                guard.remember(batch.kind, batch.station, obs.id, obs.lat, obs.lon, shared)
         for hearing in heard:
             await _store_heard(session, batch.station, batch.kind, hearing, when)
-        await _store_latest(session, batch.kind, mapped, point)
+        tally.stored += 1
+    return tally
+
+
+async def store_custom(
+    session: AsyncSession,
+    custom: Custom,
+    received: datetime,
+    rules: Rules,
+    guard: Guard | None = None,
+) -> Tally:
+    """Store a batch from a member's mod (#324, section 6).
+
+    Each point is kept under its station and mod, never in a shared
+    layer. A point with `heard_here` is drawn at the station's rounded
+    position when it is read, so no position is stored for it. A point
+    with neither a position nor `heard_here` goes to the table only.
+    """
+    tally = Tally()
+    points = list(custom.points)
+    allowed = (
+        guard.allow_custom(custom.station, custom.mod, [p.id for p in points], received)
+        if guard is not None
+        else [True] * len(points)
+    )
+    for point, ok in zip(points, allowed, strict=True):
+        if not ok:
+            tally.over_quota += 1
+            continue
+        if not CUSTOM_ID.match(point.id):
+            tally.rejected += 1
+            tally.reasons.append(f"not a mod id: {point.id!r}")
+            continue
+        when, retimed = guarded_time(point.t, received, rules)
+        tally.retimed += int(retimed)
+        if point.heard_here:
+            placement, lat, lon = "heard_here", None, None
+        elif point.lat is not None:
+            placement, lat, lon = "reported", point.lat, point.lon
+        else:
+            placement, lat, lon = "none", None, None
+        await session.execute(
+            insert(RfCustom)
+            .values(
+                station_id=custom.station,
+                source=custom.source or NO_SOURCE,
+                mod=custom.mod,
+                thing_id=point.id,
+                t=when,
+                received_at=received,
+                sent_t=point.t,
+                placement=placement,
+                lat=lat,
+                lon=lon,
+                meta=point.meta or None,
+            )
+            .on_conflict_do_nothing(index_elements=["station_id", "mod", "thing_id", "t"])
+        )
         tally.stored += 1
     return tally

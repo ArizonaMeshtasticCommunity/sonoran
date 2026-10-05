@@ -313,20 +313,28 @@ The design is `docs/design/rf-map.md`.
 | Table | Kind | One row per | Kept |
 |---|---|---|---|
 | `rf_station` | plain | location (one station on the map): rounded position, `last_seen` of any source, and the registry fields `display_name`, `owner`, `registered_sources`, `registry_at`. `last_seen` is NULL for a location in the registry with no heartbeat yet. Kinds and counts are kept for an agent that sends no source | always |
-| `rf_source` | plain | (`station_id`, `source`): one Pi or decoder, from its own heartbeat: kinds, counts, agent version, `last_seen`. `-` is an agent that sends no source. Revision 0018 (#305) | always |
-| `rf_track` | hypertable on `bucket` | (`kind`, `thing_id`, 20 s bucket), across every station; the loudest hearing wins | 2 days |
+| `rf_source` | plain | (`station_id`, `source`): one Pi or decoder, from its own heartbeat: kinds, counts, agent version, `last_seen`, and `sweeps`, what it reports it sweeps (revision 0020). `-` is an agent that sends no source. Revision 0018 (#305) | always |
+| `rf_track` | hypertable on `bucket` | (`kind`, `thing_id`, 20 s bucket), across every station; the first point received wins, unless a station of higher trust sends one. `source`, `trust` and `received_at` say who holds it (revision 0020) | 2 days |
 | `rf_heard` | hypertable on `bucket` | (`station_id`, `kind`, `thing_id`, 5 min bucket): hearings, best level, where | 14 days |
-| `rf_latest` | plain | (`kind`, `thing_id`): the newest point, updated in place | always |
-| `rf_spectrum_hour` | hypertable on `t` | (`station_id`, hour, bin layout): each finished hour rolled up from `rf_spectrum` by the jobs process every 10 minutes, with the same per-bin rules as a waterfall row; `minutes` says how many minutes it holds. Read by the 3 and 7 day windows. Revision 0019 | 14 days |
-| `rf_spectrum` | hypertable on `t` | (`station_id`, minute): `p50`, `p95`, `peak` and `busy` arrays, one entry per bin, NULL for a bin not swept. Revision 0014 | 14 days |
+| `rf_latest` | plain | (`kind`, `thing_id`): the newest point, updated in place. Its time is never after we received it, and a station of lower trust replaces it only once it is a minute old. `source`, `trust`, `received_at` as `rf_track` | always |
+| `rf_spectrum_hour` | hypertable on `t` | (`station_id`, `source`, hour, range): each finished hour rolled up from `rf_spectrum` by the jobs process every 10 minutes, with the same per-bin rules as a waterfall row; `minutes` says how many minutes it holds. Read by the 3 and 7 day windows. Revision 0019 | 14 days |
+| `rf_spectrum` | hypertable on `t` | (`station_id`, `source`, `f_start_hz`, `bin_hz`, `bins`, minute): one minute of one swept range; `p50`, `p95`, `peak` and `busy` arrays, one entry per bin, NULL for a bin not swept; `name`, the station's label for the range. Revision 0014; keyed by range since 0020 (#324) | 14 days |
+| `rf_custom` | hypertable on `t` | (`station_id`, `mod`, `thing_id`, `t`): a point from a member's mod, with `source`, `sent_t`, `received_at`, `placement` (`reported`, `heard_here`, `none`), `lat`, `lon` and `meta`. Never part of a shared layer. Revision 0020 | 14 days |
+| `rf_trust` | plain | (`station_id`, `source` or `*`): an operator's trust level, 0 quarantined, 1 new (the default, no row), 2 trusted. Written by `sonoran-rf-trust` | always |
+| `rf_hidden_mod` | plain | (`station_id`, `mod`): a mod an operator hid from every viewer | always |
+| `rf_operator_log` | plain | one change an operator made: trust, hiding, purging; `at`, `actor`, `action`, `station_id`, `detail` | always |
 
 `sonoran-rf-ingest` writes as `azmsh_ingest`. It holds INSERT and UPDATE
 on these tables and SELECT on only the columns a conflict target or an
 `UPDATE ... WHERE` reads, so every upsert is `INSERT ... ON CONFLICT DO
 NOTHING` then `UPDATE`, as `AGENTS.md` 9.2 requires. `azmsh_api` and
-`azmsh_jobs` read them. `rf_spectrum` is insert only: a repeated minute
-is ignored, so the ingest role holds INSERT and SELECT on (`station_id`,
-`t`) there and nothing else.
+`azmsh_jobs` read them. `rf_spectrum` and `rf_custom` are insert only: a
+repeated minute or point is ignored, so the ingest role holds INSERT and
+SELECT on their key columns there and nothing else. The ingest role also
+reads `rf_trust`, which only operators write, and SELECT on `trust` in
+`rf_track` and `rf_latest` for its `UPDATE ... WHERE`. No application
+role can read or write `rf_operator_log`; `rf_trust` and
+`rf_hidden_mod` are written only by the database owner.
 
 `thing_id` is the identity of what was heard: the ICAO address, lower
 case, for aircraft. `rssi_db` is in the receiver's own units, so it

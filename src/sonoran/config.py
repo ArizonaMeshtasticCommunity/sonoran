@@ -513,6 +513,31 @@ class Settings(BaseSettings):
     # preset's default: `Preset:slot`, comma separated, slots counted from
     # 1 as the app numbers them, such as `MediumFast:18`.
     rf_custom_channels: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Limits per station, so one login cannot flood the ingest or the
+    # database (#324). Over a limit is dropped, counted, and logged once
+    # an hour per station. Messages and points are token buckets: a rate
+    # per minute, and a burst for an agent that sends what it queued
+    # while the broker was away.
+    rf_quota_messages_per_minute: int = 240
+    rf_quota_messages_burst: int = 2400
+    rf_quota_points_per_minute: int = 3000
+    rf_quota_points_burst: int = 30000
+    # At most this many ranges, and bins in all, per station per minute.
+    # One range of 902 to 928 MHz at 25 kHz is 1,040 bins, about 8 kB.
+    rf_spectrum_max_ranges: int = 4
+    rf_spectrum_max_bins: int = 8192
+    # Ranges no station may store, as `start:end` in Hz, comma separated,
+    # such as `851000000:869000000`. A minute that touches one is dropped.
+    # We store power levels only, never content; this is for bands an
+    # operator chooses not to show at all.
+    rf_spectrum_refused_ranges: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Members' mods: points per minute (a token bucket like the above),
+    # and distinct ids per station per day.
+    rf_custom_points_per_minute: int = 600
+    rf_custom_points_burst: int = 6000
+    rf_custom_max_ids: int = 1000
+    # How often the ingest reads the operators' trust levels again.
+    rf_trust_refresh_seconds: int = 60
 
     # Logging.
     log_level: str = "INFO"
@@ -523,6 +548,7 @@ class Settings(BaseSettings):
         "rf_hidden_ids",
         "rf_ism_allow",
         "rf_custom_channels",
+        "rf_spectrum_refused_ranges",
         "channel_keys",
         "core_channels",
         "embed_frame_ancestors",
@@ -546,6 +572,16 @@ class Settings(BaseSettings):
 
         for spec in value:
             custom_channel(spec)
+        return value
+
+    @field_validator("rf_spectrum_refused_ranges", mode="after")
+    @classmethod
+    def check_refused_ranges(cls, value: list[str]) -> list[str]:
+        """Refuse a range that is not `start:end` in Hz, at start."""
+        from sonoran.rf.guard import parse_refused
+
+        for spec in value:
+            parse_refused(spec)
         return value
 
 

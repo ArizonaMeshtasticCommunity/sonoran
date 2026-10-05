@@ -64,14 +64,14 @@
    * Whether each is stored today comes from `/api/rf/kinds`, never from
    * here, so the page cannot show a source as working before it does.
    * `spectrum` is not an observation kind; it has its own view (design
-   * 7.4) and is listed so the page says what is coming.
+   * 7.4). A station may sweep any range it chooses (#324).
    */
   const SOURCES = [
     { key: 'aircraft', label: 'Aircraft', kinds: ['adsb', 'uat'], band: '1090 and 978 MHz' },
     { key: 'aprs', label: 'APRS', kinds: ['aprs'], band: '144.39 MHz' },
     { key: 'sonde', label: 'Radiosondes', kinds: ['sonde'], band: '400 to 406 MHz' },
     { key: 'ism', label: 'Weather sensors', kinds: ['ism'], band: '433 and 915 MHz' },
-    { key: 'spectrum', label: '900 MHz band', kinds: ['spectrum'], band: '902 to 928 MHz' },
+    { key: 'spectrum', label: 'Spectrum', kinds: ['spectrum'], band: '902 to 928 MHz, or any range a station sweeps' },
   ];
   const sourceOf = (kind) => SOURCES.find((source) => source.kinds.includes(kind));
 
@@ -96,8 +96,10 @@
     selectedStation: null,
     selectedThing: null,
     kinds: null,
-    // Which layers are shown, by source key, plus `stations`.
-    shown: { stations: true },
+    custom: null,
+    // Which layers are shown, by source key, plus `stations` and `mods`.
+    // Member mods start hidden (#324): a reader turns them on.
+    shown: { stations: true, mods: false },
   };
 
   function el(tag, props = {}, ...children) {
@@ -113,6 +115,42 @@
     }
     return node;
   }
+
+  /*
+   * Text a station or a member's mod sent, made safe to show (#324,
+   * section 8). It is only ever set as text, never markup. These remove
+   * what text can do besides be read: zero-width characters, direction
+   * overrides and isolates, and control characters, which let one name
+   * pretend to be another. Sonoran removes them on the way in too; this
+   * covers anything stored before that.
+   */
+  const INVISIBLE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f­؜ᅟᅠ᠎​-‏‪-‮⁠-⁤⁦-⁯﻿￹-￻]/g;
+  function plainText(value) {
+    return String(value == null ? '' : value).replace(INVISIBLE, '');
+  }
+  /* Shortened on screen with an ellipsis. The whole value is kept for
+     where a reader asks for it. */
+  function shorten(text, most) {
+    const chars = Array.from(text);
+    return chars.length > most ? `${chars.slice(0, most - 1).join('')}…` : text;
+  }
+
+  /* A frequency in words, from Sonoran's own numbers. */
+  function freqText(hz) {
+    const value = Number(hz);
+    if (value >= 1e9) return `${+(value / 1e9).toFixed(3)} GHz`;
+    if (value >= 1e6) return `${+(value / 1e6).toFixed(3)} MHz`;
+    return `${+(value / 1e3).toFixed(1)} kHz`;
+  }
+  /* "902–928 MHz", or "420 MHz–1.2 GHz" across a unit. */
+  function rangeText(start, end) {
+    const a = freqText(start);
+    const b = freqText(end);
+    const [, unitA] = a.split(' ');
+    const [numB, unitB] = b.split(' ');
+    return unitA === unitB ? `${a.split(' ')[0]}–${numB} ${unitB}` : `${a}–${b}`;
+  }
+  const khz = (hz) => (Number(hz) >= 1e6 ? freqText(hz) : `${+(Number(hz) / 1000).toFixed(2)} kHz`);
 
   function altitudeColour(alt) {
     if (alt == null) return UNKNOWN_ALTITUDE;
@@ -406,6 +444,34 @@
     return el('div', { text: `${name}: ${state}${kinds ? ` · ${kinds}` : ''}` });
   }
 
+  /* What each source of a station says it sweeps, and how (#324). The
+     station reports it about itself, so it is said to be reported. The
+     command is shortened here; the "what is being swept" panel shows
+     it whole. */
+  function sweepLines(sources) {
+    const lines = [];
+    for (const source of sources) {
+      for (const sweep of source.sweeps || []) {
+        lines.push(el('div', { text: `${sweepSummary(sweep)}${sources.length > 1 && source.source ? ` (${source.source})` : ''}` }));
+        if (sweep.command) {
+          lines.push(el('code', { class: 'rf-command', text: shorten(plainText(sweep.command), 120) }));
+        }
+      }
+    }
+    if (lines.length) lines.unshift(el('div', { class: 'muted', text: 'Reported by the station:' }));
+    return lines;
+  }
+
+  function sweepSummary(sweep) {
+    const parts = [`${plainText(sweep.tool)} ${rangeText(sweep.f_start_hz, sweep.f_end_hz)}`];
+    if (sweep.name) parts.push(`"${sweep.name}"`);
+    parts.push(`${khz(sweep.bin_hz)} bins`, `gain ${Number(sweep.gain_db).toFixed(1)} dB`);
+    if (sweep.interval_s) parts.push(`every ${sweep.interval_s} s`);
+    if (sweep.dwell_s) parts.push(`${sweep.dwell_s} s at a time, in turn`);
+    if (sweep.tool_version) parts.push(`version ${shorten(plainText(sweep.tool_version), 30)}`);
+    return parts.join(', ');
+  }
+
   function stationTooltip(row) {
     const counts = row.counts || {};
     const sources = row.sources || [];
@@ -426,7 +492,11 @@
           text: `position rounded to ${SonoranUnits.distanceFromM(row.precision_m)}`,
         })
         : null,
-      row.spectrum_last ? el('div', { text: `sweeps the 900 MHz band, newest minute ${ago(row.spectrum_last)}` }) : null,
+      row.spectrum_last ? el('div', { text: `sweeps, newest minute ${ago(row.spectrum_last)}` }) : null,
+      sweepLines(sources),
+      row.trust === 'quarantined'
+        ? el('div', { class: 'rf-unverified', text: 'Quarantined by an operator: it adds nothing to the shared map.' })
+        : null,
       // One source says nothing a line above has not. Two or more are
       // listed, so a Pi that went quiet shows beside the one that did not.
       sources.length > 1 ? el('div', { class: 'muted', text: `${sources.length} sources:` }) : null,
@@ -663,6 +733,11 @@
         el('span', { class: 'swatch ring', style: `border-color:${style.colour}` }),
         style.heardHere ? `${style.label} (drawn where heard)` : style.label));
     }
+    if (state.shown.mods) {
+      const mark = el('span', { class: 'swatch' });
+      mark.append(el('span', { class: 'rf-mod-mark', style: 'display:inline-block' }));
+      target.append(el('span', { class: 'legend-note' }, mark, "member's mod (unverified)"));
+    }
     if (state.shown.stations) {
       target.append(el('span', { class: 'legend-note' },
         el('span', { class: 'swatch', style: 'background:#f6ece2' }), 'our receiver (dashed: position rounded)'));
@@ -673,16 +748,19 @@
   function drawLayerToggles(page, stored) {
     const target = $('[data-rf-layers]', page);
     if (!target || target.childElementCount) return;
+    const views = new Set((state.kinds && state.kinds.views) || []);
     const layers = SOURCES.filter((source) => source.kinds.some((kind) => stored.has(kind)))
       .map((source) => ({ key: source.key, label: source.label }))
-      .concat([{ key: 'stations', label: 'Receivers' }]);
+      .concat([{ key: 'stations', label: 'Receivers' }])
+      // Members' own programs: off until a reader turns them on (#324).
+      .concat(views.has('custom') ? [{ key: 'mods', label: 'Member mods' }] : []);
     for (const layer of layers) {
       if (!(layer.key in state.shown)) state.shown[layer.key] = true;
       const button = el('button', {
         type: 'button', class: 'toggle', 'aria-pressed': String(state.shown[layer.key]), text: layer.label,
-        // Every source starts shown. On a phone these sit in the Filters
-        // panel (#275), and its count reads this.
-        'data-option-default': 'true',
+        // Every source starts shown, member mods hidden. On a phone these
+        // sit in the Filters panel (#275), and its count reads this.
+        'data-option-default': String(layer.key !== 'mods'),
       });
       button.addEventListener('click', () => {
         state.shown[layer.key] = !state.shown[layer.key];
@@ -745,7 +823,7 @@
   }
 
 
-  /* --- The 900 MHz band (design 7.4) ----------------------------- */
+  /* --- Spectrum (design 7.4, #324) ------------------------------ */
 
   /* A station counts as sweeping when its newest minute is this fresh. */
   const BAND_FRESH_MS = 10 * 60 * 1000;
@@ -757,10 +835,21 @@
    * It runs dark to bright so it reads in greyscale too.
    */
   const BAND_RAMP = ['#0b0d2b', '#2a1b6b', '#6a1f7a', '#b1325f', '#e8603c', '#f9a53f', '#fcf3a8'];
+  /* A row no sweep of this range reached. */
+  const NOT_SWEPT = [40, 40, 40, 255];
   /* The presets drawn on the busy chart before a reader picks others. */
   const BAND_DEFAULT_CHANNELS = new Set(['LongFast', 'MediumFast']);
+  /* Where Meshtastic lives here. Marks and "(ours)" lines are drawn only
+     where a range overlaps it (#324). */
+  const MESH_BAND = [902e6, 928e6];
+  /* On a range with no mesh channel, the busy chart shows the whole
+     range and the bins busiest over the window, this share of them. */
+  const BUSIEST_SHARE = 0.05;
 
-  const band = { station: null, hours: '6', view: 'p50', data: null, channels: null, drawnAt: 0, wired: false, where: null, start: null };
+  const band = {
+    station: null, range: null, ranges: [], hours: '6', view: 'p50', data: null, channels: null,
+    drawnAt: 0, wired: false, where: null, start: null,
+  };
   // Full resolution: two hours from any minute of the last three days.
   // The API refuses anything else (FULL_RESOLUTION_* in routes/rf.py).
   const FULL_HOURS = 2;
@@ -785,12 +874,33 @@
   }
 
   const mhz = (hz) => `${(hz / 1e6).toFixed(hz % 1e6 ? 3 : 0)} MHz`;
+  const swept = (row) => Boolean(row.minutes) && Array.isArray(row.p50);
+  const rowLength = (minutes) => (minutes >= 60 ? `${minutes / 60} h` : `${minutes} min`);
+
+  /* A range's title, from Sonoran's numbers. A station's own name for
+     the range is given beside it, as the station's label. */
+  function rangeTitle(range) {
+    if (!range) return 'Spectrum';
+    return rangeText(range.f_start_hz, range.f_end_hz);
+  }
+  function rangeOption(range) {
+    const label = `${rangeTitle(range)}${range.name ? ` "${range.name}"` : ''}`
+      + `${range.source ? ` · ${range.source}` : ''}, ${khz(range.bin_hz)} bins`;
+    return el('option', { value: range.id, text: label });
+  }
 
   /** The bins a channel covers, clamped to the sweep. */
   function channelBins(channel, data) {
     const first = Math.floor((channel.low_hz - data.f_start_hz) / data.bin_hz);
     const last = Math.ceil((channel.high_hz - data.f_start_hz) / data.bin_hz) - 1;
     return [Math.max(0, first), Math.min(data.bins - 1, last)];
+  }
+
+  /* The mesh channels this range covers. None outside 902 to 928 MHz. */
+  function channelsIn(data) {
+    const end = data.f_start_hz + data.bins * data.bin_hz;
+    if (!(data.f_start_hz < MESH_BAND[1] && end > MESH_BAND[0])) return [];
+    return (band.channels || []).filter((c) => c.high_hz > data.f_start_hz && c.low_hz < end);
   }
 
   function drawWaterfall(page) {
@@ -806,27 +916,31 @@
     const image = ctx.createImageData(canvas.width, canvas.height);
     // Scale to this station's own spread: its units are its dongle's,
     // so only its own quiet and loud ends mean anything.
-    const values = rows.flatMap((row) => row[band.view]).filter((v) => v != null).sort((a, b) => a - b);
+    const values = rows.filter(swept).flatMap((row) => row[band.view])
+      .filter((v) => v != null).sort((a, b) => a - b);
     const low = quantile(values, 0.02);
     const high = quantile(values, 0.995);
     const span = Math.max(1, high - low);
     rows.forEach((row, y) => {
-      row[band.view].forEach((value, x) => {
+      const levels = swept(row) ? row[band.view] : null;
+      for (let x = 0; x < data.bins; x += 1) {
         const at = (y * canvas.width + x) * 4;
+        const value = levels ? levels[x] : null;
         if (value == null) {
-          image.data.set([40, 40, 40, 255], at); // no sweep reached this bin
-          return;
+          image.data.set(NOT_SWEPT, at); // no sweep reached this bin
+          continue;
         }
         const [r, g, b] = rampColour((value - low) / span);
         image.data.set([r, g, b, 255], at);
-      });
+      }
     });
     ctx.putImageData(image, 0, 0);
 
-    // Our channels, drawn from the firmware's own arithmetic.
+    // Our channels, drawn from the firmware's own arithmetic, and only
+    // where this range covers the band they live in.
     const width = data.bins * data.bin_hz;
     const left = (hz) => `${((hz - data.f_start_hz) / width) * 100}%`;
-    const inSweep = (band.channels || []).filter((c) => c.high_hz > data.f_start_hz && c.low_hz < data.f_start_hz + width);
+    const inSweep = channelsIn(data);
     marks.replaceChildren(...inSweep.map((c) => el('span', {
       class: c.custom ? 'rf-mark custom' : 'rf-mark', title: `${c.label}: ${mhz(c.centre_hz)}, ${c.bandwidth_hz / 1000} kHz${c.custom ? ', set by this mesh' : ''}`,
       style: `left:${left(c.low_hz)};width:calc(${left(c.high_hz)} - ${left(c.low_hz)})`,
@@ -837,48 +951,74 @@
     axis.replaceChildren(...inSweep.map((c, index) => el('span', {
       class: `rf-tick channel row-${index % 3}${c.custom ? ' custom' : ''}`, style: `left:${left(c.centre_hz)}`, text: c.name,
     })));
+    axis.hidden = !inSweep.length;
     scale.replaceChildren(
       el('span', { class: 'rf-edges' },
-        el('span', { text: mhz(data.f_start_hz) }),
-        el('span', { text: mhz(data.f_start_hz + width) })),
+        el('span', { text: freqText(data.f_start_hz) }),
+        el('span', { text: freqText(data.f_start_hz + width) })),
       el('span', { text: 'quiet' }),
       el('span', { class: 'rf-ramp', style: `background:linear-gradient(to right, ${BAND_RAMP.join(', ')})` }),
       el('span', { text: 'loud, for this station' }),
-      el('span', { class: 'muted', text: ` · newest at the top · each row ${data.bucket_minutes >= 60 ? `${data.bucket_minutes / 60} h` : `${data.bucket_minutes} min`} · grey: not swept` }));
+      el('span', { class: 'muted', text: ` · newest at the top · each row ${rowLength(data.bucket_minutes)} · grey: not swept` }));
+  }
+
+  /* The mean busy share of some bins of a row, or null for a row not swept. */
+  function meanBusy(row, keep) {
+    if (!swept(row)) return null;
+    const values = row.busy.filter((v, i) => v != null && keep(i));
+    return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
   }
 
   function drawBusy(page) {
     const data = band.data;
     const target = $('[data-rf-band-busy]', page);
+    const explainBusy = $('[data-rf-band-busy-explain]', page);
     if (!window.echarts || !target) return;
-    const inSweep = (band.channels || []).filter((c) => c.high_hz > data.f_start_hz
-      && c.low_hz < data.f_start_hz + data.bins * data.bin_hz);
-    const covered = new Set();
-    const series = inSweep.map((channel) => {
-      const [first, last] = channelBins(channel, data);
-      for (let i = first; i <= last; i += 1) covered.add(i);
-      return {
-        name: `${channel.name} (ours)`,
-        type: 'line', showSymbol: false,
-        data: data.rows.map((row) => {
-          const values = row.busy.slice(first, last + 1).filter((v) => v != null);
-          return [Date.parse(row.t), values.length ? values.reduce((a, b) => a + b, 0) / values.length : null];
-        }),
-      };
-    });
-    // Everything outside our channels: this is the interference number.
-    series.unshift({
-      name: 'Outside our channels', type: 'line', showSymbol: false, lineStyle: { width: 2.5 },
-      data: data.rows.map((row) => {
-        const values = row.busy.filter((v, i) => v != null && !covered.has(i));
-        return [Date.parse(row.t), values.length ? values.reduce((a, b) => a + b, 0) / values.length : null];
-      }),
-    });
-    // A channel the mesh set itself is one it uses, so it is shown at once.
-    const custom = new Set((band.channels || []).filter((c) => c.custom).map((c) => `${c.name} (ours)`));
-    const selected = Object.fromEntries(series.map((item) => [item.name,
-      item.name === 'Outside our channels' || custom.has(item.name)
-      || BAND_DEFAULT_CHANNELS.has(item.name.replace(' (ours)', ''))]));
+    const inSweep = channelsIn(data);
+    const point = (keep) => data.rows.map((row) => [Date.parse(row.t), meanBusy(row, keep)]);
+    let series;
+    let selected;
+    if (inSweep.length) {
+      const covered = new Set();
+      series = inSweep.map((channel) => {
+        const [first, last] = channelBins(channel, data);
+        for (let i = first; i <= last; i += 1) covered.add(i);
+        return {
+          name: `${channel.name} (ours)`, type: 'line', showSymbol: false,
+          data: point((i) => i >= first && i <= last),
+        };
+      });
+      // Everything outside our channels: this is the interference number.
+      series.unshift({
+        name: 'Outside our channels', type: 'line', showSymbol: false, lineStyle: { width: 2.5 },
+        data: point((i) => !covered.has(i)),
+      });
+      // A channel the mesh set itself is one it uses, so it is shown at once.
+      const custom = new Set((band.channels || []).filter((c) => c.custom).map((c) => `${c.name} (ours)`));
+      selected = Object.fromEntries(series.map((item) => [item.name,
+        item.name === 'Outside our channels' || custom.has(item.name)
+        || BAND_DEFAULT_CHANNELS.has(item.name.replace(' (ours)', ''))]));
+      explainBusy.replaceChildren(
+        'The share of sweeps in which a bin stood 6 dB above its own median. Inside a mesh channel that is mostly our own packets. ',
+        el('strong', { text: 'Outside every mesh channel' }), ' it is something else on the band.');
+    } else {
+      // No mesh channel here: the whole range, and the bins that were
+      // busiest over the window, where anything that keys up shows.
+      const totals = new Array(data.bins).fill(0);
+      for (const row of data.rows) {
+        if (!swept(row)) continue;
+        row.busy.forEach((v, i) => { totals[i] += v || 0; });
+      }
+      const count = Math.max(1, Math.round(data.bins * BUSIEST_SHARE));
+      const busiest = new Set(totals.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0])
+        .slice(0, count).map(([, i]) => i));
+      series = [
+        { name: 'Whole range', type: 'line', showSymbol: false, lineStyle: { width: 2.5 }, data: point(() => true) },
+        { name: `Busiest ${count} bins`, type: 'line', showSymbol: false, data: point((i) => busiest.has(i)) },
+      ];
+      selected = Object.fromEntries(series.map((item) => [item.name, true]));
+      explainBusy.textContent = 'The share of sweeps in which a bin stood 6 dB above its own median, over the whole range and over the bins busiest in this window. This range is outside the mesh band, so no mesh channel is marked.';
+    }
     let chart = window.echarts.getInstanceByDom(target);
     if (!chart) chart = window.echarts.init(target, null, { renderer: 'canvas' });
     const css = getComputedStyle(document.documentElement);
@@ -889,7 +1029,7 @@
       animation: !REDUCED_MOTION.matches,
       backgroundColor: 'transparent',
       textStyle: { color: token('--muted', '#b59c88') },
-      tooltip: { trigger: 'axis', valueFormatter: (v) => (v == null ? '-' : `${v.toFixed(1)} %`) },
+      tooltip: { trigger: 'axis', valueFormatter: (v) => (v == null ? 'not swept' : `${v.toFixed(1)} %`) },
       legend: { top: 0, type: 'scroll', selected, textStyle: { color: token('--muted', '#b59c88') } },
       grid: { left: 40, right: 16, top: 36, bottom: 28, containLabel: true },
       xAxis: { type: 'time' },
@@ -899,13 +1039,44 @@
   }
 
   function explain(page) {
+    const marked = band.data && channelsIn(band.data).length;
     const text = {
-      p50: 'The median of each minute’s sweeps: the noise floor. A mesh packet is a short burst, so it does not move the median. A bright column here is something on the air most of the time.',
-      p95: 'The 95th percentile of each minute’s sweeps: the bursts. Our own packets show here, inside the marked channels. A burst outside every mark is something else.',
+      p50: 'The median of each minute’s sweeps: the noise floor. A short burst does not move the median. A bright column here is something on the air most of the time.',
+      p95: marked
+        ? 'The 95th percentile of each minute’s sweeps: the bursts. Our own packets show here, inside the marked channels. A burst outside every mark is something else.'
+        : 'The 95th percentile of each minute’s sweeps: the bursts on top of the noise floor.',
       peak: 'The loudest single moment in each bin. Nothing short is averaged away here: a transmitter that keyed once shows. In a row longer than a minute, point at it to see when it peaked, and click to open those two hours at full resolution.',
     }[band.view];
     $('[data-rf-band-explain]', page).textContent = text
       + ' Levels are relative to this station’s own receiver and never compare two stations.';
+  }
+
+  /*
+   * Say so when one dongle takes turns between ranges (#324). It hears
+   * each range only part of the time: a burst while it was on another
+   * was not heard, so those minutes are grey, never quiet. Known from
+   * what the station reports, or seen in the rows themselves.
+   */
+  function drawTurns(page, station) {
+    const target = $('[data-rf-band-turns]', page);
+    if (!target) return;
+    const data = band.data;
+    const range = data && data.range;
+    const source = range && (station && station.sources || []).find((s) => (s.source || null) === range.source);
+    const turns = (source && source.sweeps || []).filter((s) => s.dwell_s);
+    const mine = turns.find((s) => range && s.f_start_hz === range.f_start_hz && s.bin_hz === range.bin_hz);
+    const rows = data ? data.rows : [];
+    const gaps = rows.length ? rows.filter((row) => !row.minutes).length / rows.length : 0;
+    if (mine && turns.length > 1) {
+      target.textContent = `This dongle takes turns between ${turns.length} ranges, ${mine.dwell_s} s at a time, so it sweeps this one about 1/${turns.length} of the time. `
+        + 'A burst while it was on another range was not heard. Rows it did not sweep are grey: not swept, never quiet. (Reported by the station.)';
+      target.hidden = false;
+    } else if (gaps >= 0.2) {
+      target.textContent = `${Math.round(gaps * 100)} % of the rows in this window hold no sweep of this range. They are grey: not swept, never quiet.`;
+      target.hidden = false;
+    } else {
+      target.hidden = true;
+    }
   }
 
   /* A distance in words, in the reader's units: "1 mi", "500 ft". */
@@ -994,16 +1165,41 @@
     if (!cell) return;
     const data = band.data;
     const hz = data.f_start_hz + (cell.bin + 0.5) * data.bin_hz;
-    const level = cell.row[band.view][cell.bin];
-    const length = data.bucket_minutes >= 60 ? `${data.bucket_minutes / 60} h` : `${data.bucket_minutes} min`;
+    const level = swept(cell.row) ? cell.row[band.view][cell.bin] : null;
     const parts = [
-      `${(hz / 1e6).toFixed(3)} MHz`,
-      data.bucket_minutes > 1 ? `${length} from ${when(cell.row.t)}` : when(cell.row.t),
+      freqText(hz),
+      data.bucket_minutes > 1 ? `${rowLength(data.bucket_minutes)} from ${when(cell.row.t)}` : when(cell.row.t),
       level == null ? 'not swept' : `${(level / 10).toFixed(1)} dB`,
     ];
+    if (swept(cell.row) && data.bucket_minutes > 1 && cell.row.minutes < data.bucket_minutes) {
+      parts.push(`swept ${cell.row.minutes} of ${data.bucket_minutes} min`);
+    }
     if (cell.peakAt) parts.push(`loudest at ${cell.peakAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
     if (data.bucket_minutes > 1) parts.push('click for full resolution');
     $('[data-rf-band-hover]', page).textContent = parts.join(' · ');
+  }
+
+  /* The station's ranges, for the picker, newest first. */
+  async function loadRanges(page) {
+    const picker = $('[data-rf-band-range]', page);
+    const { body } = await getJson(`api/rf/spectrum/${encodeURIComponent(band.station)}/ranges?days=7`);
+    band.ranges = body.ranges || [];
+    if (!band.range || !band.ranges.some((r) => r.id === band.range)) {
+      band.range = band.ranges.length ? band.ranges[0].id : null;
+    }
+    picker.replaceChildren(...band.ranges.map(rangeOption));
+    picker.value = band.range || '';
+    // One range needs no picker.
+    picker.closest('label').hidden = band.ranges.length < 2;
+  }
+
+  /* Open one station's range, from the "what is being swept" chart. */
+  function openRange(page, stations, station, rangeId) {
+    band.station = station;
+    band.range = rangeId;
+    band.start = null;
+    drawBand(page, stations, true);
+    $('[data-rf-band]', page).scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   async function drawBand(page, stations, force) {
@@ -1021,7 +1217,8 @@
     picker.value = band.station;
     if (!band.wired) {
       band.wired = true;
-      picker.addEventListener('change', () => { band.station = picker.value; drawBand(page, stations, true); });
+      picker.addEventListener('change', () => { band.station = picker.value; band.range = null; drawBand(page, stations, true); });
+      $('[data-rf-band-range]', page).addEventListener('change', (event) => { band.range = event.target.value; drawBand(page, stations, true); });
       $('[data-rf-band-hours]', page).addEventListener('change', (event) => { band.hours = event.target.value; band.start = null; drawBand(page, stations, true); });
       const startInput = $('[data-rf-band-start]', page);
       $('[data-rf-band-zoom]', page).addEventListener('click', () => {
@@ -1051,32 +1248,310 @@
         });
       }
     }
-    explain(page);
-    drawWhere(page, stations.find((row) => row.station === band.station));
+    const station = stations.find((row) => row.station === band.station);
+    drawWhere(page, station);
+    const title = $('[data-rf-band-title]', page);
     try {
       if (!band.channels) band.channels = (await getJson('api/rf/channels')).body.channels;
-      const query = band.start ? `start=${encodeURIComponent(band.start)}` : `hours=${band.hours}`;
-      band.data = (await getJson(`api/rf/spectrum/${encodeURIComponent(band.station)}?${query}`)).body;
+      await loadRanges(page);
+      const query = [band.start ? `start=${encodeURIComponent(band.start)}` : `hours=${band.hours}`];
+      if (band.range) query.push(`range=${encodeURIComponent(band.range)}`);
+      band.data = (await getJson(`api/rf/spectrum/${encodeURIComponent(band.station)}?${query.join('&')}`)).body;
     } catch (error) {
       $('[data-rf-band-note]', page).textContent = `could not be loaded: ${error.message}`;
       return;
     }
     band.drawnAt = Date.now();
+    explain(page);
+    drawTurns(page, station);
     const note = $('[data-rf-band-note]', page);
     $('[data-rf-band-back]', page).hidden = !band.start;
     const span = band.start
       ? `the two hours from ${when(band.start)}`
       : `the last ${band.hours >= 72 ? `${band.hours / 24} days` : `${band.hours} h`}`;
+    const chosen = band.data.range || band.ranges.find((r) => r.id === band.range);
+    title.textContent = rangeTitle(chosen);
     if (!band.data.rows.length) {
-      note.textContent = `${band.station} sent no minute of the band in ${span}`;
+      note.textContent = `${band.station} sent no minute of this range in ${span}`;
       return;
     }
-    note.textContent = `${band.station}, ${mhz(band.data.f_start_hz)} to `
-      + `${mhz(band.data.f_start_hz + band.data.bins * band.data.bin_hz)}, `
-      + `${band.data.bin_hz / 1000} kHz bins, gain ${Number(band.data.gain_db).toFixed(1)} dB, `
+    note.textContent = `${band.station}${chosen && chosen.name ? `, "${chosen.name}"` : ''}, `
+      + `${khz(band.data.bin_hz)} bins, gain ${Number(band.data.gain_db).toFixed(1)} dB, `
       + (band.start ? `full resolution, ${span}` : `newest ${ago(band.data.newest)}`);
     drawWaterfall(page);
     drawBusy(page);
+  }
+
+  /* --- What is being swept (#324) ---------------------------------
+
+     Every station's ranges on one log frequency axis, from the RTL-SDR's
+     lowest tuning to 6 GHz, so the gaps show too. A bar is a button:
+     pointing at it or focusing it says what it is, clicking it opens
+     its waterfall. What a station reports about how it sweeps is shown
+     as reported, and its command as text. */
+  const AXIS_LOW_HZ = 24e6;
+  const AXIS_HIGH_HZ = 6e9;
+  const AXIS_TICKS = [25e6, 50e6, 100e6, 200e6, 500e6, 1e9, 2e9, 6e9];
+  const sweepsState = { data: null, fetchedAt: 0 };
+
+  function logLeft(hz) {
+    const value = Math.min(Math.max(Number(hz), AXIS_LOW_HZ), AXIS_HIGH_HZ);
+    return (Math.log(value / AXIS_LOW_HZ) / Math.log(AXIS_HIGH_HZ / AXIS_LOW_HZ)) * 100;
+  }
+
+  function sweepDetail(item) {
+    const who = item.display_name ? `${item.display_name} (${item.station})` : item.station;
+    const lines = [
+      el('strong', { text: `${rangeText(item.f_start_hz, item.f_end_hz)} at ${who}` }),
+      el('div', {
+        text: [item.source ? `source ${item.source}` : null, item.name ? `named "${item.name}"` : null,
+          `${khz(item.bin_hz)} bins`, item.gain_db == null ? null : `gain ${Number(item.gain_db).toFixed(1)} dB`]
+          .filter(Boolean).join(', '),
+      }),
+      el('div', {
+        text: item.minutes
+          ? `${item.minutes.toLocaleString()} minutes in the last 24 h, newest ${ago(item.newest)}`
+          : 'Reported, but no minute of it arrived in the last 24 h',
+      }),
+    ];
+    if (item.reported) {
+      lines.push(el('div', { class: 'muted', text: `Reported by the station: ${sweepSummary(item.reported)}` }));
+      if (item.reported.command) {
+        lines.push(el('code', { text: plainText(item.reported.command) }));
+      }
+    } else {
+      lines.push(el('div', { class: 'muted', text: 'The station reports no sweep settings for this range.' }));
+    }
+    return lines;
+  }
+
+  function drawSweeps(page, stations) {
+    const panel = $('[data-rf-sweeps]', page);
+    const chart = $('[data-rf-sweeps-chart]', page);
+    const detail = $('[data-rf-sweeps-detail]', page);
+    if (!panel || !sweepsState.data) return;
+    const items = sweepsState.data.ranges || [];
+    panel.hidden = !items.length;
+    if (!items.length) return;
+    $('[data-rf-sweeps-note]', page).textContent = `${items.length} range${items.length === 1 ? '' : 's'}, `
+      + `${new Set(items.map((i) => i.station)).size} station${new Set(items.map((i) => i.station)).size === 1 ? '' : 's'}`;
+    const rows = [];
+    for (const item of items) {
+      const label = `${item.station}${item.source ? `/${item.source}` : ''}${item.name ? ` "${item.name}"` : ''}`;
+      const start = logLeft(item.f_start_hz);
+      const end = logLeft(item.f_end_hz);
+      const bar = el('button', {
+        type: 'button',
+        class: item.minutes ? 'rf-sweeps-bar' : 'rf-sweeps-bar reported-only',
+        style: `left:${start}%;width:${Math.max(0.4, end - start)}%`,
+        'aria-label': `${rangeText(item.f_start_hz, item.f_end_hz)} at ${item.station}`,
+      });
+      const say = () => detail.replaceChildren(...sweepDetail(item));
+      bar.addEventListener('mouseenter', say);
+      bar.addEventListener('focus', say);
+      bar.addEventListener('click', () => {
+        say();
+        if (item.id) openRange(page, stations, item.station, item.id);
+      });
+      rows.push(el('span', { class: 'rf-sweeps-label', title: label, text: label }),
+        el('div', { class: 'rf-sweeps-track' }, bar));
+    }
+    rows.push(el('span', {}), el('div', { class: 'rf-sweeps-axis', 'aria-hidden': 'true' },
+      AXIS_TICKS.map((hz) => el('span', { style: `left:${logLeft(hz)}%`, text: freqText(hz).replace('.000', '') }))));
+    chart.replaceChildren(...rows);
+    if (!detail.childElementCount) detail.textContent = 'Point at a bar, or move to one with Tab, for what it is.';
+  }
+
+  async function loadSweeps(page, stations) {
+    if (Date.now() - sweepsState.fetchedAt >= BAND_REFRESH_MS) {
+      try {
+        sweepsState.data = (await getJson('api/rf/sweeps?hours=24')).body;
+        sweepsState.fetchedAt = Date.now();
+      } catch {
+        return;
+      }
+    }
+    drawSweeps(page, stations);
+  }
+
+  /* --- Member mods (#324, section 8) --------------------------------
+
+     Programs members wrote, sending through their own station. Sonoran
+     decides how they look; the data only gives values. So:
+
+     - every value is plain text, made plain again here (`plainText`),
+       shortened with an ellipsis, the whole value one click away;
+     - nothing in it is a link, an image, a colour, a style or markup;
+     - every mod is drawn with one plain mark, a dashed diamond, unlike
+       any built-in kind, and every tooltip says it is a member's mod,
+       which one, at which station, and that it is unverified;
+     - the layer starts off, with a switch per station and per mod;
+     - past `MOD_CAP` points, a mod is drawn as counts per cell;
+     - units come from a fixed list by the key's ending, never from the
+       data; the key is shown exactly as sent;
+     - the time Sonoran received a point is shown beside the mod's own.
+
+     Nothing here is put in a live region. */
+  const MOD_CAP = 200;
+  const MOD_CELL_DEG = 0.05;
+  const MOD_WINDOW_MIN = 60;
+  const MOD_VALUE_CHARS = 60;
+  const UNIT_SUFFIX = [
+    ['_dbm', 'dBm'], ['_db', 'dB'], ['_mhz', 'MHz'], ['_khz', 'kHz'], ['_hz', 'Hz'],
+    ['_c', '°C'], ['_pct', '%'], ['_km', 'km'], ['_m', 'm'], ['_v', 'V'], ['_s', 's'],
+  ];
+  const modState = { rows: [], off: new Set(), fetchedAt: 0, total: 0 };
+  const modKey = (row) => `${row.station}/${row.mod}`;
+
+  function unitOf(key) {
+    const found = UNIT_SUFFIX.find(([suffix]) => key.toLowerCase().endsWith(suffix));
+    return found ? found[1] : '';
+  }
+
+  /* One value of a mod's `meta`, as plain text with its fixed unit. */
+  function modValue(key, value) {
+    const text = plainText(typeof value === 'number' ? String(Math.round(value * 1000) / 1000) : value);
+    const unit = typeof value === 'number' ? unitOf(key) : '';
+    return `${text}${unit ? ` ${unit}` : ''}`;
+  }
+
+  function modLines(row) {
+    return Object.entries(row.meta || {}).slice(0, 16)
+      .map(([key, value]) => `${plainText(key)}: ${modValue(key, value)}`);
+  }
+
+  function modTooltip(row) {
+    const muted = (text) => el('div', { class: 'muted', text });
+    return el('div', { class: 'rf-tip' },
+      el('strong', { text: shorten(plainText(row.id), 40) }),
+      el('div', { text: `From a member's mod: ${row.mod} at ${row.station}` }),
+      el('div', { class: 'rf-unverified', text: 'Unverified: sent by the station, not decoded by Sonoran.' }),
+      modLines(row).slice(0, 8).map((line) => el('div', { text: shorten(line, MOD_VALUE_CHARS) })),
+      row.placement === 'heard_here'
+        ? muted('It sends no position. The mark is the station that heard it, rounded.')
+        : muted('The position is the one the mod sent.'),
+      muted(`the mod's time ${when(row.sent_t)} · received ${ago(row.received_at)}`));
+  }
+
+  function drawMods(page) {
+    if (!state.custom) state.custom = L.layerGroup().addTo(ensureMap());
+    state.custom.clearLayers();
+    const panel = $('[data-rf-mods]', page);
+    if (panel) panel.hidden = !state.shown.mods;
+    if (!state.shown.mods) return;
+    const shown = modState.rows.filter((row) => !modState.off.has(row.station) && !modState.off.has(modKey(row)));
+    const byMod = new Map();
+    for (const row of shown) {
+      if (row.lat == null || row.lon == null) continue;
+      const key = modKey(row);
+      if (!byMod.has(key)) byMod.set(key, []);
+      byMod.get(key).push(row);
+    }
+    for (const [key, rows] of byMod) {
+      if (rows.length <= MOD_CAP) {
+        for (const row of rows) {
+          const node = document.createElement('div');
+          node.className = 'rf-mod-mark';
+          const icon = new ElementIcon({ element: node, className: 'rf-icon', iconSize: [10, 10], iconAnchor: [5, 5] });
+          state.custom.addLayer(L.marker([row.lat, row.lon], { icon, keyboard: false })
+            .bindTooltip(() => modTooltip(row), { direction: 'top' }));
+        }
+        continue;
+      }
+      // Too many to draw one by one: counts per cell, so one busy mod
+      // cannot hide the map or slow the browser.
+      const cells = new Map();
+      for (const row of rows) {
+        const cell = `${Math.round(row.lat / MOD_CELL_DEG)},${Math.round(row.lon / MOD_CELL_DEG)}`;
+        const item = cells.get(cell) || { lat: 0, lon: 0, n: 0 };
+        item.lat += row.lat; item.lon += row.lon; item.n += 1;
+        cells.set(cell, item);
+      }
+      for (const item of cells.values()) {
+        state.custom.addLayer(L.circleMarker([item.lat / item.n, item.lon / item.n], {
+          radius: Math.min(18, 5 + Math.log2(item.n) * 2), color: '#d8d8d8', weight: 1.5, dashArray: '3 3',
+          fillColor: '#d8d8d8', fillOpacity: 0.12,
+        }).bindTooltip(() => el('div', { class: 'rf-tip' },
+          el('strong', { text: `${item.n.toLocaleString()} points` }),
+          el('div', { text: `From a member's mod: ${key.split('/')[1]} at ${key.split('/')[0]}` }),
+          el('div', { class: 'rf-unverified', text: 'Unverified. Zoom in or use the table for each point.' })), { direction: 'top' }));
+      }
+    }
+    drawModSwitches(page);
+    drawModTable(page, shown);
+  }
+
+  /* A switch per station and per mod. Off here is off for this reader only. */
+  function drawModSwitches(page) {
+    const target = $('[data-rf-mods-switches]', page);
+    if (!target) return;
+    const stations = new Map();
+    for (const row of modState.rows) {
+      if (!stations.has(row.station)) stations.set(row.station, new Set());
+      stations.get(row.station).add(row.mod);
+    }
+    const box = (key, label, cls) => {
+      const input = el('input', { type: 'checkbox' });
+      input.checked = !modState.off.has(key);
+      input.addEventListener('change', () => {
+        if (input.checked) modState.off.delete(key); else modState.off.add(key);
+        drawMods(page);
+      });
+      return el('label', { class: cls }, input, label);
+    };
+    const parts = [];
+    for (const [station, mods] of [...stations].sort()) {
+      parts.push(box(station, station, 'station'));
+      for (const mod of [...mods].sort()) parts.push(box(`${station}/${mod}`, mod, 'mod'));
+    }
+    target.replaceChildren(...(parts.length ? parts : [el('span', { class: 'muted', text: `No member mod sent anything in the last ${MOD_WINDOW_MIN} min.` })]));
+    const note = $('[data-rf-mods-note]', page);
+    if (note) {
+      note.textContent = `${modState.rows.length.toLocaleString()} things in the last ${MOD_WINDOW_MIN} min`
+        + (modState.total > modState.rows.length ? `, the newest of ${modState.total.toLocaleString()}` : '');
+    }
+  }
+
+  /* A long value is shortened with the whole of it one click away. */
+  function longText(text) {
+    return Array.from(text).length > MOD_VALUE_CHARS
+      ? el('details', {}, el('summary', { text: shorten(text, MOD_VALUE_CHARS) }), el('span', { text }))
+      : el('span', { text });
+  }
+
+  function drawModTable(page, rows) {
+    const target = $('[data-rf-mods-table]', page);
+    if (!target) return;
+    const head = el('tr', {}, ['Station', 'Mod', 'Id', 'Where', 'Values', "Mod's time", 'Received']
+      .map((label) => el('th', { scope: 'col', text: label })));
+    const where = { reported: 'as the mod sent it', heard_here: 'at the station', none: 'not given' };
+    const body = rows.slice(0, TABLE_MAX_ROWS).map((row) => el('tr', {},
+      el('td', { text: row.station }),
+      el('td', { text: row.mod }),
+      el('td', {}, longText(plainText(row.id))),
+      el('td', { text: where[row.placement] || 'not given' }),
+      el('td', { class: 'wrap' }, longText(modLines(row).join(' · '))),
+      el('td', { text: new Date(row.sent_t).toLocaleString() }),
+      el('td', { text: ago(row.received_at) })));
+    target.replaceChildren(el('table', { class: 'rf-table' }, el('thead', {}, head), el('tbody', {}, body)));
+  }
+
+  async function loadMods(page) {
+    if (!state.shown.mods) {
+      drawMods(page);
+      return;
+    }
+    if (Date.now() - modState.fetchedAt >= BAND_REFRESH_MS) {
+      try {
+        const { body, total } = await getJson(`api/rf/custom?minutes=${MOD_WINDOW_MIN}&limit=5000`);
+        modState.rows = body;
+        modState.total = Number(total || body.length);
+        modState.fetchedAt = Date.now();
+      } catch {
+        // Keep what was drawn.
+      }
+    }
+    drawMods(page);
   }
 
   /* --- The table ----------------------------------------------------
@@ -1294,6 +1769,8 @@
     bindTable(page);
     drawTable(page);
     drawBand(page, stations.body, false);
+    loadSweeps(page, stations.body);
+    loadMods(page);
     if (!stations.body.length) {
       summary.textContent = 'No RF station has reported yet. A station runs rf-agent beside its SDR.';
       return;

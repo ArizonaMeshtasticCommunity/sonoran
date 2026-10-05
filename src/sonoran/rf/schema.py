@@ -15,7 +15,15 @@ from __future__ import annotations
 import re
 from typing import Annotated, Literal, NamedTuple
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import models_json_schema
 
 STATION_ID = re.compile(r"^[a-z0-9-]{3,32}$")
@@ -91,6 +99,31 @@ MESH_NODE = re.compile(r"^![0-9a-f]{8}$")
 # 902 to 928 MHz in 50 kHz bins is 520. This leaves room for finer bins
 # or a wider band without letting one message grow without bound.
 MAX_BINS = 4096
+# A name a station gives one of its sweep ranges, or a member gives a
+# mod: short, lower case, and safe in a URL path.
+NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,15}$")
+# The sweeps one heartbeat may report (#324).
+MAX_SWEEPS = 8
+MAX_COMMAND_CHARS = 512
+# A point's id inside a member's mod. Sonoran stores it under the
+# station and the mod, so no mod can take another's id or a built-in one.
+CUSTOM_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,31}$")
+MAX_CUSTOM_POINTS = 100
+
+# Characters that change how text looks without being seen: zero-width
+# characters, direction overrides and isolates, the soft hyphen, and the
+# control characters. A name that holds them can pretend to be another
+# name, so they are removed from text a station sends before it is
+# stored (#324, section 8).
+INVISIBLE = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u061c\u115f\u1160\u180e"
+    "\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]"
+)
+
+
+def plain_text(value: str) -> str:
+    """Return `value` without the characters `INVISIBLE` names."""
+    return INVISIBLE.sub("", value)
 
 
 class _Model(BaseModel):
@@ -194,26 +227,36 @@ class Observation(_Model):
         What survives is a small flat map of short scalars, which is the
         same guarantee the raising version gave, without the collateral.
         """
-        if value is None:
-            return None
-        kept: dict[str, object] = {}
-        for key, item in value.items():
-            if len(kept) >= MAX_META_KEYS:
-                break
-            if not META_KEY.match(key):
-                continue
-            if isinstance(item, bool) or item is None or isinstance(item, int | float):
-                kept[key] = item
-            elif isinstance(item, str) and len(item) <= MAX_META_VALUE_CHARS:
-                kept[key] = item
-            # Anything else -- a dict, a list, an over-long string -- is
-            # dropped. No recursion reaches a renderer.
-        if len(repr(kept).encode()) > MAX_META_BYTES:
-            # Bounded key count and value length make this close to
-            # unreachable, but the byte cap is the one promise the old
-            # code made and it is kept rather than assumed.
-            return {}
-        return kept
+        return small_meta(value)
+
+
+def small_meta(value: dict[str, object] | None, *, plain: bool = False) -> dict[str, object] | None:
+    """Keep the parts of a `meta` map that are safe; see `Observation._small_meta`.
+
+    With `plain`, text values also lose the characters `INVISIBLE` names.
+    A member's mod sends text we did not write, so its values are made
+    plain before they are stored (#324, section 8).
+    """
+    if value is None:
+        return None
+    kept: dict[str, object] = {}
+    for key, item in value.items():
+        if len(kept) >= MAX_META_KEYS:
+            break
+        if not META_KEY.match(key):
+            continue
+        if isinstance(item, bool) or item is None or isinstance(item, int | float):
+            kept[key] = item
+        elif isinstance(item, str) and len(item) <= MAX_META_VALUE_CHARS:
+            kept[key] = plain_text(item) if plain else item
+        # Anything else -- a dict, a list, an over-long string -- is
+        # dropped. No recursion reaches a renderer.
+    if len(repr(kept).encode()) > MAX_META_BYTES:
+        # Bounded key count and value length make this close to
+        # unreachable, but the byte cap is the one promise the old
+        # code made and it is kept rather than assumed.
+        return {}
+    return kept
 
 
 def _station_id(value: str) -> str:
@@ -247,6 +290,61 @@ class Counts(_Model):
     dropped: Annotated[int, Field(ge=0)] = 0
 
 
+Hz = Annotated[int, Field(ge=0, le=6_000_000_000)]
+
+
+class Sweep(_Model):
+    """What one sweeper of a station runs, as the station reports it (#324).
+
+    This is a claim, shown as "reported by the station". Nothing is ever
+    run from it, and it never changes how a station's data is trusted.
+    `command` is the exact command line the sweeper runs, for a reader
+    who wants to repeat it. `dwell_s` is set when one dongle takes turns
+    between ranges: it sweeps this range `dwell_s` seconds at a time.
+    """
+
+    tool: Annotated[str, Field(pattern=r"^[a-z0-9_.-]{1,32}$")]
+    tool_version: Annotated[str | None, Field(max_length=64)] = None
+    name: Annotated[str | None, Field(pattern=NAME.pattern)] = None
+    f_start_hz: Hz
+    f_end_hz: Hz
+    bin_hz: Annotated[int, Field(ge=1, le=10_000_000)]
+    gain_db: Annotated[float, Field(ge=-10, le=100)]
+    interval_s: Annotated[int | None, Field(ge=1, le=3600)] = None
+    ppm: Annotated[int | None, Field(ge=-1000, le=1000)] = None
+    dwell_s: Annotated[int | None, Field(ge=1, le=86400)] = None
+    command: Annotated[str | None, Field(max_length=MAX_COMMAND_CHARS)] = None
+
+    @field_validator("tool_version", "command")
+    @classmethod
+    def _plain(cls, value: str | None) -> str | None:
+        return None if value is None else plain_text(value)
+
+    @model_validator(mode="after")
+    def _a_range(self) -> Sweep:
+        if self.f_end_hz <= self.f_start_hz:
+            raise ValueError("f_end_hz must be above f_start_hz")
+        return self
+
+
+def _usable_sweeps(value: object) -> object:
+    """Keep the sweeps that pass the contract, drop the rest.
+
+    A heartbeat is how the map knows a station is alive. One bad sweep
+    report must not drop it, so a bad entry is left out instead, as a
+    bad `meta` key is (`Observation._small_meta`).
+    """
+    if not isinstance(value, list):
+        return []
+    kept: list[Sweep] = []
+    for item in value[:MAX_SWEEPS]:
+        try:
+            kept.append(Sweep.model_validate(item))
+        except ValidationError:
+            continue
+    return kept
+
+
 class Status(_Model):
     """The heartbeat, published retained.
 
@@ -269,6 +367,14 @@ class Status(_Model):
     # The Meshtastic node on the same site, if any (design 3.5), so the
     # minutes it was transmitting are not read as interference.
     mesh_node: Annotated[str | None, Field(pattern=MESH_NODE.pattern)] = None
+    # What each sweeper of this source runs (#324). Missing is not
+    # "sweeps nothing": an older agent does not report it.
+    sweeps: Annotated[list[Sweep], Field(max_length=MAX_SWEEPS)] = []
+
+    @field_validator("sweeps", mode="before")
+    @classmethod
+    def _keep_usable_sweeps(cls, value: object) -> object:
+        return _usable_sweeps(value)
 
 
 # A level in tenths of a dB relative to the dongle's full scale. None is
@@ -278,7 +384,12 @@ Busy = Annotated[int, Field(ge=0, le=100)] | None
 
 
 class Spectrum(_Model):
-    """One minute of the 900 MHz band from one station, on `rf/v1/<station>/spectrum`.
+    """One minute of one swept range from one station, on `rf/v1/<station>/spectrum`.
+
+    A station may sweep any range it chooses, and more than one: with
+    two dongles, or one that takes turns (#324). Each range sends its
+    own minutes. A range is known by its source, `f_start_hz`, `bin_hz`
+    and number of bins; `name` is an optional label the station gives it.
 
     Bin `i` covers `f_start_hz + i * bin_hz` to the next bin. Per bin: the
     median, the 95th percentile and the peak level over the minute's
@@ -303,12 +414,64 @@ class Spectrum(_Model):
     p95: Annotated[list[Level], Field(min_length=1, max_length=MAX_BINS)]
     peak: Annotated[list[Level], Field(min_length=1, max_length=MAX_BINS)]
     busy: Annotated[list[Busy], Field(min_length=1, max_length=MAX_BINS)]
+    name: Annotated[str | None, Field(pattern=NAME.pattern)] = None
 
     @model_validator(mode="after")
     def _one_entry_per_bin(self) -> Spectrum:
         if not len(self.p50) == len(self.p95) == len(self.peak) == len(self.busy):
             raise ValueError("p50, p95, peak and busy must have one entry per bin")
         return self
+
+
+class CustomPoint(_Model):
+    """One thing a member's mod heard (#324, section 6).
+
+    A position is optional. With `heard_here`, the point is drawn at the
+    station's own rounded position, and any position it sends is not
+    used. With neither, it is listed in the table and never drawn.
+    """
+
+    id: Annotated[str, Field(min_length=1, max_length=32)]
+    t: AwareDatetime
+    lat: Annotated[float | None, Field(ge=-90, le=90)] = None
+    lon: Annotated[float | None, Field(ge=-180, le=180)] = None
+    heard_here: bool = False
+    meta: dict[str, object] | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _lower(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("meta")
+    @classmethod
+    def _small_plain_meta(cls, value: dict[str, object] | None) -> dict[str, object] | None:
+        """Filtered as an observation's is, and made plain: see `small_meta`."""
+        return small_meta(value, plain=True)
+
+    @model_validator(mode="after")
+    def _both_or_neither(self) -> CustomPoint:
+        if (self.lat is None) != (self.lon is None):
+            raise ValueError("lat and lon are sent together or not at all")
+        return self
+
+
+class Custom(_Model):
+    """A batch from a member's own mod, on `rf/v1/<station>/custom` (#324).
+
+    `mod` names the program within the station. Sonoran stores each point
+    under the station and the mod, so a mod can never post as another
+    station, another mod, or a built-in kind. It gets no more trust than
+    a built-in decoder, and is shown as unverified.
+    """
+
+    v: Literal[1]
+    station: StationId
+    source: SourceId = None
+    kind: Literal["custom"]
+    mod: Annotated[str, Field(pattern=NAME.pattern)]
+    sent: AwareDatetime
+    points: Annotated[list[CustomPoint], Field(max_length=MAX_CUSTOM_POINTS)]
 
 
 MAX_DISPLAY_NAME = 64
@@ -344,7 +507,8 @@ class TopicError(ValueError):
 class Topic(NamedTuple):
     """An RF topic, split.
 
-    `kind` is an observation kind, `spectrum`, `status` or `registry`.
+    `kind` is an observation kind, `spectrum`, `custom`, `status` or
+    `registry`.
     `source` is set only for a heartbeat on `status/<source>`.
     """
 
@@ -384,6 +548,7 @@ def json_schema() -> dict[str, object]:
             (Batch, "validation"),
             (Status, "validation"),
             (Spectrum, "validation"),
+            (Custom, "validation"),
             (Registry, "validation"),
         ],
         ref_template="#/$defs/{model}",
@@ -395,12 +560,14 @@ def json_schema() -> dict[str, object]:
             "Published by rf-agent. Observations go to rf/v1/<station>/<kind>, "
             "the heartbeat to rf/v1/<station>/status/<source> (or "
             "rf/v1/<station>/status without a source), retained, and a minute of "
-            "the 900 MHz band to rf/v1/<station>/spectrum. The registrar alone "
+            "a swept range to rf/v1/<station>/spectrum, and a member's mod's points "
+            "to rf/v1/<station>/custom. The registrar alone "
             "publishes the Registry to rf/v1/<station>/registry, retained. "
             "See docs/design/rf-map.md section 4. Generated from sonoran/rf/schema.py."
         ),
         # A message with `obs` is a batch, one of kind `spectrum` is a
-        # spectrum, one with `display_name` is a registry entry, and
+        # spectrum, one of kind `custom` is a mod's batch, one with
+        # `display_name` is a registry entry, and
         # anything else is a heartbeat. Not `oneOf`: a
         # heartbeat ignores unknown fields, so every batch would also pass
         # as one, and `anyOf` would let a batch with bad observations
@@ -412,9 +579,13 @@ def json_schema() -> dict[str, object]:
             "if": {"required": ["kind"], "properties": {"kind": {"const": "spectrum"}}},
             "then": {"$ref": "#/$defs/Spectrum"},
             "else": {
-                "if": {"required": ["display_name"]},
-                "then": {"$ref": "#/$defs/Registry"},
-                "else": {"$ref": "#/$defs/Status"},
+                "if": {"required": ["kind"], "properties": {"kind": {"const": "custom"}}},
+                "then": {"$ref": "#/$defs/Custom"},
+                "else": {
+                    "if": {"required": ["display_name"]},
+                    "then": {"$ref": "#/$defs/Registry"},
+                    "else": {"$ref": "#/$defs/Status"},
+                },
             },
         },
         "$defs": top["$defs"],

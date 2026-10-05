@@ -763,6 +763,43 @@ The token carries `project` (read and write) as of 2026-09-24, so a
 gated issue moved to `Ready` can also be set to `In progress` and then
 `Done` from here, which is what Tyler asked for.
 
+### 9.29 A shared RF layer is never decided by what a station says (#324)
+
+`rf_track` keeps one point per thing per 20 s across every station, and
+`rf_latest` one point per thing. They used to pick the point that
+**claimed** the loudest `rssi_db`, and the one that **claimed** the
+newest `t`, up to a minute ahead. Both are numbers the station chooses.
+A modified agent that sent `rssi_db: 50` and stamps 59 s ahead won
+every shared point, other stations' aircraft included. It could never
+post as another station; it did not need to.
+
+The rule now, in `rf/store.py` and `rf/guard.py`:
+
+- `rf_track` keeps the **first point received**. Only a station of
+  higher trust replaces it. Trust is set by an operator
+  (`sonoran-rf-trust`) and read from `rf_trust`; nothing in a message
+  sets it.
+- A shared point's time is `shared_time`: never later than when we
+  received it. The clock guard's minute of slack stays for a station's
+  own view only.
+- A point `Guard.doubtful` calls implausible (out of its kind's reach,
+  too fast since the same station's last point, or contradicting two
+  other stations) and every point of a quarantined station stay out of
+  the shared layers. Both are still counted in `rf_heard` for the
+  station's own view.
+
+Do not bring back "the loudest wins" because loud is usually closer.
+It is, for honest stations, and that is the whole trap: the field is
+attacker-chosen. `test_a_loud_claim_does_not_decide_a_shared_point` and
+`test_a_station_cannot_take_shared_points_with_claims` pin it.
+
+The ingest role reads `rf_trust`. That is a SELECT on a table only
+operators write, holding settings, never station data, and it is the one
+exception to "the ingest role has INSERT and UPDATE rights only" (4).
+It reads nothing else whole. Its in-memory state (positions, recent
+points, quotas) is rebuilt within minutes of a restart, because the
+broker replays every retained heartbeat on connect.
+
 ### 9.25 A diagnostic coverage run never reaches the public embed
 
 `COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
