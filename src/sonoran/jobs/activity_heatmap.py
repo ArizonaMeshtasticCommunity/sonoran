@@ -234,9 +234,18 @@ def _build_grids(
     count_grid = blur_grid(count_grid)
     relative_grids = {}
     for g_name in models:
-        s_grid = blur_grid(score_grids[g_name])
+        raw_s = score_grids[g_name]
+        mask = (raw_s > 0).astype(np.float32)
+        
+        blurred_s = blur_grid(raw_s)
+        blurred_mask = blur_grid(mask)
+        
+        # Normalize the blurred score so colors extend outward without dropping to 0
+        s_grid = np.divide(blurred_s, blurred_mask, out=np.zeros_like(blurred_s), where=blurred_mask > 0.001)
+        
         local_potential = local_max_pool(s_grid, radius_cells=177)
-        relative_grids[g_name] = np.clip(s_grid / local_potential, 0.0, 1.0)
+        relative = np.divide(s_grid, local_potential, out=np.zeros_like(s_grid), where=local_potential > 0.001)
+        relative_grids[g_name] = np.clip(relative, 0.0, 1.0)
         
     return grid, relative_grids, count_grid
 
@@ -273,14 +282,15 @@ def _render_tile(rel_score: npt.NDArray[np.float32], count: npt.NDArray[np.float
     height, width = rel_score.shape
     image = np.zeros((height, width, 4), dtype=np.uint8)
     
-    active = count > 0.1
+    active = count > 0.01
     if not active.any():
         return image
         
     image[..., :3] = _ramp_colour(rel_score)
     
-    alpha_fraction = np.clip((count - 1.0) / max(1.0, MAX_PACKETS_OPACITY - 1.0), 0.0, 1.0)
-    alpha = MIN_ALPHA + alpha_fraction * (MAX_ALPHA - MIN_ALPHA)
+    alpha_high = MIN_ALPHA + np.clip((count - 1.0) / max(1.0, MAX_PACKETS_OPACITY - 1.0), 0.0, 1.0) * (MAX_ALPHA - MIN_ALPHA)
+    alpha_low = count * MIN_ALPHA
+    alpha = np.where(count >= 1.0, alpha_high, alpha_low)
     
     image[..., 3] = np.where(active, alpha.astype(np.uint8), 0)
     return image
