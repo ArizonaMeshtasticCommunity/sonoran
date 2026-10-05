@@ -757,7 +757,9 @@ def test_purging_a_station_removes_its_rows_and_puts_back_honest_points(
             timescale_url,
             _beat("good-site", "pi", ["adsb"], 1),
             _beat("bad-site", "pi", ["adsb"], 1),
-            _batch("good-site", "adsb", [_obs("a1b2c3", now - timedelta(seconds=30), -20.0)]),
+            # A minute apart: in another 20 s slot from the bad point, so the
+            # bad station cannot take this one over in rf_track.
+            _batch("good-site", "adsb", [_obs("a1b2c3", now - timedelta(seconds=60), -20.0)]),
             _batch("bad-site", "adsb", [_obs("a1b2c3", now, -5.0, lat=40.0)]),
             _batch("bad-site", "adsb", [_obs("bbbbbb", now, -5.0)]),
         )

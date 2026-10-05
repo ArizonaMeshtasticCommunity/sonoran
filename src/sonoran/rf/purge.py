@@ -28,9 +28,9 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
-from sqlalchemy import CursorResult, create_engine, delete, func, insert, select, tuple_
+from sqlalchemy import create_engine, delete, func, insert, select, tuple_
 from sqlalchemy.engine import Connection
 
 from sonoran.db.models import (
@@ -114,29 +114,30 @@ def purge(conn: Connection, station: str) -> Report:
             .distinct(RfTrack.kind, RfTrack.thing_id)
             .order_by(RfTrack.kind, RfTrack.thing_id, RfTrack.t.desc())
         )
-        result = cast(
-            "CursorResult[Any]",
-            conn.execute(
-                insert(RfLatest).from_select(
-                    [
-                        "kind",
-                        "thing_id",
-                        "t",
-                        "lat",
-                        "lon",
-                        "alt_m",
-                        "alt_ref",
-                        "gs_kn",
-                        "track_deg",
-                        "rssi_db",
-                        "station_id",
-                        "meta",
-                    ],
-                    newest,
-                )
-            ),
-        )
-        report.restored = result.rowcount or 0
+        # Counted from RETURNING: the driver reports no row count for an
+        # INSERT ... SELECT (it says -1).
+        restored = conn.execute(
+            insert(RfLatest)
+            .from_select(
+                [
+                    "kind",
+                    "thing_id",
+                    "t",
+                    "lat",
+                    "lon",
+                    "alt_m",
+                    "alt_ref",
+                    "gs_kn",
+                    "track_deg",
+                    "rssi_db",
+                    "station_id",
+                    "meta",
+                ],
+                newest,
+            )
+            .returning(RfLatest.thing_id)
+        ).all()
+        report.restored = len(restored)
     return report
 
 
