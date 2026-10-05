@@ -679,7 +679,7 @@
           <div class="page-head">
             <div>
               <h2>RF</h2>
-              <p class="sub" data-sub-fold>What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors, the 900 MHz band and any other range a station sweeps, and members' own mods, from stations that run rf-agent beside an SDR.</p>
+              <p class="sub" data-sub-fold>What our own receivers hear outside Meshtastic: aircraft, APRS, weather sensors, the 900 MHz band and other swept ranges, and members' own mods. This data comes from stations that run rf-agent with an SDR.</p>
             </div>
             <div class="controls">
               <!--
@@ -839,7 +839,7 @@
           <div class="page-head dense fit">
             <div>
               <h2>Coverage</h2>
-              <p class="sub" data-coverage-sub>Where the mesh reaches, predicted from the routers and repeaters that carry it.</p>
+              <p class="sub" data-coverage-sub>Predicted coverage from routers and repeaters.</p>
             </div>
             <div class="controls">
               <!-- Only shown when the run published more than one site
@@ -919,7 +919,7 @@
           <div class="page-head">
             <div>
               <h2>Coverage gaps</h2>
-              <p class="sub" data-sub-fold>Which nodes the mesh is not carrying well, measured from the packets we hold. Shows the preset chosen in the menu: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
+              <p class="sub" data-sub-fold>Nodes with poor coverage, measured from the packets we hold. Shows the preset chosen in the menu: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
             </div>
           </div>
 
@@ -954,15 +954,15 @@
             actually look.
           -->
           <div class="panel span-2">
-            <h3>Where a node would help, and who it would help</h3>
+            <h3>Coverage gaps</h3>
             <div class="gap-map-shell">
               <div id="gaps-map"></div>
             </div>
             <div class="gap-legend">
-              <span><i class="area"></i>An area worth siting against</span>
-              <span><i class="candidate"></i>A place a node could go</span>
-              <span><i class="bad"></i>A node with a fault we can measure</span>
-              <span><i class="unknown"></i>A node with not enough evidence</span>
+              <span><i class="area"></i>Target area</span>
+              <span><i class="candidate"></i>Potential site</span>
+              <span><i class="bad"></i>Measurable fault</span>
+              <span><i class="unknown"></i>Not enough data</span>
             </div>
           </div>
 
@@ -995,18 +995,18 @@
               <dl class="gap-key-list">
                 <div class="gap-key-item">
                   <dt>Evidence</dt>
-                  <dd><p>Opens the sentence and the counts behind every answer in the row.</p></dd>
+                  <dd><p>Shows the detailed data behind each answer.</p></dd>
                 </div>
                 <div class="gap-key-item">
                   <dt>Node and Role</dt>
-                  <dd><p>The node's name, and the role its owner set on it, such as Client or Router.</p></dd>
+                  <dd><p>The node's name and its configured role (e.g., Client, Router).</p></dd>
                 </div>
               </dl>
               <dl class="gap-key-list" data-gaps-key-signals></dl>
               <dl class="gap-key-list">
                 <div class="gap-key-item">
                   <dt>Packets</dt>
-                  <dd><p>How many packets from this node reached us in the window. Too few, and most answers are &ldquo;cannot tell&rdquo;.</p></dd>
+                  <dd><p>Number of packets received from this node during the window.</p></dd>
                 </div>
               </dl>
             </details>
@@ -1375,12 +1375,11 @@
             Nothing is sent. The reader copies it if they choose to.
           -->
           <div class="panel" data-config-diagnostics hidden>
-            <h3>Something went wrong reading that file</h3>
+            <h3>Error reading configuration</h3>
             <p class="sub">
-              This did not work, and we would not otherwise hear about it.
-              Below is everything the report contains &mdash; no settings, no
-              channel names, no keys, not even the file name. Nothing is sent
-              anywhere; copying it is up to you.
+              We encountered an error. The diagnostic report below contains no settings,
+              channel names, keys, or file names. Nothing is sent automatically; please copy
+              this report and open an issue.
             </p>
             <pre data-config-diagnostics-text></pre>
             <div class="controls">
@@ -1546,12 +1545,10 @@
             it. See the note in `config-check.js`.
           -->
           <details class="panel" data-config-extras hidden>
-            <summary>Optional: connect this node to the azmsh.net MQTT broker, or change a recommended value</summary>
+            <summary>Optional: Configure MQTT or change recommended values</summary>
             <p class="sub">
-              MQTT sends this node&rsquo;s traffic to a server over the internet, so
-              the mesh can be seen on a map and from other sites. It is optional
-              and the node works without it. Credentials for the community broker
-              come from the AZ Meshtastic Discord.
+              MQTT sends node traffic over the internet so it can be seen on maps and from other sites.
+              This is optional. Credentials for the community broker are in the AZ Meshtastic Discord.
             </p>
             <div class="grid two">
               <div>
@@ -1660,9 +1657,9 @@
             <p class="notice" data-graph-warning hidden></p>
             <div class="chart tall" data-graph-chart></div>
             <p class="legend" style="margin: .5rem 0 0">
-              <span><span class="line solid"></span>Two-way: packets crossed it both ways</span>
-              <span><span class="line dashed"></span>One-way: packets crossed it mostly one way</span>
-              <span data-legend-weak hidden><span class="line weak"></span>Too little evidence: under 10 packets seen</span>
+              <span><span class="line solid"></span>Two-way traffic</span>
+              <span><span class="line dashed"></span>Mostly one-way traffic</span>
+              <span data-legend-weak hidden><span class="line weak"></span>Insufficient data: &lt;10 packets</span>
               <span data-legend-unconfirmed hidden><span class="line grey"></span>No signal reading</span>
             </p>
           </div>
@@ -1892,7 +1889,7 @@
         <section class="page" data-page="meshnet">
           <div class="page-head">
             <div>
-              <h2>Weekly mesh net check-in</h2>
+              <h2>Weekly check-in</h2>
               <!-- The channel name is filled from the server's answer
                    (`channel` in `api/chat/tagged`), which decides it from
                    `default_preset`. The text here is only what shows
@@ -1923,7 +1920,7 @@
         <section class="page" data-page="firehose">
           <div class="page-head">
             <div>
-              <h2>Packet firehose</h2>
+              <h2>Firehose</h2>
               <!-- The window is named, not implied (plan §5.1). A page
                    showing 150 rows out of a database and a page showing
                    150 rows out of one day look identical and answer
@@ -1973,7 +1970,7 @@
           <div class="page-head">
             <div data-link-title>
               <h2>Link</h2>
-              <p class="sub">The reports that evidence one radio link.</p>
+              <p class="sub">The reports for one radio link.</p>
             </div>
           </div>
           <div data-link-body></div>
@@ -1984,7 +1981,7 @@
           <div class="page-head">
             <div data-packet-title>
               <h2>Packet</h2>
-              <p class="sub">Everything stored about one packet.</p>
+              <p class="sub">The details of one packet.</p>
             </div>
           </div>
           <div data-packet-body></div>
@@ -2058,19 +2055,15 @@
               <div class="grid" data-leaderboards></div>
             </div>
             <div class="panel span-2">
-              <h3><span>Busiest senders <span class="range-chip" data-range-chip></span></span>
-                <span class="muted head-note">a diagnostic, not a prize: air time is shared</span></h3>
+              <h3><span>Busiest nodes <span class="range-chip" data-range-chip></span></span>
+                <span class="muted head-note">Air time is shared</span></h3>
               <div class="table-wrap" data-top-talkers></div>
             </div>
             <div class="panel span-2">
-              <h3><span>Nodes worth a look <span class="range-chip" data-range-chip></span></span>
+              <h3><span>Frequent senders <span class="range-chip" data-range-chip></span></span>
                 <span class="muted head-note" data-broadcast-note></span></h3>
               <p class="muted" style="margin: -.25rem 0 .75rem; font-size: .8rem">
-                How often each node sends, against the firmware defaults. A node
-                that keeps announcing itself is usually restarting, and a node
-                that keeps restarting usually needs power rather than a change
-                of settings. Counts include packets sent on boot and in reply to
-                a request, so read this as a reason to ask, not as a verdict.
+                Nodes sending more often than firmware defaults. High counts often indicate frequent restarts due to power issues.
               </p>
               <div class="table-wrap" data-broadcast-table></div>
             </div>

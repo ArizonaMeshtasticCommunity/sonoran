@@ -1148,7 +1148,7 @@ function writeSummary(threshold) {
       'A prediction, not a promise. It assumes clear ground and the ' +
       'receiver figures in the form. Real radios do worse.'),
     el('div', { class: 'panel', style: 'margin-top:1rem' },
-      el('h3', { text: 'Nodes this site would reach' }),
+      el('h3', { text: 'Reachable nodes' }),
       el('div', { class: 'table-wrap' },
         table(
           [

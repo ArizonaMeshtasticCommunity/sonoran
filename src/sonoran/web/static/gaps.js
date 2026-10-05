@@ -370,7 +370,7 @@
        * shortcut that duplicates a real control is an enhancement,
        * not the only way in.
        */
-      tr.title = 'Open the evidence';
+      tr.title = 'View node details';
       const opener = tr.querySelector('.gap-open');
       const toggle = () => {
         const open = tr.classList.contains('open');
