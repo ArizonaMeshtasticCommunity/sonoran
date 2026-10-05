@@ -568,6 +568,34 @@ the waterfall; the tab offers the pattern, not a verdict.
 
 ---
 
+### 8.1 Removing a station that sent bad data
+
+A station's data is a claim from that station. If a station sends bad
+data on purpose:
+
+1. Revoke its login: `/rf token revoke` for one Pi, or
+   `/rf location delete` for the whole station. The broker cuts it off
+   at once. Ban the member in Discord if needed.
+2. Purge what it left, as the database owner, in the `migrate` service:
+
+   ```
+   docker compose run --rm migrate sonoran-rf-purge <station>          # counts only
+   docker compose run --rm migrate sonoran-rf-purge <station> --yes    # deletes
+   ```
+
+   It removes the station from every RF table in one transaction. A
+   "latest position" it held is put back from another station's newest
+   kept point of the same thing. It cannot restore a shared track point
+   it won from an honest station for that 20 s.
+3. The broker keeps the station's last heartbeat as a retained message,
+   and the ingest reads it again on reconnect. The registrar clears it
+   on revoke. For a login made by hand, clear the topics the command
+   lists with the broker's API.
+
+A replayed (retained) heartbeat counts as heard when it was sent, not
+when it arrived, so a revoked or dead station never looks online after
+an ingest restart.
+
 ## 9. Build order
 
 Each phase is useful on its own and ends with a measurement.

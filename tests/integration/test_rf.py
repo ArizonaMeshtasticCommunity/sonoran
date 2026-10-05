@@ -738,3 +738,55 @@ def test_the_rollup_finds_nothing_to_do_without_minutes(
     with _client(timescale_url) as client:
         week = client.get("/api/rf/spectrum/west-site?hours=168").json()
     assert week == {"station": "west-site", "hours": 168, "bucket_minutes": 60, "rows": []}
+
+
+def test_purging_a_station_removes_its_rows_and_puts_back_honest_points(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """`sonoran-rf-purge`: one bad station goes; the honest one stays.
+
+    Both hear aircraft a1b2c3; the bad one is heard last, so it holds the
+    latest position. After the purge the latest position comes back from
+    the honest station's track.
+    """
+    from sonoran.rf.purge import purge, survey
+
+    now = datetime.now(UTC)
+    asyncio.run(
+        _write(
+            timescale_url,
+            _beat("good-site", "pi", ["adsb"], 1),
+            _beat("bad-site", "pi", ["adsb"], 1),
+            _batch("good-site", "adsb", [_obs("a1b2c3", now - timedelta(seconds=30), -20.0)]),
+            _batch("bad-site", "adsb", [_obs("a1b2c3", now, -5.0, lat=40.0)]),
+            _batch("bad-site", "adsb", [_obs("bbbbbb", now, -5.0)]),
+        )
+    )
+    asyncio.run(
+        _write_spectrum(timescale_url, _minute("bad-site", now, [-500, -500, -500], [0, 0, 0]))
+    )
+    assert _rows(migrated_engine, "SELECT station_id FROM rf_latest WHERE thing_id = 'a1b2c3'") == [
+        ("bad-site",)
+    ]
+
+    with migrated_engine.begin() as conn:
+        dry = survey(conn, "bad-site")
+    assert dry.counts["rf_station"] == 1 and dry.counts["rf_spectrum"] == 1
+    assert dry.sources == ["pi"]
+
+    with migrated_engine.begin() as conn:
+        report = purge(conn, "bad-site")
+    assert report.restored == 1, "a1b2c3 came back from good-site; bbbbbb had no one else"
+    for table in (
+        "rf_track",
+        "rf_latest",
+        "rf_heard",
+        "rf_spectrum",
+        "rf_spectrum_hour",
+        "rf_source",
+        "rf_station",
+    ):
+        assert _rows(migrated_engine, f"SELECT 1 FROM {table} WHERE station_id = 'bad-site'") == []
+    latest = _rows(migrated_engine, "SELECT thing_id, station_id, lat FROM rf_latest ORDER BY 1")
+    assert latest == [("a1b2c3", "good-site", 33.5)]
+    assert _rows(migrated_engine, "SELECT station_id FROM rf_station") == [("good-site",)]
