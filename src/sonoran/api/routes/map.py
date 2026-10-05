@@ -579,10 +579,7 @@ async def heatmap_tile(
         content=png,
         media_type="image/png",
         headers={
-            # Heatmap tiles are regenerated nightly.
-            # Do not cache: the job rewrites tiles in place and browsers
-            # must not serve a stale tile after the job runs.
-            "Cache-Control": "no-store",
+            "Cache-Control": "public, max-age=3600",
         },
     )
 
