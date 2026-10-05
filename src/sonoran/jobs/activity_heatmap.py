@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 MIN_ALPHA = 40
 MAX_ALPHA = 210
-MAX_PACKETS_OPACITY = 50.0
+MAX_PACKETS_OPACITY = 100.0
 
 def precision_deviation_m(precision_bits: int) -> float:
     """Calculate the rough deviation in meters for a given geohash precision."""
@@ -229,6 +229,8 @@ def _build_grids(
         block_count = count_grid[r_start:r_end, c_start:c_end]
         block_count += 1.0
         
+    # Clip count_grid so chatty nodes don't bleed massive opacity through the blur
+    np.clip(count_grid, 0.0, 100.0, out=count_grid)
     count_grid = blur_grid(count_grid)
     relative_grids = {}
     for g_name in models:
