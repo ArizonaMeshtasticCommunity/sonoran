@@ -5,6 +5,32 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.07 — 2026-10-07
+
+2 pull requests merged, 1 issue closed.
+
+#### New features
+
+- Sonoran-rf-purge to remove a revoked station's data; retained heartbeats keep their time (#325) by @logans-stuff
+  - Operators can remove all of a revoked RF station's data with one command, `sonoran-rf-purge`.
+  - A dead or revoked RF station no longer shows as online after a server restart.
+- Any swept range, a sweeps view, member mods, and shared layers a station cannot win (#326) by @logans-stuff — done: #324
+  - The RF page can show any range a station sweeps, not only 902–928 MHz, with a picker for stations that sweep more than one, and grey rows where a range was not swept.
+  - A new "What is being swept" chart shows every station's ranges and the sweep settings each reports.
+  - Members can send data from their own programs through their station; it appears in a new "Member mods" layer, off by default and marked unverified.
+  - A station can no longer take over the shared aircraft tracks by claiming a loud signal or an early clock.
+
+#### Issues
+
+- Done: #324 RF: monitoring any range a station chooses, a 'what is being swept' view, and support for member-built mods (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.05...v2026.10.07
+
 ## v2026.10.05 — 2026-10-05
 
 1 pull request merged.
