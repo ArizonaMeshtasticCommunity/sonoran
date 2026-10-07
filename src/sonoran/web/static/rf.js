@@ -1045,6 +1045,7 @@
       if (band.data) {
         // `fitChannels` moved each mark to its centre; put the edges back.
         drawWaterfall(page);
+        drawBusy(page);
       }
       const axis = $('.rf-sweeps-axis', page);
       if (axis) fitAxis(axis);
@@ -1108,8 +1109,10 @@
       selected = Object.fromEntries(series.map((item) => [item.name, true]));
       explainBusy.textContent = 'The share of sweeps in which a bin stood 6 dB above its own median, over the whole range and over the bins busiest in this window. This range is outside the mesh band, so no mesh channel is marked.';
     }
+    fitLegend(target, series);
     let chart = window.echarts.getInstanceByDom(target);
     if (!chart) chart = window.echarts.init(target, null, { renderer: 'canvas' });
+    else chart.resize();
     const css = getComputedStyle(document.documentElement);
     const token = (name, fallback) => (css.getPropertyValue(name) || '').trim() || fallback;
     chart.setOption({
@@ -1119,12 +1122,63 @@
       backgroundColor: 'transparent',
       textStyle: { color: token('--muted', '#b59c88') },
       tooltip: { trigger: 'axis', valueFormatter: (v) => (v == null ? 'not swept' : `${v.toFixed(1)} %`) },
-      legend: { top: 0, type: 'scroll', selected, textStyle: { color: token('--muted', '#b59c88') } },
-      grid: { left: 40, right: 16, top: 36, bottom: 28, containLabel: true },
+      legend: {
+        ...legendFor(target, selected, token('--muted', '#b59c88')),
+        // Plain text: ECharts draws a legend name on the canvas, never as markup.
+        formatter: (name) => (target.dataset.legendRows ? legendName(name) : name),
+      },
+      grid: { left: 40, right: 16, top: target.dataset.legendRows ? 16 : 36, bottom: 28 + Number(target.dataset.legendHeight || 0), containLabel: true },
       xAxis: { type: 'time' },
       yAxis: { type: 'value', min: 0, axisLabel: { formatter: '{value} %' } },
       series,
     }, true);
+  }
+
+  /*
+   * The busy chart's legend. One scrolling line on a wide screen. On a
+   * phone that line showed one and a half names and a "1/11" pager, so
+   * the names wrap into rows under the chart instead, and the chart
+   * grows by the rows' height so the plot keeps its own.
+   */
+  const LEGEND_NARROW = 600;
+  const LEGEND_FONT = 11;
+  const LEGEND_ROW = 22;
+  const legendName = (name) => name.replace(' (ours)', '');
+
+  function fitLegend(target, series) {
+    const width = target.clientWidth;
+    delete target.dataset.legendRows;
+    delete target.dataset.legendHeight;
+    target.style.removeProperty('height');
+    if (!width || width >= LEGEND_NARROW) return;
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = `${LEGEND_FONT}px ${getComputedStyle(target).fontFamily || 'sans-serif'}`;
+    let rows = 1;
+    let used = 0;
+    for (const item of series) {
+      // Marker, its gap, the words and the gap to the next name.
+      const size = 18 + 5 + ctx.measureText(legendName(item.name)).width + 10;
+      if (used && used + size > width) {
+        rows += 1;
+        used = 0;
+      }
+      used += size;
+    }
+    const height = rows * LEGEND_ROW + 6;
+    target.dataset.legendRows = String(rows);
+    target.dataset.legendHeight = String(height);
+    target.style.height = `calc(15rem + ${height}px)`;
+  }
+
+  function legendFor(target, selected, colour) {
+    if (!target.dataset.legendRows) {
+      return { top: 0, type: 'scroll', selected, textStyle: { color: colour } };
+    }
+    return {
+      type: 'plain', bottom: 0, left: 0, right: 0, selected,
+      itemWidth: 18, itemHeight: 10, itemGap: 10,
+      textStyle: { color: colour, fontSize: LEGEND_FONT },
+    };
   }
 
   function explain(page) {

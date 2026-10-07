@@ -86,8 +86,8 @@ def test_to_cannot_fall_under_from() -> None:
     """
     block = _phone_cards()
     assert ":is(td, th):nth-child(3) { flex: 1 1 0; }" in block
-    # And the names are flex items, so a name's button can shrink.
-    assert "td:is(:nth-child(2), :nth-child(3)) { display: flex;" in block
+    # And a name's button is capped to its cell, so it can shrink.
+    assert "td:nth-child(3) .linky { max-width: calc(100% - 1.4em); }" in block
 
 
 def test_a_trace_card_hides_what_the_trace_page_shows() -> None:
@@ -103,3 +103,22 @@ def test_the_dense_head_centres_its_controls_on_a_phone() -> None:
     )
     assert match
     assert "justify-content: center" in match.group(1)
+
+
+def test_the_busy_legend_wraps_on_a_phone() -> None:
+    """One scrolling line showed "LongSl" and a "1/11" pager at 390 px.
+    Below 600 px the names wrap under the chart, which grows to hold them.
+    """
+    assert "const LEGEND_NARROW = 600;" in RF
+    assert "type: 'plain', bottom: 0" in RF
+    assert "target.style.height = `calc(15rem + ${height}px)`;" in RF
+    # The grid's foot moves up by the legend, so the axis stays clear.
+    assert "bottom: 28 + Number(target.dataset.legendHeight || 0)" in RF
+
+
+def test_the_firehose_search_shows_its_whole_hint() -> None:
+    """It read "Packet ty" on a phone and "Packet type, such as Posi" on
+    a desktop."""
+    search = '[data-page="firehose"] .page-head .controls > input[type="search"]'
+    assert f"{search} {{ flex-basis: 100%; }}" in CSS
+    assert f"{search} {{ min-width: 16.5rem; }}" in CSS

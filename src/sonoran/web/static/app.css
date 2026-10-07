@@ -2620,6 +2620,10 @@ tr.row-link { cursor: pointer; }
 tr.row-link:hover td { background: var(--panel-2); }
 tr.row-link:focus-within td { background: var(--panel-2); }
 
+/* Wide enough for its hint, "Packet type, such as Position". At the
+   default width it read "Packet type, such as Posi". */
+[data-page="firehose"] .page-head .controls > input[type="search"] { min-width: 16.5rem; }
+
 /*
  * The firehose as cards on a phone (#273).
  *
@@ -2712,12 +2716,14 @@ tr.row-link:focus-within td { background: var(--panel-2); }
   }
   [data-traceroute-table] :is(td, th):nth-child(1) { order: 4; width: auto; }
   /* A name is a button, and a button does not shrink inside a line of
-     text: it was clipped whole, leaving "→ …". As flex items the button
-     shrinks, and the name inside it ends in its own ellipsis. */
-  [data-firehose-table] td:is(:nth-child(2), :nth-child(3)),
-  [data-traceroute-table] td:is(:nth-child(2), :nth-child(3)) { display: flex; align-items: baseline; }
-  [data-firehose-table] td::before, [data-traceroute-table] td::before { flex: none; white-space: pre; }
-  [data-firehose-table] td .linky, [data-traceroute-table] td .linky { min-width: 0; overflow: hidden; }
+     text: it was clipped whole, leaving "→ …". Capped to the cell (less
+     the arrow), it fits, and the name inside it ends in its own
+     ellipsis. A name that is plain text ("Everyone") takes the cell's. */
+  [data-firehose-table] td .linky, [data-traceroute-table] td .linky {
+    display: inline-flex; min-width: 0; overflow: hidden;
+  }
+  [data-firehose-table] td:nth-child(3) .linky,
+  [data-traceroute-table] td:nth-child(3) .linky { max-width: calc(100% - 1.4em); }
   /* Hops and Signal measured stay on the trace page on a phone (#274). */
   [data-traceroute-table] .low { display: none; }
   /* The trace's time column is the sticky one on a wider screen. */
@@ -2726,7 +2732,7 @@ tr.row-link:focus-within td { background: var(--panel-2); }
      taken back as a margin (#269), so the line is no taller than its
      text and the cards do not stand apart. */
   [data-firehose-table] td .linky, [data-traceroute-table] td .linky {
-    max-width: 100%; margin-block: -.6rem; vertical-align: baseline;
+    max-width: 100%; margin-block: -12.5px; vertical-align: baseline;
   }
   /* The break between the two lines, in the headings too, so the one
      line of words above the cards has the cards' own shape. */
@@ -3324,6 +3330,10 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    * row, to 37% of an iPhone SE's first screen.
    */
   .page-head .controls > input[type="search"] { flex: 1 1 7rem; min-width: 7rem; width: auto; }
+  /* The firehose's search has its own line on a phone. Sharing one with
+     the window and Filter left it 9 characters wide, and its hint read
+     "Packet ty". */
+  [data-page="firehose"] .page-head .controls > input[type="search"] { flex-basis: 100%; }
 }
 .filter-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
 .filter-group { border: 0; margin: 0; padding: 0; min-width: 0; }
