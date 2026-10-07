@@ -2501,3 +2501,67 @@ def test_the_firehose_counts_each_packets_uploads(  # type: ignore[no-untyped-de
     assert [row["packet_key"] for row in top] == [f"{sender}:1", f"{sender}:2"], (
         "newest first, and the limit holds"
     )
+
+
+_CLEAR_9931 = (
+    "DELETE FROM neighbor_metrics WHERE node_num IN (9931, 9932)",
+    "DELETE FROM position_metrics WHERE node_num IN (9931, 9932)",
+    "DELETE FROM node WHERE node_num IN (9931, 9932)",
+)
+
+
+def test_a_distance_is_where_both_nodes_were_when_they_heard_each_other(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """A mobile node is measured where it was, not where it is now (#310).
+
+    "about 120 mi" showed between Will's node and a car that had heard it
+    nearby and driven off. 9931 heard 9932 two days ago when 9932 was
+    about 5.6 km away. 9932 has since moved to Flagstaff, about 190 km
+    away, and that is its stored position now.
+    """
+    now = datetime.now(UTC)
+    then = now - timedelta(days=2)
+    try:
+        with migrated_engine.begin() as connection:
+            for statement in _CLEAR_9931:
+                connection.execute(text(statement))
+            connection.execute(
+                text(
+                    "INSERT INTO node (node_num, node_id, short_name, first_seen, updated_at, "
+                    "last_heard, last_lat, last_lon, position_time) VALUES "
+                    "(9931, '!000026cb', 'HOME', :then, :now, :now, 33.4500, -112.0700, :then), "
+                    "(9932, '!000026cc', 'CAR', :then, :now, :now, 35.1983, -111.6513, :moved)"
+                ),
+                {"then": then, "now": now, "moved": now - timedelta(hours=1)},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO position_metrics (node_num, latitude, longitude, time) VALUES "
+                    "(9931, 33.4500, -112.0700, :then), "
+                    "(9932, 33.5000, -112.0700, :then), "
+                    "(9932, 35.1983, -111.6513, :moved)"
+                ),
+                {"then": then - timedelta(minutes=5), "moved": now - timedelta(hours=1)},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO neighbor_metrics "
+                    "(node_num, neighbor_node_num, channel, snr, time) "
+                    "VALUES (9931, 9932, 'MediumFast', 10.5, :then)"
+                ),
+                {"then": then},
+            )
+
+        app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+        with TestClient(app) as client:
+            body = client.get("/api/nodes/!000026cb/routes?hours=720").json()
+    finally:
+        with migrated_engine.begin() as connection:
+            for statement in _CLEAR_9931:
+                connection.execute(text(statement))
+
+    furthest = body["furthest_heard"]
+    assert furthest is not None and furthest["node_id"] == "!000026cc", body
+    # Where it was: about 5.6 km. Where it is now would be about 190 km.
+    assert 4.5 < furthest["distance_km"] < 7.0, furthest

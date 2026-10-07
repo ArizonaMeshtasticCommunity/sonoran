@@ -91,6 +91,11 @@ def test_the_reason_names_the_cause_the_reader_can_act_on() -> None:
     # would not help.
     assert _no_distance_reason([{"node_id": "!a"}], False, quiet=False) == "no_position"
     assert _no_distance_reason([{"node_id": "!a"}], True, quiet=False) == "partners_no_position"
+    # Both have a position now, none from when they heard each other
+    # (#310): say that, not that nobody shares one.
+    assert (
+        _no_distance_reason([{"node_id": "!a"}], True, quiet=False, placed_now=True) == "not_then"
+    )
 
 
 # --- the page half, and proof that it can fail --------------------

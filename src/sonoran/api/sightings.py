@@ -25,6 +25,7 @@ expires the old rows, and after that holds only the packets whose
 header had no `hop_start` at all (about 3 in 100 in live data).
 """
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, select, union_all
@@ -43,11 +44,26 @@ _COLUMNS = (
 )
 
 
-def sightings(*where: Any) -> Any:
+# How long before a window a packet first seen then can still have a
+# sighting inside it. Relays and late uploads arrive within minutes; a
+# day is far beyond that, and still lets the planner skip every older
+# chunk of `packet`.
+PACKET_SLACK = timedelta(days=1)
+
+
+def sightings(*where: Any, since: datetime | None = None, until: datetime | None = None) -> Any:
     """Return the `packet_seen` rows `where` selects, with `hop_start`.
 
     `where` is written against `PacketSeen`, and each half gets all of
     it, so the index on the node and the time bound work in both.
+
+    `since` and `until` bound the joined half's `packet` rows as well
+    (#304). `packet` is a hypertable on `first_seen_at`, and with no
+    bound on it TimescaleDB excluded none of its chunks ("Chunks
+    excluded during startup: 0"), so the join read all 30 days of
+    `packet` for a window of any size. A packet is first seen before
+    any of its sightings, so `until` holds exactly; `since` allows
+    `PACKET_SLACK` for a packet first seen just before the window.
 
     A sighting whose packet row is gone is kept when it carries its own
     `hop_start`. The join dropped it. Both tables expire after the same
@@ -68,6 +84,10 @@ def sightings(*where: Any) -> Any:
         )
         .where(PacketSeen.hop_start.is_(None), *where)
     )
+    if since is not None:
+        joined = joined.where(Packet.first_seen_at >= since - PACKET_SLACK)
+    if until is not None:
+        joined = joined.where(Packet.first_seen_at <= until)
     return union_all(own, joined).subquery("sightings")
 
 

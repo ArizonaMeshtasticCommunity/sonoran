@@ -139,9 +139,12 @@ def test_every_reason_the_api_can_send_has_words_for_both_tiles() -> None:
     source = NODE_PAGE.read_text(encoding="utf-8")
     # Up to the next line that starts at column 0: the next definition,
     # whether `def` or `async def`.
-    body = re.split(r"\n(?=\S)", source.split("def _no_distance_reason", 1)[1], maxsplit=1)[0]
+    # After the signature, which may wrap: its closing line also starts
+    # at column 0.
+    after = source.split("def _no_distance_reason", 1)[1].split("-> str:", 1)[1]
+    body = re.split(r"\n(?=\S)", after, maxsplit=1)[0]
     codes = set(re.findall(r'"(\w+)"', body.split('"""', 2)[2]))
-    assert codes == {"quiet", "no_link", "no_position", "partners_no_position"}, codes
+    assert codes == {"quiet", "no_link", "no_position", "not_then", "partners_no_position"}, codes
     app = _code("app.js")
     block = app.split("const NO_DISTANCE = {", 1)[1].split("\n};", 1)[0]
     for side in ("heardBy", "heard"):

@@ -318,6 +318,8 @@ function coveredAreaKm2(result, threshold) {
 /* State                                                             */
 
 const state = {
+  // True while the form holds a shared link's values (#314).
+  fromLink: false,
   map: null,
   nodeLayer: null,
   coverageLayer: null,
@@ -632,6 +634,8 @@ async function applyShareLink() {
 
   const read = SonoranPlannerParams.fromShareQuery(search);
   const filled = { ...SonoranPlannerParams.FORM_DEFAULTS, ...read.values };
+  // The link brought its own numbers. See `missingChoices`.
+  state.fromLink = true;
   // `fillForm` leaves a field alone when the value is null, and the
   // default for both coordinates is null. A link with no site must
   // empty them rather than keep whatever was typed before.
@@ -839,6 +843,11 @@ function drawNodes() {
 
 async function runCoverage() {
   if (state.running) return;
+  const missing = missingChoices();
+  if (missing.length) {
+    askForChoices(missing);
+    return;
+  }
   const request = readForm();
   if (!request) return;
 
@@ -1361,6 +1370,7 @@ function applyPlannerMode(mode) {
   const form = document.querySelector('[data-planner-form]');
   if (!form) return;
   form.classList.toggle('is-simple', mode === 'simple');
+  labelEmptyChoices(mode);
   for (const button of document.querySelectorAll('[data-planner-mode]')) {
     button.setAttribute('aria-pressed', String(button.dataset.plannerMode === mode));
   }
@@ -1371,7 +1381,69 @@ function applyPlannerMode(mode) {
   }
 }
 
+/*
+ * The first choice of each picker (#314, Will).
+ *
+ * In Advanced the empty choice means "I'll type it myself", and the box
+ * beside it is there to type into. In Simple the box is hidden, so the
+ * same words offered something the reader could not do. There it reads
+ * "Select …", and a run asks for a choice instead of quietly using
+ * whatever the hidden box held.
+ */
+const PICKERS = [
+  { select: '[data-board-type]', run: '[data-board-run]', simple: 'Select your radio', advanced: "I'll type the power myself" },
+  { select: '[data-antenna-type="tx"]', run: '[data-antenna-run="tx"]', simple: 'Select the antenna at your site', advanced: "I'll type the gain myself" },
+  { select: '[data-antenna-type="rx"]', run: '[data-antenna-run="rx"]', simple: 'Select the antenna at the far end', advanced: "I'll type the gain myself" },
+  { select: '[data-cable-type]', run: '[data-cable-run]', simple: 'Select the cable', advanced: "I'll type the loss myself" },
+];
+
+function emptyChoice(picker) {
+  const option = el('option', { value: '' });
+  option.textContent = plannerMode() === 'simple' ? picker.simple : picker.advanced;
+  return option;
+}
+
+function labelEmptyChoices(mode) {
+  for (const picker of PICKERS) {
+    const option = document.querySelector(`${picker.select} option[value=""]`);
+    if (option) option.textContent = mode === 'simple' ? picker.simple : picker.advanced;
+  }
+}
+
+/*
+ * In Simple, every picker on screen needs a choice before a run.
+ *
+ * A picker whose catalogue did not load stays hidden, and is not asked
+ * for. A plan opened from a share link is not asked either: its values
+ * came with it, and the pickers are empty only because a link carries
+ * numbers, not names.
+ */
+function missingChoices() {
+  if (plannerMode() !== 'simple' || state.fromLink) return [];
+  return PICKERS.map((picker) => {
+    const run = document.querySelector(picker.run);
+    const select = document.querySelector(picker.select);
+    return run && !run.hidden && select && select.value === '' ? { picker, select } : null;
+  }).filter(Boolean);
+}
+
+function askForChoices(missing) {
+  for (const { select } of missing) select.setAttribute('aria-invalid', 'true');
+  const names = missing.map(({ picker }) => picker.simple.replace(/^Select /, '')).join(', ');
+  setNotice(`Choose ${names} first, or switch to Advanced to type the numbers yourself.`, 'warn');
+  missing[0].select.focus();
+}
+
 function wirePlannerMode() {
+  // A choice made clears its own mark, and the notice once none is left.
+  for (const picker of PICKERS) {
+    const select = document.querySelector(picker.select);
+    if (!select) continue;
+    select.addEventListener('change', () => {
+      select.removeAttribute('aria-invalid');
+      if (!document.querySelector('[data-planner-form] select[aria-invalid="true"]')) setNotice('', '');
+    });
+  }
   const buttons = [...document.querySelectorAll('[data-planner-mode]')];
   if (!buttons.length) return;
   for (const button of buttons) {
@@ -1731,7 +1803,7 @@ async function wireBoardRun() {
   });
 
   picker.replaceChildren(
-    el('option', { value: '', text: "I'll type the power myself" }),
+    emptyChoice(PICKERS[0]),
     ...ordered.map((board) => el('option', {
       value: board.slug,
       text: board.profile_is_exact ? board.name : `${board.name} (assumed)`,
@@ -1809,7 +1881,7 @@ async function wireAntennaRun(end, gainField) {
   if (!antennas || !antennas.length) return;
 
   picker.replaceChildren(
-    el('option', { value: '', text: "I'll type the gain myself" }),
+    emptyChoice(PICKERS[end === 'tx' ? 1 : 2]),
     ...antennas.map((antenna) => el('option', {
       value: antenna.key,
       text: `${antenna.name} (${antenna.gain_dbi_claimed} dBi)`,
@@ -1852,7 +1924,7 @@ async function wireCableRun() {
   if (!cables || !cables.length) return;
 
   picker.replaceChildren(
-    el('option', { value: '', text: "I'll type the loss myself" }),
+    emptyChoice(PICKERS[3]),
     ...cables.map((cable) => el('option', { value: cable.key, text: cable.name })),
   );
 
@@ -2010,6 +2082,7 @@ function wirePlanner() {
   const clear = document.querySelector('[data-planner-clear]');
   if (clear) {
     clear.addEventListener('click', () => {
+      state.fromLink = false;
       state.result = null;
       state.request = null;
       state.ranOn = null;

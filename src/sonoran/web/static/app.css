@@ -4563,3 +4563,6 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   background: none; border: 1px solid var(--line); border-radius: .5rem;
   color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
 }
+
+/* A planner picker that needs a choice before a run (#314). */
+[data-planner-form] select[aria-invalid="true"] { border-color: var(--bad); outline: 2px solid var(--bad); outline-offset: 1px; }

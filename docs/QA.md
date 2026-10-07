@@ -170,6 +170,20 @@ Use conventional commits:
 
 Example: `feat: add neighbor metrics handler`
 
+### 8.1 Never close an issue by accident
+
+GitHub closes an issue for "close", "fix" or "resolve" in any form next
+to `#N`, even in "this does not fix #N". Write "part of #N" for every
+issue that must stay open. Before you push, look at what your commits
+and your PR body say:
+
+```bash
+git log --format=%B main..HEAD | grep -oiE '(close|fix|resolve)[a-z]*[: ]+#[0-9]+'
+```
+
+No output means nothing will close. See #308.
+
+
 ## 9. Security review checklist
 
 Check these items on every pull request:

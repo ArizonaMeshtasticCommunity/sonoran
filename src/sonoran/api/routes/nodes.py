@@ -177,7 +177,7 @@ async def _heard_by(
     and then offers the node's own reading as a radio link to itself. It
     must not count as direct. See AGENTS.md 9.5.1.
     """
-    seen = sightings(PacketSeen.from_node_num == node_num, PacketSeen.seen_at >= since)
+    seen = sightings(PacketSeen.from_node_num == node_num, PacketSeen.seen_at >= since, since=since)
     heard = direct_sighting(seen)
     statement = (
         select(

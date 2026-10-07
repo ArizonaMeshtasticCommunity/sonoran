@@ -5,6 +5,26 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.07.4 — 2026-10-07
+
+1 pull request merged.
+
+#### Fixes
+
+- Recover when the network comes back (#331) by @logans-stuff
+  The installed app now loads again by itself when the network comes back, instead of needing to be closed and opened.
+
+#### Issues
+
+- Worked on: #322 Mobile: installable PWA (manifest behind the login, service worker, offline state) (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.07.3...v2026.10.07.4
+
 ## v2026.10.07.3 — 2026-10-07
 
 1 pull request merged.
