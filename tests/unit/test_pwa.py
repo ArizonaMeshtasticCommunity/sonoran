@@ -224,3 +224,29 @@ def test_offline_turns_the_status_line_red() -> None:
     went = PWA[PWA.index("function wentOffline") :].split("\n  }\n", 1)[0]
     assert "setStatus('down'" in went
     assert "data-offline" in went
+
+
+# ---- A request never strands the app ---------------------------------
+
+
+def test_every_api_request_can_be_ended() -> None:
+    """Airplane mode on and off left the installed app loading nothing
+    until it was closed: one request never answered, and `render` draws
+    one page at a time. Every API request goes through `apiFetch`, which
+    a network change or a minute without an answer ends.
+    """
+    app = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function apiFetch(url)" in app
+    assert "const REQUEST_TIMEOUT_MS = 60000;" in app
+    assert "function abortRequests()" in app
+    for name in ("app.js", "gaps.js", "siting.js", "rf.js", "planner.js", "coverage.js"):
+        source = (STATIC_DIR / name).read_text(encoding="utf-8")
+        assert not re.search(r"await fetch\(\s*(api|timelineQuery)\(", source), name
+
+
+def test_a_network_change_ends_requests_and_draws_again() -> None:
+    went = PWA[PWA.index("function wentOffline") :].split("\n  }\n", 1)[0]
+    came = PWA[PWA.index("function cameOnline") :].split("\n  }\n", 1)[0]
+    assert "abortRequests();" in went
+    assert "abortRequests();" in came
+    assert came.index("abortRequests();") < came.index("route();")

@@ -11,8 +11,8 @@
  *    must not show.
  * 4. In an installed app, give the four detail pages a Back button.
  *
- * Loaded after app.js, so `clock` (the mesh's timezone) and `setStatus`
- * exist.
+ * Loaded after app.js, so `clock` (the mesh's timezone), `setStatus`,
+ * `abortRequests` and `route` exist.
  */
 (function () {
   'use strict';
@@ -48,6 +48,10 @@
 
   function wentOffline() {
     root.setAttribute('data-offline', '');
+    // A request in flight as the network goes can hang for ever, and the
+    // page drawing waits on it (see `apiFetch` in app.js). End them: the
+    // page then says it could not load, which is true.
+    abortRequests();
     if (offline) return;
     const at = clock(new Date());
     // The status line in the menu and the phone bar, which otherwise
@@ -61,6 +65,11 @@
 
   function cameOnline() {
     root.removeAttribute('data-offline');
+    // Draw the page again with the network back. Anything still in
+    // flight started while there was none, so end it first; otherwise
+    // the new drawing would queue behind it.
+    abortRequests();
+    route();
     if (!offline) return;
     offline.box.remove();
     offline = null;

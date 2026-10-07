@@ -5,6 +5,26 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.07.3 — 2026-10-07
+
+1 pull request merged.
+
+#### New features
+
+- Installable app behind the login, offline state, and phone layout fixes (#330) by @logans-stuff
+  Sonoran can be installed as an app on a phone or computer, and says so clearly when it is offline. On phones, the RF page, firehose, traceroutes and map controls are easier to read.
+
+#### Issues
+
+- Worked on: #322 Mobile: installable PWA (manifest behind the login, service worker, offline state) (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.07.2...v2026.10.07.3
+
 ## v2026.10.07.2 — 2026-10-07
 
 1 pull request merged.
