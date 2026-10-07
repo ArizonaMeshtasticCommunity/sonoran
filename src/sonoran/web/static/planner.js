@@ -1429,7 +1429,8 @@ function missingChoices() {
 
 function askForChoices(missing) {
   for (const { select } of missing) select.setAttribute('aria-invalid', 'true');
-  const names = missing.map(({ picker }) => picker.simple.replace(/^Select /, '')).join(', ');
+  const each = missing.map(({ picker }) => picker.simple.replace(/^Select /, ''));
+  const names = each.length > 1 ? `${each.slice(0, -1).join(', ')} and ${each[each.length - 1]}` : each[0];
   setNotice(`Choose ${names} first, or switch to Advanced to type the numbers yourself.`, 'warn');
   missing[0].select.focus();
 }
