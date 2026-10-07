@@ -194,7 +194,7 @@
   }
 
   async function getJson(path) {
-    const response = await fetch(api(path));
+    const response = await apiFetch(api(path));
     if (!response.ok) throw new Error(`Request failed (${response.status})`);
     return { body: await response.json(), total: response.headers.get('X-Total-Count') };
   }

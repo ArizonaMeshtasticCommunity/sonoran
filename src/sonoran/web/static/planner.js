@@ -64,7 +64,7 @@ async function fetchTerrainPage(tile) {
   if (terrainMemory.has(tile)) return terrainMemory.get(tile);
   let page = null;
   try {
-    const response = await fetch(api(`api/terrain/page/${tile}`));
+    const response = await apiFetch(api(`api/terrain/page/${tile}`));
     if (response.status === 404) {
       page = null;
     } else if (!response.ok) {

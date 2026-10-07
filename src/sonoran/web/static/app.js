@@ -41,8 +41,47 @@ function requestFailed(path, status) {
   return new Error(`Request failed (${status}) on ${where}`);
 }
 
+/*
+ * Every request to the API goes through here (#322).
+ *
+ * On an iPhone, in the installed app, airplane mode on and off left the
+ * app loading nothing until it was closed. A request that started as the
+ * network went away never answered and never failed, and `render` draws
+ * one page at a time, so every page after it waited behind it for ever.
+ * Measured the same way in Chromium: one request held unanswered, and
+ * no page drew again, with the network back.
+ *
+ * So a request now ends one way or another:
+ *
+ * - `abortRequests` ends every request in flight. pwa.js calls it when
+ *   the device goes offline or comes back, which is exactly when a
+ *   request can be stranded, and then draws the page again.
+ * - A request that has had no answer in 60 s is abandoned. The slowest
+ *   real query measured on production took 29 s (#304).
+ */
+const REQUEST_TIMEOUT_MS = 60000;
+const requestsInFlight = new Set();
+
+function apiFetch(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error('The server did not answer within a minute.')),
+    REQUEST_TIMEOUT_MS,
+  );
+  requestsInFlight.add(controller);
+  return fetch(url, { signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+    requestsInFlight.delete(controller);
+  });
+}
+
+function abortRequests() {
+  for (const controller of requestsInFlight) controller.abort(new Error('The connection changed.'));
+  requestsInFlight.clear();
+}
+
 async function get(path) {
-  const response = await fetch(api(path));
+  const response = await apiFetch(api(path));
   if (!response.ok) throw requestFailed(path, response.status);
   return response.json();
 }
@@ -61,7 +100,7 @@ async function get(path) {
  * was handed and calling that the answer.
  */
 async function getList(path) {
-  const response = await fetch(api(path));
+  const response = await apiFetch(api(path));
   if (!response.ok) throw requestFailed(path, response.status);
   const rows = await response.json();
   const header = response.headers.get('X-Total-Count');
@@ -4898,7 +4937,7 @@ function nodeFacetQuery(page) {
  * and an absent cursor stays null, which sends the next page back to
  * the offset. */
 async function getNodePage(path) {
-  const response = await fetch(api(path));
+  const response = await apiFetch(api(path));
   if (!response.ok) throw requestFailed(path, response.status);
   const rows = await response.json();
   const header = response.headers.get('X-Total-Count');
@@ -7360,7 +7399,7 @@ function timelineQuery(state, hours, before) {
 
 /** One page, with the total and the cursor the headers carry. */
 async function fetchTimelinePage(state, hours, before) {
-  const response = await fetch(timelineQuery(state, hours, before));
+  const response = await apiFetch(timelineQuery(state, hours, before));
   if (!response.ok) throw new Error('Cannot load the packets.');
   const rows = await response.json();
   // An absent header is an unknown total, never 0 (`Number(null)` is 0).

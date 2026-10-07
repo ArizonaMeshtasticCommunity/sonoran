@@ -307,7 +307,7 @@
     if (!rows) {
       const hours = Number(state.summary.active_hours) || 168;
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           api(`api/map/nodes?channel=${encodeURIComponent(preset)}&hours=${hours}&active_hours=${hours}`),
         );
         if (!response.ok) throw new Error(`Request failed (${response.status})`);
@@ -682,7 +682,7 @@
 
     let report = null;
     try {
-      const response = await fetch(api('api/coverage/calibration'));
+      const response = await apiFetch(api('api/coverage/calibration'));
       if (response.ok) report = await response.json();
     } catch (error) {
       console.warn('calibration unavailable', error);
@@ -1001,7 +1001,7 @@
 
     let summary = null;
     try {
-      const response = await fetch(api('api/coverage'));
+      const response = await apiFetch(api('api/coverage'));
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       summary = await response.json();
     } catch (error) {

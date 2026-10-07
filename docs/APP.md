@@ -51,6 +51,13 @@ live.
   the status line in the menu turns red. The figures stay on the screen,
   but they are not live. When the network comes back the notice goes, and
   the next refresh brings the page up to date.
+- **The network comes back:** the status line says "Reconnecting", and
+  the page you are on loads again as soon as the server answers. A phone
+  says it is online a moment before a request can get through, so the
+  page waits for an answer rather than for the phone.
+  A request that was in flight when the network changed is ended, so it
+  cannot hold up the pages after it. A request with no answer in a
+  minute is ended too.
 
 ## 3. A new version
 
@@ -101,6 +108,11 @@ under `/static/`. Under `WEB_BASE_PATH` it is at the base path.
 - It handles page loads only. Every other request, the API, the map
   tiles and the login included, goes to the network as if no worker
   existed.
+- Every API request from the page goes through `apiFetch` in `app.js`,
+  which `abortRequests` (called by `pwa.js` on `offline` and `online`)
+  or a 60 s timeout can end. Before this, one request stranded by
+  airplane mode stopped every later page from drawing until the app was
+  closed.
 - It keeps **nothing** in a cache. The data is live, and a cached page
   could be a login page. The document is `no-cache`, and every asset is
   versioned with `?v=` and kept for a year by the HTTP cache, so a second
