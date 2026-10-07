@@ -98,6 +98,10 @@ async function requestedUrl(hash) {
     $$: () => [],
     el: () => ({}),
     replace: () => {},
+    // app.js's request helper (#322), which every API request now goes
+    // through. Straight to the recording `fetch` above, so the URL
+    // checked is still the one that would go out.
+    apiFetch: (url) => sandbox.fetch(url),
   };
   sandbox.window.location = sandbox.location;
   sandbox.window.history = sandbox.history;
