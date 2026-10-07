@@ -2628,10 +2628,6 @@ tr.row-link { cursor: pointer; }
 tr.row-link:hover td { background: var(--panel-2); }
 tr.row-link:focus-within td { background: var(--panel-2); }
 
-/* Wide enough for its hint, "Packet type, such as Position". At the
-   default width it read "Packet type, such as Posi". */
-[data-page="firehose"] .page-head .controls > input[type="search"] { min-width: 16.5rem; }
-
 /*
  * The firehose as cards on a phone (#273).
  *

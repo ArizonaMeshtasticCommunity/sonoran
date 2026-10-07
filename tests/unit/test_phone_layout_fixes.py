@@ -117,11 +117,12 @@ def test_the_busy_legend_wraps_on_a_phone() -> None:
 
 
 def test_the_firehose_search_shows_its_whole_hint() -> None:
-    """It read "Packet ty" on a phone and "Packet type, such as Posi" on
-    a desktop."""
+    """It read "Packet ty" on a phone."""
     search = '[data-page="firehose"] .page-head .controls > input[type="search"]'
     assert f"{search} {{ flex-basis: 100%; }}" in CSS
-    assert f"{search} {{ min-width: 16.5rem; }}" in CSS
+    # Not widened on a desktop: that pushed the firehose controls under
+    # the title at 1280 px, which the #299 e2e journey forbids.
+    assert f"{search} {{ min-width: 16.5rem; }}" not in CSS
 
 
 APP = (STATIC / "app.js").read_text(encoding="utf-8")
