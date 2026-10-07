@@ -250,3 +250,18 @@ def test_a_network_change_ends_requests_and_draws_again() -> None:
     assert "abortRequests();" in went
     assert "abortRequests();" in came
     assert came.index("abortRequests();") < came.index("route();")
+
+
+def test_the_page_is_drawn_again_only_once_the_api_answers() -> None:
+    """An iPhone says it is online before a request can get through.
+    Drawing at that moment failed, and Traceroutes and the weekly
+    check-in, which do not refresh by themselves, stayed on "Failed to
+    fetch". The page now waits for `api/version` to answer.
+    """
+    came = PWA[PWA.index("function cameOnline") :].split("\n  }\n", 1)[0]
+    assert "whenReachable()" in came
+    assert "route();" not in came.split("whenReachable()")[0], "drawn before the API answered"
+    assert "setStatus('stale', 'Reconnecting');" in came
+    reach = PWA[PWA.index("async function whenReachable") :].split("\n  }\n", 1)[0]
+    assert "apiFetch(api('api/version'))" in reach
+    assert "const RETRY_LIMIT = 45;" in PWA

@@ -12,7 +12,7 @@
  * 4. In an installed app, give the four detail pages a Back button.
  *
  * Loaded after app.js, so `clock` (the mesh's timezone), `setStatus`,
- * `abortRequests` and `route` exist.
+ * `api`, `apiFetch`, `abortRequests` and `route` exist.
  */
 (function () {
   'use strict';
@@ -63,16 +63,55 @@
     );
   }
 
+  /*
+   * The device says it is online a moment before a request can get
+   * through: on an iPhone the event comes as the radio returns, ahead of
+   * a working route. Drawing the page at that moment failed, and a page
+   * that does not refresh by itself (Traceroutes, the weekly check-in)
+   * stayed on "Failed to fetch". Measured in Chromium with the network
+   * held back for 3 s after the event.
+   *
+   * So the page is drawn again when the API answers, asked at once and
+   * then after 0.5, 1, 1.5, 2, then every 3 s, for up to about two
+   * minutes. `api/version` is the smallest answer the API has.
+   */
+  const RETRY_MS = [500, 1000, 1500, 2000, 3000];
+  const RETRY_LIMIT = 45;
+  let reconnecting = null;
+
+  async function whenReachable() {
+    for (let attempt = 0; attempt < RETRY_LIMIT; attempt += 1) {
+      if (navigator.onLine === false) return false;
+      try {
+        const response = await apiFetch(api('api/version'));
+        if (response.ok) return true;
+      } catch (error) {
+        // Not yet. Ask again below.
+      }
+      const wait = RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)];
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    return false;
+  }
+
   function cameOnline() {
     root.removeAttribute('data-offline');
-    // Draw the page again with the network back. Anything still in
-    // flight started while there was none, so end it first; otherwise
-    // the new drawing would queue behind it.
+    // Anything still in flight started while there was no network, so
+    // end it; otherwise the new drawing would queue behind it.
     abortRequests();
-    route();
-    if (!offline) return;
-    offline.box.remove();
-    offline = null;
+    if (offline) {
+      offline.box.remove();
+      offline = null;
+    }
+    if (reconnecting) return;
+    setStatus('stale', 'Reconnecting');
+    reconnecting = whenReachable().then((reached) => {
+      reconnecting = null;
+      // Drawn either way: a page that still cannot load says so, which
+      // is better than the stale "Failed to fetch" from before.
+      if (navigator.onLine !== false) route();
+      return reached;
+    });
   }
 
   window.addEventListener('offline', wentOffline);

@@ -51,7 +51,10 @@ live.
   the status line in the menu turns red. The figures stay on the screen,
   but they are not live. When the network comes back the notice goes, and
   the next refresh brings the page up to date.
-- **The network comes back:** the page you are on loads again at once.
+- **The network comes back:** the status line says "Reconnecting", and
+  the page you are on loads again as soon as the server answers. A phone
+  says it is online a moment before a request can get through, so the
+  page waits for an answer rather than for the phone.
   A request that was in flight when the network changed is ended, so it
   cannot hold up the pages after it. A request with no answer in a
   minute is ended too.
