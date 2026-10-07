@@ -122,8 +122,16 @@ A pull request can merge only when all jobs pass.
 3. Review the generated file by hand. Autogenerate makes mistakes on hypertables.
 4. Add hypertable and retention commands by hand where needed.
 5. Test upgrade and downgrade on a real database.
-6. Update `docs/DATABASE.md`.
-7. Never edit a migration that is applied anywhere.
+6. A migration that changes rows already stored, or a key they are
+   read by, also needs a test that puts rows in at the revision before,
+   upgrades, and reads them back through the API the way the page does.
+   A test on an empty database cannot see what happens to stored data.
+   Revision 0020 filled a new key column with one value for every
+   stored spectrum minute, and the live waterfall opened on a range one
+   minute long while every test passed (2026-10-07, revision 0021). See
+   `tests/integration/test_rf_migration_data.py`.
+7. Update `docs/DATABASE.md`.
+8. Never edit a migration that is applied anywhere.
 
 ## 6. Protobuf update policy
 
@@ -186,6 +194,17 @@ Check these items on every pull request:
 3. The CI builds the Docker image for each tag.
 4. Deploy with Docker Compose on the azmsh.net host.
 5. After a deploy, check `/health` and the ingest logs.
+5a. Before a deploy, take a snapshot of what the live API answers, and
+    compare after it:
+
+        python tools/deploy_check.py snapshot <api base url> > before.json
+        python tools/deploy_check.py compare before.json <api base url>
+
+    It fails when an endpoint stops answering, or when a count the page
+    shows gets smaller: stations, packets, and for each station that
+    sweeps, the rows of the waterfall the page opens on. `/health` said
+    ok on 2026-10-07 while the waterfall had lost its history; this
+    would have failed. Stop and look before you call a deploy done.
 6. Run `docker compose config --quiet` before deployment.
 7. Confirm that mesh-graph subscribes to the configured MQTT topic.
 8. Read `docker compose config` — not `--quiet` — and check what each
