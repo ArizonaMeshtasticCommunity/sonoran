@@ -682,6 +682,12 @@ Two more sources are fixed, and both exist for the coverage planner:
 - `script-src` holds `'wasm-unsafe-eval'`. Without it the browser
   refuses to compile the engine and reports nothing the user can see.
 - `worker-src` holds `'self'`, for the worker that runs the engine.
+  It also covers the service worker at `/sw.js` (docs/APP.md).
+
+`manifest-src` holds `'self'`, for the installed app's manifest. A
+policy with no `manifest-src` falls back to `default-src`, which says the
+same today. It is named so that a stricter `default-src` cannot stop the
+install.
 
 `connect-src` also always holds `https://api.github.com`. The config
 checker asks it which firmware release is current. That is the only

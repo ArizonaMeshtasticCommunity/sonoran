@@ -800,6 +800,21 @@ It reads nothing else whole. Its in-memory state (positions, recent
 points, quotas) is rebuilt within minutes of a restart, because the
 broker replays every retained heartbeat on connect.
 
+### 9.30 The installed app sits behind a login (#322)
+
+A browser fetches a manifest **without cookies** unless the link says
+`crossorigin="use-credentials"`. The login proxy (Keycloak in
+production, Authelia on the dev box) then answers with its login page,
+and the browser finds no manifest. Nothing fails visibly: the app just
+cannot be installed. Keep the attribute.
+
+The service worker (`web/static/sw.js`, served at `/sw.js`) caches
+nothing and handles page loads only. Do not add a cache for the API or
+the document. An old API answer reads as the mesh's real state, and a
+cached page can be a login page that never reaches the proxy again.
+`test_the_worker_keeps_nothing` and
+`test_the_worker_handles_page_loads_only` pin it. See `docs/APP.md`.
+
 ### 9.25 A diagnostic coverage run never reaches the public embed
 
 `COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
@@ -1076,6 +1091,7 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/ARCHITECTURE.md` — module contracts and data flow
 - `docs/DATABASE.md` — the full database schema
 - `docs/API.md` — the API specification
+- `docs/APP.md` — the installed app, the service worker, and offline
 - `docs/QA.md` — the QA process
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new

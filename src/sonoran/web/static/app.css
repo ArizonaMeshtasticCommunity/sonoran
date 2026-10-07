@@ -4411,3 +4411,46 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* A slot the mesh set itself: solid, so it reads apart from the defaults. */
 .rf-mark.custom { border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); background: rgb(255 255 255 / .06); }
 .rf-tick.channel.custom { color: var(--accent); }
+
+/*
+ * The installed app's two notices (#322): "a new version is available"
+ * and "you are offline". pwa.js makes them. They sit at the bottom
+ * edge, clear of the home indicator, and above the page's own layers.
+ */
+.app-notices {
+  position: fixed; z-index: 1950;
+  left: calc(.5rem + var(--safe-left));
+  right: calc(.5rem + var(--safe-right));
+  bottom: calc(.5rem + var(--safe-bottom));
+  display: flex; flex-direction: column; align-items: center; gap: .5rem;
+  pointer-events: none;
+}
+.app-notice {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: .75rem;
+  width: min(32rem, 100%);
+  padding: .6rem .75rem .6rem 1rem;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: .6rem;
+  box-shadow: 0 .4rem 1.2rem rgb(0 0 0 / .35);
+}
+.app-notice p { margin: 0; flex: 1; }
+.app-notice button { flex: none; min-height: 44px; min-width: 44px; }
+
+/*
+ * Offline: every figure on the page stopped when the connection did.
+ * Fade the content, so nothing on it reads as live. pwa.js also turns
+ * the status line red ("Offline since ..."). Opacity and not a
+ * `filter`: a filter makes the element the containing block of every
+ * `position: fixed` element inside it, which would move the watch mode
+ * and the full-screen chart.
+ */
+:root[data-offline] #main { opacity: .55; }
+
+/* Back, on the four detail pages of an installed app (#322). pwa.js
+   adds it only in standalone mode, where there is no browser back. */
+.app-back {
+  min-height: 44px; margin: 0 0 .5rem; padding: .4rem .8rem;
+  background: none; border: 1px solid var(--line); border-radius: .5rem;
+  color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
+}

@@ -68,7 +68,27 @@
     -->
     <link rel="icon" type="image/png" sizes="256x256" href="static/favicon.png?v=__SONORAN_ASSET_VERSION__" />
     <link rel="apple-touch-icon" sizes="180x180" href="static/apple-touch-icon.png?v=__SONORAN_ASSET_VERSION__" />
-    <link rel="manifest" href="static/manifest.webmanifest?v=__SONORAN_ASSET_VERSION__" />
+    <!--
+      The installed app (#322). A login proxy stands in front of every
+      file here: Keycloak in production, Authelia on the dev box. A
+      browser fetches the manifest WITHOUT cookies unless this link says
+      `use-credentials`, so without it the proxy answered with its login
+      page and the browser found no manifest to install from. This works
+      with any proxy that keeps its session in a cookie, and it needs no
+      change to the proxy.
+    -->
+    <link rel="manifest" href="static/manifest.webmanifest?v=__SONORAN_ASSET_VERSION__" crossorigin="use-credentials" />
+    <!--
+      A home-screen app on iOS. Safari reads the manifest's `display`
+      since iOS 16.4; the Apple tag is for older versions. The status bar
+      stays `default`, which keeps the page below it: `black-translucent`
+      draws white status text over the page, and the light theme's page
+      is light.
+    -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Sonoran" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <link rel="stylesheet" href="static/vendor/leaflet.css?v=__SONORAN_ASSET_VERSION__" />
     <link rel="stylesheet" href="static/app.css?v=__SONORAN_ASSET_VERSION__" />
     <link rel="stylesheet" href="static/gaps.css?v=__SONORAN_ASSET_VERSION__" />
@@ -2261,6 +2281,8 @@
     <script src="static/map-live.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/map-watch.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/app.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!-- The service worker, the update notice and the offline notice (#322). After app.js, for `clock` and `setStatus`. -->
+    <script src="static/pwa.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       Everything the config check page needs, fetched when #config is
       first opened (#277). No other page uses any of it. The order below

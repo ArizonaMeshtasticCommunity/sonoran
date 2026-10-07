@@ -246,7 +246,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "frame-src 'none'; "
                 f"frame-ancestors {frame_ancestors(settings.embed_frame_ancestors)}"
             )
-        elif path.startswith("/static") or path == "/":
+        elif path.startswith("/static") or path in ("/", SERVICE_WORKER_PATH):
             frame_source = _frame_source(settings.mesh_graph_base_url)
             image_sources = _image_sources(settings.map_tile_url, settings.mesh_graph_base_url)
             connect_sources = _connect_sources(settings.web_api_base_url)
@@ -275,7 +275,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 # would only weaken the policy for browsers that honour
                 # both.
                 f"script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval'; "
+                # `'self'` also covers the service worker at `/sw.js`
+                # (#322), and `manifest-src` the installed app's manifest.
+                # Without `manifest-src` a policy falls back to
+                # `default-src`, which says the same today; it is named so
+                # that a stricter `default-src` cannot remove the install.
                 "worker-src 'self' blob:; "
+                "manifest-src 'self'; "
                 # Nothing may frame the dashboard, not even this origin.
                 "frame-ancestors 'none'; "
                 f"frame-src 'self' {frame_source}"
@@ -284,6 +290,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["Cache-Control"] = _static_cache_control(request.scope)
         return response
 
+
+# The service worker's path below the mount (#322). It must be the app
+# root, because a worker controls only the pages at or below its path.
+SERVICE_WORKER_PATH = "/sw.js"
 
 # How long a versioned asset may be kept. A year, which is the longest
 # value the specification gives a meaning to.
@@ -525,6 +535,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.state.csp_nonce = nonce
         html = html.replace("__SONORAN_NONCE__", nonce)
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+    @app.get(SERVICE_WORKER_PATH, include_in_schema=False)
+    async def service_worker() -> Response:
+        """Serve the service worker from the app root (#322).
+
+        A worker controls only the pages at or below its own path, so it
+        cannot live under `/static/`. The asset version is written into
+        it, so every deploy changes its bytes, and the browser installs
+        the new one and the page offers a reload. `no-cache`, so the
+        browser asks for it again every time it checks for an update.
+        """
+        script = (STATIC_DIR / "sw.js").read_text(encoding="utf-8")
+        script = script.replace("__SONORAN_ASSET_VERSION__", app.state.asset_version)
+        return Response(
+            script,
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
