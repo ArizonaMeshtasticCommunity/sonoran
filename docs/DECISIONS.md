@@ -1291,3 +1291,38 @@ it is held until the freeze lifts.** Until then `main` is behind what is
 deployed, and anyone deploying from `main` would roll the site back — the
 branch and tag names are in the release notes and in the handoff so that
 cannot happen by accident.
+
+## 2026-09-27 — batch 3 (#303, release v2026.09.27.2)
+
+38 issues filed under `rancur` and not blocked on a decision. Seven agents built them in parallel, one area each, in separate worktrees. The branches were merged locally, verified as a whole, and sent as one PR.
+
+### Parallel tracks each pass alone and break together
+Each track's full e2e suite was green on its own branch. Merged, three things broke that no branch could have shown:
+- **The sticky phone bar (#271) covered two other tracks' sticky elements.** The node page's section chips (#286) sat at `top: 0` and the firehose "N new" pill (#280) at 8 px, both behind a 62 px bar. A tap on the pill reached the bar. The fix: the bar's measured height is published as `--bar-h` (a ResizeObserver on the sidebar), and both elements offset by it.
+- **An id rename broke another track's journey.** #270 renamed the live map box from `#map` to `#live-map`, because `#map` was also the page address and the browser scrolled to it on every load. #268's journey still asked for `#map`.
+- **Two resolved conflicts needed real thought:**
+  - The firehose row key now carries the units (#291), so rows redraw after a units change. The "N new" count (#280) compared keys, so it now compares the packet part only. Otherwise every row counted as new after a units change.
+  - `route()` keeps #297's `navigateRender`. #299 and #275's head helpers moved to the end of `render()`, so they also run after a deferred render.
+
+**Rule:** budget a full-merge e2e and fix pass before pushing a multi-track batch.
+
+### The CI runner's fonts are wider than a Mac's
+Two layouts passed locally "to the pixel" and failed on CI:
+- **"Who hears it" (#260) at 320 px:** 254 px in a 254 px panel on macOS, 269 px on the runner. The table headings were the floor, not the rows.
+- **Graph's page head on a phone (#275):** 196 px of search box plus the Options button, with 8 px to spare locally. On the runner it wrapped, and the head took 37% of the screen.
+
+Letter-spacing of about 0.12em reproduces the runner locally. **Rule:** layout journeys measure with widened `letter-spacing`, and an input that shares a row with a button gets a flexible basis, not a fixed width.
+
+### Read a page value once, never across a render
+"Cannot destructure property 'value' of null" on CI came from `waitFor(read)` followed by a second `evaluate(read)`: the node page re-rendered in between. The same pattern read the previous node's tile as this node's ("no position, yet it reads about 180 mi"). `valueOf` in `tools/dev/e2e.js` returns the first non-null answer from ONE call, and reads return nothing while `loading` is true.
+
+This was proved by making the page re-render every 150 ms: the old read failed 2 runs in 3, and the new one passed 3 of 3. A forced `render()` also waits for any render in flight, because `render` does nothing while another is loading (#280's journey).
+
+### Seeded data hides slowness: time new endpoints on production
+#290 made the node page's Links panel read every traceroute in the window. It was measured at 1 to 3 s on 99k seeded traceroutes. On production, `/routes` took 7 to 29 s. Most of that came from older `packet_seen` ⋈ `packet` queries (`_direct_links`, `_hop_depth`), which join without a time bound on `packet`, so no `packet` chunk is excluded. It's filed as #304.
+
+**Rule:** after a deploy that touches a heavy endpoint, sweep it on production.
+
+### Environment
+- **Docker VM:** the Colima VM (2 CPUs, 1 GiB) ran six agents' Postgres containers. Postgres was OOM-killed more than once, and leftover test containers plus dangling images filled its 60 GB disk to 100%.
+- **Before fanning out:** check `df` inside the VM, and remove what you start.

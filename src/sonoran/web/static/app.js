@@ -7146,6 +7146,8 @@ const NO_DISTANCE = {
       'Its owner can turn on position sharing. A rounded position is enough for an estimate.'],
     partners_no_position: ['None of the nodes that heard it shares a position.',
       'Any one of them sharing a position, even a rounded one, would give a distance.'],
+    not_then: ['No position is known for both nodes from when they heard each other. A distance from where they are now could be wrong, because a node can move.',
+      'Positions are kept for 30 days. A link heard again gives a distance.'],
   },
   heard: {
     quiet: ['It sent nothing in this window.', 'Choose a longer window at the top of the page.'],
@@ -7155,6 +7157,8 @@ const NO_DISTANCE = {
       'Its owner can turn on position sharing. A rounded position is enough for an estimate.'],
     partners_no_position: ['None of the nodes it heard shares a position.',
       'Any one of them sharing a position, even a rounded one, would give a distance.'],
+    not_then: ['No position is known for both nodes from when they heard each other. A distance from where they are now could be wrong, because a node can move.',
+      'Positions are kept for 30 days. A link heard again gives a distance.'],
   },
 };
 
@@ -7204,7 +7208,7 @@ function routesPanel(routes) {
    * no longer leaves the tile empty.
    */
   const furthestTile = (label, row, reason, words) => {
-    const hint = 'The most distant node on this list. Marked "about" with a ± range when either position is rounded: the range is how far the rounding can move it.';
+    const hint = 'The most distant node on this list, measured where both nodes were when they last heard each other, not where they are now (#310). Marked "about" with a ± range when either position is rounded: the range is how far the rounding can move it.';
     // The tile with a second muted line: the estimate's range, or what
     // would give a tile with no distance one.
     const twoLine = (value, first, second) => el('div', { class: 'route-tile' },
@@ -7216,7 +7220,9 @@ function routesPanel(routes) {
       const [why, fix] = words[reason] || ['No distance is known.', ''];
       return twoLine('Not known', why, fix);
     }
-    const who = `${row.display_name}${row.best_snr != null ? `, ${round(row.best_snr, 1)} dB` : ''}`;
+    // When: the distance is where the two were then (#310).
+    const who = `${row.display_name}${row.best_snr != null ? `, ${round(row.best_snr, 1)} dB` : ''}`
+      + `${row.last ? `, ${stamp(row.last)}` : ''}`;
     if (row.distance_km != null) return tile(label, km(row.distance_km), who, hint);
     const rough = roughKm(row.approx_distance_km, row.distance_error_km);
     // The API sends the two together; without the range there is no
@@ -7287,10 +7293,9 @@ function routesPanel(routes) {
           ? `typical, over ${count(depth.packets)} packets: ${depth.counts.map((item) => `${item.hops} hop${item.hops === 1 ? '' : 's'} ${count(item.packets)}`).join(', ')}`
           : 'No other gateway heard it in the window.',
         'The fewest hops any gateway saw each packet use. Its own uploads are left out.')),
-    el('p', { class: 'muted' },
-      'A rounded position can be kilometres out, so a distance from one is marked "about" with the range the rounding allows. '
-      + 'The longest route segment needs an exact position at both ends, and rounded pairs are left out of it'
-      + (routes.coarse_excluded ? ` (${count(routes.coarse_excluded)} segments here).` : '.')),
+    // A paragraph on rounded positions was here (#311, Will: "said
+    // elsewhere"). Each tile already marks a rounded distance "about"
+    // with its range, and says why when it has no distance at all.
     // "Only the newest 2,000 traceroutes were read" was here. Every
     // traceroute in the window is read now, so there is no cut to own
     // up to (#290).

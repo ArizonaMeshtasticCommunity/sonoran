@@ -70,7 +70,11 @@ def test_the_beamwidth_is_shown_where_there_is_one() -> None:
 
 
 def test_typing_a_figure_is_still_possible() -> None:
-    assert "I'll type the gain myself" in _wiring()
+    """In Advanced the empty choice still offers typing (#314: Simple
+    asks for a choice instead)."""
+    source = (STATIC / "planner.js").read_text(encoding="utf-8")
+    assert 'advanced: "I\'ll type the gain myself"' in source
+    assert "emptyChoice(PICKERS[end === 'tx' ? 1 : 2])" in _wiring()
 
 
 def test_the_pickers_stay_hidden_until_the_catalogue_arrives() -> None:

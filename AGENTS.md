@@ -118,6 +118,26 @@ Fill in the pull request template: "Release notes", "Issues" and
 stay open, never any form of close, fix or resolve beside its number.
 See `docs/RELEASING.md`.
 
+## 6.2 CI runs on someone else's hardware
+
+Every job in this repository is `runs-on: self-hosted`. The runners
+belong to a community member, and there is no monthly reset. This is
+the working agreement with the runner's owner (#308):
+
+1. Pull `main` first. Other people edit this repository too.
+2. Build, lint and test locally first. CI is not a test runner.
+3. One PR for a batch of work, one commit for each fix inside it,
+   pushed once. A PR costs one run, and its merge costs another. A merge
+   commit can carry `[skip ci]` when `main` has not moved since the
+   green run.
+4. Never put a security fix in the same PR as features.
+5. **A person merges a security PR.** Never merge one yourself. A green
+   PR that is not a security fix may be merged by its author.
+6. Stop and wait if the owner is working. Look at `gh run list` for
+   jobs in progress.
+
+Deploying is in `docs/DEPLOY.md`.
+
 ## 7. Security rules
 
 - The public API is read-only.
@@ -815,6 +835,48 @@ cached page can be a login page that never reaches the proxy again.
 `test_the_worker_keeps_nothing` and
 `test_the_worker_handles_page_loads_only` pin it. See `docs/APP.md`.
 
+### 9.31 The CI runner's fonts are wider than a Mac's
+
+A layout that fits "to the pixel" on macOS can wrap or overflow on the
+Linux runner. "Who hears it" at 320 px was 254 px in a 254 px panel on
+a Mac and 269 px on the runner. A letter-spacing of about 0.12em
+reproduces the runner locally. A layout journey measures with widened
+`letter-spacing`, and an input that shares a row with a button gets a
+flexible basis, not a fixed width. See `docs/DECISIONS.md`, batch 3.
+
+### 9.32 Read a page value once, never across a render
+
+`waitFor(read)` followed by a second `evaluate(read)` can read two
+different renders: the page can draw again between them. That gave
+"Cannot destructure property 'value' of null" on CI, and once read the
+previous node's tile as this node's. Use `valueOf` in
+`tools/dev/e2e.js`, which returns the first answer of ONE call, and
+wait for `!loading` before you force a render.
+
+### 9.33 In Playwright, put the hash in the first `goto`
+
+Going from `/` to `/#x` is a change inside the same document. The page
+does not load again, and the journey silently stays on the dashboard.
+
+### 9.34 Static files are hashed when the API starts
+
+Each asset URL carries `?v=` and a hash of the static files, made when
+the API process starts. After a frontend edit, restart the API, or run
+the e2e with `SONORAN_LOCAL_STATIC=1` so that it serves the files from
+the disk.
+
+### 9.35 A green count is not a working page
+
+- **Read the console-errors line of every e2e run.** The suite once
+  reported 23 of 23 while the map threw on every render.
+- **Mutation-check a new test, and check that the mutation landed.**
+  One units journey passed a mutation that it had to catch.
+- **An inert measurement is not evidence.** A comparison once "showed"
+  that coverage ignored the preset, only because that instance had no
+  coverage run. Seed what the measurement needs first. The "gaps sites
+  against an area" journey needs `uv run sonoran-gaps-once` after the
+  seed.
+
 ### 9.25 A diagnostic coverage run never reaches the public embed
 
 `COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
@@ -1092,6 +1154,7 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/DATABASE.md` — the full database schema
 - `docs/API.md` — the API specification
 - `docs/APP.md` — the installed app, the service worker, and offline
+- `docs/DEPLOY.md` — how to deploy, check and roll back
 - `docs/QA.md` — the QA process
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new

@@ -17,8 +17,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import and_, func, select
+from sqlalchemy import BigInteger, and_, cast, column, func, select, true, values
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.types import DateTime as SqlDateTime
 
 from sonoran.api.cache import KeyedCache
 from sonoran.api.dependencies import get_session, require_node_num
@@ -27,7 +28,15 @@ from sonoran.api.routes.gaps import read_assessment
 from sonoran.api.routes.graph import _mentions, _trace_links
 from sonoran.api.sightings import direct, sightings
 from sonoran.config import Settings
-from sonoran.db.models import DeviceMetrics, NeighborMetrics, Node, Packet, PacketSeen, Traceroute
+from sonoran.db.models import (
+    DeviceMetrics,
+    NeighborMetrics,
+    Node,
+    Packet,
+    PacketSeen,
+    PositionMetrics,
+    Traceroute,
+)
 from sonoran.decode.portnums import traffic_label
 from sonoran.gaps import store as gaps_store
 from sonoran.gaps.signals import position_confidence
@@ -309,6 +318,8 @@ async def _direct_signal(
         PacketSeen.from_node_num == node_num,
         PacketSeen.seen_at >= since,
         PacketSeen.seen_at <= now,
+        since=since,
+        until=now,
     )
     bucket = _bucket(seen.c.seen_at, width, since).label("bucket")
     rows = (
@@ -490,11 +501,35 @@ async def _node_routes(session: AsyncSession, node_num: int, hours: int) -> dict
                 "snr": snr,
             }
 
+    # Where both ends were when each link was last heard (#310). A
+    # mobile node that has driven off since read as heard 120 mi away.
+    then = await positions_at(
+        session,
+        {
+            (end, facts["last"])
+            for found in (hears, heard_by)
+            for other, facts in found.items()
+            if facts["last"] is not None
+            for end in (node_num, other)
+        },
+    )
+
     def listed(found: dict[int, dict[str, Any]]) -> list[dict[str, object]]:
         rows = []
         for other, facts in found.items():
-            distance = _distance(positions, node_num, other)
-            rough = None if distance is not None else _approximate(placed, node_num, other)
+            at = facts["last"]
+            exact_then = {
+                end: (place[0], place[1])
+                for end in (node_num, other)
+                if (place := then.get((end, at))) is not None and place[2] == 0.0
+            }
+            placed_then = {
+                end: place
+                for end in (node_num, other)
+                if (place := then.get((end, at))) is not None
+            }
+            distance = _distance(exact_then, node_num, other)
+            rough = None if distance is not None else _approximate(placed_then, node_num, other)
             rows.append(
                 _named(names, other)
                 | {
@@ -531,10 +566,14 @@ async def _node_routes(session: AsyncSession, node_num: int, hours: int) -> dict
         "furthest_heard": furthest_heard,
         "furthest_heard_by_reason": None
         if furthest_heard_by
-        else _no_distance_reason(heard_by_rows, own, quiet=quiet),
+        else _no_distance_reason(
+            heard_by_rows, own, quiet=quiet, placed_now=any(other in placed for other in heard_by)
+        ),
         "furthest_heard_reason": None
         if furthest_heard
-        else _no_distance_reason(hears_rows, own, quiet=False),
+        else _no_distance_reason(
+            hears_rows, own, quiet=False, placed_now=any(other in placed for other in hears)
+        ),
         "coarse_excluded": coarse_excluded,
         # How many traceroutes the answer was built from. Every one in
         # the window: there is no limit to have reached any more.
@@ -587,7 +626,9 @@ def _furthest(rows: list[dict[str, object]]) -> dict[str, object] | None:
     return max(ranked, key=lambda pair: pair[0])[1] if ranked else None
 
 
-def _no_distance_reason(rows: list[dict[str, object]], own: bool, *, quiet: bool) -> str:
+def _no_distance_reason(
+    rows: list[dict[str, object]], own: bool, *, quiet: bool, placed_now: bool = False
+) -> str:
     """Say why a furthest-node tile has no distance, as a code (#257).
 
     The page turns the code into a sentence and says what would fix it.
@@ -597,12 +638,17 @@ def _no_distance_reason(rows: list[dict[str, object]], own: bool, *, quiet: bool
     - `no_link`: nothing recorded a single hop to or from it.
     - `no_position`: it shares no usable position of its own. Checked
       before its partners, because theirs cannot help without its own.
+    - `not_then`: both ends have a position now, but not one from when
+      they heard each other (#310). Kept apart from the next, which
+      would say nobody shares a position when they do.
     - `partners_no_position`: every node at the other end shares none.
     """
     if not rows:
         return "quiet" if quiet else "no_link"
     if not own:
         return "no_position"
+    if placed_now:
+        return "not_then"
     return "partners_no_position"
 
 
@@ -628,6 +674,88 @@ async def exact_positions(
         for node, lat, lon, bits in rows
         if position_confidence(lat, lon, bits, MIN_SITE_PRECISION_BITS)[0] == "exact"
     }
+
+
+async def positions_at(
+    session: AsyncSession, wanted: set[tuple[int, datetime]]
+) -> dict[tuple[int, datetime], tuple[float, float, float]]:
+    """Return where each node was at each time, with its doubt in km (#310).
+
+    The newest `position_metrics` row at or before the time. That table
+    keeps 30 days; past that, the node's stored position is used only
+    when it was set at or before the time, which means it had not moved
+    since. Otherwise the node's place then is not known, and it is left
+    out rather than taken from where it is now.
+
+    The doubt follows `placed_positions`: 0 for an exact position, the
+    firmware's rounding for a rounded one, and no entry for none.
+    """
+    if not wanted:
+        return {}
+    asked = values(
+        column("node_num", BigInteger), column("at", SqlDateTime(timezone=True)), name="asked"
+    ).data(sorted(wanted))
+    # A VALUES list carries no column types into the query, so each is
+    # cast where it meets a typed column; without it PostgreSQL read
+    # the time as text and refused `<=` (checked on the dev database).
+    asked_at = cast(asked.c.at, SqlDateTime(timezone=True))
+    then = (
+        select(PositionMetrics.latitude, PositionMetrics.longitude, PositionMetrics.precision_bits)
+        .where(
+            PositionMetrics.node_num == cast(asked.c.node_num, BigInteger),
+            PositionMetrics.time <= asked_at,
+            PositionMetrics.latitude.is_not(None),
+            PositionMetrics.longitude.is_not(None),
+        )
+        .order_by(PositionMetrics.time.desc())
+        .limit(1)
+        .lateral("then")
+    )
+    rows = (
+        await session.execute(
+            select(
+                asked.c.node_num,
+                asked.c.at,
+                then.c.latitude,
+                then.c.longitude,
+                then.c.precision_bits,
+            )
+            .select_from(asked)
+            .join(then, true())
+        )
+    ).all()
+    found = {(node, at): (lat, lon, bits) for node, at, lat, lon, bits in rows}
+    missing = {node for node, at in wanted if (node, at) not in found}
+    if missing:
+        stored = (
+            await session.execute(
+                select(
+                    Node.node_num,
+                    Node.last_lat,
+                    Node.last_lon,
+                    Node.last_position_precision_bits,
+                    Node.position_time,
+                ).where(Node.node_num.in_(missing))
+            )
+        ).all()
+        since_when = {node: (lat, lon, bits, when) for node, lat, lon, bits, when in stored}
+        for node, at in wanted:
+            if (node, at) in found or node not in since_when:
+                continue
+            lat, lon, bits, when = since_when[node]
+            if when is not None and when <= at:
+                found[(node, at)] = (lat, lon, bits)
+    out: dict[tuple[int, datetime], tuple[float, float, float]] = {}
+    for key, (lat, lon, bits) in found.items():
+        state, deviation = position_confidence(lat, lon, bits, MIN_SITE_PRECISION_BITS)
+        if state == "none":
+            continue
+        out[key] = (
+            float(lat),
+            float(lon),
+            0.0 if state == "exact" else (deviation or 0.0) / 1000.0,
+        )
+    return out
 
 
 async def placed_positions(
@@ -705,7 +833,13 @@ async def _direct_links(
     """
     heard_by = side == "heard_by"
     mine = PacketSeen.from_node_num if heard_by else PacketSeen.gateway_node_num
-    seen = sightings(mine == node_num, PacketSeen.seen_at >= since, PacketSeen.seen_at <= now)
+    seen = sightings(
+        mine == node_num,
+        PacketSeen.seen_at >= since,
+        PacketSeen.seen_at <= now,
+        since=since,
+        until=now,
+    )
     other = seen.c.gateway_node_num if heard_by else seen.c.from_node_num
     rows = (
         await session.execute(
@@ -760,6 +894,8 @@ async def _hop_depth(
         PacketSeen.seen_at >= since,
         PacketSeen.seen_at <= now,
         PacketSeen.hop_limit.is_not(None),
+        since=since,
+        until=now,
     )
     fewest = (
         select(func.min(seen.c.hop_start - seen.c.hop_limit).label("hops"))

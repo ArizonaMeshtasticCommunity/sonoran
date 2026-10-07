@@ -102,5 +102,28 @@ def test_a_sealed_antenna_is_called_out() -> None:
 
 
 def test_typing_a_figure_is_still_possible() -> None:
-    assert "I'll type the power myself" in _wiring()
+    """In Advanced the empty choice still offers typing (#314: Simple
+    asks for a choice instead)."""
+    source = (STATIC / "planner.js").read_text(encoding="utf-8")
+    assert 'advanced: "I\'ll type the power myself"' in source
+    assert "emptyChoice(PICKERS[0])" in _wiring()
     assert "data-board-run hidden" in HTML, "the picker shows before it can work"
+
+
+def test_simple_mode_asks_for_a_choice_before_a_run() -> None:
+    """#314 (Will): in Simple the box is hidden, so "I'll type the power
+    myself" offered what the reader could not do. There the empty choice
+    reads "Select …", and a run with an empty picker is refused, with
+    each empty picker marked and the first one focused. A plan opened
+    from a share link brought its own numbers and is not refused.
+    """
+    source = (STATIC / "planner.js").read_text(encoding="utf-8")
+    assert "simple: 'Select your radio'" in source
+    assert "labelEmptyChoices(mode);" in source
+    run = source[source.index("async function runCoverage()") :].split("\n}\n", 1)[0]
+    assert run.index("missingChoices()") < run.index("readForm()"), "it ran before it asked"
+    missing = source[source.index("function missingChoices()") :].split("\n}\n", 1)[0]
+    assert "plannerMode() !== 'simple' || state.fromLink" in missing
+    assert "!run.hidden" in missing, "a picker whose catalogue did not load is asked for"
+    share = source[source.index("async function applyShareLink()") :].split("\n}\n", 1)[0]
+    assert "state.fromLink = true;" in share

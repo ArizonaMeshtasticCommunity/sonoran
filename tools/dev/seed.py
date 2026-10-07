@@ -685,23 +685,33 @@ async def main() -> None:
                     )
                 elif portnum == PORT_POSITION:
                     src = next(n for n in NODES if n[NUM] == sender)
+                    # The same rule as the node row above, as ingest
+                    # writes one value to both. The history said full
+                    # precision for every node, and a node that shares no
+                    # position had one in its history, so once the node
+                    # page read positions from the history (#310) the
+                    # rounded nodes read as exact and the e2e found no
+                    # estimate to check.
+                    coarse = sender % 5 == 0
+                    no_position = sender % 7 == 0
                     await conn.execute(
                         text(
                             """
                             INSERT INTO position_metrics (node_num, packet_pk,
                                 packet_id, latitude, longitude, altitude,
                                 sats_in_view, precision_bits, time)
-                            VALUES (:n, :pk, :p, :lat, :lon, :alt, :sats, 32, :t)
+                            VALUES (:n, :pk, :p, :lat, :lon, :alt, :sats, :bits, :t)
                             """
                         ),
                         {
                             "n": sender,
                             "pk": packet_pk,
                             "p": packet_id,
-                            "lat": src[LAT] + drift(src),
-                            "lon": src[LON] + drift(src),
-                            "alt": src[ALT],
+                            "lat": None if no_position else src[LAT] + drift(src),
+                            "lon": None if no_position else src[LON] + drift(src),
+                            "alt": None if no_position else src[ALT],
                             "sats": RNG.randint(4, 12),
+                            "bits": 13 if coarse and not no_position else 32,
                             "t": seen_at,
                         },
                     )

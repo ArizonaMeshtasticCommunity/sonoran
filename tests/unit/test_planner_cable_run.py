@@ -63,8 +63,11 @@ def test_it_fills_the_existing_box_rather_than_replacing_it() -> None:
 
 
 def test_an_advanced_user_can_still_type_a_figure() -> None:
-    body = _wiring()
-    assert "I'll type the loss myself" in body, "there is no way back to entering the dB directly"
+    # In Advanced the empty choice still offers typing (#314: Simple asks
+    # for a choice instead).
+    source = (STATIC / "planner.js").read_text(encoding="utf-8")
+    assert 'advanced: "I\'ll type the loss myself"' in source, "no way back to typing the dB"
+    assert "emptyChoice(PICKERS[3])" in _wiring()
 
 
 def test_the_helper_stays_hidden_until_its_data_arrives() -> None:
