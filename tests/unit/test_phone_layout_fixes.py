@@ -122,3 +122,39 @@ def test_the_firehose_search_shows_its_whole_hint() -> None:
     search = '[data-page="firehose"] .page-head .controls > input[type="search"]'
     assert f"{search} {{ flex-basis: 100%; }}" in CSS
     assert f"{search} {{ min-width: 16.5rem; }}" in CSS
+
+
+APP = (STATIC / "app.js").read_text(encoding="utf-8")
+
+
+def test_a_chart_follows_its_own_box() -> None:
+    """On an iPhone, in the installed app, the Statistics charts were drawn
+    a third of their panel's width and stayed so: ECharts resizes only when
+    told, and only the window's resize event told it. Each chart's box is
+    now watched, and a real change of size redraws it.
+    """
+    assert "const chartBoxes = window.ResizeObserver" in APP
+    assert "if (chartBoxes) chartBoxes.observe(target);" in APP
+    # A hidden box (0 x 0) is left alone and drawn when it comes back.
+    assert "if (!width || !height) continue;" in APP
+
+
+def test_the_logo_goes_to_the_dashboard() -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    link = re.search(r'<a class="brand-home" href="#dashboard"[^>]*>', html)
+    assert link, "the logo is not a link to the dashboard"
+    # A phone hides the wordmark, so the link carries its own name.
+    assert 'aria-label="Sonoran, go to the dashboard"' in link.group(0)
+    assert html.index(link.group(0)) < html.index("data-brand-mark")
+    # Outside the menu, so it closes the menu itself.
+    assert "const home = $('[data-brand-home]');" in APP
+
+
+def test_the_meshs_own_channel_is_dashed_like_the_rest() -> None:
+    """Orange tells it apart; dashed, with no fill, keeps the levels
+    under it readable, as the white preset marks do."""
+    rule = re.search(r"\.rf-mark\.custom \{([^}]*)\}", CSS)
+    assert rule
+    assert "2px dashed var(--accent)" in rule.group(1)
+    assert "solid" not in rule.group(1)
+    assert "background" not in rule.group(1)

@@ -999,6 +999,7 @@ function chart(target, option) {
   if (!instance || instance.isDisposed()) {
     instance = echarts.init(target, null, { renderer: 'canvas' });
     charts.set(target, instance);
+    if (chartBoxes) chartBoxes.observe(target);
   }
   instance.setOption(option, true);
   chartOptions.set(target, option);
@@ -1094,6 +1095,31 @@ const AXIS = {
   splitLine: { lineStyle: { color: PALETTE.panel2 } },
   axisLabel: { color: PALETTE.muted },
 };
+
+/*
+ * Every chart follows its own box, not only the window (#322).
+ *
+ * ECharts measures its box when it starts and again only on `resize`.
+ * The window's resize event is not the only way a box changes width: on
+ * an iPhone, in the installed app, the Statistics charts were drawn
+ * about a third of their panel's width with every label piled on the
+ * next, and stayed so, because the page was laid out at another width
+ * when they started and no window resize followed. A box that changes
+ * size for any reason now redraws its chart, once, at the size it has.
+ */
+const chartBoxes = window.ResizeObserver
+  ? new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const instance = charts.get(entry.target);
+      if (!instance || instance.isDisposed()) continue;
+      const { width, height } = entry.contentRect;
+      if (!width || !height) continue; // hidden: draw when it comes back
+      if (Math.round(width) !== instance.getWidth() || Math.round(height) !== instance.getHeight()) {
+        instance.resize();
+      }
+    }
+  })
+  : null;
 
 addEventListener('resize', () => {
   markScrollableTables();
@@ -11537,6 +11563,22 @@ function wireNav() {
   menu.addEventListener('click', (event) => {
     if (narrow.matches && event.target.closest('a')) setOpen(false);
   });
+  /*
+   * The logo goes to the dashboard. It is outside the menu, so it closes
+   * the menu itself. On the dashboard already, the address does not
+   * change and nothing would happen, so it goes back to the top instead,
+   * which is what a reader who taps a logo there wants.
+   */
+  const home = $('[data-brand-home]');
+  if (home) {
+    home.addEventListener('click', (event) => {
+      if (narrow.matches) setOpen(false);
+      const here = (location.hash.slice(1) || 'dashboard').split('?')[0];
+      if (here !== 'dashboard') return;
+      event.preventDefault();
+      window.scrollTo({ top: 0, behavior: REDUCED_MOTION.matches ? 'auto' : 'smooth' });
+    });
+  }
   /*
    * Escape closes it and gives the focus back to the control that
    * opened it, so a keyboard is never left in a list that has gone.

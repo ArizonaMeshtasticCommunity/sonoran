@@ -190,11 +190,16 @@
           <!-- The heading stays in the accessibility tree when the mark
                loads, so the mark itself is decorative. See `reveal` in
                app.js. -->
-          <img class="brand-mark" data-brand-mark src="static/logo.png?v=__SONORAN_ASSET_VERSION__" alt="" />
-          <div class="brand-text" data-brand-text>
-            <h1>Sonoran</h1>
-            <span>azmsh.net</span>
-          </div>
+          <!-- The mark goes home, as a site's logo does. Named here
+               because a phone hides the wordmark, which would leave the
+               link with no words in it. -->
+          <a class="brand-home" href="#dashboard" data-brand-home aria-label="Sonoran, go to the dashboard">
+            <img class="brand-mark" data-brand-mark src="static/logo.png?v=__SONORAN_ASSET_VERSION__" alt="" />
+            <div class="brand-text" data-brand-text>
+              <h1>Sonoran</h1>
+              <span>azmsh.net</span>
+            </div>
+          </a>
           <!--
             Collapse the sidebar to its icons (#300). Will: it sits at the
             top, beside the logo, and a new visitor starts expanded.

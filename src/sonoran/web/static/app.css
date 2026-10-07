@@ -261,6 +261,12 @@ body {
 .brand { display: flex; align-items: baseline; gap: .5rem; }
 .brand h1 { font-size: 1.3rem; margin: 0; letter-spacing: .02em; }
 .brand-text { display: flex; align-items: baseline; gap: .5rem; }
+/* The mark and the wordmark, as one link to the dashboard. */
+.brand-home {
+  display: flex; align-items: center; gap: .5rem; min-width: 0;
+  color: inherit; text-decoration: none; border-radius: .35rem;
+}
+.brand-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .brand-text span { color: var(--muted); font-size: .75rem; }
 /* The script reveals the mark only after the file loads. */
 .brand-mark { display: none; width: 100%; max-width: 11rem; height: auto; }
@@ -2297,6 +2303,8 @@ a.more { text-decoration: none; display: inline-block; }
   /* A link drawn as a button (#258, #289) is a button to a finger, and
      the rule above names `button`, which cannot reach it. */
   a.button-link { min-height: 2.75rem; }
+  /* The logo is a link to the dashboard, and the same target. */
+  .brand-home { min-height: 2.75rem; }
 }
 
 @media (max-width: 60rem) {
@@ -4507,10 +4515,12 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-zoom input[type="datetime-local"] { margin-left: .35rem; }
 .rf-hover { min-height: 1.3em; margin: .35rem 0 0; font-size: .8rem; }
 .rf-waterfall canvas { cursor: crosshair; }
-/* A slot the mesh set itself: solid, so it reads apart from the defaults. */
-.rf-mark.custom { border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); background: rgb(255 255 255 / .06); }
+/* A slot the mesh set itself: orange, so it reads apart from the
+   defaults, and dashed like them, so the levels under it stay readable.
+   It was solid and tinted, and hid the waterfall beneath it. */
+.rf-mark.custom { border-left: 2px dashed var(--accent); border-right: 2px dashed var(--accent); }
 /* A channel too narrow on this screen for two edges: one line at its
-   centre (`fitChannels`), dashed for a preset, solid for the mesh's own. */
+   centre (`fitChannels`), white for a preset, orange for the mesh's own. */
 .rf-mark.narrow { width: 0 !important; min-width: 0; border-right: 0; background: none; transform: translateX(-.5px); }
 .rf-mark.custom.narrow { transform: translateX(-1px); }
 .rf-tick.channel.custom { color: var(--accent); }
