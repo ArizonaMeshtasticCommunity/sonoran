@@ -64,6 +64,8 @@ sonoran-rf-ingest = "sonoran.rf.ingest:run"
 # Remove one RF station's data after its login is revoked. A dry run
 # unless --yes. Run it in the migrate service, which holds the owner.
 sonoran-rf-purge = "sonoran.rf.purge:run"
+# Trust levels and hidden mods for RF stations (#324). Run in `migrate`.
+sonoran-rf-trust = "sonoran.rf.operator:run"
 
 [build-system]
 requires = ["hatchling"]

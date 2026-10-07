@@ -6,15 +6,22 @@ For a station that sent bad data: revoke its login first (the Discord
     docker compose run --rm migrate sonoran-rf-purge <station>          # dry run
     docker compose run --rm migrate sonoran-rf-purge <station> --yes    # delete
 
+With `--mod <name>`, only what one of the station's mods sent is removed
+(#324): the owner's data is theirs, and they may ask for it to go. To stop
+a mod from being shown without deleting it, see `sonoran-rf-trust`.
+
+Each deletion is written to `rf_operator_log`, with `--by` or the user
+that ran it.
+
 It runs as the database owner (`DATABASE_URL_MIGRATE`), because no
 application role may delete. It removes the station from every RF
 table in one transaction. A "latest position" the station held is put
 back from another station's newest point of the same thing, where one
 is still kept, so a plane heard by others does not vanish from the map.
 
-What it cannot undo: a shared track point the station won (the loudest
-hearing wins, `store.py`) replaced another station's point for that
-20 s, and that point is gone.
+What it cannot undo: a shared track point the station held (the first
+point received wins, `store.py`) kept another station's point for that
+20 s out, and that point was never stored.
 
 The broker keeps the station's last heartbeat as a retained message,
 and the ingest reads it again when it reconnects. The registrar clears
@@ -34,6 +41,7 @@ from sqlalchemy import create_engine, delete, func, insert, select, tuple_
 from sqlalchemy.engine import Connection
 
 from sonoran.db.models import (
+    RfCustom,
     RfHeard,
     RfLatest,
     RfSource,
@@ -42,7 +50,8 @@ from sonoran.db.models import (
     RfStation,
     RfTrack,
 )
-from sonoran.rf.schema import NO_SOURCE, STATION_ID
+from sonoran.rf.operator import actor_name, log_action
+from sonoran.rf.schema import NAME, NO_SOURCE, STATION_ID
 
 # Every table that holds a station's rows, by its station column.
 TABLES: tuple[tuple[str, Any], ...] = (
@@ -51,6 +60,7 @@ TABLES: tuple[tuple[str, Any], ...] = (
     ("rf_heard", RfHeard),
     ("rf_spectrum", RfSpectrum),
     ("rf_spectrum_hour", RfSpectrumHour),
+    ("rf_custom", RfCustom),
     ("rf_source", RfSource),
     ("rf_station", RfStation),
 )
@@ -109,6 +119,9 @@ def purge(conn: Connection, station: str) -> Report:
                 RfTrack.rssi_db,
                 RfTrack.station_id,
                 RfTrack.meta,
+                RfTrack.source,
+                RfTrack.trust,
+                RfTrack.received_at,
             )
             .where(tuple_(RfTrack.kind, RfTrack.thing_id).in_(held))
             .distinct(RfTrack.kind, RfTrack.thing_id)
@@ -132,6 +145,9 @@ def purge(conn: Connection, station: str) -> Report:
                     "rssi_db",
                     "station_id",
                     "meta",
+                    "source",
+                    "trust",
+                    "received_at",
                 ],
                 newest,
             )
@@ -148,6 +164,23 @@ def retained_topics(station: str, sources: list[str]) -> list[str]:
     return topics
 
 
+def survey_mod(conn: Connection, station: str, mod: str) -> Report:
+    """Count what one of the station's mods sent."""
+    count = conn.execute(
+        select(func.count())
+        .select_from(RfCustom)
+        .where(RfCustom.station_id == station, RfCustom.mod == mod)
+    ).scalar_one()
+    return Report({"rf_custom": int(count)}, 0, [])
+
+
+def purge_mod(conn: Connection, station: str, mod: str) -> Report:
+    """Delete what one of the station's mods sent. The caller owns the transaction."""
+    report = survey_mod(conn, station, mod)
+    conn.execute(delete(RfCustom).where(RfCustom.station_id == station, RfCustom.mod == mod))
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="sonoran-rf-purge",
@@ -155,9 +188,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("station", help="the station id, such as tempe-roof")
     parser.add_argument("--yes", action="store_true", help="delete; without it, only count")
+    parser.add_argument("--mod", help="remove only what this mod of the station sent")
+    parser.add_argument("--by", help="who asked for it, for the log; default the user")
     args = parser.parse_args(argv)
     if not STATION_ID.match(args.station):
         print(f"{args.station!r} is not a station id", file=sys.stderr)
+        return 2
+    if args.mod is not None and not NAME.match(args.mod):
+        print(f"{args.mod!r} is not a mod name", file=sys.stderr)
         return 2
     url = os.environ.get("DATABASE_URL_MIGRATE")
     if not url:
@@ -166,20 +204,34 @@ def main(argv: list[str] | None = None) -> int:
     engine = create_engine(url.replace("+asyncpg", "+psycopg"))
     try:
         with engine.begin() as conn:
-            report = purge(conn, args.station) if args.yes else survey(conn, args.station)
+            if args.mod is not None:
+                report = (purge_mod if args.yes else survey_mod)(conn, args.station, args.mod)
+            else:
+                report = purge(conn, args.station) if args.yes else survey(conn, args.station)
             if args.yes and not any(report.counts.values()):
                 print(f"{args.station}: nothing to remove")
                 return 1
+            if args.yes:
+                removed = ", ".join(f"{n} {name}" for name, n in report.counts.items() if n)
+                log_action(
+                    conn,
+                    args.by or actor_name(),
+                    "purge mod" if args.mod else "purge",
+                    args.station,
+                    f"{args.mod}: {removed}" if args.mod else removed,
+                )
     finally:
         engine.dispose()
     verb = "removed" if args.yes else "would remove"
     print(f"{args.station}: {verb}")
     for name, count in report.counts.items():
         print(f"  {count:>8}  {name}")
-    if args.yes:
+    if args.yes and args.mod is None:
         print(f"  {report.restored:>8}  latest positions put back from other stations")
-    else:
+    if not args.yes:
         print("Nothing was deleted. Run again with --yes to delete.")
+    if args.mod is not None:
+        return 0
     print("Retained messages the broker may still hold (cleared for a revoked minted login;")
     print("for a login made by hand, clear each with the broker's API):")
     for topic in retained_topics(args.station, report.sources):

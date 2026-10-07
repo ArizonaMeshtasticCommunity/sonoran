@@ -1,4 +1,4 @@
-"""Roll each finished hour of the 900 MHz band up into `rf_spectrum_hour`.
+"""Roll each finished hour of every swept range up into `rf_spectrum_hour`.
 
 The 3 and 7 day waterfalls read these rows instead of every minute
 (revision 0019). Each hour is built with the same per-bin rules as a
@@ -40,10 +40,14 @@ MAX_HOURS_PER_RUN = 48
 
 @dataclass(frozen=True, order=True)
 class HourKey:
+    """One hour of one range of one station (#324)."""
+
     t: datetime
     station_id: str
+    source: str
     f_start_hz: int
     bin_hz: int
+    bins: int
 
 
 def floor_hour(when: datetime) -> datetime:
@@ -58,24 +62,33 @@ async def hours_to_build(
     since = current - KEEP
     hour = func.time_bucket(HOUR, RfSpectrum.t)
     raw = {
-        HourKey(t, station, f_start, bin_hz)
-        for station, t, f_start, bin_hz in (
+        HourKey(t, station, source, f_start, bin_hz, bins)
+        for station, t, source, f_start, bin_hz, bins in (
             await session.execute(
-                select(RfSpectrum.station_id, hour, RfSpectrum.f_start_hz, RfSpectrum.bin_hz)
+                select(
+                    RfSpectrum.station_id,
+                    hour,
+                    RfSpectrum.source,
+                    RfSpectrum.f_start_hz,
+                    RfSpectrum.bin_hz,
+                    RfSpectrum.bins,
+                )
                 .where(RfSpectrum.t >= since, RfSpectrum.t < current)
                 .distinct()
             )
         ).all()
     }
     done = {
-        HourKey(t, station, f_start, bin_hz)
-        for station, t, f_start, bin_hz in (
+        HourKey(t, station, source, f_start, bin_hz, bins)
+        for station, t, source, f_start, bin_hz, bins in (
             await session.execute(
                 select(
                     RfSpectrumHour.station_id,
                     RfSpectrumHour.t,
+                    RfSpectrumHour.source,
                     RfSpectrumHour.f_start_hz,
                     RfSpectrumHour.bin_hz,
+                    RfSpectrumHour.bins,
                 ).where(RfSpectrumHour.t >= since)
             )
         ).all()
@@ -89,31 +102,19 @@ async def build_hour(session: AsyncSession, key: HourKey, now: datetime) -> bool
     """Build one hour. True when it had minutes to build from."""
     in_hour = (
         RfSpectrum.station_id == key.station_id,
+        RfSpectrum.source == key.source,
         RfSpectrum.t >= key.t,
         RfSpectrum.t < key.t + HOUR,
         RfSpectrum.f_start_hz == key.f_start_hz,
         RfSpectrum.bin_hz == key.bin_hz,
+        RfSpectrum.bins == key.bins,
     )
-    layout = (
-        await session.execute(
-            select(func.cardinality(RfSpectrum.p95), RfSpectrum.gain_db)
-            .where(*in_hour)
-            .order_by(RfSpectrum.t.desc())
-            .limit(1)
-        )
-    ).first()
-    if layout is None:
+    gain_db = await session.scalar(
+        select(RfSpectrum.gain_db).where(*in_hour).order_by(RfSpectrum.t.desc()).limit(1)
+    )
+    if gain_db is None:
         return False
-    bins, gain_db = layout
-    row = (
-        await session.execute(
-            bin_rows(
-                func.time_bucket(HOUR, RfSpectrum.t),
-                *in_hour,
-                func.cardinality(RfSpectrum.p95) == bins,
-            )
-        )
-    ).first()
+    row = (await session.execute(bin_rows(func.time_bucket(HOUR, RfSpectrum.t), *in_hour))).first()
     if row is None:
         return False
     _, p50, p95, busy, minutes, peak, peak_min = row
@@ -133,15 +134,16 @@ async def build_hour(session: AsyncSession, key: HourKey, now: datetime) -> bool
     }
     statement = insert(RfSpectrumHour).values(
         station_id=key.station_id,
+        source=key.source,
         t=key.t,
         f_start_hz=key.f_start_hz,
         bin_hz=key.bin_hz,
-        bins=bins,
+        bins=key.bins,
         **values,
     )
     await session.execute(
         statement.on_conflict_do_update(
-            index_elements=["station_id", "t", "f_start_hz", "bin_hz", "bins"],
+            index_elements=["station_id", "source", "t", "f_start_hz", "bin_hz", "bins"],
             set_=values,
         )
     )
@@ -158,5 +160,5 @@ async def run_once(session: AsyncSession, now: datetime | None = None) -> int:
         # One hour per transaction: a failure loses one hour, not the run.
         await session.commit()
     if built:
-        logger.info("rolled up %d hours of the 900 MHz band", built)
+        logger.info("rolled up %d hours of swept ranges", built)
     return built

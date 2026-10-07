@@ -20,17 +20,39 @@ from uuid import uuid4
 
 import aiomqtt
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.logging import configure_logging, get_logger
-from sonoran.rf.schema import Batch, Registry, Spectrum, Status, TopicError, parse_topic
-from sonoran.rf.store import Rules, store_batch, store_registry, store_spectrum, store_status
+from sonoran.rf.guard import Guard, Limits, parse_refused
+from sonoran.rf.schema import (
+    Batch,
+    Custom,
+    Registry,
+    Spectrum,
+    Status,
+    TopicError,
+    parse_topic,
+)
+from sonoran.rf.store import (
+    Rules,
+    range_key,
+    spectrum_minute,
+    store_batch,
+    store_custom,
+    store_registry,
+    store_spectrum,
+    store_status,
+)
 
 logger = get_logger(__name__)
 
 # How often the running totals are logged.
 REPORT_EVERY = timedelta(seconds=60)
+# An invalid message is logged once per station in this time; the rest
+# are counted. One broken agent must not fill the log (#324).
+INVALID_LOG_EVERY = timedelta(hours=1)
 
 
 def rules_from(settings: Settings) -> Rules:
@@ -41,6 +63,22 @@ def rules_from(settings: Settings) -> Rules:
         past_slack=timedelta(seconds=settings.rf_past_slack_seconds),
         hidden=frozenset(item.lower() for item in settings.rf_hidden_ids),
         ism_allow=frozenset(item.strip().lower() for item in settings.rf_ism_allow),
+    )
+
+
+def limits_from(settings: Settings) -> Limits:
+    """Return the per-station limits from the settings."""
+    return Limits(
+        messages_per_minute=settings.rf_quota_messages_per_minute,
+        messages_burst=settings.rf_quota_messages_burst,
+        points_per_minute=settings.rf_quota_points_per_minute,
+        points_burst=settings.rf_quota_points_burst,
+        spectrum_max_ranges=settings.rf_spectrum_max_ranges,
+        spectrum_max_bins=settings.rf_spectrum_max_bins,
+        refused=tuple(parse_refused(spec) for spec in settings.rf_spectrum_refused_ranges),
+        custom_per_minute=settings.rf_custom_points_per_minute,
+        custom_burst=settings.rf_custom_points_burst,
+        custom_max_ids=settings.rf_custom_max_ids,
     )
 
 
@@ -98,7 +136,7 @@ class Removed:
         self.station = station
 
 
-Message = Batch | Status | Spectrum | Registry | Removed
+Message = Batch | Status | Spectrum | Custom | Registry | Removed
 
 
 def decode(topic: str, payload: bytes) -> Message:
@@ -114,13 +152,15 @@ def decode(topic: str, payload: bytes) -> Message:
     if kind == "registry" and not payload:
         return Removed(station)
     data = json.loads(payload)
-    message: Batch | Status | Spectrum | Registry
+    message: Batch | Status | Spectrum | Custom | Registry
     if kind == "status":
         message = Status.model_validate(data)
         if message.source != source:
             raise ValueError(f"heartbeat names source {message.source!r} on the {source!r} topic")
     elif kind == "spectrum":
         message = Spectrum.model_validate(data)
+    elif kind == "custom":
+        message = Custom.model_validate(data)
     elif kind == "registry":
         message = Registry.model_validate(data)
     else:
@@ -132,46 +172,119 @@ def decode(topic: str, payload: bytes) -> Message:
     return message
 
 
+class InvalidLog:
+    """Log an invalid message once per station an hour; count the rest."""
+
+    def __init__(self, every: timedelta = INVALID_LOG_EVERY) -> None:
+        self.every = every
+        self._last: dict[str, datetime] = {}
+        self._skipped: Counter[str] = Counter()
+
+    def note(self, topic: str, error: str, now: datetime) -> bool:
+        """Record one invalid message. True when it was logged."""
+        parts = topic.split("/")
+        who = parts[2] if len(parts) > 2 else topic
+        last = self._last.get(who)
+        if last is not None and now - last < self.every:
+            self._skipped[who] += 1
+            return False
+        skipped = self._skipped.pop(who, 0)
+        more = f" ({skipped} more since the last line)" if skipped else ""
+        logger.info("drop invalid RF message on %s: %s%s", topic, error[:200], more)
+        self._last[who] = now
+        return True
+
+
+async def handle(
+    session: AsyncSession,
+    message: Message,
+    received: datetime,
+    retained: bool,
+    rules: Rules,
+    guard: Guard,
+    totals: Counter[str],
+) -> None:
+    """Store one decoded message, counting what happened in `totals`."""
+    if isinstance(message, Removed):
+        await store_registry(session, message.station, None, received)
+        totals["registry"] += 1
+    elif isinstance(message, Registry):
+        await store_registry(session, message.station, message, received)
+        totals["registry"] += 1
+    elif not retained and not guard.allow_message(message.station, received):
+        # The registry comes from the registrar alone, and a retained
+        # message is the broker replaying one on connect: neither is a
+        # station sending more than its share.
+        totals["over_quota"] += 1
+    elif isinstance(message, Status):
+        await store_status(session, message, heard_at(message, received, retained), guard)
+        totals["status"] += 1
+    elif isinstance(message, Spectrum):
+        refused = guard.allow_spectrum(
+            message.station,
+            range_key(message),
+            message.f_start_hz,
+            len(message.p95),
+            message.bin_hz,
+            spectrum_minute(message, received, rules),
+            received,
+        )
+        if refused is not None:
+            totals["spectrum_refused"] += 1
+            return
+        new = await store_spectrum(session, message, received, rules)
+        totals["spectrum" if new else "spectrum_repeat"] += 1
+    elif isinstance(message, Custom):
+        tally = await store_custom(session, message, received, rules, guard)
+        totals["custom"] += tally.stored
+        totals["custom_rejected"] += tally.rejected
+        totals["over_quota"] += tally.over_quota
+    else:
+        tally = await store_batch(session, message, received, rules, guard)
+        totals["stored"] += tally.stored
+        totals["retimed"] += tally.retimed
+        totals["hidden"] += tally.hidden
+        totals["not_allowed"] += tally.not_allowed
+        totals["relayed"] += tally.relayed
+        totals["rejected"] += tally.rejected
+        totals["kind_not_stored"] += tally.kind_not_stored
+        totals["doubtful"] += tally.doubtful
+        totals["withheld"] += tally.withheld
+        totals["over_quota"] += tally.over_quota
+
+
 async def main() -> None:
     """Run the RF ingest loop."""
     settings = get_settings()
     rules = rules_from(settings)
+    guard = Guard(limits_from(settings))
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
     totals: Counter[str] = Counter()
+    invalid = InvalidLog()
     reported = datetime.now(UTC)
+    trust_every = timedelta(seconds=settings.rf_trust_refresh_seconds)
+    trust_read: datetime | None = None
     try:
         async for topic, payload, retained in _messages(settings):
             received = datetime.now(UTC)
+            if trust_read is None or received - trust_read >= trust_every:
+                trust_read = received
+                try:
+                    async with session_factory() as session:
+                        await guard.refresh(session)
+                except Exception:
+                    # The last levels read stay in force.
+                    logger.exception("could not read the RF trust levels")
             try:
                 message = decode(topic, payload)
             except (TopicError, ValueError, ValidationError) as exc:
                 totals["invalid"] += 1
-                logger.info("drop invalid RF message on %s: %s", topic, str(exc)[:200])
+                invalid.note(topic, str(exc), received)
                 continue
             async with session_factory() as session:
                 try:
-                    if isinstance(message, Removed):
-                        await store_registry(session, message.station, None, received)
-                        totals["registry"] += 1
-                    elif isinstance(message, Registry):
-                        await store_registry(session, message.station, message, received)
-                        totals["registry"] += 1
-                    elif isinstance(message, Spectrum):
-                        new = await store_spectrum(session, message, received, rules)
-                        totals["spectrum" if new else "spectrum_repeat"] += 1
-                    elif isinstance(message, Status):
-                        await store_status(session, message, heard_at(message, received, retained))
-                        totals["status"] += 1
-                    else:
-                        tally = await store_batch(session, message, received, rules)
-                        totals["stored"] += tally.stored
-                        totals["retimed"] += tally.retimed
-                        totals["hidden"] += tally.hidden
-                        totals["not_allowed"] += tally.not_allowed
-                        totals["relayed"] += tally.relayed
-                        totals["rejected"] += tally.rejected
-                        totals["kind_not_stored"] += tally.kind_not_stored
+                    await handle(session, message, received, retained, rules, guard, totals)
                     await session.commit()
                 except Exception:
                     await session.rollback()

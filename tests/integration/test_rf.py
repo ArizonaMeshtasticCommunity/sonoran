@@ -16,11 +16,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from sonoran.api.app import create_app
 from sonoran.config import Settings
-from sonoran.rf.schema import Batch, Registry, Spectrum, Status
+from sonoran.rf.guard import Guard
+from sonoran.rf.schema import Batch, Custom, Registry, Spectrum, Status
 from sonoran.rf.store import (
     Rules,
     Tally,
     store_batch,
+    store_custom,
     store_registry,
     store_spectrum,
     store_status,
@@ -34,7 +36,8 @@ def clean(migrated_engine):  # type: ignore[no-untyped-def]
         connection.execute(
             text(
                 "TRUNCATE rf_station, rf_source, rf_track, rf_heard, rf_latest, "
-                "rf_spectrum, rf_spectrum_hour"
+                "rf_spectrum, rf_spectrum_hour, rf_custom, rf_trust, rf_hidden_mod, "
+                "rf_operator_log"
             )
         )
     yield
@@ -52,26 +55,37 @@ def _obs(icao: str, when: datetime, rssi: float | None, lat: float = 33.5) -> di
 
 async def _write(
     timescale_url: str,
-    *messages: Batch | Status | Registry | str,
+    *messages: Batch | Status | Registry | Custom | str,
     rules: Rules | None = None,
+    guard: Guard | None = None,
 ) -> list[Tally]:
     """Write each message as the ingest role. A bare station id removes
-    that station's registry entry, as an empty retained message does."""
+    that station's registry entry, as an empty retained message does.
+    With a `guard`, its trust levels are read first, as the ingest role."""
     engine = create_async_engine(role_url(timescale_url, "azmsh_ingest"))
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tallies: list[Tally] = []
     try:
+        if guard is not None:
+            async with factory() as session:
+                await guard.refresh(session)
         for message in messages:
             async with factory() as session:
                 received = datetime.now(UTC)
                 if isinstance(message, Status):
-                    await store_status(session, message, received)
+                    await store_status(session, message, received, guard)
+                elif isinstance(message, Custom):
+                    tallies.append(
+                        await store_custom(session, message, received, rules or Rules(), guard)
+                    )
                 elif isinstance(message, Registry):
                     await store_registry(session, message.station, message, received)
                 elif isinstance(message, str):
                     await store_registry(session, message, None, received)
                 else:
-                    tallies.append(await store_batch(session, message, received, rules or Rules()))
+                    tallies.append(
+                        await store_batch(session, message, received, rules or Rules(), guard)
+                    )
                 await session.commit()
     finally:
         await engine.dispose()
@@ -90,7 +104,7 @@ def _client(timescale_url: str, **extra: object) -> TestClient:
     return TestClient(create_app(settings))
 
 
-def test_two_stations_hearing_one_aircraft_make_one_point_the_loudest(
+def test_two_stations_hearing_one_aircraft_make_one_point_the_first_received(
     timescale_url: str, migrated_engine, clean: None
 ) -> None:  # type: ignore[no-untyped-def]
     now = datetime.now(UTC).replace(second=5, microsecond=0)
@@ -104,7 +118,9 @@ def test_two_stations_hearing_one_aircraft_make_one_point_the_loudest(
     )
     track = _rows(migrated_engine, "SELECT station_id, rssi_db, lat FROM rf_track")
     assert len(track) == 1, "one point per aircraft per bucket, across stations"
-    assert track[0].station_id == "south-site" and track[0].rssi_db == -12.0
+    # The first received, never the loudest: a level is a number the
+    # station reports, and a modified agent could claim any (#324).
+    assert track[0].station_id == "north-site" and track[0].rssi_db == -30.0
 
     heard = {
         r.station_id: r
@@ -429,7 +445,7 @@ def test_rf_never_counts_as_meshtastic(timescale_url: str, migrated_engine, clea
     assert kinds == {
         "known": ["adsb", "uat", "aprs", "sonde", "ism"],
         "stored": ["adsb", "aprs", "ism", "sonde", "uat"],
-        "views": ["spectrum"],
+        "views": ["spectrum", "sweeps", "custom"],
     }
 
 
@@ -503,11 +519,14 @@ def test_the_spectrum_api_buckets_a_long_window_and_keeps_bursts(  # type: ignor
         stations = client.get("/api/rf/stations").json()
         refused = client.get("/api/rf/spectrum/NOT_A_STATION")
     assert hour["bucket_minutes"] == 1
-    assert len(hour["rows"]) == 8
+    assert len(_swept(hour)) == 8
+    # Every other minute of the hour is there too, as not swept.
+    assert len(hour["rows"]) in (60, 61) and not hour["rows"][0]["minutes"]
     assert hour["bins"] == 3 and hour["f_start_hz"] == 902_000_000
+    assert hour["range"]["id"] == "-:902000000:50000:3"
     assert day["bucket_minutes"] == 6
-    assert len(day["rows"]) <= 3
-    loud = max(day["rows"], key=lambda row: row["p95"][1])
+    assert len(_swept(day)) <= 3
+    loud = max(_swept(day), key=lambda row: row["p95"][1])
     assert loud["p95"][1] == -260, "the highest 95th percentile in the bucket is kept"
     assert loud["p50"][1] == -500, "the median of the medians ignores one loud minute"
     by_name = {item["name"]: item for item in channels["channels"]}
@@ -516,6 +535,11 @@ def test_the_spectrum_api_buckets_a_long_window_and_keeps_bursts(  # type: ignor
     # The station has no heartbeat, so it is not listed; spectrum alone
     # does not invent a station.
     assert all(item["station"] != "west-site" for item in stations)
+
+
+def _swept(answer: dict) -> list[dict]:  # type: ignore[type-arg]
+    """The rows of a waterfall that hold a sweep."""
+    return [row for row in answer["rows"] if row["minutes"]]
 
 
 def _beat(station: str, source: str | None, kinds: list[str], heard: int) -> Status:
@@ -687,11 +711,11 @@ def test_the_hourly_rollup_keeps_bursts_and_feeds_the_week_view(
         three = client.get("/api/rf/spectrum/west-site?hours=72").json()
         too_long = client.get("/api/rf/spectrum/west-site?hours=169")
     assert week["bucket_minutes"] == 60 and three["bucket_minutes"] == 60
-    assert len(week["rows"]) == len(rows)
+    assert len(_swept(week)) == len(rows)
     assert week["bins"] == 3 and week["sweeps_per_minute"] == 12
-    assert max(row["p95"][1] for row in week["rows"]) == -260
-    assert max(row["peak"][1] for row in week["rows"]) == -210
-    assert all(len(row["peak_min"]) == 3 for row in week["rows"])
+    assert max(row["p95"][1] for row in _swept(week)) == -260
+    assert max(row["peak"][1] for row in _swept(week)) == -210
+    assert all(len(row["peak_min"]) == 3 for row in _swept(week))
     assert too_long.status_code == 422
 
 
@@ -722,9 +746,10 @@ def test_full_resolution_is_two_hours_of_minutes_from_the_last_three_days(
         )
         naive = client.get("/api/rf/spectrum/west-site", params={"start": "2026-10-04T12:00:00"})
     assert full["bucket_minutes"] == 1 and full["hours"] == 2
-    assert len(full["rows"]) == 8, "one row per minute"
-    assert "peak_min" not in full["rows"][0], "a one-minute row needs no peak minute"
-    assert max(row["peak"][1] for row in full["rows"]) == -210
+    assert len(_swept(full)) == 8, "one row per minute"
+    assert len(full["rows"]) == 120, "the minutes not swept are sent as such"
+    assert "peak_min" not in _swept(full)[0], "a one-minute row needs no peak minute"
+    assert max(row["peak"][1] for row in _swept(full)) == -210
     assert empty["rows"] == [] and empty["bucket_minutes"] == 1
     assert too_old.status_code == 422
     assert future.status_code == 422
@@ -785,6 +810,7 @@ def test_purging_a_station_removes_its_rows_and_puts_back_honest_points(
         "rf_heard",
         "rf_spectrum",
         "rf_spectrum_hour",
+        "rf_custom",
         "rf_source",
         "rf_station",
     ):
@@ -792,3 +818,284 @@ def test_purging_a_station_removes_its_rows_and_puts_back_honest_points(
     latest = _rows(migrated_engine, "SELECT thing_id, station_id, lat FROM rf_latest ORDER BY 1")
     assert latest == [("a1b2c3", "good-site", 33.5)]
     assert _rows(migrated_engine, "SELECT station_id FROM rf_station") == [("good-site",)]
+
+
+# --- Any range, trust, and members' mods (#324) -----------------------
+
+
+def _ranged(
+    station: str,
+    when: datetime,
+    f_start: int,
+    *,
+    source: str | None = None,
+    name: str | None = None,
+    level: int = -500,
+) -> Spectrum:
+    body: dict[str, object] = {
+        "v": 1,
+        "station": station,
+        "kind": "spectrum",
+        "t": when,
+        "f_start_hz": f_start,
+        "bin_hz": 25_000,
+        "sweeps": 12,
+        "gain_db": 20.0,
+        "p50": [level, level],
+        "p95": [level + 40, level + 40],
+        "peak": [level + 90, level + 90],
+        "busy": [0, 10],
+    }
+    if source:
+        body["source"] = source
+    if name:
+        body["name"] = name
+    return Spectrum.model_validate(body)
+
+
+def test_a_station_sweeping_two_ranges_keeps_both_and_offers_a_picker(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """Two dongles at one station, in the same minutes: both are stored."""
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    minutes = []
+    for i in range(3):
+        when = now - timedelta(minutes=i)
+        minutes += [
+            _ranged("west-site", when, 902_000_000, level=-500),
+            _ranged("west-site", when, 420_000_000, source="pi2", name="uhf", level=-400),
+        ]
+    stored = asyncio.run(_write_spectrum(timescale_url, *minutes))
+    assert stored == [True] * 6, "a second range in the same minute is not a repeat"
+    with _client(timescale_url) as client:
+        ranges = client.get("/api/rf/spectrum/west-site/ranges").json()["ranges"]
+        uhf = client.get(
+            "/api/rf/spectrum/west-site", params={"hours": 1, "range": "pi2:420000000:25000:2"}
+        ).json()
+        ism = client.get(
+            "/api/rf/spectrum/west-site", params={"hours": 1, "range": "-:902000000:25000:2"}
+        ).json()
+        bad = client.get("/api/rf/spectrum/west-site", params={"range": "pi2:<b>:1:2"})
+        sweeps = client.get("/api/rf/sweeps").json()["ranges"]
+    assert {r["id"] for r in ranges} == {"pi2:420000000:25000:2", "-:902000000:25000:2"}
+    named = next(r for r in ranges if r["source"] == "pi2")
+    assert named["name"] == "uhf" and named["f_end_hz"] == 420_050_000 and named["minutes"] == 3
+    assert uhf["range"]["name"] == "uhf"
+    assert {row["p50"][0] for row in _swept(uhf)} == {-400}
+    assert {row["p50"][0] for row in _swept(ism)} == {-500}, "two ranges are never mixed"
+    assert bad.status_code == 422
+    assert [(r["f_start_hz"], r["minutes"]) for r in sweeps] == [
+        (420_000_000, 3),
+        (902_000_000, 3),
+    ]
+
+    later = now + timedelta(hours=2)
+    asyncio.run(_rollup(timescale_url, later))
+    hours = _rows(migrated_engine, "SELECT DISTINCT source, f_start_hz FROM rf_spectrum_hour")
+    assert sorted(hours) == [("-", 902_000_000), ("pi2", 420_000_000)]
+
+
+def test_a_dongle_taking_turns_shows_where_it_was_elsewhere_as_not_swept(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    minutes = [
+        _ranged("west-site", now - timedelta(minutes=i), 902_000_000 if i % 2 else 420_000_000)
+        for i in range(8)
+    ]
+    asyncio.run(_write_spectrum(timescale_url, *minutes))
+    start = (now - timedelta(minutes=10)).isoformat()
+    with _client(timescale_url) as client:
+        full = client.get(
+            "/api/rf/spectrum/west-site",
+            params={"start": start, "range": "-:902000000:25000:2"},
+        ).json()
+    rows = {row["t"][:16]: row for row in full["rows"]}
+    for i in range(8):
+        key = (now - timedelta(minutes=i)).isoformat()[:16]
+        assert bool(rows[key]["minutes"]) == bool(i % 2), key
+        if not i % 2:
+            assert "p50" not in rows[key], "a minute not swept carries no level"
+
+
+def test_what_a_station_reports_it_sweeps_is_kept_and_shown_as_reported(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    beat = _beat("west-site", "pi2", [], 0).model_copy(
+        update={
+            "sweeps": Status.model_validate(
+                {
+                    "v": 1,
+                    "station": "west-site",
+                    "sent": now,
+                    "sweeps": [
+                        {
+                            "tool": "rtl_power",
+                            "f_start_hz": 420_000_000,
+                            "f_end_hz": 420_050_000,
+                            "bin_hz": 25_000,
+                            "gain_db": 20,
+                            "dwell_s": 60,
+                            "command": "rtl_power -f 420000000:420050000:25000 -g 20 -",
+                        },
+                        {
+                            "tool": "rtl_power",
+                            "f_start_hz": 144_000_000,
+                            "f_end_hz": 148_000_000,
+                            "bin_hz": 10_000,
+                            "gain_db": 20,
+                            "dwell_s": 60,
+                        },
+                    ],
+                }
+            ).sweeps
+        }
+    )
+    asyncio.run(_write(timescale_url, beat))
+    asyncio.run(
+        _write_spectrum(timescale_url, _ranged("west-site", now, 420_000_000, source="pi2"))
+    )
+    with _client(timescale_url) as client:
+        sweeps = client.get("/api/rf/sweeps").json()["ranges"]
+        station = client.get("/api/rf/stations").json()[0]
+    measured = next(r for r in sweeps if r["f_start_hz"] == 420_000_000)
+    assert measured["reported"]["command"].startswith("rtl_power -f 420000000")
+    only = next(r for r in sweeps if r["f_start_hz"] == 144_000_000)
+    assert only["minutes"] == 0 and only["id"] is None
+    assert len(station["sources"][0]["sweeps"]) == 2
+    assert station["trust"] == "new"
+
+
+def _trust(migrated_engine, station: str, level: str, source: str = "*") -> None:  # type: ignore[no-untyped-def]
+    from sonoran.rf.guard import TRUST_LEVELS
+    from sonoran.rf.operator import set_trust
+
+    with migrated_engine.begin() as conn:
+        set_trust(conn, station, source, TRUST_LEVELS[level], None, "test")
+
+
+def test_a_trusted_station_takes_a_shared_point_and_a_quarantined_one_adds_nothing(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """Trust is set by an operator and read by the ingest role (revision 0020)."""
+    _trust(migrated_engine, "good-site", "trusted")
+    _trust(migrated_engine, "bad-site", "quarantined")
+    now = datetime.now(UTC) - timedelta(seconds=2)
+    tallies = asyncio.run(
+        _write(
+            timescale_url,
+            _batch("new-site", "adsb", [_obs("a1b2c3", now, -10.0)]),
+            _batch("good-site", "adsb", [_obs("a1b2c3", now, -40.0)]),
+            _batch("new-site", "adsb", [_obs("a1b2c3", now, -5.0)]),
+            _batch("bad-site", "adsb", [_obs("bbbbbb", now, -5.0)]),
+            guard=Guard(),
+        )
+    )
+    track = _rows(migrated_engine, "SELECT thing_id, station_id, trust FROM rf_track ORDER BY 1")
+    assert track == [("a1b2c3", "good-site", 2)], "trusted beats new; quarantined adds nothing"
+    assert tallies[-1].withheld == 1
+    heard = _rows(migrated_engine, "SELECT station_id FROM rf_heard WHERE thing_id = 'bbbbbb'")
+    assert heard == [("bad-site",)], "a quarantined station keeps its own view"
+    log = _rows(migrated_engine, "SELECT actor, action, detail FROM rf_operator_log ORDER BY id")
+    assert log[0] == ("test", "trust", "good-site: new -> trusted")
+
+
+def test_a_station_cannot_take_shared_points_with_claims(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    """Maximal level, a clock a minute ahead, a position nothing could hear."""
+    now = datetime.now(UTC)
+    guard = Guard()
+    honest = [_beat(name, None, ["adsb"], 1) for name in ("north-site", "south-site")]
+    liar = _beat("liar-site", None, ["adsb"], 1)
+    tallies = asyncio.run(
+        _write(
+            timescale_url,
+            *honest,
+            liar,
+            _batch("north-site", "adsb", [_obs("a1b2c3", now, -30.0, lat=33.4)]),
+            _batch("south-site", "adsb", [_obs("a1b2c3", now, -28.0, lat=33.41)]),
+            # Loud, early, and 100 km from where two others heard it.
+            _batch(
+                "liar-site", "adsb", [_obs("a1b2c3", now + timedelta(seconds=59), 50.0, lat=34.3)]
+            ),
+            # Loud and early, at a plausible place.
+            _batch(
+                "liar-site", "adsb", [_obs("cccccc", now + timedelta(seconds=59), 50.0, lat=33.4)]
+            ),
+            guard=guard,
+        )
+    )
+    assert tallies[-2].doubtful == 1
+    track = _rows(migrated_engine, "SELECT station_id, lat FROM rf_track WHERE thing_id = 'a1b2c3'")
+    assert track == [("north-site", 33.4)]
+    latest = _rows(
+        migrated_engine, "SELECT station_id, lat FROM rf_latest WHERE thing_id = 'a1b2c3'"
+    )
+    assert latest[0].station_id != "liar-site"
+    # A clock a minute ahead holds nothing: the shared time is when we got it.
+    early = _rows(migrated_engine, "SELECT t, received_at FROM rf_latest WHERE thing_id = 'cccccc'")
+    assert early[0][0] <= early[0][1]
+
+
+def _mod(station: str, mod: str, points: list[dict[str, object]]) -> Custom:
+    return Custom.model_validate(
+        {
+            "v": 1,
+            "station": station,
+            "kind": "custom",
+            "mod": mod,
+            "sent": datetime.now(UTC),
+            "points": points,
+        }
+    )
+
+
+def test_mods_are_stored_shown_as_unverified_and_hidden_on_request(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    from sonoran.rf.operator import hide_mod
+    from sonoran.rf.purge import purge_mod
+
+    now = datetime.now(UTC)
+    asyncio.run(
+        _write(
+            timescale_url,
+            _beat("west-site", None, [], 0),
+            _beat("bad-site", None, [], 0),
+            _mod(
+                "west-site",
+                "lightning",
+                [
+                    {"id": "s1", "t": now, "heard_here": True, "meta": {"km": 12, "x": "a\u202eb"}},
+                    {"id": "s2", "t": now, "lat": 33.0, "lon": -112.0},
+                    {"id": "s3", "t": now},
+                ],
+            ),
+            _mod("west-site", "noise", [{"id": "n1", "t": now, "heard_here": True}]),
+            _mod("bad-site", "fake", [{"id": "f1", "t": now, "heard_here": True}]),
+            guard=Guard(),
+        )
+    )
+    _trust(migrated_engine, "bad-site", "quarantined")
+    with _client(timescale_url) as client:
+        before = client.get("/api/rf/custom").json()
+    by_id = {row["id"]: row for row in before}
+    assert set(by_id) == {"s1", "s2", "s3", "n1"}, "a quarantined station's mods are not shown"
+    assert (by_id["s1"]["lat"], by_id["s1"]["precision_m"]) == (33.4, 1000)
+    assert by_id["s1"]["meta"] == {"km": 12, "x": "ab"}
+    assert by_id["s2"]["placement"] == "reported" and by_id["s3"]["lat"] is None
+    assert by_id["s1"]["mod"] == "lightning" and by_id["s1"]["station"] == "west-site"
+
+    with migrated_engine.begin() as conn:
+        hide_mod(conn, "west-site", "noise", True, "too busy", "test")
+    with _client(timescale_url) as client:
+        hidden = {row["id"] for row in client.get("/api/rf/custom").json()}
+    assert hidden == {"s1", "s2", "s3"}
+
+    with migrated_engine.begin() as conn:
+        report = purge_mod(conn, "west-site", "lightning")
+    assert report.counts == {"rf_custom": 3}
+    left = _rows(migrated_engine, "SELECT station_id, mod FROM rf_custom ORDER BY 1, 2")
+    assert left == [("bad-site", "fake"), ("west-site", "noise")]

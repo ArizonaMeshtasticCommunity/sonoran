@@ -412,10 +412,12 @@ map, as APRS itself does, and `meta.owner` names who placed it last.
 | Table | Kind | Holds | Retention |
 |---|---|---|---|
 | `rf_station` | plain | one row per station: rounded position, kinds, last heartbeat, last counts | kept |
-| `rf_track` | hypertable on `t` | one point per thing per time bucket, from whichever station heard it best | ADS-B/UAT 48 h, sondes 30 d, APRS 30 d, sensors 7 d |
+| `rf_track` | hypertable on `t` | one point per thing per time bucket: the first received, unless a station of higher trust sends one (5.5) | ADS-B/UAT 48 h, sondes 30 d, APRS 30 d, sensors 7 d |
 | `rf_heard` | hypertable on `bucket` | per station, per thing, per 5 min: best RSSI and count | 14 d |
 | `rf_latest` | plain | the newest point of each thing, updated in place | rows older than 1 h deleted |
-| `rf_spectrum` | hypertable on `t` | one row per station per minute: the four arrays of 3.5 | 14 d, then an hourly summary kept 180 d |
+| `rf_spectrum` | hypertable on `t` | one row per station, range and minute: the four arrays of 3.5. A range is (source, start, bin width, bins), so a station may keep several (#324) | 14 d, then an hourly summary |
+| `rf_custom` | hypertable on `t` | one row per point a member's mod sent, under its station and mod (5.6) | 14 d |
+| `rf_trust`, `rf_hidden_mod`, `rf_operator_log` | plain | what operators set, and every change they made (5.5) | kept |
 
 `rf_track` deduplicates across stations. Two receivers hearing the same
 aircraft make one track point, not two. The identity is
@@ -458,6 +460,86 @@ The hourly summary is what keeps six months affordable.
 If the numbers are worse than this when measured, the fallback is a
 longer interval, not a bigger box.
 
+A station may sweep up to `RF_SPECTRUM_MAX_RANGES` ranges (4) and
+`RF_SPECTRUM_MAX_BINS` bins in all (8,192) per minute (#324). Each extra
+range of 520 bins adds about 4 kB a minute. The ingest refuses the
+rest, and logs it once an hour per station.
+
+### 5.5 The server never trusts the station (#324)
+
+A member's Pi is theirs. They can change their copy of the agent, or
+send messages by hand with their login, and nothing the Pi says about
+itself proves otherwise: a version string, a "built-in decoder" label,
+a signed image are all claims. So the rules are kept where we control
+things, at the broker and in Sonoran, and every message is a claim from
+one station and source. The agent's own checks are a convenience for
+honest members, never a defence.
+
+Kept at the broker: a login publishes only to its own station's topics,
+never another's heartbeat or the registry (#305). Kept here:
+
+- **Strict schema.** Bad fields drop the message, `meta` is filtered to
+  a small flat map, ids must match each kind's rule (4.2).
+- **The clock guard** (5.3).
+- **Shared layers decided by Sonoran, not by the station.** `rf_track`
+  used to keep the point heard loudest, and `rf_latest` the one that
+  claimed the newest time, up to a minute ahead. A modified agent that
+  sent `rssi_db: 50` and times 59 s ahead won every shared point, other
+  stations' aircraft included. Now `rf_track` keeps the first point
+  received in its bucket, and only a station of higher trust replaces
+  it; and a shared point's time is never later than when we received
+  it, so a clock ahead holds nothing.
+- **Plausibility** (`rf/guard.py`). A point is doubtful when it is
+  further from its station than its kind can be heard (ADS-B 550 km,
+  APRS 1,000 km, sondes 800 km, sensors 120 km), when it moved faster
+  than its kind can since the same station's last point, or when two or
+  more other stations placed the same thing in the last minute and none
+  of them could have seen it there. A doubtful point is counted as heard
+  by its station, places no cell, and never takes a shared point.
+- **Quotas per station**, in the ingest: messages and points as token
+  buckets, spectrum ranges and bins per measured minute, mods' points per
+  minute and ids per day. Over a quota is dropped, counted and logged
+  once an hour per station, never per message.
+- **Trust levels**, set by an operator with `sonoran-rf-trust`, never by
+  a message: `new` (the default), `trusted`, `quarantined`. A trusted
+  station wins a shared point against a new one. A quarantined station
+  keeps its own data and adds nothing to a shared layer; its mods are
+  not shown. The ingest reads the levels every minute.
+- **An audit trail.** Every point keeps the station and source that sent
+  it, as long as the data is kept. Every trust change, hidden mod and
+  purge is written to `rf_operator_log`; mints, rotations and revocations
+  are the registrar's log (#305).
+
+Self-reported fields are shown as claims: the agent version, the sweep a
+station reports (5.7), and "came from a mod". None of them changes how
+data is trusted.
+
+At the broker, an operator should also set a per-client message rate
+and a maximum packet size on the RF listener. That is broker
+configuration, not code, and is left to the deployment.
+
+### 5.6 Members' mods (#324)
+
+A member may run their own program beside the agent and send what it
+hears as their station's data, on `rf/v1/<station>/custom` (rf-map
+`docs/MODS.md`). Each point is stored in `rf_custom` under its station
+and mod, so no mod can post as another station, another mod, or a
+built-in kind, and it never enters a shared layer. A mod gets no more
+trust than a built-in decoder: the same validation, quotas and trust
+levels. Text in its `meta` loses invisible and direction-changing
+characters on the way in. An owner can ask for a mod's data to be
+deleted (`sonoran-rf-purge <station> --mod <name>`), and an operator can
+hide a mod at once (`sonoran-rf-trust hide-mod`).
+
+### 5.7 What a station reports it sweeps (#324)
+
+`rf-sweep` reports what it runs: the tool and its version, each range,
+the bin, the gain, the interval, the dwell when one dongle takes turns,
+and the exact command, with the dongle's serial left out. The agent
+sends it in the heartbeat as `sweeps`, and `rf_source.sweeps` keeps the
+newest. It is only reported: nothing is ever run from MQTT or from
+Sonoran.
+
 ---
 
 ## 6. API
@@ -470,7 +552,10 @@ GET only, like everything else (`AGENTS.md` 4).
 | `GET /api/rf/latest?kind=&since=` | the newest point of everything heard in the window |
 | `GET /api/rf/track/{kind}/{id}?hours=` | one thing's track |
 | `GET /api/rf/heard/{station}?hours=` | what one station heard, for its range plot |
-| `GET /api/rf/spectrum/{station}?hours=` | one station's minutes, for the waterfall |
+| `GET /api/rf/spectrum/{station}?hours=&range=` | one station's minutes of one range, for the waterfall, with the rows not swept |
+| `GET /api/rf/spectrum/{station}/ranges` | the ranges a station swept, for the picker |
+| `GET /api/rf/sweeps` | every range any station swept, and what each reports it runs, see 7.5 |
+| `GET /api/rf/custom` | the newest point of each thing members' mods sent, see 7.6 |
 | `GET /api/rf/channels` | where each Meshtastic preset sits in the band, see 7.4 |
 
 Bounded like the existing endpoints: a `limit` with a hard cap, and the
@@ -524,13 +609,18 @@ can never be confused.
 The Live map's full-screen watch mode, reused. Most of the use of this
 tab will be leaving it on a screen.
 
-### 7.4 The 900 MHz band
+### 7.4 Spectrum: the 900 MHz band, and any range
 
-The part of the tab that watches for interference to the mesh.
+The part of the tab that watches for interference to the mesh, and any
+other range a station chooses to sweep (#324).
 
-- **A waterfall per station**: frequency across, time down, the 95th
-  percentile level as colour. One station at a time, for the reason in
-  3.5.
+- **A waterfall per station and range**: frequency across, time down,
+  the level as colour. One station and one range at a time, for the
+  reason in 3.5. A station with more than one range has a picker. The
+  panel's title is the range, from Sonoran's own numbers.
+- **Not swept is not quiet.** A row with no minute of the range is
+  grey. A dongle that takes turns between ranges makes many, and the
+  panel says so: it hears each range only part of the time.
 - **Our channels marked on it.** Each preset's centre frequency is
   computed the way the firmware does it: the slot is the djb2 hash of
   the channel name modulo the number of slots, unless the channel sets
@@ -539,7 +629,9 @@ The part of the tab that watches for interference to the mesh.
   never typed in by hand.
 - **Busy over time, per preset channel**: the `busy` share inside each
   of our channel bands, as a line. This is the number that answers
-  "is something sitting on LongFast".
+  "is something sitting on LongFast". Marks and these lines are drawn
+  only where a range covers 902 to 928 MHz. Elsewhere the chart shows
+  the whole range and its busiest bins.
 - **Our own traffic is marked**, from the site's Meshtastic node (3.5),
   so a busy minute that was our own node talking is not read as
   interference.
@@ -549,6 +641,40 @@ Smart meters hop across the whole band, LoRaWAN gateways and Z-Wave sit
 on known frequencies, and amateur 33 cm traffic shares the band with
 more rights than we have. Naming a source is left to the person reading
 the waterfall; the tab offers the pattern, not a verdict.
+
+### 7.5 What is being swept (#324)
+
+A chart of every station's ranges on one log frequency axis, 24 MHz to
+6 GHz: which frequencies anyone here watches, and the gaps. Each bar is
+a button; pointing at it or focusing it shows the station, the range,
+the bin, the gain, and what the station reports it runs, command
+included; clicking it opens the waterfall of that range.
+
+### 7.6 Member mods (#324)
+
+Mods come from programs we did not write, so the page decides how they
+look and the data only supplies values:
+
+- **Text is text.** Every value is set as text, never HTML or Markdown,
+  never a link. No image, icon, colour, sound or style is taken from the
+  data, so the CSP stays as it is. Invisible and direction-changing
+  characters are removed. Long values are shortened with "…", and the
+  whole value is one click away.
+- **A mod cannot look built in.** One plain mark for every mod, a dashed
+  diamond, unlike any built-in kind. Every tooltip and table row says
+  "From a member's mod: `<mod>` at `<station>`" and that it is
+  unverified. Names are under the station and the mod.
+- **Viewers are in control.** A "Member mods" layer, off by default,
+  with a switch per station and per mod. Past 200 points, one mod is
+  drawn as counts per cell. A hidden mod, and the mods of a quarantined
+  station, are not sent at all.
+- **Values without guesswork.** Each value shows with its key as sent.
+  A unit is added only from a fixed list, by the key's ending, and only
+  to a number. A point drawn `heard_here` is at the station's rounded
+  position and says so; a point with no position is in the table only.
+  The time Sonoran received a point is beside the mod's own.
+- Nothing from a mod goes in a live region. Titles, headings and axis
+  labels come from Sonoran's own values, never from mod text.
 
 ---
 
@@ -586,7 +712,11 @@ data on purpose:
    It removes the station from every RF table in one transaction. A
    "latest position" it held is put back from another station's newest
    kept point of the same thing. It cannot restore a shared track point
-   it won from an honest station for that 20 s.
+   it held instead of an honest station's for that 20 s. With
+   `--mod <name>`, only what one of its mods sent goes.
+4. Or, to keep a station but stop it changing the shared map, quarantine
+   it: `sonoran-rf-trust set <station> quarantined --note "why"`. Every
+   change is logged; `sonoran-rf-trust log` shows them.
 3. The broker keeps the station's last heartbeat as a retained message,
    and the ingest reads it again on reconnect. The registrar clears it
    on revoke. For a login made by hand, clear the topics the command

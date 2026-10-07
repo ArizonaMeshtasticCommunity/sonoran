@@ -3731,6 +3731,45 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-ramp { display: inline-block; width: 8rem; height: .6rem; border-radius: 999px; }
 .rf-where { margin: .4rem 0; padding: .45rem .7rem; border-left: 3px solid var(--accent-2); background: var(--panel-2); border-radius: .3rem; }
 .rf-where.unknown { border-left-color: var(--warn); }
+.rf-turns { margin: .4rem 0; }
+
+/*
+ * What is being swept (#324): one row per station range on a log
+ * frequency axis. Bars are buttons, so a keyboard reaches each one.
+ */
+.rf-sweeps { margin-top: 1rem; }
+.rf-sweeps-chart { display: grid; grid-template-columns: minmax(6rem, 12rem) 1fr; gap: .25rem .6rem; align-items: center; font-size: .78rem; }
+.rf-sweeps-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.rf-sweeps-track { position: relative; height: 1.1rem; background: var(--panel-2); border-radius: .2rem; }
+.rf-sweeps-bar {
+  position: absolute; top: .15rem; bottom: .15rem; min-width: 4px; padding: 0;
+  border: 0; border-radius: .2rem; background: var(--accent); cursor: pointer;
+}
+.rf-sweeps-bar.reported-only { background: transparent; border: 1px dashed var(--accent); }
+.rf-sweeps-bar:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.rf-sweeps-axis { position: relative; height: 1.2rem; color: var(--muted); font-size: .7rem; }
+.rf-sweeps-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.rf-sweeps-detail { margin-top: .5rem; font-size: .8rem; min-height: 1.2rem; }
+.rf-sweeps-detail code, .rf-tip code.rf-command { white-space: pre-wrap; word-break: break-all; font-size: .75rem; }
+@media (max-width: 600px) {
+  .rf-sweeps-chart { grid-template-columns: 1fr; }
+}
+
+/*
+ * Member mods (#324, section 8). One plain mark for every mod, a dashed
+ * diamond, unlike any built-in kind's shape. Nothing about it comes
+ * from the data.
+ */
+.rf-mod-mark {
+  width: 10px; height: 10px; transform: rotate(45deg);
+  border: 2px dashed #d8d8d8; background: rgb(216 216 216 / .15); box-sizing: border-box;
+}
+.rf-mods { margin-top: 1rem; }
+.rf-mods-switches { display: flex; flex-wrap: wrap; gap: .3rem .9rem; margin: .4rem 0; font-size: .8rem; }
+.rf-mods-switches label { display: inline-flex; gap: .3rem; align-items: center; }
+.rf-mods-switches .station { font-weight: 600; }
+.rf-mods details summary { cursor: pointer; }
+.rf-tip .rf-unverified { color: var(--warn); }
 
 /* ===================================================== the menu footer
  *

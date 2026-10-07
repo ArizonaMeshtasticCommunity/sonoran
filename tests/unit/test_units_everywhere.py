@@ -45,6 +45,10 @@ RAW_UNIT = re.compile(r"\$\{[\w.]*\bunit\}")
 # setting is not followed, so every entry needs a reason a reader would
 # accept.
 ALLOWED: dict[tuple[str, str], str] = {
+    ("rf.js", "return `${text}${unit ? ` ${unit}` : ''}`;"): (
+        "A member mod's value, shown in the unit the mod sent it in, from a fixed "
+        "list by key (#324). Converting it would claim a reading the mod never made."
+    ),
     ("app.js", "/ 60)}m`"): "Minutes in a short age such as 5m, not metres.",
     ("config-check.js", "Use 30m, 1.5h, 2d"): "Minutes in a typed duration, not metres.",
     ("gaps.js", ": `${Math.round(value)} m`"): (

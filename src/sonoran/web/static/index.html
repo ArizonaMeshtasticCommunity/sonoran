@@ -654,7 +654,7 @@
           <div class="page-head">
             <div>
               <h2>RF</h2>
-              <p class="sub" data-sub-fold>What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors and the 900 MHz band, from stations that run rf-agent beside an SDR.</p>
+              <p class="sub" data-sub-fold>What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors, the 900 MHz band and any other range a station sweeps, and members' own mods, from stations that run rf-agent beside an SDR.</p>
             </div>
             <div class="controls">
               <!--
@@ -708,19 +708,23 @@
           </section>
 
           <!--
-            The 900 MHz band (design 7.4). One station at a time: an SDR
-            reads in its own units, so two stations are never compared.
-            The median view is the default because it shows the noise
-            floor: a mesh packet is a short burst and does not move the
-            median of a minute's sweeps. The 95th percentile shows the
-            bursts, ours included. Our preset channels are marked, so
-            busy inside a mark is expected traffic and busy outside every
-            mark is something else.
+            Spectrum (design 7.4, #324). One station and one range at a
+            time: an SDR reads in its own units, so two stations are
+            never compared, and two ranges are never mixed. A station
+            may sweep any range it chooses, and more than one. The
+            median view is the default because it shows the noise
+            floor: a short burst does not move the median of a minute's
+            sweeps. The 95th percentile shows the bursts. Where a range
+            covers 902 to 928 MHz, our preset channels are marked, so
+            busy inside a mark is expected traffic and busy outside
+            every mark is something else. The title is the range, from
+            Sonoran's own numbers, never text a station sent.
           -->
-          <section class="panel rf-band" data-rf-band hidden aria-label="900 MHz band">
-            <h3><span>900 MHz band</span> <span class="muted head-note" data-rf-band-note></span></h3>
+          <section class="panel rf-band" data-rf-band hidden aria-label="Spectrum">
+            <h3><span data-rf-band-title>Spectrum</span> <span class="muted head-note" data-rf-band-note></span></h3>
             <div class="controls">
               <label class="muted">Station <select data-rf-band-station aria-label="Station"></select></label>
+              <label class="muted">Range <select data-rf-band-range aria-label="Range"></select></label>
               <label class="muted">Window
                 <select data-rf-band-hours aria-label="How far back">
                   <option value="1">1 h</option>
@@ -750,6 +754,9 @@
                  position and by how much, or a plain "not shared". A
                  waterfall means nothing without where it was measured. -->
             <p class="rf-where" data-rf-band-where></p>
+            <!-- Said when one dongle takes turns between ranges: it hears
+                 each only part of the time, and the rest is not quiet. -->
+            <p class="notice rf-turns" data-rf-band-turns hidden></p>
             <p class="sub" data-rf-band-explain></p>
             <div class="rf-axis" data-rf-band-axis aria-hidden="true"></div>
             <div class="rf-waterfall" data-rf-band-waterfall>
@@ -758,9 +765,36 @@
             </div>
             <p class="muted rf-hover" data-rf-band-hover>Point at the waterfall for a frequency, time and level. Click a row to see its two hours at full resolution.</p>
             <div class="rf-scale" data-rf-band-scale></div>
-            <h4>How busy each part of the band is</h4>
-            <p class="sub">The share of sweeps in which a bin stood 6 dB above its own median. Inside a mesh channel that is mostly our own packets. <strong>Outside every mesh channel</strong> it is something else on the band.</p>
+            <h4>How busy each part of the range is</h4>
+            <p class="sub" data-rf-band-busy-explain></p>
             <div class="chart" data-rf-band-busy></div>
+          </section>
+
+          <!--
+            What is being swept (#324): every station's ranges on one
+            frequency axis, so anyone can see what is watched and where
+            nobody listens. The settings shown are what each station
+            reports about itself.
+          -->
+          <section class="panel rf-sweeps" data-rf-sweeps hidden aria-label="What is being swept">
+            <h3><span>What is being swept</span> <span class="muted head-note" data-rf-sweeps-note></span></h3>
+            <p class="sub">Each bar is one range one station swept in the last 24 hours, on a log scale from 24 MHz to 6 GHz. A gap is a part of the spectrum nobody here is watching. The tool, gain and command are what the station reports about itself. Point at a bar for them, and click it to open its waterfall.</p>
+            <div class="rf-sweeps-chart" data-rf-sweeps-chart></div>
+            <div class="rf-sweeps-detail" data-rf-sweeps-detail></div>
+          </section>
+
+          <!--
+            Member mods (#324, section 8). Programs members wrote, sending
+            through their own station. Off until a reader turns the layer
+            on. Every value is plain text, shortened on screen with the
+            whole value one click away; nothing in it is ever a link, an
+            image, a colour or markup, and nothing in it is announced.
+          -->
+          <section class="panel rf-mods" data-rf-mods hidden aria-label="Member mods">
+            <h3><span>Member mods</span> <span class="muted head-note" data-rf-mods-note></span></h3>
+            <p class="sub">Data from programs members wrote and run on their own stations. Sonoran did not decode it and cannot check it: it is shown as each station sent it, marked as unverified, and drawn with one plain mark of its own. A mod an operator hid is not shown.</p>
+            <div class="rf-mods-switches" data-rf-mods-switches></div>
+            <div class="table-wrap" data-rf-mods-table></div>
           </section>
           <!-- The two name lists are CC BY-SA and ask to be credited in
                the small print. See vendor/aprs/PROVENANCE.md. -->
