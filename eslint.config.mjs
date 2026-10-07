@@ -47,8 +47,11 @@ const ours = fs
   .readdirSync(STATIC)
   .filter((f) => f.endsWith('.js') && !NOT_OURS.has(f));
 
-const scripts = ours.filter((f) => f !== 'planner.worker.js' && !isModule(read(f)));
-const modules = ours.filter((f) => f !== 'planner.worker.js' && isModule(read(f)));
+// The two workers run in their own global scope, never the page's. Their
+// top-level names must not join the shared list below.
+const WORKERS = new Set(['planner.worker.js', 'sw.js']);
+const scripts = ours.filter((f) => !WORKERS.has(f) && !isModule(read(f)));
+const modules = ours.filter((f) => !WORKERS.has(f) && isModule(read(f)));
 
 /*
  * Every name a classic script puts in the shared global scope.
@@ -143,6 +146,17 @@ export default [
       ecmaVersion: 2024,
       sourceType: 'module',
       globals: { ...globals.worker },
+    },
+    rules,
+  },
+  {
+    // The service worker (#322): a classic script with service worker
+    // globals (`self`, `caches`, `clients`), and no window.
+    files: [`${STATIC}/sw.js`],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: { ...globals.serviceworker },
     },
     rules,
   },

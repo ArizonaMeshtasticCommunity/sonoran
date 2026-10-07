@@ -5,6 +5,20 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.07.2 — 2026-10-07
+
+1 pull request merged.
+
+#### Fixes
+
+- Give pre-0020 spectrum minutes their source; check a deploy against live data (#329) by @logans-stuff
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.07...v2026.10.07.2
+
 ## v2026.10.07 — 2026-10-07
 
 2 pull requests merged, 1 issue closed.

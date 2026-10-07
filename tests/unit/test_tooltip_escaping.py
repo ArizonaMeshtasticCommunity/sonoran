@@ -334,6 +334,9 @@ EXPECTED_FORMATTERS = {
     ("app.js", "axisLabel", "formatter"): 1,
     ("rf.js", "tooltip", "valueFormatter"): 1,
     ("rf.js", "axisLabel", "formatter"): 1,
+    # The busy chart's legend on a phone (#322): drops " (ours)" from a
+    # series name. Plain text; ECharts draws legend names on the canvas.
+    ("rf.js", "legend", "formatter"): 1,
 }
 
 _MARKUP = re.compile(r"<[a-zA-Z/!]")

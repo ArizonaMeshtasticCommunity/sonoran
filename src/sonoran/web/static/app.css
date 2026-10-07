@@ -261,6 +261,12 @@ body {
 .brand { display: flex; align-items: baseline; gap: .5rem; }
 .brand h1 { font-size: 1.3rem; margin: 0; letter-spacing: .02em; }
 .brand-text { display: flex; align-items: baseline; gap: .5rem; }
+/* The mark and the wordmark, as one link to the dashboard. */
+.brand-home {
+  display: flex; align-items: center; gap: .5rem; min-width: 0;
+  color: inherit; text-decoration: none; border-radius: .35rem;
+}
+.brand-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .brand-text span { color: var(--muted); font-size: .75rem; }
 /* The script reveals the mark only after the file loads. */
 .brand-mark { display: none; width: 100%; max-width: 11rem; height: auto; }
@@ -2297,6 +2303,8 @@ a.more { text-decoration: none; display: inline-block; }
   /* A link drawn as a button (#258, #289) is a button to a finger, and
      the rule above names `button`, which cannot reach it. */
   a.button-link { min-height: 2.75rem; }
+  /* The logo is a link to the dashboard, and the same target. */
+  .brand-home { min-height: 2.75rem; }
 }
 
 @media (max-width: 60rem) {
@@ -2639,38 +2647,112 @@ tr.row-link:focus-within td { background: var(--panel-2); }
  * it said, then Channel, Hops and Uploads, which the packet page shows
  * one tap away.
  *
- * The headings become one line of words above the cards, the five that
- * are shown. They carry the column hints (#99), and the Type hint is
+ * The headings become a line of words above the cards, the five that
+ * are shown, in the cards' own two-line shape.
+ *
+ * The traceroutes table takes the same shape (it scrolled sideways on
+ * every row, #274's sticky column notwithstanding):
+ *
+ *     Sky Island → Grits Wis
+ *     Path  3R424 → Anthem Peak → Backscatter     Oct 7, 02:57 AM They carry the column hints (#99), and the Type hint is
  * where a phone reader finds the exact protocol value, so hiding them
  * would take both away from a finger.
  */
 @media (max-width: 40rem) {
   [data-firehose-table] table,
   [data-firehose-table] thead,
-  [data-firehose-table] tbody { display: block; }
-  [data-firehose-table] tr {
+  [data-firehose-table] tbody,
+  [data-traceroute-table] table,
+  [data-traceroute-table] thead,
+  [data-traceroute-table] tbody { display: block; }
+  [data-firehose-table] tr,
+  [data-traceroute-table] tr {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     column-gap: .6rem;
-    padding: .45rem .6rem;
+    row-gap: .2rem;
+    padding: .55rem .6rem;
     border-bottom: 1px solid var(--line);
   }
-  [data-firehose-table] th { display: block; padding: 0; border: 0; }
+  [data-firehose-table] th,
+  [data-traceroute-table] th { display: block; padding: 0; border: 0; }
   [data-firehose-table] th:nth-child(n + 6) { display: none; }
-  /* The line break between the two lines: a full-width item between
-     the first three cells and the last two. When from and to do not fit
-     on one line, "to" wraps under "from" rather than being cut. */
-  [data-firehose-table] tbody tr::after { content: ""; flex-basis: 100%; order: 2; }
-  [data-firehose-table] td {
-    display: block; padding: 0; border: 0; min-width: 0; max-width: 100%; order: 1;
+  [data-firehose-table] td,
+  [data-traceroute-table] td {
+    display: block; padding: 0; border: 0; min-width: 0; max-width: 100%;
   }
-  [data-firehose-table] td:nth-child(3)::before { content: "→ " / ""; color: var(--muted); }
-  [data-firehose-table] td:nth-child(4) { order: 3; color: var(--muted); }
-  [data-firehose-table] td:nth-child(5) {
+  /*
+   * Line one is always one line: from, to, and on the firehose the time
+   * at its right end (an iPhone showed it three ways, as each pair of
+   * names did or did not fit). A long name gives way with an ellipsis; the packet or
+   * the trace is one tap away with all of it.
+   */
+  [data-firehose-table] td:nth-child(2), [data-firehose-table] td:nth-child(3),
+  [data-traceroute-table] td:nth-child(2), [data-traceroute-table] td:nth-child(3),
+  [data-firehose-table] th:nth-child(2), [data-firehose-table] th:nth-child(3),
+  [data-traceroute-table] th:nth-child(2), [data-traceroute-table] th:nth-child(3) {
+    order: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /*
+   * A wrapping flex line moves an item to the next line before it
+   * shrinks one, so the ellipsis never came and "to" still dropped under
+   * "from". So "from" is capped at 55% of what the time and the gaps
+   * leave, and "to" starts from nothing and takes the rest: the line
+   * always fits, and "to" is cut only when it has to be.
+   */
+  [data-firehose-table] tr { --when: 5rem; }
+  /* A trace's time carries the date and is twice as wide, so it goes on
+     the path line and the names have line one to themselves. */
+  [data-traceroute-table] tr { --when: 0rem; }
+  [data-firehose-table] :is(td, th):nth-child(2),
+  [data-traceroute-table] :is(td, th):nth-child(2) { max-width: calc((100% - var(--when) - 1.2rem) * .55); }
+  [data-firehose-table] :is(td, th):nth-child(3),
+  [data-traceroute-table] :is(td, th):nth-child(3) { flex: 1 1 0; }
+  [data-firehose-table] td:nth-child(3)::before,
+  [data-traceroute-table] td:nth-child(3)::before,
+  [data-firehose-table] th:nth-child(3)::before,
+  [data-traceroute-table] th:nth-child(3)::before { content: "→ " / ""; color: var(--muted); }
+  [data-firehose-table] td:nth-child(1), [data-traceroute-table] td:nth-child(1),
+  [data-firehose-table] th:nth-child(1), [data-traceroute-table] th:nth-child(1) {
+    order: 1; flex: none; margin-left: auto; font-size: .82rem;
+    width: var(--when); text-align: right; white-space: nowrap;
+  }
+  [data-traceroute-table] :is(td, th):nth-child(1) { order: 4; width: auto; }
+  /* A name is a button, and a button does not shrink inside a line of
+     text: it was clipped whole, leaving "→ …". Capped to the cell (less
+     the arrow), it fits, and the name inside it ends in its own
+     ellipsis. A name that is plain text ("Everyone") takes the cell's. */
+  [data-firehose-table] td .linky, [data-traceroute-table] td .linky {
+    display: inline-flex; min-width: 0; overflow: hidden;
+  }
+  [data-firehose-table] td:nth-child(3) .linky,
+  [data-traceroute-table] td:nth-child(3) .linky { max-width: calc(100% - 1.4em); }
+  /* Hops and Signal measured stay on the trace page on a phone (#274). */
+  [data-traceroute-table] .low { display: none; }
+  /* The trace's time column is the sticky one on a wider screen. */
+  [data-traceroute-table] .stick { position: static; box-shadow: none; background: none; }
+  /* The names are buttons, 44 px tall to a finger. The same amount is
+     taken back as a margin (#269), so the line is no taller than its
+     text and the cards do not stand apart. */
+  [data-firehose-table] td .linky, [data-traceroute-table] td .linky {
+    max-width: 100%; margin-block: -12.5px; vertical-align: baseline;
+  }
+  /* The break between the two lines, in the headings too, so the one
+     line of words above the cards has the cards' own shape. */
+  [data-firehose-table] tr::after,
+  [data-traceroute-table] tr::after { content: ""; flex-basis: 100%; order: 2; }
+  [data-firehose-table] td:nth-child(4), [data-firehose-table] th:nth-child(4) { order: 3; color: var(--muted); }
+  [data-firehose-table] td:nth-child(5), [data-firehose-table] th:nth-child(5) {
     order: 3; flex: 1 1 8rem; max-width: none; white-space: normal; overflow-wrap: anywhere;
   }
   [data-firehose-table] td:nth-child(n + 6) { display: none; }
+  /* The trace's second line: the path it took, or "direct". */
+  [data-traceroute-table] td:nth-child(4), [data-traceroute-table] th:nth-child(4) {
+    order: 3; flex: 1 1 0; white-space: normal; overflow-wrap: anywhere;
+  }
+  [data-traceroute-table] td:nth-child(4) { color: var(--muted); }
+  [data-traceroute-table] td:nth-child(4)::before { content: "Path " / ""; font-size: .82rem; }
 }
 
 /*
@@ -3252,6 +3334,10 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    * row, to 37% of an iPhone SE's first screen.
    */
   .page-head .controls > input[type="search"] { flex: 1 1 7rem; min-width: 7rem; width: auto; }
+  /* The firehose's search has its own line on a phone. Sharing one with
+     the window and Filter left it 9 characters wide, and its hint read
+     "Packet ty". */
+  [data-page="firehose"] .page-head .controls > input[type="search"] { flex-basis: 100%; }
 }
 .filter-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
 .filter-group { border: 0; margin: 0; padding: 0; min-width: 0; }
@@ -3714,8 +3800,9 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-axis { position: relative; height: 3.3rem; font-size: .7rem; color: var(--muted); }
 .rf-tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .rf-tick.channel { color: var(--text); font-weight: 600; }
-.rf-tick.row-1 { top: 1.1rem; }
-.rf-tick.row-2 { top: 2.2rem; }
+/* `fitChannels` in rf.js sets each name's row and the axis height from
+   the width the panel has. */
+.rf-tick.channel { transform: none; }
 .rf-edges { display: flex; justify-content: space-between; flex-basis: 100%; color: var(--muted); }
 .rf-waterfall { position: relative; border: 1px solid var(--line); border-radius: .35rem; overflow: hidden; }
 .rf-waterfall canvas {
@@ -3753,6 +3840,16 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-sweeps-detail code, .rf-tip code.rf-command { white-space: pre-wrap; word-break: break-all; font-size: .75rem; }
 @media (max-width: 600px) {
   .rf-sweeps-chart { grid-template-columns: 1fr; }
+}
+/*
+ * The touch rule makes every button 44 px tall. A bar is a button, so
+ * it stood 44 px high in an 18 px track and crossed the labels under it.
+ * The bar keeps the track's height, and a larger box around it, which
+ * draws nothing, takes the finger.
+ */
+@media (max-width: 60rem), (pointer: coarse) {
+  .rf-sweeps-bar { min-height: 0; padding-block: 0; }
+  .rf-sweeps-bar::after { content: ""; position: absolute; inset: -.85rem -10px; }
 }
 
 /*
@@ -4380,6 +4477,12 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+/* On a phone the controls have the full width to themselves, under the
+   title. Pushed to the right they left a ragged edge on the left of each
+   wrapped row; centred, the rows sit evenly under one another. */
+@media (max-width: 40rem) {
+  .page-head.dense .controls { flex-basis: 100%; margin-left: 0; justify-content: center; }
+}
 /*
  * The controls come first (#299), on Graph and Coverage.
  *
@@ -4408,6 +4511,55 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-zoom input[type="datetime-local"] { margin-left: .35rem; }
 .rf-hover { min-height: 1.3em; margin: .35rem 0 0; font-size: .8rem; }
 .rf-waterfall canvas { cursor: crosshair; }
-/* A slot the mesh set itself: solid, so it reads apart from the defaults. */
-.rf-mark.custom { border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); background: rgb(255 255 255 / .06); }
+/* A slot the mesh set itself: orange, so it reads apart from the
+   defaults, and dashed like them, so the levels under it stay readable.
+   It was solid and tinted, and hid the waterfall beneath it. */
+.rf-mark.custom { border-left: 2px dashed var(--accent); border-right: 2px dashed var(--accent); }
+/* A channel too narrow on this screen for two edges: one line at its
+   centre (`fitChannels`), white for a preset, orange for the mesh's own. */
+.rf-mark.narrow { width: 0 !important; min-width: 0; border-right: 0; background: none; transform: translateX(-.5px); }
+.rf-mark.custom.narrow { transform: translateX(-1px); }
 .rf-tick.channel.custom { color: var(--accent); }
+
+/*
+ * The installed app's two notices (#322): "a new version is available"
+ * and "you are offline". pwa.js makes them. They sit at the bottom
+ * edge, clear of the home indicator, and above the page's own layers.
+ */
+.app-notices {
+  position: fixed; z-index: 1950;
+  left: calc(.5rem + var(--safe-left));
+  right: calc(.5rem + var(--safe-right));
+  bottom: calc(.5rem + var(--safe-bottom));
+  display: flex; flex-direction: column; align-items: center; gap: .5rem;
+  pointer-events: none;
+}
+.app-notice {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: .75rem;
+  width: min(32rem, 100%);
+  padding: .6rem .75rem .6rem 1rem;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: .6rem;
+  box-shadow: 0 .4rem 1.2rem rgb(0 0 0 / .35);
+}
+.app-notice p { margin: 0; flex: 1; }
+.app-notice button { flex: none; min-height: 44px; min-width: 44px; }
+
+/*
+ * Offline: every figure on the page stopped when the connection did.
+ * Fade the content, so nothing on it reads as live. pwa.js also turns
+ * the status line red ("Offline since ..."). Opacity and not a
+ * `filter`: a filter makes the element the containing block of every
+ * `position: fixed` element inside it, which would move the watch mode
+ * and the full-screen chart.
+ */
+:root[data-offline] #main { opacity: .55; }
+
+/* Back, on the four detail pages of an installed app (#322). pwa.js
+   adds it only in standalone mode, where there is no browser back. */
+.app-back {
+  min-height: 44px; margin: 0 0 .5rem; padding: .4rem .8rem;
+  background: none; border: 1px solid var(--line); border-radius: .5rem;
+  color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
+}

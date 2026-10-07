@@ -944,14 +944,17 @@
     marks.replaceChildren(...inSweep.map((c) => el('span', {
       class: c.custom ? 'rf-mark custom' : 'rf-mark', title: `${c.label}: ${mhz(c.centre_hz)}, ${c.bandwidth_hz / 1000} kHz${c.custom ? ', set by this mesh' : ''}`,
       style: `left:${left(c.low_hz)};width:calc(${left(c.high_hz)} - ${left(c.low_hz)})`,
+      'data-centre': left(c.centre_hz),
     })));
-    // Neighbouring presets sit a few hundred kHz apart, so the names go
-    // on three rows, in turn from low to high, and do not overlap. The
-    // band's edges are written under the waterfall instead.
-    axis.replaceChildren(...inSweep.map((c, index) => el('span', {
-      class: `rf-tick channel row-${index % 3}${c.custom ? ' custom' : ''}`, style: `left:${left(c.centre_hz)}`, text: c.name,
+    // The band's edges are written under the waterfall. The names are
+    // placed by `fitChannels`, which needs the drawn width.
+    axis.replaceChildren(...inSweep.map((c) => el('span', {
+      class: `rf-tick channel${c.custom ? ' custom' : ''}`, style: `left:${left(c.centre_hz)}`,
+      text: c.name, 'data-centre': left(c.centre_hz), 'data-full': c.name, 'data-short': shortChannel(c.name),
     })));
     axis.hidden = !inSweep.length;
+    fitChannels(page);
+    watchWidth(page);
     scale.replaceChildren(
       el('span', { class: 'rf-edges' },
         el('span', { text: freqText(data.f_start_hz) }),
@@ -960,6 +963,93 @@
       el('span', { class: 'rf-ramp', style: `background:linear-gradient(to right, ${BAND_RAMP.join(', ')})` }),
       el('span', { text: 'loud, for this station' }),
       el('span', { class: 'muted', text: ` · newest at the top · each row ${rowLength(data.bucket_minutes)} · grey: not swept` }));
+  }
+
+  /*
+   * "MediumFast slot 18" as "MF 18": the capitals of each preset word,
+   * which is how the mesh writes them. Used only when the full names do
+   * not fit (a phone); the mark under each one keeps the full name.
+   */
+  function shortChannel(name) {
+    return String(name)
+      .replace(/\b(?:[A-Z][a-z]+){2,}\b/g, (word) => word.replace(/[a-z]/g, ''))
+      .replace(/\bslot\s+/i, '');
+  }
+
+  /*
+   * Place the channel names and the channel marks for the width the
+   * waterfall has now.
+   *
+   * Neighbouring presets sit a few hundred kHz apart. Three fixed rows
+   * were enough on a desktop and not on a phone: at 390 px the names
+   * overlapped and ran 53 px past the panel. Each name now goes on the
+   * first row where it does not touch the one before it, kept inside the
+   * panel. When the full names need more than three rows, the short ones
+   * are used.
+   *
+   * A mark is the channel's width, outlined at both edges. A 250 kHz
+   * channel on a phone is about 3 px, so the two edges merged into one
+   * thick bar ("MediumFast slot 18" read as a smudge). A mark too narrow
+   * for two edges is drawn as one line at the channel's centre.
+   */
+  function fitChannels(page) {
+    const axis = $('[data-rf-band-axis]', page);
+    const marks = $('[data-rf-band-marks]', page);
+    const width = axis && axis.clientWidth;
+    if (!width) return;
+    const ticks = [...axis.querySelectorAll('.rf-tick.channel')];
+    const at = (node) => (parseFloat(node.dataset.centre) / 100) * width;
+    const GAP = 6;
+    const place = (short) => {
+      const ends = [];
+      for (const tick of ticks) {
+        tick.textContent = short ? tick.dataset.short : tick.dataset.full;
+        const size = tick.offsetWidth;
+        const start = Math.max(0, Math.min(width - size, at(tick) - size / 2));
+        let row = ends.findIndex((end) => start >= end + GAP);
+        if (row < 0) row = ends.push(0) - 1;
+        ends[row] = start + size;
+        tick.style.left = `${start}px`;
+        tick.style.top = `${row * 1.1}rem`;
+      }
+      return ends.length;
+    };
+    ticks.sort((a, b) => at(a) - at(b));
+    let rows = place(false);
+    if (rows > 3) rows = place(true);
+    axis.style.height = `${rows * 1.1 + 0.2}rem`;
+    for (const mark of marks.querySelectorAll('.rf-mark')) {
+      mark.classList.remove('narrow');
+      mark.style.removeProperty('transform');
+      if (mark.getBoundingClientRect().width < 8) {
+        mark.classList.add('narrow');
+        mark.style.left = mark.dataset.centre;
+      }
+    }
+  }
+
+  /*
+   * The two drawings placed from a measured width (the channel names and
+   * the sweeps axis) are placed again when the panel changes width: a
+   * phone turned on its side, or a desktop window resized.
+   */
+  let widthWatched = false;
+  function watchWidth(page) {
+    if (widthWatched || !window.ResizeObserver) return;
+    widthWatched = true;
+    let last = page.clientWidth;
+    new ResizeObserver(() => {
+      const width = page.clientWidth;
+      if (width === last) return;
+      last = width;
+      if (band.data) {
+        // `fitChannels` moved each mark to its centre; put the edges back.
+        drawWaterfall(page);
+        drawBusy(page);
+      }
+      const axis = $('.rf-sweeps-axis', page);
+      if (axis) fitAxis(axis);
+    }).observe(page);
   }
 
   /* The mean busy share of some bins of a row, or null for a row not swept. */
@@ -1019,8 +1109,10 @@
       selected = Object.fromEntries(series.map((item) => [item.name, true]));
       explainBusy.textContent = 'The share of sweeps in which a bin stood 6 dB above its own median, over the whole range and over the bins busiest in this window. This range is outside the mesh band, so no mesh channel is marked.';
     }
+    fitLegend(target, series);
     let chart = window.echarts.getInstanceByDom(target);
     if (!chart) chart = window.echarts.init(target, null, { renderer: 'canvas' });
+    else chart.resize();
     const css = getComputedStyle(document.documentElement);
     const token = (name, fallback) => (css.getPropertyValue(name) || '').trim() || fallback;
     chart.setOption({
@@ -1030,12 +1122,63 @@
       backgroundColor: 'transparent',
       textStyle: { color: token('--muted', '#b59c88') },
       tooltip: { trigger: 'axis', valueFormatter: (v) => (v == null ? 'not swept' : `${v.toFixed(1)} %`) },
-      legend: { top: 0, type: 'scroll', selected, textStyle: { color: token('--muted', '#b59c88') } },
-      grid: { left: 40, right: 16, top: 36, bottom: 28, containLabel: true },
+      legend: {
+        ...legendFor(target, selected, token('--muted', '#b59c88')),
+        // Plain text: ECharts draws a legend name on the canvas, never as markup.
+        formatter: (name) => (target.dataset.legendRows ? legendName(name) : name),
+      },
+      grid: { left: 40, right: 16, top: target.dataset.legendRows ? 16 : 36, bottom: 28 + Number(target.dataset.legendHeight || 0), containLabel: true },
       xAxis: { type: 'time' },
       yAxis: { type: 'value', min: 0, axisLabel: { formatter: '{value} %' } },
       series,
     }, true);
+  }
+
+  /*
+   * The busy chart's legend. One scrolling line on a wide screen. On a
+   * phone that line showed one and a half names and a "1/11" pager, so
+   * the names wrap into rows under the chart instead, and the chart
+   * grows by the rows' height so the plot keeps its own.
+   */
+  const LEGEND_NARROW = 600;
+  const LEGEND_FONT = 11;
+  const LEGEND_ROW = 22;
+  const legendName = (name) => name.replace(' (ours)', '');
+
+  function fitLegend(target, series) {
+    const width = target.clientWidth;
+    delete target.dataset.legendRows;
+    delete target.dataset.legendHeight;
+    target.style.removeProperty('height');
+    if (!width || width >= LEGEND_NARROW) return;
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = `${LEGEND_FONT}px ${getComputedStyle(target).fontFamily || 'sans-serif'}`;
+    let rows = 1;
+    let used = 0;
+    for (const item of series) {
+      // Marker, its gap, the words and the gap to the next name.
+      const size = 18 + 5 + ctx.measureText(legendName(item.name)).width + 10;
+      if (used && used + size > width) {
+        rows += 1;
+        used = 0;
+      }
+      used += size;
+    }
+    const height = rows * LEGEND_ROW + 6;
+    target.dataset.legendRows = String(rows);
+    target.dataset.legendHeight = String(height);
+    target.style.height = `calc(15rem + ${height}px)`;
+  }
+
+  function legendFor(target, selected, colour) {
+    if (!target.dataset.legendRows) {
+      return { top: 0, type: 'scroll', selected, textStyle: { color: colour } };
+    }
+    return {
+      type: 'plain', bottom: 0, left: 0, right: 0, selected,
+      itemWidth: 18, itemHeight: 10, itemGap: 10,
+      textStyle: { color: colour, fontSize: LEGEND_FONT },
+    };
   }
 
   function explain(page) {
@@ -1356,10 +1499,49 @@
       rows.push(el('span', { class: 'rf-sweeps-label', title: label, text: label }),
         el('div', { class: 'rf-sweeps-track' }, bar));
     }
-    rows.push(el('span', {}), el('div', { class: 'rf-sweeps-axis', 'aria-hidden': 'true' },
-      AXIS_TICKS.map((hz) => el('span', { style: `left:${logLeft(hz)}%`, text: freqText(hz).replace('.000', '') }))));
+    const axis = el('div', { class: 'rf-sweeps-axis', 'aria-hidden': 'true' },
+      AXIS_TICKS.map((hz) => el('span', {
+        style: `left:${logLeft(hz)}%`, 'data-at': logLeft(hz), text: freqText(hz).replace('.000', ''),
+      })));
+    rows.push(el('span', {}), axis);
     chart.replaceChildren(...rows);
+    fitAxis(axis);
+    watchWidth(page);
     if (!detail.childElementCount) detail.textContent = 'Point at a bar, or move to one with Tab, for what it is.';
+  }
+
+  /*
+   * Keep the frequency labels under the sweeps apart and inside the
+   * panel. Eight labels on a log axis 320 px wide overlapped ("25 MHz50
+   * MHz100 MH...") and the two ends ran past the panel. The two ends are
+   * kept, pulled inside the edge, then the rest in the order below, and
+   * a label that would touch one already placed is left out.
+   */
+  const AXIS_KEEP = [25e6, 6e9, 1e9, 100e6, 500e6, 2e9, 50e6, 200e6];
+  function fitAxis(axis) {
+    const width = axis.clientWidth;
+    const labels = [...axis.children];
+    if (!width || !labels.length) return;
+    const GAP = 8;
+    const placed = [];
+    const order = labels.map((label, index) => ({ label, index, hz: AXIS_TICKS[index] }))
+      .sort((a, b) => {
+        const rank = (hz) => (AXIS_KEEP.includes(hz) ? AXIS_KEEP.indexOf(hz) : AXIS_KEEP.length);
+        return rank(a.hz) - rank(b.hz);
+      });
+    for (const { label } of order) {
+      label.hidden = false;
+      label.style.transform = 'none';
+      const size = label.offsetWidth;
+      const centre = (parseFloat(label.dataset.at) / 100) * width;
+      const start = Math.max(0, Math.min(width - size, centre - size / 2));
+      if (placed.some(([a, b]) => start < b + GAP && start + size > a - GAP)) {
+        label.hidden = true;
+        continue;
+      }
+      placed.push([start, start + size]);
+      label.style.left = `${start}px`;
+    }
   }
 
   async function loadSweeps(page, stations) {
