@@ -498,6 +498,12 @@ class Settings(BaseSettings):
     #: should not be recorded against the node. See
     #: ingest/handlers/clocks.py.
     mesh_future_slack_seconds: int = 300
+    #: A gateway that uploads on two different preset-named topics
+    #: within this many minutes is ambiguous, and its topic-channel
+    #: uploads get no modem preset until the older one ages out. A
+    #: gateway that was reconfigured once is therefore uncertain for
+    #: this long and no longer (#313). See `ingest/presets.py`.
+    gateway_preset_conflict_minutes: int = Field(default=60, ge=1, le=10080)
     rf_future_slack_seconds: int = 60
     rf_past_slack_seconds: int = 600
     # Things never stored or shown: aircraft on the FAA LADD and PIA

@@ -31,6 +31,7 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
+from sonoran.api.preset_scope import preset_filter, require_preset
 from sonoran.api.schemas import NodeSummary
 from sonoran.api.sightings import direct as direct_sighting
 from sonoran.api.sightings import sightings
@@ -452,6 +453,7 @@ def _apply_node_filters(
     licensed: bool | None = None,
     first_seen_hours: int | None = None,
     quiet_hours: int | None = None,
+    preset: str | None = None,
 ) -> Select[Any]:
     """Apply the documented node list filters to a statement.
 
@@ -484,6 +486,10 @@ def _apply_node_filters(
         statement = statement.where(Node.last_heard < before)
     if channel:
         statement = statement.where(Node.last_channel == channel)
+    if preset is not None:
+        # The preset of the node's newest tagged packet, which stays put
+        # when its last packet was on a topic channel (#313).
+        statement = statement.where(preset_filter(Node.last_preset, Node.last_channel, preset))
     if position:
         statement = statement.where(_position_filter(position))
     if licensed is not None:
@@ -528,6 +534,7 @@ async def list_nodes(
     active_hours: int | None = Query(default=None, ge=1, le=720),
     before: datetime | None = None,
     channel: str | None = None,
+    preset: str | None = None,
     position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
     licensed: bool | None = None,
     first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
@@ -587,14 +594,23 @@ async def list_nodes(
     ordering = (direction.nullslast(), Node.node_num.asc())
 
     filters = (q, hw, role, gateway, active_hours, before, channel, position, licensed)
+    menu_preset = require_preset(preset)
     # The sort value is selected beside the row, so the cursor can name it
     # exactly as the database compares it. `name` is an expression, not a
     # column the row carries.
     statement = _apply_node_filters(
-        select(Node, column.label("sort_value")), *filters, first_seen_hours, quiet_hours
+        select(Node, column.label("sort_value")),
+        *filters,
+        first_seen_hours,
+        quiet_hours,
+        preset=menu_preset,
     )
     counted = _apply_node_filters(
-        select(func.count()).select_from(Node), *filters, first_seen_hours, quiet_hours
+        select(func.count()).select_from(Node),
+        *filters,
+        first_seen_hours,
+        quiet_hours,
+        preset=menu_preset,
     )
 
     # The gaps state is per preset, because a node can need help on one
@@ -667,6 +683,7 @@ async def node_facets(
     active_hours: int | None = Query(default=None, ge=1, le=720),
     before: datetime | None = None,
     channel: str | None = None,
+    preset: str | None = None,
     position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
     licensed: bool | None = None,
     first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
@@ -688,7 +705,11 @@ async def node_facets(
     filter lifted and the rest in force, which is the number a reader
     is actually asking for: "if I also picked this, how many would I
     have".
+
+    `preset` is the menu's modem preset. It is never lifted: it says
+    which mesh is being counted, not one more filter to compare.
     """
+    menu_preset = require_preset(preset)
 
     async def counts(column: Any, lifted: str) -> list[dict[str, object]]:
         # Each facet is counted with its own filter lifted and the rest
@@ -708,6 +729,7 @@ async def node_facets(
             None if lifted == "licensed" else licensed,
             None if lifted == "first_seen_hours" else first_seen_hours,
             None if lifted == "quiet_hours" else quiet_hours,
+            preset=menu_preset,
         ).group_by(column)
         rows = (await session.execute(statement)).all()
         return [
@@ -742,6 +764,7 @@ async def node_facets(
         licensed,
         first_seen_hours,
         quiet_hours,
+        preset=menu_preset,
     ).group_by("state")
 
     # The gaps states, per preset, because a node can need help on one
@@ -772,6 +795,7 @@ async def node_facets(
                     licensed,
                     first_seen_hours,
                     quiet_hours,
+                    preset=menu_preset,
                 ).where(Node.node_num.in_(wanted))
             )
             if total:

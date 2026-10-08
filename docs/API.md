@@ -59,6 +59,47 @@ on only where the API sees real client addresses: behind a proxy that
 is not in `FORWARDED_ALLOW_IPS`, every reader has the proxy's address,
 and all of them share one budget.
 
+### 1.2 The `preset` parameter (#313)
+
+The list endpoints take `preset`, a LoRa modem preset name such as
+`LongFast` or `MediumFast`. It keeps the rows carried on that preset:
+
+- `GET /api/nodes` and `GET /api/nodes/facets` (3.1, 3.1.1)
+- `GET /api/packets` (4.1)
+- `GET /api/chat` and `GET /api/chat/overview` (5.1, 5.3)
+- `GET /api/stats/portnums` (8.4)
+
+A topic channel is not a preset. `azmsh` runs on MediumFast and on
+LongFast, so `channel=LongFast` never showed an azmsh message, on any
+preset. Ingest now decides which preset carried each packet and stores
+it (see `docs/DATABASE.md`). `preset` reads that tag:
+
+    modem_preset = :preset
+    OR (modem_preset IS NULL AND channel = :preset)
+
+The second line is the fallback for a row written before the tag. Such
+a row is read by its topic channel, which is exactly what the page did
+before. The fallback fades out as retention expires the old rows: after
+30 days for packets and messages. A node keeps its fallback until it
+sends a packet that ingest tags.
+
+For a node, the tag is `node.last_preset`, the preset of its newest
+tagged packet, and the fallback column is `node.last_channel`. A node
+whose last packet was on `azmsh` therefore stays on its own preset.
+
+`preset` and `channel` are separate. Both may be given, and both then
+apply: `channel=azmsh&preset=LongFast` is the azmsh traffic on LongFast.
+A request without `preset` runs exactly the SQL it ran before.
+`tests/unit/test_preset_param_legacy.py` holds that to the byte.
+
+The name is matched without regard to case or separators, so `longfast`
+and `LONG_FAST` work. A name that is not a preset, such as `azmsh`,
+returns 422 rather than an empty list.
+
+The map, graph, coverage, gaps and leaderboard endpoints do not take
+`preset` yet. They still take `channel`, and the page sends the preset's
+own channel name there.
+
 ## 2. System endpoints
 
 ### 2.1 `GET /health`
@@ -97,6 +138,9 @@ Filters:
 - `hw` — filter by hardware model.
 - `role` — filter by role.
 - `channel` — the channel the node was last heard on.
+- `preset` — the modem preset of the node's newest tagged packet. See
+  1.2. It is never lifted in the facet counts: it says which mesh is
+  counted.
 - `position` — `exact`, `coarse`, or `none`. How well the node's
   position is known, by the same rule the gaps assessment applies. A
   node that sent no precision field at all is `exact`, not missing: that
@@ -1008,6 +1052,7 @@ Query parameters:
 - `portnum` — filter by payload type name or number.
 - `from`, `to` — filter by node.
 - `channel` — filter by channel name.
+- `preset` — keep packets carried on one modem preset. See 1.2.
 - `since` — only packets newer than this timestamp.
 - `before`, `limit` — pagination.
 - `summary` — `true` adds `summary`, one short line of what the packet
@@ -1112,8 +1157,13 @@ These endpoints return empty lists when text storage is disabled.
 
 Returns text messages, newest first.
 
-Query parameters: `channel`, `from`, `q`, `since`, `before`, `limit`
-(1 to 500), `reactions`, `metrics`.
+Query parameters: `channel`, `preset`, `from`, `q`, `since`, `before`,
+`limit` (1 to 500), `reactions`, `metrics`.
+
+A message has no preset of its own. With `preset` (see 1.2) it is joined
+to its packet on (`from_node_num`, `packet_id`, `first_seen_at` =
+`seen_at`), which is the whole of `uq_packet_dedup`, so it matches one
+packet at most. A message with no packet row falls back to its channel.
 
 With `metrics=true`, each message carries `metrics`: how it travelled.
 The channel page (`#chat/<channel>`) asks for it. It is null when the
@@ -1184,7 +1234,14 @@ group says what a channel is about; the tier says whether it is part of
 this mesh or something running beside it. A core channel keeps whatever
 topic group it matched.
 
-Query parameters: `hours` (default 168), `per_channel` (default 25).
+Query parameters: `hours` (default 168), `per_channel` (default 25),
+`preset`.
+
+With `preset` (see 1.2) each section counts and lists only the messages
+carried on that preset, and a channel with none on it has no section.
+The chat page sends the menu's preset. It used to fetch every channel and
+keep, in the browser, the topic channels on the default preset only, so
+azmsh was never shown on LongFast.
 
 ### 5.4 `GET /api/chat/tagged`
 
@@ -1785,8 +1842,11 @@ Query parameters:
   it, every packet the database holds.
 - `channel` — keep packets seen on this channel. Optional; without it,
   every channel.
+- `preset` — keep packets carried on one modem preset. See 1.2. The
+  dashboard's chart sends this, as the firehose does, so the two count
+  the same packets.
 
-Both are optional because two callers want different things. The
+All are optional because two callers want different things. The
 firehose's type suggestions want every type this mesh has ever sent, so
 that each suggestion returns rows. The dashboard's packet-types chart
 passes both, because a slice of it is a link into the firehose (plan

@@ -79,22 +79,27 @@ async def store_gateway(
     node_num: int,
     seen_at: datetime,
     mqtt_topic: str,
+    uplink_preset: str | None = None,
 ) -> None:
     """Record that one node published a packet to the MQTT broker.
 
     A node that publishes is an MQTT gateway. The flag never returns to
     false, because a gateway that stops publishing was still a gateway.
+
+    `uplink_preset` is the preset a preset-named topic named (#313). It
+    goes in the same statement, so it costs no extra round trip, and
+    ingest reads it back at start. See `ingest/presets.py`.
     """
     if not is_real_node(node_num):
         return
     await _ensure_row(session, node_num, seen_at)
-    await session.execute(
-        update(Node)
-        .where(Node.node_num == node_num)
-        .values(
-            is_mqtt_gateway=True,
-            last_mqtt_topic=mqtt_topic,
-            last_heard=seen_at,
-            updated_at=seen_at,
-        )
-    )
+    values: dict[str, object] = {
+        "is_mqtt_gateway": True,
+        "last_mqtt_topic": mqtt_topic,
+        "last_heard": seen_at,
+        "updated_at": seen_at,
+    }
+    if uplink_preset:
+        values["uplink_preset"] = uplink_preset
+        values["uplink_preset_at"] = seen_at
+    await session.execute(update(Node).where(Node.node_num == node_num).values(**values))

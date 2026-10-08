@@ -71,8 +71,8 @@ def test_the_chat_paging_cases_pass() -> None:
 def test_a_key_made_from_the_moving_default_would_be_caught() -> None:
     """The bug itself: the key held `now - 7 days`, which never matched twice."""
     done = _broken(
-        "  if (!addressRange) return `${channel || ''}|default`;",
-        "  if (!addressRange) return `${channel || ''}|${Date.now()}`;",
+        "  if (!addressRange) return `${scope}|default`;",
+        "  if (!addressRange) return `${scope}|${Date.now()}`;",
     )
     assert done.returncode != 0
     assert "one key across redraws" in done.stderr, done.stderr
@@ -89,7 +89,7 @@ def test_a_full_page_merged_under_the_old_rows_would_be_caught() -> None:
 
 def test_the_page_keys_on_the_address_not_the_range_in_force() -> None:
     page = _function(_code(), "chatChannelPage")
-    assert "chatKey(channel, chatRangeFromAddress())" in page, (
+    assert "chatKey(channel, chatRangeFromAddress(), menuPreset())" in page, (
         "the key is made from the range in force again, whose start moves every call"
     )
 
