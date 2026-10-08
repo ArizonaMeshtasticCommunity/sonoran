@@ -1644,10 +1644,16 @@ async function loadLeaderboards(page, { query = '', span = '' } = {}) {
   /*
    * The window chip says whether a board follows the page's range (#294).
    *
-   * The link board does. The two boards read from the gaps assessment keep
-   * the gaps job's own window, because that job writes one file for one
-   * window -- so their chip says their window and that the range does not
-   * reach them, rather than letting a reader take them for the range.
+   * Every board follows a quick range: the link board reads it, and the gaps
+   * job writes the two gaps boards for 24 h, 7 d and 30 d (Will chose this
+   * on 2026-10-08). The API says so per board with `follows_window`, and the
+   * page believes only that -- never the button it pressed.
+   *
+   * A custom range is a fixed period no job can write in advance, so there
+   * the two gaps boards hold the job's own window. Their chip then names
+   * that window and says the range does not reach it, rather than letting a
+   * reader take it for the range. The same happens for the few minutes
+   * after a deploy before the job has written the new windows.
    */
   const boardWindow = (board) => {
     if (board.follows_window && span) return span;

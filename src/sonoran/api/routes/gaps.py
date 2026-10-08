@@ -100,6 +100,19 @@ def read_assessment(settings: Settings, preset: str) -> dict[str, object] | None
     return _read(settings, preset)
 
 
+def read_board_window(settings: Settings, preset: str, hours: int) -> dict[str, object] | None:
+    """Return one preset's leaderboard counts for one Statistics window.
+
+    Held in the same cache as the assessment, under its own key, because
+    the job rewrites the two files on different schedules (#294).
+    """
+    return _read_file(
+        f"boards:{preset}:{hours}",
+        store.boards_path(settings, preset, hours),
+        lambda: store.read_boards(settings, preset, hours),
+    )
+
+
 def _read_file(
     key: str,
     path: Path | None,

@@ -307,6 +307,82 @@ To run one by hand:
 sonoran-gaps-once
 ```
 
+### 6.1 The leaderboard windows (#294)
+
+Two leaderboards on the Statistics page rank nodes from this job's
+evidence: "Most consistently reachable" and "Heard directly by the most
+gateways". The page has a range control with 24 h, 7 d and 30 d. Will
+chose on 2026-10-08 that these two boards follow it (option A).
+
+**What the job writes.** The assessment holds `GAPS_WINDOW_HOURS`, which
+is 7 d by default, and it is the board for that window. For each other
+quick range the job writes one more small file for each preset:
+
+    {coverage_cache_dir}/gaps/boards-{preset}-{hours}.json
+
+`hours` is the range as the page names it: 24 or 720 by default. The
+file holds `preset`, `channels`, `window_hours`, `generated_at` and
+`nodes`. Each node row holds `node_id`, `display_name`, `packets`,
+`active_hours`, `rf_hours` and `direct_gateways`, with the names the
+assessment rows use. The assessment file does not change shape, so the
+gaps page and the node page read it as before.
+
+**What it does not compute.** No signals, no siting, no neighbour,
+traceroute or position reads. A board needs none of them.
+`signals.read_reach_evidence` makes only the two reads that hold the
+counts, and they are the same reads the assessment makes
+(`_packet_summary` and `_read_direct_gateways`), not copies.
+
+**What it costs.** For each preset and window that is due, two aggregate
+reads over `packet`, `packet_seen` and `mesh_packet_metrics`. A 30 d
+window that is longer than the assessment also reads its own channel
+names, once for all presets. The cost of these reads grows with the
+rows in the window, so against the 7 d assessment:
+
+| Window | Rows against 7 d | Rebuilt | Share of a run, on average |
+|--------|-----------------:|---------|---------------------------:|
+| 24 h | about 1/7 | every run | about 0.14 of the two reads |
+| 30 d | about 4.3 | every 6 hours | about 0.36 of the two reads |
+
+A file is rebuilt when it is older than 1/120 of its window
+(`REFRESH_SHARE` in `gaps/boards.py`): 12 minutes for 24 h, which is
+every 30 minute run, and 6 hours for 30 d. So a 30 d board is at most
+about 1 percent of its window old. The run that rebuilds the 30 d file
+is the expensive one: about 4.3 times the two reads. These figures are
+reasoned from row counts, not measured. The job logs the time of each
+board file, as `gaps boards, preset ...: N nodes over H hours in S s`,
+so read that line on the live box before you trust them. This job is
+on its own clock and runs no engine, so it does not join the coverage
+cycle. It still shares three cores with ingest, the API and a coverage
+build.
+
+**What 30 d can mean.** The boards read `packet` and `packet_seen`, which
+are kept for `RETENTION_DAYS_PACKET` days, 30 by default. TimescaleDB
+drops a whole chunk only when all of it is older than that, so at the
+default the full 30 days are there. `mesh_packet_metrics` is kept for
+90 days. A window is cut to packet retention: with 14 days kept, the
+30 d file holds 336 hours and says so, and the board says "not the page
+range". Counting deleted hours would rank a node as silent in hours
+that are simply gone.
+
+**What a custom range does.** A from/to range is a fixed period, and no
+job can know in advance which periods a reader will ask for. The two
+boards then show the assessment's own window and say "not the page
+range". They never show a near window as if it were the range. The same
+happens for any `hours` that is not a quick range, and before the job
+has written a window's file, for example just after a deploy: an older
+deployment's files still serve.
+
+**The awake floor.** "Most consistently reachable" ranks a node awake
+for at least 24 hours. A 24 h window cannot hold 24 awake hours for
+most nodes, so the floor is half the window when that is smaller: 12
+hours at 24 h.
+
+**One function.** `_reachable_board` in `api/routes/leaderboards.py` is
+the whole of what "most consistently reachable" measures, for every
+window. #293 will change that measure. It changes that function, and
+`board_rows` in `jobs/gaps.py` if it needs another count.
+
 ## 7. Where it appears
 
 `#gaps`, its own page. The nav entry says "Gaps" and the heading says

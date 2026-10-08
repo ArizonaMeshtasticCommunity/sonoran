@@ -2214,17 +2214,16 @@ async function main() {
     must((await chips()).every((text) => text.startsWith('last 7 d')), 'a chip still names another range');
 
     /*
-     * The gaps-backed boards cannot follow the range, and say so. The link
-     * board does follow it.
+     * Every board follows a quick range (#294, option A): the gaps job
+     * writes the two gaps boards for 24 h, 7 d and 30 d. At 7 d they are the
+     * assessment itself, so this holds from the first run of the job.
      */
-    const boards = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+    const boardChips = () => page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
       .map((h) => [h.dataset.label, (h.querySelector('span.muted') || {}).textContent || '']));
+    const boards = await boardChips();
     if (boards.length) {
-      const link = boards.find(([title]) => /Longest reliable link/.test(title));
-      must(link && link[1] === 'last 7 d', `the link board chip reads ${link && link[1]}`);
-      const fixed = boards.filter(([title]) => !/Longest reliable link/.test(title));
-      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
-        `a gaps board does not say it keeps its own window: ${JSON.stringify(fixed)}`);
+      must(boards.every(([, chip]) => chip === 'last 7 d'),
+        `a board does not follow 7 d: ${JSON.stringify(boards)}`);
     }
 
     // A reload keeps it.
@@ -2251,6 +2250,16 @@ async function main() {
     await settled();
     missing = everyWidgetAsked(`since=${day(40)}`);
     must(!missing.length, `these widgets did not follow the dates: ${missing.join(', ')}`);
+    /*
+     * A custom range has no precomputed file. The two gaps boards hold the
+     * job's own window and say so; the link board reads the dates.
+     */
+    const customBoards = await boardChips();
+    if (customBoards.length) {
+      const fixed = customBoards.filter(([title]) => !/Longest reliable link/.test(title));
+      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
+        `a gaps board passes another window off as the dates: ${JSON.stringify(fixed)}`);
+    }
     const capped = await chips();
     must(capped.every((text) => /counted from/.test(text)),
       `a widget does not say retention cuts the range short: ${capped.join(' | ')}`);
