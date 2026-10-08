@@ -346,122 +346,22 @@ def test_a_node_with_no_hours_at_all_is_unknown() -> None:
 # --------------------------------------------------------------- 4.4
 
 
-def test_no_direct_observer_is_unknown_not_bad() -> None:
-    """A well connected node three hops deep is heard directly by nobody.
-
-    That is normal, and calling it a fault would flag most of the mesh.
-    """
-    found = signals.sole_observer(
-        NodeEvidence(node_num=1, packets=400, direct_gateways=0), _settings()
-    )
-    assert found.state == UNKNOWN
-    assert found.reason == "no_direct_observation"
 
 
-def test_one_direct_gateway_is_named_as_instrumentation_not_redundancy() -> None:
-    """The observer set is gateways, so this is a fact about our reach."""
-    found = signals.sole_observer(
-        NodeEvidence(node_num=1, packets=400, direct_gateways=1), _settings()
-    )
-    assert found.state == BAD
-    said = found.as_dict()["sentence"]
-    assert isinstance(said, str)
-    assert "gateway" in said
-    # It must not be sold as a single point of failure.
-    assert "redundan" not in said.lower()
-    assert "point of failure" not in said.lower()
 
 
-def test_one_gateway_that_hears_it_loudly_is_not_a_fault() -> None:
-    """A repeater and a client at one site: the repeater is the one gateway.
-
-    That is the setup working as intended. The sentence gives the
-    measurement and makes no claim about who owns what.
-    """
-    found = signals.sole_observer(
-        NodeEvidence(
-            node_num=1,
-            packets=400,
-            direct_gateways=1,
-            direct_rssi_dbm=-44.0,
-            direct_rssi_readings=300,
-        ),
-        _settings(),
-    )
-    assert found.state == OK
-    assert found.reason == "one_gateway_hears_it_close"
-    said = found.as_dict()["sentence"]
-    assert isinstance(said, str)
-    assert "-44 dBm" in said
-    assert "300 packets" in said
-    assert "own" not in said.lower()
 
 
-def test_one_gateway_that_hears_it_weakly_is_still_bad() -> None:
-    found = signals.sole_observer(
-        NodeEvidence(
-            node_num=1,
-            packets=400,
-            direct_gateways=1,
-            direct_rssi_dbm=-110.0,
-            direct_rssi_readings=300,
-        ),
-        _settings(),
-    )
-    assert found.state == BAD
-    assert found.reason == "one_gateway_hears_it"
 
 
-def test_a_few_loud_packets_are_not_enough_to_call_it_close() -> None:
-    found = signals.sole_observer(
-        NodeEvidence(
-            node_num=1,
-            packets=400,
-            direct_gateways=1,
-            direct_rssi_dbm=-30.0,
-            direct_rssi_readings=4,
-        ),
-        _settings(),
-    )
-    assert found.state == BAD
 
 
-def test_a_gateway_that_reports_no_rssi_leaves_the_signal_as_it_was() -> None:
-    """A missing reading is not a loud one."""
-    found = signals.sole_observer(
-        NodeEvidence(node_num=1, packets=400, direct_gateways=1, direct_rssi_readings=0),
-        _settings(),
-    )
-    assert found.state == BAD
 
 
-def test_the_close_line_is_inclusive() -> None:
-    settings = _settings()
-    found = signals.sole_observer(
-        NodeEvidence(
-            node_num=1,
-            packets=400,
-            direct_gateways=1,
-            direct_rssi_dbm=settings.gaps_sole_gateway_close_rssi_dbm,
-            direct_rssi_readings=settings.gaps_sole_gateway_min_readings,
-        ),
-        settings,
-    )
-    assert found.state == OK
 
 
-def test_two_direct_gateways_is_ok() -> None:
-    found = signals.sole_observer(
-        NodeEvidence(node_num=1, packets=400, direct_gateways=2), _settings()
-    )
-    assert found.state == OK
 
 
-def test_sole_observer_respects_the_packet_floor() -> None:
-    found = signals.sole_observer(
-        NodeEvidence(node_num=1, packets=5, direct_gateways=1), _settings()
-    )
-    assert found.state == UNKNOWN
 
 
 # --------------------------------------------------------------- 4.6
@@ -621,7 +521,7 @@ def test_the_ranking_is_counts_then_severity_then_evidence() -> None:
         "node_id": "!c",
         "bad_count": 2,
         "packets": 5,
-        "signals": {"sole_observer": {"state": BAD}, "weak_best_link": {"state": BAD}},
+        "signals": {"rf_intermittent": {"state": BAD}, "weak_best_link": {"state": BAD}},
     }
     ordered = sorted([thin, asymmetric, two], key=signals.rank_key)
     assert [row["node_id"] for row in ordered] == ["!c", "!a", "!b"]
@@ -912,3 +812,18 @@ def test_the_caveats_name_what_cannot_be_answered_at_all() -> None:
     assert "one_preset_only" in keys
     for _, text in signals.CAVEATS:
         assert text.endswith(".")
+
+def test_direct_gateways_count_does_not_produce_bad_state() -> None:
+    for count in [0, 1, 2]:
+        evidence = signals.NodeEvidence(
+            node_num=1,
+            direct_gateways=count,
+            rf_packets=5,
+            packets=5,
+            active_hours=2,
+            rf_hours=2,
+        )
+        settings = Settings()
+        coverage = signals.CoverageLevels(available=True, is_diagnostic=False, threshold_level=100, levels={'1': {'usable': 105}})
+        found = signals.assess(evidence, settings, Preset.LONG_FAST, 10, coverage, "exact", None)
+        assert not any(signal.state == signals.BAD for signal in found.values())

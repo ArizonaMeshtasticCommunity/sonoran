@@ -109,7 +109,6 @@ SIGNAL_ORDER: tuple[str, ...] = (
     "radio_isolated",
     "rf_intermittent",
     "weak_best_link",
-    "sole_observer",
     "outside_predicted_usable",
 )
 
@@ -119,7 +118,6 @@ SIGNAL_LABELS: dict[str, str] = {
     "radio_isolated": "Reaches us only through MQTT",
     "rf_intermittent": "Gets out over the air only sometimes",
     "weak_best_link": "Best measured link has little margin",
-    "sole_observer": "Only one gateway hears it directly",
     "outside_predicted_usable": "Outside the predicted usable map",
 }
 
@@ -152,7 +150,6 @@ UNITS: frozenset[str] = frozenset({FRACTION, DB, GATEWAYS, DBM, METRES})
 SIGNAL_UNIT_LABELS: dict[str, str] = {
     "rf_intermittent": "% of hours heard",
     "weak_best_link": "dB of margin",
-    "sole_observer": "gateways",
     "outside_predicted_usable": "predicted dBm",
 }
 
@@ -212,20 +209,6 @@ SIGNAL_KEY: dict[str, dict[str, str]] = {
         "owner": (
             "Little margin means small changes, such as weather or a parked truck, can break "
             "the link. More height or a better antenna adds margin."
-        ),
-    },
-    "sole_observer": {
-        "measures": (
-            "How many gateways hear the node directly, with no relay in between. This says "
-            "as much about where our gateways are as about the node."
-        ),
-        "problem": (
-            "Yes when exactly one gateway hears it directly, unless that one receives it so "
-            "strongly that it must be close by."
-        ),
-        "owner": (
-            "Nothing needs fixing on the node. A second gateway within reach would make the "
-            "reading more certain."
         ),
     },
     "outside_predicted_usable": {
@@ -1163,66 +1146,8 @@ def rf_intermittent(evidence: NodeEvidence, settings: Settings) -> Signal:
 # --------------------------------------------------------------- 4.4
 
 
-def sole_observer(evidence: NodeEvidence, settings: Settings) -> Signal:
-    """Only one gateway has ever heard this node directly.
-
-    **This is not a single point of failure and must never be called
-    one.** The observer set is MQTT gateways, so the signal says "one
-    gateway can hear it", which is a statement about where our gateways
-    are as much as about the mesh. Name it on the page exactly as it is,
-    do not call it redundancy, and do not draw a line to that gateway.
-
-    Zero direct gateways is `unknown`, not `bad`. A well connected node
-    three hops deep is heard directly by nobody, and that is normal.
-    `radio_isolated` and `rf_intermittent` are the signals to read for
-    such a node.
-
-    One gateway that receives the node very strongly is `ok`. The common
-    case is a repeater and a client at one site: the repeater is the one
-    gateway, and the client works as intended. The test is the median
-    RSSI, which is physics: a strong enough signal bounds the distance.
-    Positions cannot do this, because most are rounded to kilometres.
-    Nothing here reads names or guesses who owns what.
-    """
-    counts: dict[str, object] = {
-        "direct_gateways": evidence.direct_gateways,
-        "packets": evidence.packets,
-        "min_packets": settings.gaps_min_packets,
-        "direct_rssi_dbm": (
-            None if evidence.direct_rssi_dbm is None else round(evidence.direct_rssi_dbm)
-        ),
-        "direct_rssi_readings": evidence.direct_rssi_readings,
-    }
-    if evidence.packets < settings.gaps_min_packets:
-        return Signal(UNKNOWN, "too_few_packets", evidence=counts)
-    if evidence.direct_gateways == 0:
-        return Signal(UNKNOWN, "no_direct_observation", evidence=counts)
-    if evidence.direct_gateways == 1:
-        if _sole_gateway_is_close(evidence, settings):
-            return Signal(
-                OK, "one_gateway_hears_it_close", value=1.0, evidence=counts, unit=GATEWAYS
-            )
-        return Signal(BAD, "one_gateway_hears_it", value=1.0, evidence=counts, unit=GATEWAYS)
-    return Signal(
-        OK,
-        "several_gateways_hear_it",
-        value=float(evidence.direct_gateways),
-        evidence=counts,
-        unit=GATEWAYS,
-    )
 
 
-def _sole_gateway_is_close(evidence: NodeEvidence, settings: Settings) -> bool:
-    """Return true when the one direct gateway receives the node very strongly.
-
-    Too few readings is false, so the signal stays as it was. One loud
-    packet is not a site.
-    """
-    if evidence.direct_rssi_dbm is None:
-        return False
-    if evidence.direct_rssi_readings < settings.gaps_sole_gateway_min_readings:
-        return False
-    return evidence.direct_rssi_dbm >= settings.gaps_sole_gateway_close_rssi_dbm
 
 
 # --------------------------------------------------------------- 4.5
@@ -1489,7 +1414,6 @@ def assess(
         "radio_isolated": isolated,
         "rf_intermittent": rf_intermittent(evidence, settings),
         "weak_best_link": weak_best_link(evidence, settings, preset),
-        "sole_observer": sole_observer(evidence, settings),
         "outside_predicted_usable": outside_predicted_usable(
             evidence.node_num, coverage, confidence, deviation_m
         ),
@@ -1534,7 +1458,6 @@ __all__ = [
     "read_trace_evidence",
     "rf_intermittent",
     "sentence_for",
-    "sole_observer",
     "weak_best_link",
     "window_bounds",
     "worst_state",

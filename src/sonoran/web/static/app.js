@@ -6441,12 +6441,7 @@ function healthChecks(gaps, detail) {
    * `unknown` is for. It must not be coloured as health.
    */
   const isolated = signal('radio_isolated');
-  const sole = signal('sole_observer');
   let heardState = signalState(isolated);
-  if (heardState === 'ok' && sole) {
-    if (sole.state === 'bad') heardState = 'warn';
-    else if (sole.state === 'unknown') heardState = 'unknown';
-  }
 
   const margin = signal('weak_best_link');
   const marginEvidence = margin ? margin.evidence || {} : {};
