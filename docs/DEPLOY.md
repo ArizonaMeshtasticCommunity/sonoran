@@ -30,7 +30,7 @@ deployment host for access.
 3. Tag each image that you will rebuild, so that a rollback is one step:
 
    ```bash
-   docker tag sonoran-api:latest sonoran-api:rollback-<old-sha>
+   docker tag sonoran-web:latest sonoran-api:rollback-<old-sha>
    ```
 
 4. Take a snapshot of what the live API answers:
@@ -53,8 +53,8 @@ Copy the bundle to the service account. On the host, as that account:
 cd <deployment>
 git fetch deploy.bundle +main:refs/remotes/deploy/main
 git checkout --detach refs/remotes/deploy/main
-docker compose build api            # only the services whose code changed
-docker compose up -d --no-deps api  # the same services
+docker compose build web            # only the services whose code changed
+docker compose up -d --no-deps web  # the same services
 ```
 
 **Fetch into `refs/remotes/deploy/main`, never into a local branch
@@ -89,7 +89,7 @@ Do not stop at the diff. Check what runs:
    deployment. A merged PR was once reported as deployed when only the
    PR before it was.
 2. The rebuilt containers are `healthy` and their restart count is 0:
-   `docker inspect -f '{{.State.Health.Status}} {{.RestartCount}}' sonoran-api-1`.
+   `docker inspect -f '{{.State.Health.Status}} {{.RestartCount}}' sonoran-web-1`.
    `docker compose ps --format '{{.State}}'` says `running` and does not
    show health.
 3. Compare the API with the snapshot:
@@ -107,9 +107,9 @@ Do not stop at the diff. Check what runs:
 ## 5. Roll back
 
 ```bash
-docker tag sonoran-api:rollback-<old-sha> sonoran-api:latest
+docker tag sonoran-web:rollback-<old-sha> sonoran-api:latest
 git checkout --detach <old-sha>
-docker compose up -d --no-deps api
+docker compose up -d --no-deps web
 ```
 
 A migration that already ran is not undone by this. Read the
@@ -129,7 +129,20 @@ migration's `downgrade` before you roll back past one.
 
 ## 7. Stop a server by its port
 
-Never use `pkill -f sonoran-api` or a pattern like it. It stops every
+Never use `pkill -f sonoran-web` or a pattern like it. It stops every
 server that matches, the ones of other people included, and it can
 also match the shell that runs it. Stop one server by its process ID,
 found from its port.
+
+## 8. Upgrade Notes
+
+If you are upgrading an existing deployment:
+
+1. **Service Rename:** The `api` service is now called `web`. You must update any `docker-compose.override.yml` files, deployment scripts, or reverse proxies that reference `api` or `sonoran-web-1`.
+2. **Mesh-Graph Config:** The `mesh-graph` configuration file moved from the repository root to `config/mesh-graph.config.toml`. Move any local copies to the new path.
+3. **Disabling Mesh-Graph:** The `mesh-graph` service is enabled by default. If you use a custom build or an external instance (e.g. on Coolify), you can disable the included service by adding the following to your `docker-compose.override.yml`:
+   ```yaml
+   services:
+     mesh-graph:
+       profiles: ["off"]
+   ```
