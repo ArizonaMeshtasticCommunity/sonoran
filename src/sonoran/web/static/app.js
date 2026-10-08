@@ -4797,6 +4797,10 @@ let nodeOffset = 0;
 let nodeCursor = null;
 let nodeTotal = 0;
 let nodeRows = [];
+/* The query the table is drawn from, without paging. The export reads
+ * this rather than the controls, so the file holds what the table shows
+ * even while a typed search waits for its pause (#350). */
+let nodeShownQuery = null;
 /*
  * True once a request came back short, which is the only trustworthy
  * sign that the list has ended.
@@ -5399,6 +5403,7 @@ async function loadNodes(page, { reset = false } = {}) {
     nodeCursor = null;
     nodeRows = [];
     nodeExhausted = false;
+    nodeShownQuery = nodeQuery(page);
     replace(target, el('p', { class: 'loading', text: 'Loading' }));
   }
   nodeLoadingMore = true;
@@ -5511,30 +5516,37 @@ async function loadNodes(page, { reset = false } = {}) {
  * reorders rows it already holds: this list is paged, so sorting the
  * rows in hand would order the first hundred by name and present the
  * answer as the first hundred by name of the whole mesh. See `table()`.
+ *
+ * Every column also names the key the export knows it by (#350). The
+ * file takes its columns from this list, in this order, so a column
+ * added, removed or moved here is added, removed or moved in the file.
  */
 function nodeColumns(onSort) {
   const sortable = (column) => ({ ...column, sortState: nodeSort, onSort });
   return [
-    sortable({ label: 'Node', sort: 'name', cell: (row) => nodeChip(row) }),
+    sortable({ label: 'Node', sort: 'name', export: 'name', cell: (row) => nodeChip(row) }),
     sortable({
       label: 'Node ID',
       sort: 'node_id',
+      export: 'node_id',
       hint: 'The number the firmware gives the node, written in hexadecimal after a "!".',
       cell: (row) => el('code', { text: row.node_id }),
     }),
     sortable({
       label: 'Hardware',
       sort: 'hw',
+      export: 'hw',
       hint: 'The board model the node reports for itself.',
       cell: (row) => row.hw_model || '-',
     }),
-    sortable({ label: 'Role', sort: 'role', cell: (row) => roleCell(row.role) }),
+    sortable({ label: 'Role', sort: 'role', export: 'role', cell: (row) => roleCell(row.role) }),
     sortable({
       label: 'Flags',
       // Flags is not one value, so sorting it is a decision rather than
       // a rule. It sorts by how exactly the position is known, which is
       // the half of this column somebody sorts it to find.
       sort: 'position',
+      export: 'flags',
       hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is. '
         + 'Sorting this column orders by how exactly the position is known.',
       cell: (row) => el('span', {},
@@ -5548,11 +5560,90 @@ function nodeColumns(onSort) {
     sortable({
       label: 'Last heard',
       sort: 'last_heard',
+      export: 'last_heard',
       num: true,
       hint: HEARD_HINT,
       cell: (row) => `${ago(row.last_heard)} ago`,
     }),
   ];
+}
+
+/** The export keys of the columns, in the order the table draws them. */
+function nodeExportColumns(columns) {
+  return columns.map((column) => column.export).filter(Boolean);
+}
+
+/** The address of the file that holds what the list shows (#350).
+ *
+ * Built from the list's own query, so every filter, the search and the
+ * sort go with it and none can be left behind. Only the paging comes
+ * off: the file is the whole list, and the server builds it with the
+ * same query as `/api/nodes`. Pure, so the cases in `tests/unit/js` run
+ * it.
+ */
+function nodeExportQuery(listQuery, format, columns) {
+  const params = new URLSearchParams(String(listQuery).split('?')[1] || '');
+  for (const key of ['limit', 'offset', 'cursor']) params.delete(key);
+  params.set('format', format);
+  params.set('columns', columns.join(','));
+  return `api/nodes/export?${params}`;
+}
+
+/** The file name the server gave, or a plain one. Pure. */
+function nodeExportName(disposition, format) {
+  const found = /filename="([^"]+)"/.exec(disposition || '');
+  return found ? found[1] : `sonoran-nodes.${format}`;
+}
+
+/* True while one export is in flight, so a second click asks nothing. */
+let nodeExporting = false;
+
+/** Fetch the export and hand it to the browser as a download.
+ *
+ * Fetched, not opened as a link: the server can refuse an export that
+ * is too large, and a link would then open a page of JSON in place of
+ * the dashboard. Here the refusal is shown as a sentence beside the
+ * buttons.
+ *
+ * The query is the one the table was last drawn from, not one read
+ * again from the controls. The search box waits for a pause in the
+ * typing, so the controls can hold a search the table does not show
+ * yet, and the file must hold what the reader sees.
+ */
+async function exportNodes(page, format) {
+  if (nodeExporting) return;
+  const status = $('[data-node-export-status]', page);
+  const buttons = $$('[data-node-export-format]', page);
+  const say = (words) => { if (status) status.textContent = words; };
+  nodeExporting = true;
+  for (const button of buttons) button.setAttribute('aria-disabled', 'true');
+  say(`Preparing the ${format.toUpperCase()} file`);
+  const path = nodeExportQuery(nodeShownQuery || nodeQuery(page), format,
+    nodeExportColumns(nodeColumns(() => {})));
+  try {
+    const response = await apiFetch(api(path));
+    if (!response.ok) {
+      const answer = await response.json().catch(() => null);
+      const detail = answer && typeof answer.detail === 'string' ? answer.detail : '';
+      throw detail ? new Error(detail) : requestFailed(path, response.status);
+    }
+    const blob = await response.blob();
+    const name = nodeExportName(response.headers.get('Content-Disposition'), format);
+    const url = URL.createObjectURL(blob);
+    const link = el('a', { href: url, download: name, hidden: true });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Released after the click has started the download, not during it.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const header = response.headers.get('X-Total-Count');
+    say(header == null ? `Saved ${name}` : `Saved ${count(Number(header))} nodes as ${name}`);
+  } catch (error) {
+    say(error.message || String(error));
+  } finally {
+    nodeExporting = false;
+    for (const button of buttons) button.setAttribute('aria-disabled', 'false');
+  }
 }
 
 /** The foot of the list: where we are in it, and how to read on.
@@ -11401,6 +11492,13 @@ function wire() {
     drawNodeFilters($('[data-page="nodes"]'), nodeFacets);
     render('nodes');
   });
+
+  /* The export: the rows the list shows, as a file (#350). */
+  for (const button of $$('[data-node-export-format]')) {
+    button.addEventListener('click', () => {
+      exportNodes($('[data-page="nodes"]'), button.dataset.nodeExportFormat);
+    });
+  }
 
   /*
    * The starting points. Each one sets a whole query, because the

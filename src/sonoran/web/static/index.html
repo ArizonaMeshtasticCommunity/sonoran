@@ -1698,6 +1698,21 @@
                       aria-controls="node-filters">Filters<span class="filter-count"
                       data-node-filter-count hidden></span></button>
               <!--
+                The export (#350): the rows the list shows, every page of
+                them, with the columns the table draws, as a file. A
+                disclosure like the live map's packet kinds, so it costs
+                one control in this row. The status is in the markup, so
+                that a screen reader announces each change of it.
+              -->
+              <details class="family-filter node-export" data-node-export>
+                <summary>Export</summary>
+                <span class="family-chips" role="group" aria-label="Export the list as">
+                  <button type="button" class="chip" data-node-export-format="csv">CSV</button>
+                  <button type="button" class="chip" data-node-export-format="json">JSON</button>
+                  <span class="muted" role="status" data-node-export-status></span>
+                </span>
+              </details>
+              <!--
                 The Search button is gone (Will: "What is the point of the
                 search button if it's automatically sorting, filtering and
                 searching?").

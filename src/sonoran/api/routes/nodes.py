@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api import export
 from sonoran.api.dependencies import (
     LIKE_ESCAPE,
     contains,
@@ -517,10 +519,34 @@ def _apply_node_filters(
     return statement
 
 
-@router.get("", response_model=list[NodeSummary])
-async def list_nodes(
-    request: Request,
-    response: Response,
+@dataclass(frozen=True)
+class NodeListParams:
+    """The filters and the order of the node list.
+
+    One set, read by one dependency, for the list and for its export.
+    A filter added to the list therefore reaches the export with no
+    second edit, and the file cannot hold rows the screen does not
+    (#350).
+    """
+
+    q: str | None
+    hw: str | None
+    role: str | None
+    gateway: bool | None
+    active_hours: int | None
+    before: datetime | None
+    channel: str | None
+    position: str | None
+    licensed: bool | None
+    first_seen_hours: int | None
+    quiet_hours: int | None
+    gaps: str | None
+    gaps_preset: str | None
+    sort: str
+    order: str
+
+
+def node_list_params(
     q: str | None = None,
     hw: str | None = None,
     role: str | None = None,
@@ -536,6 +562,107 @@ async def list_nodes(
     gaps_preset: str | None = None,
     sort: str = Query(default="last_heard"),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
+) -> NodeListParams:
+    """Read the node list's query parameters. Refuse an unknown sort."""
+    if sort not in SORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"sort must be one of: {', '.join(sorted(SORTS))}",
+        )
+    return NodeListParams(
+        q=q,
+        hw=hw,
+        role=role,
+        gateway=gateway,
+        active_hours=active_hours,
+        before=before,
+        channel=channel,
+        position=position,
+        licensed=licensed,
+        first_seen_hours=first_seen_hours,
+        quiet_hours=quiet_hours,
+        gaps=gaps,
+        gaps_preset=gaps_preset,
+        sort=sort,
+        order=order,
+    )
+
+
+@dataclass(frozen=True)
+class NodeListQuery:
+    """The statements of one node list, before any paging."""
+
+    rows: Select[Any]
+    count: Select[Any]
+    column: Any
+    ordering: tuple[Any, ...]
+
+
+def _node_list_query(request: Request, params: NodeListParams) -> NodeListQuery:
+    """Build the node list's row and count statements.
+
+    The list and its export both call this, so they cannot disagree
+    about which rows match or in which order they come.
+    """
+    column = SORTS[params.sort]
+    direction = column.asc() if params.order == "asc" else column.desc()
+
+    # Nulls last whichever way it was clicked. A node with no role is
+    # not the smallest role, and a reader scanning a column wants the
+    # rows that have nothing to say out of the way.
+    #
+    # `node_num` breaks the tie. Without it Postgres may order equal
+    # rows differently between two queries, so a node could arrive on
+    # two pages or on neither. With 160 nodes reporting no role at all,
+    # ties are the ordinary case here rather than an edge.
+    ordering = (direction.nullslast(), Node.node_num.asc())
+
+    filters = (
+        params.q,
+        params.hw,
+        params.role,
+        params.gateway,
+        params.active_hours,
+        params.before,
+        params.channel,
+        params.position,
+        params.licensed,
+        params.first_seen_hours,
+        params.quiet_hours,
+    )
+    # The sort value is selected beside the row, so the cursor can name it
+    # exactly as the database compares it. `name` is an expression, not a
+    # column the row carries.
+    statement = _apply_node_filters(select(Node, column.label("sort_value")), *filters)
+    counted = _apply_node_filters(select(func.count()).select_from(Node), *filters)
+
+    # The gaps state is per preset, because a node can need help on one
+    # mesh and be fine on another. Merging them would be the thing
+    # AGENTS.md 9.7 forbids everywhere else, wearing a filter's clothes.
+    if params.gaps:
+        if not params.gaps_preset:
+            raise HTTPException(
+                status_code=422,
+                detail="gaps needs gaps_preset: a node can need help on one preset and not another",
+            )
+        wanted = _gaps_node_nums(request, params.gaps_preset, params.gaps)
+        if wanted is None:
+            # Not an empty result. Nothing has been assessed, and saying
+            # "no nodes" would be an answer we do not have.
+            raise HTTPException(
+                status_code=409,
+                detail=f"no gap assessment has been written for {params.gaps_preset} yet",
+            )
+        statement = statement.where(Node.node_num.in_(wanted))
+        counted = counted.where(Node.node_num.in_(wanted))
+    return NodeListQuery(statement, counted, column, ordering)
+
+
+@router.get("", response_model=list[NodeSummary])
+async def list_nodes(
+    request: Request,
+    response: Response,
+    params: NodeListParams = Depends(node_list_params),
     offset: int = Query(default=0, ge=0, le=100_000),
     cursor: str | None = Query(default=None, max_length=1024),
     limit: int = Query(default=100, ge=1, le=500),
@@ -566,69 +693,87 @@ async def list_nodes(
     cursor names the last row itself, so a row that moves cannot shift
     the next page. The cursor carries its sort and order and is refused
     under any other, as for the packet timeline (#259).
+
+    The filters, the sort and the query come from `node_list_params`
+    and `_node_list_query`, which `export_nodes` uses too (#350).
     """
-    if sort not in SORTS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"sort must be one of: {', '.join(sorted(SORTS))}",
-        )
-    after = None if cursor is None else _read_node_cursor(cursor, sort, order)
-    column = SORTS[sort]
-    direction = column.asc() if order == "asc" else column.desc()
+    after = None if cursor is None else _read_node_cursor(cursor, params.sort, params.order)
+    query = _node_list_query(request, params)
+    statement = query.rows
 
-    # Nulls last whichever way it was clicked. A node with no role is
-    # not the smallest role, and a reader scanning a column wants the
-    # rows that have nothing to say out of the way.
-    #
-    # `node_num` breaks the tie. Without it Postgres may order equal
-    # rows differently between two queries, so a node could arrive on
-    # two pages or on neither. With 160 nodes reporting no role at all,
-    # ties are the ordinary case here rather than an edge.
-    ordering = (direction.nullslast(), Node.node_num.asc())
-
-    filters = (q, hw, role, gateway, active_hours, before, channel, position, licensed)
-    # The sort value is selected beside the row, so the cursor can name it
-    # exactly as the database compares it. `name` is an expression, not a
-    # column the row carries.
-    statement = _apply_node_filters(
-        select(Node, column.label("sort_value")), *filters, first_seen_hours, quiet_hours
-    )
-    counted = _apply_node_filters(
-        select(func.count()).select_from(Node), *filters, first_seen_hours, quiet_hours
-    )
-
-    # The gaps state is per preset, because a node can need help on one
-    # mesh and be fine on another. Merging them would be the thing
-    # AGENTS.md 9.7 forbids everywhere else, wearing a filter's clothes.
-    if gaps:
-        if not gaps_preset:
-            raise HTTPException(
-                status_code=422,
-                detail="gaps needs gaps_preset: a node can need help on one preset and not another",
-            )
-        wanted = _gaps_node_nums(request, gaps_preset, gaps)
-        if wanted is None:
-            # Not an empty result. Nothing has been assessed, and saying
-            # "no nodes" would be an answer we do not have.
-            raise HTTPException(
-                status_code=409,
-                detail=f"no gap assessment has been written for {gaps_preset} yet",
-            )
-        statement = statement.where(Node.node_num.in_(wanted))
-        counted = counted.where(Node.node_num.in_(wanted))
-
-    total = await session.scalar(counted)
+    total = await session.scalar(query.count)
     response.headers["X-Total-Count"] = str(total or 0)
 
     if after is not None:
-        statement = statement.where(_after_node(column, order, after))
+        statement = statement.where(_after_node(query.column, params.order, after))
     served = (
-        await session.execute(statement.order_by(*ordering).offset(offset).limit(limit))
+        await session.execute(statement.order_by(*query.ordering).offset(offset).limit(limit))
     ).all()
     if served:
         last, last_value = served[-1]
-        response.headers["X-Next-Cursor"] = _node_cursor(sort, order, last_value, last.node_num)
+        response.headers["X-Next-Cursor"] = _node_cursor(
+            params.sort, params.order, last_value, last.node_num
+        )
     return [_summary(node) for node, _value in served]
+
+
+@router.get("/export")
+async def export_nodes(
+    request: Request,
+    params: NodeListParams = Depends(node_list_params),
+    file_format: str = Query(default="csv", alias="format", pattern="^(csv|json)$"),
+    columns: str | None = Query(default=None, max_length=200),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Return every node the list would show, as one CSV or JSON file (#350).
+
+    It takes every filter and the sort of `/api/nodes`, through the same
+    dependency and the same query builder, so the file holds the rows
+    the screen holds, in the same order. It does not page: the file is
+    the whole list, which is the reason it exists.
+
+    `columns` names the list's columns in the order the page draws them.
+    No column adds a field the list does not show. See `api/export.py`.
+
+    Over `export.EXPORT_LIMIT` rows it refuses with 422 and does not cut
+    the file. The count is checked first, and the rows are read one past
+    the limit, so rows that arrive between the two queries are caught.
+    """
+    try:
+        chosen = export.parse_columns(columns)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    query = _node_list_query(request, params)
+    limit = export.EXPORT_LIMIT
+    total = await session.scalar(query.count) or 0
+    if total > limit:
+        raise HTTPException(status_code=422, detail=_too_many(total, limit))
+    served = (await session.execute(query.rows.order_by(*query.ordering).limit(limit + 1))).all()
+    if len(served) > limit:
+        raise HTTPException(status_code=422, detail=_too_many(len(served), limit))
+    rows = [_summary(node) for node, _value in served]
+    if file_format == "csv":
+        body, media = export.to_csv(rows, chosen), "text/csv; charset=utf-8"
+    else:
+        body, media = export.to_json(rows, chosen), "application/json"
+    name = export.filename(file_format, datetime.now(UTC))
+    return Response(
+        content=body.encode("utf-8"),
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Cache-Control": "no-store",
+            "X-Total-Count": str(len(rows)),
+        },
+    )
+
+
+def _too_many(found: int, limit: int) -> str:
+    """The refusal for a file over the ceiling, in words a reader can act on."""
+    return (
+        f"{found} nodes match, and one export holds at most {limit}. "
+        "Narrow the filters and export again."
+    )
 
 
 def _gaps_node_nums(request: Request, preset: str, state: str) -> set[int] | None:

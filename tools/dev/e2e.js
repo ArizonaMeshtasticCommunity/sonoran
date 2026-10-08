@@ -779,6 +779,72 @@ async function main() {
     return `${before} -> ${narrowed} for "base", 0 for nonsense`;
   });
 
+  await journey(context, 'the nodes export holds what the list shows (#350)', async (page) => {
+    /*
+     * A filter and a sort, then Export -> CSV. The file must hold every
+     * node the list counts, not the page that has loaded, with the
+     * columns the table draws, in the table's order. The server's half
+     * (the file equals the list for seven filter combinations) is
+     * `tests/integration/test_nodes_export.py`.
+     */
+    await open(page, 'nodes');
+    await page.locator('[data-page="nodes"] [data-node-active]').selectOption('');
+    await page.waitForTimeout(2500);
+    await page.click('[data-page="nodes"] th:nth-child(1) .sort-button');
+    await page.waitForTimeout(2500);
+    const said = await page.locator('[data-node-count]').innerText();
+    const total = Number(((said.match(/^([\d,]+) nodes$/) || [])[1] || '').replace(/,/g, ''));
+    must(Number.isFinite(total) && total > 0, `the list gives no total to compare with: "${said}"`);
+    const shownIds = await page.$$eval('[data-page="nodes"] tbody tr code',
+      (cells) => cells.map((cell) => cell.textContent));
+
+    const asked = [];
+    page.on('request', (request) => {
+      if (request.url().includes('api/nodes/export?')) asked.push(new URL(request.url()));
+    });
+    await page.click('[data-page="nodes"] [data-node-export] > summary');
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 60000 }),
+      page.click('[data-page="nodes"] [data-node-export-format="csv"]'),
+    ]);
+    const body = fs.readFileSync(await download.path(), 'utf8');
+    must(/^sonoran-nodes-\d{8}-\d{6}Z\.csv$/.test(download.suggestedFilename()),
+      `the file is called ${download.suggestedFilename()}`);
+
+    // RFC 4180, by hand: a node name can hold a comma, a quote or a line break.
+    const records = [];
+    let row = [''];
+    let quoted = false;
+    const text = body.replace(/^﻿/, '');
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (quoted) {
+        if (char === '"' && text[index + 1] === '"') { row[row.length - 1] += '"'; index += 1; }
+        else if (char === '"') quoted = false;
+        else row[row.length - 1] += char;
+      } else if (char === '"') quoted = true;
+      else if (char === ',') row.push('');
+      else if (char === '\r' && text[index + 1] === '\n') { records.push(row); row = ['']; index += 1; }
+      else row[row.length - 1] += char;
+    }
+    const [header, ...rows] = records;
+    const expected = ['Name', 'Short name', 'Node ID', 'Hardware', 'Role', 'Gateway', 'Position', 'Last heard'];
+    must(header && header.join() === expected.join(), `the header row is ${header && header.join()}`);
+    must(rows.length === total, `the file holds ${rows.length} rows and the list counts ${total}`);
+    const fileIds = rows.slice(0, shownIds.length).map((cells) => cells[2]);
+    must(fileIds.join() === shownIds.join(), 'the file is not in the order the table shows');
+
+    const query = asked[0];
+    must(query, 'no export request was seen');
+    must(query.searchParams.get('sort') === 'name', `the export lost the sort: ${query.search}`);
+    must(!query.searchParams.has('active_hours'), `the export kept the old window: ${query.search}`);
+    must(!query.searchParams.has('limit') && !query.searchParams.has('cursor'),
+      `the export asked for one page: ${query.search}`);
+    const status = await page.locator('[data-node-export-status]').innerText();
+    must(/^Saved /.test(status), `the status says "${status}"`);
+    return `${rows.length} rows = the list's ${total}, sorted by name; "${status}"`;
+  });
+
   await journey(context, 'a column heading reorders the whole list', async (page) => {
     await open(page, 'nodes');
     const summary = () => page.locator('[data-node-count]').innerText();
