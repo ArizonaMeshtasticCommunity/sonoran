@@ -144,6 +144,12 @@ class SiteSetSummary:
     is_diagnostic: bool
     presets: list[PresetSummary] = field(default_factory=list)
     data_bounds: list[float] | None = None
+    # The position rule this map was predicted with: `precise`, or
+    # `approximate` for the extra map `COVERAGE_INCLUDE_APPROXIMATE`
+    # adds. `approximate` is true for the second, so a reader has one
+    # flag to test. A run made before #315 has neither field.
+    site_precision: str = "precise"
+    approximate: bool = False
 
 
 @dataclass

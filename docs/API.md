@@ -508,10 +508,25 @@ than the mesh covers.
 
 Each site in `presets[].nodes` carries `position_deviation_m`: how far
 its position may be from the node, in metres, when the node shared
-only a rounded one and `COVERAGE_MIN_PRECISION_BITS` let it in. It is
-null for an exact position or one given in `config/nodes.yaml`. A site
-with a value is drawn around its rounded point, so its footprint is
-approximate.
+only a rounded one. Only an approximate map (below), or a deployment
+with `COVERAGE_MIN_PRECISION_BITS=0`, has such sites. It
+is null for an exact position or one given in the overrides file. A
+site with a value is drawn around its rounded point, so its footprint
+is approximate.
+
+Each site also carries `position_source`: `operator` when the position
+came from the overrides file (`RADIO_OVERRIDES_PATH`), and `reported`
+when the node sent it. A page can then say "position set by the
+operator". The position itself is never in the manifest (#315).
+
+`site_sets` lists every map the run published, the precise
+infrastructure map first. Each entry has `key`, `label`, `site_roles`,
+`is_diagnostic`, `presets`, `data_bounds`, and two fields from #315:
+`site_precision` (`precise` or `approximate`) and `approximate` (true
+for an approximate map). A run made before #315 has neither, and a
+reader must read a missing `approximate` as false. `presets` and
+`is_diagnostic` at the top level are always the precise infrastructure
+map.
 
 ### 3A.2 `GET /api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`
 
@@ -537,6 +552,11 @@ than one, and they are different answers to different questions:
 | `infrastructure` | Routers, router lates and repeaters, or a subset of them. The only map a public page ever draws |
 | `extended` | Also the roles that repeat without being infrastructure, when `COVERAGE_INCLUDE_CLIENTS` is on. A diagnostic |
 | `diagnostic` | Whatever `COVERAGE_SITE_ROLES` named, when that is not a subset of the infrastructure roles. A diagnostic |
+| `infrastructure_approximate`, `extended_approximate`, `diagnostic_approximate` | The same roles as the set it names, and also positions rounded down to `COVERAGE_APPROXIMATE_MIN_BITS`, when `COVERAGE_INCLUDE_APPROXIMATE` is on. Dashboard only. A public page never draws it (#315) |
+
+Every set without `_approximate` is predicted from precise positions
+only. `COVERAGE_MIN_PRECISION_BITS` cannot lower that below 16 bits. See
+`docs/COVERAGE.md` 9.1.2.
 
 A run whose roles are not a subset of the infrastructure set writes
 `diagnostic` and never `infrastructure`. The site set is part of the

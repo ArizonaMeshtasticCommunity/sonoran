@@ -23,8 +23,16 @@ The format is YAML:
 Every key is optional. A key that is absent falls back to the hardware
 default. A file that is absent gives no overrides at all, which is a
 working state and not an error.
+
+A `latitude` and `longitude` place a coverage site (#315). They are
+read by the coverage job and the calibration fit only; no page shows
+them. Each entry is checked when the file is read: a node ID that is
+not `!` and eight hexadecimal digits, half a position, and a position
+that is not a place are refused, each with a log line that names the
+node.
 """
 
+import re
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -32,6 +40,7 @@ from typing import Any
 import yaml
 
 from sonoran.logging import get_logger
+from sonoran.positions import is_usable
 
 logger = get_logger(__name__)
 
@@ -161,10 +170,68 @@ def _one_node(node_id: str, raw: object) -> NodeOverride:
         if checked is not None:
             values[key] = checked
 
+    _check_position(node_id, values)
     # `lock_calibration` is not optional on the dataclass, so a bad
     # value must not reach it as None.
     values.setdefault("lock_calibration", False)
     return NodeOverride(**values)
+
+
+def _check_position(node_id: str, values: dict[str, Any]) -> None:
+    """Take a position that is not a place out of one entry.
+
+    A position here makes a node a coverage site (#315), so a mistake in
+    one is refused when the file is read, with a line that names the
+    node. The rest of the entry is a set of radio facts and is kept.
+
+    Half a position is refused. That includes the half a bad value
+    leaves behind: a longitude out of range is dropped above, and the
+    latitude must then go with it. So is a pair that `is_usable` refuses,
+    such as Null Island, which is what an unset position reads as.
+    """
+    latitude = values.get("latitude")
+    longitude = values.get("longitude")
+    if latitude is None and longitude is None:
+        return
+    if latitude is None or longitude is None:
+        logger.warning(
+            "override %s gives a latitude or a longitude but not both, so its position is ignored",
+            node_id,
+        )
+    elif not is_usable(latitude, longitude):
+        logger.warning(
+            "override %s position %s, %s is not a place a node can be, so it is ignored",
+            node_id,
+            latitude,
+            longitude,
+        )
+    else:
+        return
+    values.pop("latitude", None)
+    values.pop("longitude", None)
+
+
+# What a node ID looks like: `!` and eight hexadecimal digits, the form
+# the node page prints and every table keys a node by.
+NODE_ID = re.compile(r"![0-9a-f]{8}")
+
+
+def _node_id(raw: object) -> str | None:
+    """Return a node ID in the form the job looks it up by, or None.
+
+    Capitals are accepted and lowered, because a person types them. Any
+    other form is refused with a line that names it: an entry under a
+    name no node has would never be used, and nothing would say so.
+    """
+    text = str(raw).strip().lower()
+    if NODE_ID.fullmatch(text):
+        return text
+    logger.warning(
+        "override %r is not a node ID such as !9d0f9a75, so the entry is ignored."
+        " Quote the ID in the file: YAML reads a bare ! as a tag",
+        raw,
+    )
+    return None
 
 
 def parse_overrides(text: str) -> Overrides:
@@ -197,7 +264,11 @@ def parse_overrides(text: str) -> Overrides:
         logger.error("the `nodes` key must hold a mapping, ignored")
         return EMPTY
 
-    nodes = {str(node_id): _one_node(str(node_id), raw) for node_id, raw in raw_nodes.items()}
+    nodes: dict[str, NodeOverride] = {}
+    for raw_id, raw in raw_nodes.items():
+        node_id = _node_id(raw_id)
+        if node_id is not None:
+            nodes[node_id] = _one_node(node_id, raw)
     return Overrides(nodes=nodes)
 
 

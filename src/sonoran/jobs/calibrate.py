@@ -49,7 +49,7 @@ from sonoran.jobs.coverage import ensure_terrain, read_page, tiles_around
 from sonoran.landcover.classes import is_diffracting
 from sonoran.landcover.store import class_at, clutter_at
 from sonoran.logging import get_logger
-from sonoran.positions import is_precise_enough, is_usable
+from sonoran.positions import is_precise_enough, is_usable, precise_minimum_bits
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, noise_floor_dbm, preset_for_channel
 from sonoran.radio.resolve import RadioProfile, resolve_profile
@@ -116,6 +116,10 @@ async def read_peers(
     calibration window are silent, so a handful of fuzzed positions
     move the whole fit.
 
+    The floor is the precise one the map uses, and a
+    `COVERAGE_MIN_PRECISION_BITS` below 16 is raised to 16 here as well
+    (#315). A peer an operator placed in the overrides file passes.
+
     Roles are **not** filtered here. Calibration needs both ends of a
     link and most links have a client at one end. A client is poor
     evidence of where the mesh reaches and good evidence of what a
@@ -139,7 +143,8 @@ async def read_peers(
         if not coordinates_in_region(settings, latitude, longitude):
             continue
         if given is None and not is_precise_enough(
-            node.last_position_precision_bits, settings.coverage_min_precision_bits
+            node.last_position_precision_bits,
+            precise_minimum_bits(settings.coverage_min_precision_bits),
         ):
             continue
         profile = resolve_profile(identifier, node.hw_model, overrides, role=node.role)
