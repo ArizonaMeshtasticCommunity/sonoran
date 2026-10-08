@@ -6425,28 +6425,12 @@ function healthChecks(gaps, detail) {
     : 'No gap assessment has been written yet.';
 
   /*
-   * "Heard over the air", and the case that used to read Good.
+   * "Heard over the air" card.
    *
-   * `sole_observer` is `bad` at exactly one direct gateway and
-   * `unknown` at zero (gaps/signals.py). Downgrading only on `bad`
-   * therefore let the zero case through as green, and the severity came
-   * out backwards: a node nothing had heard read Good, while a node one
-   * gateway had heard read Needs help. Measured on the live mesh, 218
-   * of 774 assessed nodes were in that state, each shown a green card
-   * over the words "0 gateways heard it directly".
-   *
-   * `unknown` is not a shade of `ok` here. A node nothing heard may be
-   * three hops deep and perfectly well, or it may be off the air, and
-   * this check cannot tell those apart -- which is exactly what
-   * `unknown` is for. It must not be coloured as health.
+   * Green when a gateway other than itself hears it over the air, directly or through relays.
    */
   const isolated = signal('radio_isolated');
-  const sole = signal('sole_observer');
-  let heardState = signalState(isolated);
-  if (heardState === 'ok' && sole) {
-    if (sole.state === 'bad') heardState = 'warn';
-    else if (sole.state === 'unknown') heardState = 'unknown';
-  }
+  const heardState = signalState(isolated);
 
   const margin = signal('weak_best_link');
   const marginEvidence = margin ? margin.evidence || {} : {};
@@ -6518,7 +6502,7 @@ function healthChecks(gaps, detail) {
         `${count(row && row.direct_gateways)} gateways heard it directly. `
           + `${count(row && row.rf_packets)} of ${count(row && row.packets)} packets reached a gateway over the air.`,
         notAssessed),
-      green: 'Green when a gateway other than itself hears it over the air, and more than one gateway hears it directly. Grey when nothing heard it directly, which this check cannot tell apart from a node several hops deep.',
+      green: 'Green when a gateway other than itself hears it over the air, directly or through relays. Grey when nothing heard it directly, which this check cannot tell apart from a node several hops deep.',
       evidence: Boolean(row),
     }),
     ({

@@ -81,8 +81,7 @@ def test_each_signal_names_the_unit_of_its_own_number() -> None:
     )
     assert (rf.value, rf.unit) == (0.25, signals.FRACTION)
 
-    many = signals.sole_observer(NodeEvidence(node_num=1, packets=500, direct_gateways=8), settings)
-    assert (many.value, many.unit) == (8.0, signals.GATEWAYS)
+
 
     preset = preset_for_channel("MediumFast")
     assert preset is not None
@@ -141,7 +140,7 @@ def test_every_signal_has_a_key_entry_in_three_parts() -> None:
 
 def test_every_signal_that_carries_a_number_names_its_unit_in_the_heading() -> None:
     """`Gets out over the air only sometimes (% of hours heard)`."""
-    carries = {"rf_intermittent", "weak_best_link", "sole_observer", "outside_predicted_usable"}
+    carries = {"rf_intermittent", "weak_best_link", "outside_predicted_usable"}
     assert set(signals.SIGNAL_UNIT_LABELS) == carries
     assert signals.SIGNAL_UNIT_LABELS["rf_intermittent"].startswith("%")
 
