@@ -2172,6 +2172,40 @@ async function main() {
     return `${imperialLink} / ${metricLink}; "${imperialLine}"`;
   });
 
+  await journey(context, 'reachability is answered traceroutes, not hours awake (#293)', async (page) => {
+    /*
+     * Will: "I think uptime hours is an easy metric to achieve." The board
+     * now ranks the share of traceroutes sent to a node that it answered.
+     *
+     * Not patched: the seed sends 12 traceroutes from three nodes to one
+     * router on each preset, with some answers, and CI runs the gaps job
+     * before this. So the title, the percentage and the "N of M answered"
+     * line all come from the real job and the real route.
+     */
+    const reachable = () => {
+      const board = [...document.querySelectorAll('[data-page="stats"] .leaderboard')]
+        .find((panel) => /Most reliably answers traceroutes/.test(panel.querySelector('h3').textContent));
+      if (!board) return null;
+      const value = board.querySelector('.board .value');
+      const detail = board.querySelector('.board .detail');
+      return {
+        value: value ? value.textContent : null,
+        detail: detail ? detail.textContent : null,
+        measure: (board.querySelector('p.muted') || {}).textContent || '',
+      };
+    };
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    must(await waitFor(page, reachable, 30000), 'no board is titled "Most reliably answers traceroutes"');
+    const old = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+      .some((h) => /Most consistently reachable/.test(h.textContent)));
+    must(!old, 'the uptime board is still on the page');
+    const got = await page.evaluate(reachable);
+    must(/traceroutes/.test(got.measure), `the board does not say what it measures: ${got.measure}`);
+    must(got.value !== null && /^\d+(\.\d+)? %$/.test(got.value), `the first row is not a percentage: ${got.value}`);
+    must(/^\d+ of \d+ answered, \d+ senders?$/.test(got.detail || ''), `the detail line reads ${got.detail}`);
+    return `${got.value}, ${got.detail}`;
+  });
+
   await journey(context, 'the statistics range reaches every widget (#294)', async (page) => {
     /*
      * Will: "all the stats, widgets, etc should adjust to them. Default is
