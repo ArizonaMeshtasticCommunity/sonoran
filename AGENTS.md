@@ -199,7 +199,7 @@ attribution beside it. See `docs/PLANNER.md` section 6.
 ### Change the database schema
 
 1. Edit the models in `src/sonoran/db/models.py`.
-2. Create a migration: `alembic revision --autogenerate -m "description"`.
+2. Create a migration. To prevent revision ID collisions between branches, use the issue or PR number as the revision ID: `alembic revision --autogenerate -m "description" --rev-id "pr123"` (or use a short commit hash). Never use sequential numbers like `0018`.
 3. Review the generated migration by hand.
 4. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
 5. Update `docs/DATABASE.md`.
