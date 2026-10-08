@@ -10994,6 +10994,7 @@ async function route() {
     else link.removeAttribute('aria-current');
   }
   markNavHere(known);
+  SonoranTabBar.mark(known);
   await navigateRender(known);
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
@@ -11548,9 +11549,21 @@ function wireNav() {
   const menu = $('#site-menu') || nav;
   if (!toggle || !nav) return;
   const narrow = matchMedia('(max-width: 60rem)');
+  /*
+   * The phone's bottom bar (#282). Its More button is a second way into
+   * this same menu, so the two buttons share one state: both say
+   * whether the menu is open, and Escape goes back to the one that was
+   * used. See tab-bar.js for when the bar is drawn and why the top
+   * button stays.
+   */
+  const tabBar = SonoranTabBar.build();
+  const more = tabBar && $('[data-tab-more]', tabBar);
+  const phone = matchMedia(SonoranTabBar.QUERY);
+  let opener = toggle;
 
   const setOpen = (open) => {
     toggle.setAttribute('aria-expanded', String(open));
+    if (more) more.setAttribute('aria-expanded', String(open));
     menu.hidden = !open;
     $('use', toggle).setAttribute('href', open ? '#i-menu-close' : '#i-menu');
     // The phone bar is sticky (#271). Open, the menu is taller than a
@@ -11564,6 +11577,7 @@ function wireNav() {
     // Wide: no button, and the nav is always there. Narrow: the button
     // appears and the nav starts closed.
     toggle.hidden = !narrow.matches;
+    if (tabBar) tabBar.hidden = !phone.matches;
     setOpen(!narrow.matches);
   };
 
@@ -11587,8 +11601,30 @@ function wireNav() {
   if (sidebar && 'ResizeObserver' in window) new ResizeObserver(barHeight).observe(sidebar);
 
   toggle.addEventListener('click', () => {
+    opener = toggle;
     setOpen(toggle.getAttribute('aria-expanded') !== 'true');
   });
+  /*
+   * More opens the menu at the top of the screen, under the bar (#271),
+   * away from the button that opened it. So the focus goes into the
+   * list, to the first page, as a menu button's focus does: a keyboard
+   * or a screen reader would otherwise be left on a button at the foot
+   * of the screen with the list it opened far above it. `preventScroll`,
+   * because the menu is sticky and already in view.
+   */
+  if (more) {
+    more.addEventListener('click', () => {
+      opener = more;
+      const open = more.getAttribute('aria-expanded') !== 'true';
+      setOpen(open);
+      const first = open && $('a', nav);
+      if (first) first.focus({ preventScroll: true });
+    });
+    // A tab is a page chosen, so it closes the menu, as a link in it does.
+    tabBar.addEventListener('click', (event) => {
+      if (narrow.matches && event.target.closest('a')) setOpen(false);
+    });
+  }
   /*
    * Choosing a page is the end of the menu's job.
    *
@@ -11637,9 +11673,18 @@ function wireNav() {
     if (event.key !== 'Escape' || !narrow.matches) return;
     if (toggle.getAttribute('aria-expanded') !== 'true') return;
     setOpen(false);
-    toggle.focus();
+    opener.focus();
   });
+  // Escape on the More button itself, which is outside the sidebar.
+  if (more) {
+    tabBar.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || more.getAttribute('aria-expanded') !== 'true') return;
+      setOpen(false);
+      more.focus();
+    });
+  }
   narrow.addEventListener('change', apply);
+  phone.addEventListener('change', apply);
   apply();
 }
 
