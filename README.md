@@ -44,7 +44,7 @@ The stack runs as six containers:
 | `timescaledb` | TimescaleDB (PostgreSQL) storage | internal |
 | `migrate` | Runs the Alembic migrations once, then exits | — |
 | `ingest` | Reads MQTT, decodes, and writes packets | — |
-| `api` | The JSON API and the static web UI | **8000** |
+| `web` | The JSON API and the static web UI | **8000** |
 | `jobs` | Scheduled work, such as daily snapshots | — |
 | `mesh-graph` | The official mesh-graph traceroute engine | **8080** |
 
@@ -58,15 +58,17 @@ You need Docker and Docker Compose.
 
 ```bash
 cp .env.example .env        # then replace every CHANGE_ME in it
-docker compose up -d --build
+docker compose --profile graph up -d --build
 ```
 
 Pick real passwords. The four database passwords are set once, when the
 database is first created, and changing `.env` later does not change them.
 [Configuration](#️-configuration) below says what each setting is.
 
-Then open the dashboard at **<http://localhost:8000>**. The mesh-graph engine is
-at **<http://localhost:8080>**.
+> [!IMPORTANT]
+> **Proxmox / VM Users:** Modern NumPy requires `x86-64-v2` CPU instructions. If deploying on a VM, set your VM's CPU type to a model that includes the required instruction sets (such as SSE4.1 and SSE4.2), or pass through the native `host` CPU if suitable for your environment. Leaving it on a default like `kvm64` will cause the `web`, `ingest`, and `jobs` containers to crash.
+
+Then open the dashboard at **<http://localhost:8000>**. If you included the `graph` profile, the mesh-graph engine is at **<http://localhost:8080>**.
 
 ## ⚙️ Configuration
 
