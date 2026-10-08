@@ -17,8 +17,8 @@ deployment host for access.
 - `docker-compose.yml` names the services. `docker-compose.override.yml`
   on the host adds what is local to it (for example `rf-ingest`).
   `mesh-graph` and `timescaledb` are upstream images.
-- The static files are inside the `api` image, and they are hashed when
-  the API starts. A frontend change needs an `api` rebuild.
+- The static files are inside the `web` image, and they are hashed when
+  the API starts. A frontend change needs a `web` rebuild.
 
 ## 2. Before you start
 
@@ -30,7 +30,7 @@ deployment host for access.
 3. Tag each image that you will rebuild, so that a rollback is one step:
 
    ```bash
-   docker tag sonoran-web:latest sonoran-api:rollback-<old-sha>
+   docker tag sonoran-web:latest sonoran-web:rollback-<old-sha>
    ```
 
 4. Take a snapshot of what the live API answers:
@@ -71,7 +71,7 @@ Which services to rebuild:
 
 | Changed | Rebuild |
 |---|---|
-| `src/sonoran/api/`, `src/sonoran/web/static/` | `api` |
+| `src/sonoran/api/`, `src/sonoran/web/static/` | `web` |
 | `src/sonoran/ingest/` | `ingest` |
 | `src/sonoran/jobs/`, `src/sonoran/coverage/`, `src/sonoran/gaps/` | `jobs` |
 | `src/sonoran/rf/` ingest code | `rf-ingest` |
@@ -107,7 +107,7 @@ Do not stop at the diff. Check what runs:
 ## 5. Roll back
 
 ```bash
-docker tag sonoran-web:rollback-<old-sha> sonoran-api:latest
+docker tag sonoran-web:rollback-<old-sha> sonoran-web:latest
 git checkout --detach <old-sha>
 docker compose up -d --no-deps web
 ```
@@ -129,16 +129,16 @@ migration's `downgrade` before you roll back past one.
 
 ## 7. Stop a server by its port
 
-Never use `pkill -f sonoran-web` or a pattern like it. It stops every
+Never use `pkill -f sonoran-api` (the process inside the `web` container) or a pattern like it. It stops every
 server that matches, the ones of other people included, and it can
 also match the shell that runs it. Stop one server by its process ID,
 found from its port.
 
-## 8. Upgrade Notes
+## 9. Upgrade Notes
 
 If you are upgrading an existing deployment:
 
-1. **Service Rename:** The `api` service is now called `web`. You must update any `docker-compose.override.yml` files, deployment scripts, or reverse proxies that reference `api` or `sonoran-web-1`.
+1. **Service Rename:** The `api` service is now called `web`. You must update any `docker-compose.override.yml` files, deployment scripts, health alerters (which watch container names), or reverse proxies that reference `api` or `sonoran-api-1`. The first rollback across this rename must start the old `api` service and remove `web` (`docker compose rm -sf web`).
 2. **Mesh-Graph Config:** The `mesh-graph` configuration file moved from the repository root to `config/mesh-graph.config.toml`. Move any local copies to the new path.
 3. **Disabling Mesh-Graph:** The `mesh-graph` service is enabled by default. If you use a custom build or an external instance (e.g. on Coolify), you can disable the included service by adding the following to your `docker-compose.override.yml`:
    ```yaml
