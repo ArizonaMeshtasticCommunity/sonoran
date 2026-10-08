@@ -309,7 +309,7 @@
        * shortcut that duplicates a real control is an enhancement,
        * not the only way in.
        */
-      tr.title = 'Open what this site would do';
+      tr.title = 'View site details';
       const toggle = () => {
         const open = tr.classList.contains('open');
         if (open) {
