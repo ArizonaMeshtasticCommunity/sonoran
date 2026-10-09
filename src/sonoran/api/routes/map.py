@@ -562,7 +562,7 @@ async def heatmap_tile(
     from pathlib import Path as FilePath
     settings = request.app.state.settings
     
-    if model not in ("raw", "multiplier", "weighted"):
+    if model not in ("position",):
         raise HTTPException(status_code=404, detail="Unknown heatmap model")
         
     layer_name = f"empirical_heatmap_{model}"
