@@ -31,7 +31,7 @@
    * because that is what sells telephones. Showing only the downlink
    * here would promise reach that a handheld cannot return.
    */
-  const DEFAULT_LAYER = 'usable';
+  const DEFAULT_LAYER = 'uplink';
 
   // How see-through the signal layer is drawn, 0 to 1. This is the
   // viewer's own choice, not the deployment's: it restyles the tiles
@@ -367,20 +367,17 @@
      */
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
-    const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
-    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap_position', label: 'Heatmap: Position Packets' }];
+    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap_position', label: 'Actual Coverage (based on heard positions)' }];
     replace(
       host,
       layers.map((layer) =>
         el('option', { value: layer.key, text: layer.label })),
     );
     host.value = state.layer;
-    host.title = usableTitle();
     if (!host.dataset.wired) {
       host.dataset.wired = 'true';
       host.addEventListener('change', () => {
         state.layer = host.value;
-        host.title = usableTitle();
         drawTiles();
         drawLegend(page);
         drawStats(page);
@@ -527,7 +524,7 @@
       return;
     }
     
-    if (state.layer.startsWith('empirical_heatmap')) {
+    if (state.layer === 'empirical_heatmap_position') {
       replace(
         host,
         statTile('30', 'Days included', 'Rolling window')
@@ -537,8 +534,7 @@
         host,
         statTile(number(preset.site_count), 'Sites predicted from',
           preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
-        statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area', 'Both directions'),
-        statTile(SonoranUnits.areaFromKm2(preset.downlink_area_km2) || '-', 'Heard area', 'One direction only'),
+        statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Simulated area', 'Total coverage'),
         statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
       );
     }
