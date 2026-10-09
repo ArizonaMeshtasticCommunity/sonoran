@@ -230,10 +230,9 @@
      * encodes the braces, and Leaflet then asks for a tile literally
      * named `%7Bz%7D`. Resolve the part before them, then append.
      */
-    const isHeatmap = state.layer.startsWith('empirical_heatmap');
-    const heatmapModel = isHeatmap ? state.layer.replace('empirical_heatmap_', '') : null;
+    const isHeatmap = state.layer === 'empirical_heatmap_position';
     const base = isHeatmap 
-      ? api(`api/map/heatmap/${heatmapModel}/`)
+      ? api(`api/map/heatmap/position/`)
       : api(`api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`);
 
     const bounds = isHeatmap
@@ -490,7 +489,7 @@
     }
     legend.hidden = false;
     
-    if (state.layer.startsWith('empirical_heatmap')) {
+    if (state.layer === 'empirical_heatmap_position') {
       $('[data-coverage-legend-title]', legend).textContent = 'Relative Local Performance';
       $('[data-coverage-floor]', legend).textContent = '0%';
       $('[data-coverage-ceiling]', legend).textContent = '100%';
@@ -635,7 +634,7 @@
     
     sub.textContent = shownIsDiagnostic()
       ? `Diagnostic view: predicted from ${shownRoles().join(', ') || 'every role'}.`
-      : 'Where the mesh reaches, predicted from the routers and repeaters that carry it.';
+      : 'Simulated coverage of where a handheld node and a router can theoretically exchange data.';
   }
 
   function diagnosticNotice() {
@@ -666,7 +665,7 @@
       replace(host, el('p', { text: 'No coverage run has been made yet.' }));
       return;
     }
-    if (state.layer.startsWith('empirical_heatmap')) {
+    if (state.layer === 'empirical_heatmap_position') {
       if (panel) panel.hidden = true;
       return;
     }
@@ -852,7 +851,7 @@
     const host = $('[data-coverage-coarse]', page);
     if (!panel || !host) return;
     
-    if (state.layer.startsWith('empirical_heatmap')) {
+    if (state.layer === 'empirical_heatmap_position') {
       panel.hidden = true;
       return;
     }
@@ -908,7 +907,7 @@
     const host = $('[data-coverage-sites]', page);
     if (!host) return;
     
-    if (state.layer.startsWith('empirical_heatmap')) {
+    if (state.layer === 'empirical_heatmap_position') {
       replace(host, el('p', { class: 'muted', text: 'This layer shows historical activity from all gateways, not a specific site set.' }));
       return;
     }
