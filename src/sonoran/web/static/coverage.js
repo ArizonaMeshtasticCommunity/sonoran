@@ -367,6 +367,7 @@
      */
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
+    const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
     const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap_position', label: 'Heatmap: Position Packets' }];
     replace(
       host,
