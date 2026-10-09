@@ -45,6 +45,7 @@ use.
 | `positions.py` | Whether a position is precise enough to predict from |
 | `radio/resolve.py` | The effective power, antenna, and height of a node |
 | `coverage/clutter.py` | What the last few metres at each end cost |
+| `climate/koppen.py` | Which ITM radio climate a site predicts on (#239) |
 | `coverage/grid.py` | How a raster maps to the ground |
 | `embed/sanitise.py` | What a public viewer may see |
 
@@ -793,6 +794,14 @@ rather than widened.
 8. The manifest counts every node left out, by role and by the
    coarseness of its position, and the page shows both. A map that
    drops nine nodes in ten must say so.
+9. Each site predicts on the radio climate of its own ground, from the
+   Köppen-Geiger crop in `sonoran/climate/` (#239). The calibration
+   uses the same climate for the same node, so the fit measures the
+   model the map draws. One run has one climate, so a path from a
+   Flagstaff site down into the desert is predicted on continental
+   temperate for its whole length. A site outside the crop predicts on
+   `desert`, which is what every site did before. See
+   `docs/PLANNER.md` 4.3.
 
 ## 12. Coverage gaps
 

@@ -416,6 +416,28 @@ The region is a bounding box in configuration. A tile outside it is
 never fetched and never served, so the endpoint cannot be used as a
 general proxy for the tile source.
 
+### 3.8.1 `climate`
+
+- Job: say which ITM radio climate a place is in (#239).
+- This module must never touch the database.
+- `store.py` reads `koppen_1991_2020.u8.gz`, a 960 x 960 byte crop of
+  the Beck et al. (2023) Köppen-Geiger map. It ships inside the package,
+  so it needs no download, no cache and no setting. Row 0 is north and
+  column 0 is west, which is **not** the order of a terrain page.
+- `koppen.py` holds the Köppen to ITM table, one row for each of the 30
+  classes, with a reason for each. It is the only copy: the planner
+  reads it from `/api/climate/classes`.
+- `climate_at` answers a place. Outside the crop, or where the map has
+  no class, it answers `desert` and marks the answer as not known. It
+  never guesses a class.
+- `PROVENANCE.md` beside the data holds the licence (CC BY 4.0), the
+  attribution and the changes made. `tools/make_climate_crop.py` makes
+  the file again from the published source.
+
+Readers: the planner page (through `api/routes/climate.py`), the
+coverage job (`coverage/sites.py::engine_params`) and the calibration
+(`jobs/calibrate.py::_params`). See `docs/PLANNER.md` 4.3.
+
 ### 3.9 `jobs`
 
 - Job: run scheduled maintenance.

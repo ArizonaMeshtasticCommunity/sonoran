@@ -1150,6 +1150,13 @@
                 <label>Longitude <input data-planner="lon" inputmode="decimal" placeholder="click the map" /></label>
               </div>
               <!--
+                The radio climate the next run will use, and where it came
+                from (#239). In both modes, because Simple predicts on it
+                too and has no climate box to read it from. "Not known
+                here, using desert" is said here rather than guessed.
+              -->
+              <p class="muted planner-climate-note" data-planner-climate-note hidden></p>
+              <!--
                 Pick the board instead of typing its transmit power
                 (#110, #113). 54 of the 117 boards the flasher offers
                 have a hand-written RF profile; the rest get a family
@@ -1258,12 +1265,10 @@
 
               <!--
                 Ground and air is Advanced in full (§6.5). Simple predicts
-                on `desert`, vertical, no clutter and 30 km, which is what
-                Arizona and a Meshtastic node are; #239 carries the
-                question of reading the climate from the coordinate, and
-                until it is answered a beginner in Flagstaff is better
-                served by a default that is openly a default than by a
-                lookup that is confidently wrong.
+                on the climate read from the site (#239), vertical, no
+                clutter and 30 km. The climate menu opens on "From the
+                site", which names what it found; choosing another
+                climate there is kept, and goes into a share link.
 
                 The heading carries the marker too. A heading over nothing
                 reads as a section that failed to load.
