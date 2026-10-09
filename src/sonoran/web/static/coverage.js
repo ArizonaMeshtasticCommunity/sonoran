@@ -367,8 +367,7 @@
      */
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
-    const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
-    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap_raw', label: 'Heatmap: Raw Gateways' }, { key: 'empirical_heatmap_multiplier', label: 'Heatmap: Hop Multiplier' }, { key: 'empirical_heatmap_weighted', label: 'Heatmap: Hop Weighted' }];
+    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap_position', label: 'Heatmap: Position Packets' }];
     replace(
       host,
       layers.map((layer) =>
@@ -383,6 +382,11 @@
         host.title = usableTitle();
         drawTiles();
         drawLegend(page);
+        drawStats(page);
+        drawDiagnosticBanner(page);
+        drawAssumes(page);
+        drawCoarse(page);
+        drawSites(page);
       });
     }
   }
@@ -627,8 +631,8 @@
     const summary = state.summary;
     if (!sub || !summary || !summary.available) return;
     
-    if (state.layer.startsWith('empirical_heatmap')) {
-      sub.textContent = 'Actual radio activity over the last 30 days, colored by maximum gateway distance.';
+    if (state.layer === 'empirical_heatmap_position') {
+      sub.textContent = 'Actual radio activity over the last 30 days. Opacity shows volume of position packets; color shows average number of hops to reach the mesh (blue = direct/strong, red = many hops/weak).';
       return;
     }
     

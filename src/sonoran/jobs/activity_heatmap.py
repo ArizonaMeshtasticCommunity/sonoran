@@ -71,8 +71,8 @@ def write_png(image: npt.NDArray[np.uint8]) -> bytes:
            struct.pack("!I", len(idat) - 4) + idat + idat_crc + \
            b"\x00\x00\x00\x00" + iend + iend_crc
 
-async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int, float, float, float]]:
-    """Fetch position metrics and calculate the three relative scores for each packet."""
+async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int, float]]:
+    """Fetch position metrics and calculate the position score for each packet."""
     since = datetime.now(UTC) - timedelta(days=30)
     
     query = (
@@ -116,23 +116,18 @@ async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int,
         if not gateways:
             continue
             
-        raw_count = float(len(gateways))
-        
-        multiplier = 5.0 / max(1, hop_start)
-        multiplier_score = float(raw_count * multiplier)
-        
-        weighted_score = 0.0
+        score = 0.0
         for hops in gateways.values():
             if hops <= 0:
-                weighted_score += 10.0
+                score += 10.0
             elif hops <= 2:
-                weighted_score += 5.0
+                score += 5.0
             elif hops <= 4:
-                weighted_score += 2.0
+                score += 2.0
             else:
-                weighted_score += 1.0
+                score += 1.0
                 
-        final_data.append((lat, lon, prec, raw_count, multiplier_score, weighted_score))
+        final_data.append((lat, lon, prec, float(score)))
         
     return final_data
 
@@ -197,7 +192,7 @@ def local_max_pool(grid: npt.NDArray[np.float32], radius_cells: int = 177) -> np
 
 def _build_grids(
     settings: Settings, 
-    data: list[tuple[float, float, int, float, float, float]]
+    data: list[tuple[float, float, int, float]]
 ) -> tuple[Grid, dict[str, npt.NDArray[np.float32]], npt.NDArray[np.float32]]:
     """Build the region grids and return normalized grids for each model."""
     grid = region_grid(
@@ -207,11 +202,11 @@ def _build_grids(
         settings.terrain_lon_max
     )
     
-    models = ["raw", "multiplier", "weighted"]
+    models = ["position"]
     score_grids = {m: np.zeros((grid.height, grid.width), dtype=np.float32) for m in models}
     count_grid = np.zeros((grid.height, grid.width), dtype=np.float32)
     
-    for lat, lon, prec, raw_s, mul_s, w_s in data:
+    for lat, lon, prec, score in data:
         row = grid.row_of(lat)
         col = grid.column_of(lon)
         
@@ -225,7 +220,7 @@ def _build_grids(
         c_start = max(0, col - radius_cells)
         c_end = min(grid.width, col + radius_cells + 1)
         
-        for g_name, score in zip(models, [raw_s, mul_s, w_s]):
+        for g_name in models:
             block = score_grids[g_name][r_start:r_end, c_start:c_end]
             np.maximum(block, score, out=block)
             
@@ -339,7 +334,7 @@ async def run_once(session: Any, settings: Settings) -> None:
                 written += 1
             
     took = (datetime.now(UTC) - start).total_seconds()
-    logger.info("activity heatmap: wrote %s tiles across 3 models in %.1fs", written, took)
+    logger.info("activity heatmap: wrote %s tiles for position model in %.1fs", written, took)
 
 def run() -> None:
     """Console script entry point for running once manually."""
