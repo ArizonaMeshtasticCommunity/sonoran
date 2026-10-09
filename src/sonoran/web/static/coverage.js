@@ -632,7 +632,7 @@
     if (!sub || !summary || !summary.available) return;
     
     if (state.layer === 'empirical_heatmap_position') {
-      sub.textContent = 'Actual radio activity over the last 30 days. Opacity shows volume of position packets; color shows average number of hops to reach the mesh (blue = direct/strong, red = many hops/weak).';
+      sub.textContent = 'Actual radio activity over the last 30 days. Opacity shows volume of position packets; color shows relative mesh penetration (gateways reached), weighted heavily toward direct and short-hop paths.';
       return;
     }
     
