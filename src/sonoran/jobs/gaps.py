@@ -257,8 +257,8 @@ async def run_once(session: AsyncSession, settings: Settings) -> list[str]:
     channels = await signals.read_preset_channels(session, since, until)
     if not channels:
         logger.info("no channel named a modem preset, so there is no gap assessment to make")
-        store.write_index(
-            settings,
+        await store.write_index(
+            session,
             {
                 "generated_at": datetime.now(UTC).isoformat(),
                 "window_hours": settings.gaps_window_hours,
@@ -279,7 +279,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> list[str]:
             logger.info("gaps, preset %s: no modelled sensitivity yet, not assessed", preset.name)
             continue
         document = await assess_preset(session, settings, preset, names)
-        if store.write_preset(settings, preset.name, document) is None:
+        if not await store.write_preset(session, preset.name, document):
             continue
         written.append(preset.name)
         index.append(
@@ -301,8 +301,8 @@ async def run_once(session: AsyncSession, settings: Settings) -> list[str]:
 
     # The index is written last, so a reader that follows it never finds
     # a preset name with no file behind it.
-    store.write_index(
-        settings,
+    await store.write_index(
+        session,
         {
             "generated_at": datetime.now(UTC).isoformat(),
             "window_hours": settings.gaps_window_hours,
@@ -365,6 +365,19 @@ def answer_rows(
     return rows
 
 
+async def _held_board(session: AsyncSession, preset: str, asked: int) -> dict[str, object] | None:
+    """Return what `boards.is_due` reads of a stored board window, or None.
+
+    The summary, and the traceroute counts only as a marker that they
+    were counted: `is_due` needs to know they exist, not to read them.
+    """
+    summary = await store.read_board_summary(session, preset, asked)
+    if summary is None:
+        return None
+    answers = await store.trace_answers(session, preset, asked)
+    return summary if answers is None else summary | {boards.TRACE_ANSWERS: answers}
+
+
 async def write_board_windows(
     session: AsyncSession, settings: Settings, channels: dict[str, list[str]]
 ) -> list[tuple[str, int]]:
@@ -385,7 +398,7 @@ async def write_board_windows(
         due = [
             preset
             for preset in sorted(channels)
-            if boards.is_due(store.read_boards(settings, preset, asked), hours, now)
+            if boards.is_due(await _held_board(session, preset, asked), hours, now)
         ]
         if not due:
             continue
@@ -409,7 +422,7 @@ async def write_board_windows(
                 "nodes": board_rows(evidence, nodes),
                 boards.TRACE_ANSWERS: answer_rows(answers, nodes),
             }
-            if store.write_boards(settings, preset, asked, document) is not None:
+            if await store.write_boards(session, preset, asked, document):
                 written.append((preset, asked))
                 # The time is logged because it is the cost #294 added to
                 # this job, and it can only be measured on live data.

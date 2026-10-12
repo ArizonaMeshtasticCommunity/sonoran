@@ -383,9 +383,9 @@ it, because dropping it would give back the unbounded estimate that
 `AGENTS.md` 9.21 exists about.
 
 Three places refuse to apply a pinned offset, and each one is cheap:
-the fit writes zero, `store.calibration_offsets` skips any node the file
+the fit writes zero, `store.offsets_of` skips any node the stored fit
 marks `locked`, and `radio/resolve.py` ignores the offset of a locked
-node whatever it holds. The middle one matters for a file written before
+node whatever it holds. The middle one matters for a fit stored before
 a lock was added.
 
 A model bias is one error over the whole mesh. A value past 20 dB says
@@ -400,7 +400,8 @@ its own guesses.
 
 The job runs on a timer in the jobs process. When calibration is due,
 it finishes before coverage starts. The coverage run then reads the
-new calibration file.
+new calibration from `coverage_calibration` and
+`coverage_calibration_node` (`docs/DATABASE.md` 5B, #351).
 
 To run one by hand, now, instead of waiting for the timer:
 

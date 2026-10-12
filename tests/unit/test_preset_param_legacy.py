@@ -29,6 +29,12 @@ from sqlalchemy.dialects import postgresql
 from sonoran.api.app import create_app
 from sonoran.api.dependencies import get_session
 from sonoran.config import Settings
+from tests.unit.job_outputs import JobOutputs
+
+
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    """The gaps reads come from memory (#351), so only this page's SQL is recorded."""
 
 
 class _Result:

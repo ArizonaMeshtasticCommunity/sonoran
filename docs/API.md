@@ -716,11 +716,12 @@ Long fast cannot hear a node on Medium fast, so a merged answer would
 invite a reader to fix a gap between two radios that have no way to
 reach each other. See `AGENTS.md` 9.7.
 
-**These endpoints read one written file and compute nothing.**
-`jobs/gaps.py` writes `{COVERAGE_CACHE_DIR}/gaps/{preset}.json` every
-`GAPS_INTERVAL_MINUTES`, and the routes read it and filter it. A request
-that ran the gap queries would be heavier than the endpoint
-`docs/ISSUES.md` 2.9 is already an open warning about.
+**These endpoints read the stored rows and compute nothing.**
+`jobs/gaps.py` writes the job output tables (`docs/DATABASE.md` 5B)
+every `GAPS_INTERVAL_MINUTES`, and the routes select from them by key,
+with the filters and the limit in SQL (#351). A request that ran the
+gap queries would be heavier than the endpoint `docs/ISSUES.md` 2.9 is
+already an open warning about.
 
 **Nothing here reaches the public embed, and nothing here ever will.** A
 list of weak nodes with positions is a list of houses with a reason to
@@ -832,12 +833,22 @@ know. It is not a score.
 | `signal` | One signal name. An unknown name returns `available: false` with `reason: "not_a_signal"`. |
 | `state` | `bad`, `ok` or `unknown`. With no `signal`, a row matches when any signal holds that state. |
 | `limit` | 1 to 500, default 100. |
+| `cursor` | The `next_cursor` of the page before, with the same filters (#351). |
+
+**Paging is by cursor.** An answer with more rows after it carries
+`next_cursor`, an opaque string, and the last page carries `null`. A
+cursor names the run it came from. Once the job has written a new run,
+which it does every `GAPS_INTERVAL_MINUTES`, the cursor is refused with
+409 and the reader starts again from the first page: a page that mixed
+two runs could list a node twice or not at all. A cursor that is not
+one is refused with 422.
 
 ```json
 {
   "available": true,
   "preset": "LongFast",
   "matched_count": 63,
+  "next_cursor": "eyJydW4iOiIyMDI2LTEwLTEyVDEyOjAwOjAwKzAwOjAwIiwiYWZ0ZXIiOjk5fQ",
   "nodes": [
     {
       "node_id": "!a1b2c3d4",
@@ -899,8 +910,8 @@ second is the node's own voice. See `AGENTS.md` 9.5 and 9.5.1.
 ### The siting half
 
 Two more endpoints answer the other question: **where would one new node
-help the most of them**. They read a second written file,
-`{COVERAGE_CACHE_DIR}/gaps/siting-{preset}.json`, which
+help the most of them**. They read the stored siting answer
+(`gaps_siting` and `gaps_siting_candidate`), which
 `jobs/gaps_siting.py` writes **inside the coverage cycle** and never on
 a clock of its own. That job runs the SPLAT engine, so it must not be
 free to start during a coverage build. See `docs/GAPS.md` 10.
@@ -943,7 +954,9 @@ that is a node, not an area, and `/api/gaps/nodes` already holds it.
 ```
 
 `GET /api/gaps/candidates` returns the places, best first inside each
-area:
+area. It pages by `cursor` and `next_cursor` exactly as
+`/api/gaps/nodes` does, and a cursor names the siting answer it came
+from.
 
 ```json
 {
@@ -951,6 +964,7 @@ area:
   "preset": "LongFast",
   "area": 0,
   "matched_count": 34,
+  "next_cursor": null,
   "candidates": [
     {"kind": "ground", "area": 0, "latitude": 33.5758, "longitude": -112.5792,
      "elevation_m": 1230, "prominence_m": 127, "node_id": null,

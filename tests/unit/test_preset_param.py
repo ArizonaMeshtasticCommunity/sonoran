@@ -16,7 +16,14 @@ from sonoran.api.preset_scope import require_preset
 from sonoran.api.routes.chat import PRESET_NAMES
 from sonoran.config import Settings
 from sonoran.radio.presets import PRESETS
+from tests.unit.job_outputs import JobOutputs
 from tests.unit.test_preset_param_legacy import RecordingSession, recorded_sql
+
+
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    """The gaps reads come from memory (#351), so only this page's SQL is recorded."""
+
 
 LIST_PAGES = [
     "/api/chat?preset=LongFast",

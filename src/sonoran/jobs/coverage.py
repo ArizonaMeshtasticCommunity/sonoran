@@ -1313,7 +1313,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     # What the mesh measured, where there is enough of it. A node
     # with thin evidence is absent rather than zero, so it keeps its
     # nameplate figures.
-    offsets = store.calibration_offsets(settings)
+    offsets = await store.calibration_offsets(session)
     if offsets:
         logger.info("%s nodes carry a measured correction", len(offsets))
     plans = _plans(settings, nodes, overrides, offsets)
