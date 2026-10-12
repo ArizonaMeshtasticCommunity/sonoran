@@ -777,3 +777,35 @@ def test_the_buttons_are_chosen_by_a_fixed_rule_not_by_traffic() -> None:
     assert "defaultPreset" in body
     assert "SonoranPreset.FALLBACK" in body
     assert "PRESET_SWITCH_SLOTS" in body
+
+
+# --- "All presets" (Logan, 2026-10-12) ------------------------------
+
+
+def test_all_presets_is_a_choice_and_means_no_filter() -> None:
+    """Every preset in one view, while the mesh does not run on one yet."""
+    store = _code("preset.js")
+    for name in ("const ALL", "function isAll", "function single"):
+        assert name in store, f"preset.js has no {name}"
+    code = _code("app.js")
+    body = code[code.index("function menuPreset") :]
+    body = body[: body.index("\nfunction ")]
+    assert "SonoranPreset.isAll()" in body and "return ''" in body, (
+        "under All the pages would still send one preset"
+    )
+    switch = code[code.index("function wirePresetSwitch") :]
+    switch = switch[: switch.index("\nfunction ")]
+    assert "SonoranPreset.ALL" in switch and "All presets" in switch, "All is not offered"
+
+
+def test_one_preset_pages_draw_the_default_under_all_and_say_so() -> None:
+    """Coverage, gaps and the planner are each for one radio setting."""
+    code = _code("app.js")
+    assert "ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps'])" in code
+    scope = code[code.index("function drawPresetScope") :]
+    scope = scope[: scope.index("\nfunction ")]
+    assert "SonoranPreset.single()" in scope, "the note does not name the preset drawn"
+    labels = _code("labels.js")
+    assert "store.single" in labels, "preferredPreset would hand '*' to coverage"
+    assert "SonoranPreset.single()" in _code("gaps.js")
+    assert "SonoranPreset.single" in _code("planner.js")

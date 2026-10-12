@@ -35,6 +35,17 @@ window.SonoranPreset = (function build() {
    */
   const FALLBACK = ['MediumFast', 'LongFast'];
 
+  /*
+   * Every preset at once (Logan, 2026-10-12: "we are not unified quite
+   * yet", so the whole state has to be visible in one view).
+   *
+   * Not a preset name: `menuPreset()` in app.js turns it into no filter
+   * at all, and a page that can only draw one preset (coverage, gaps,
+   * the planner, the leaderboards) asks `single()` instead and says so
+   * under the switch. '*' cannot be a channel name the server sends.
+   */
+  const ALL = '*';
+
   let available = [...FALLBACK];
   let chosen = null;
   const listeners = new Set();
@@ -83,12 +94,31 @@ window.SonoranPreset = (function build() {
    * no way to tell why every page was empty.
    */
   function current() {
-    if (chosen && available.includes(chosen)) return chosen;
+    if (chosen && (chosen === ALL || available.includes(chosen))) return chosen;
     const saved = stored();
-    if (saved && available.includes(saved)) {
+    if (saved && (saved === ALL || available.includes(saved))) {
       chosen = saved;
       return chosen;
     }
+    const preferred = fallbackPreset();
+    return available.includes(preferred) ? preferred : available[0];
+  }
+
+  /** True when the reader asked for every preset at once. */
+  function isAll() {
+    return current() === ALL;
+  }
+
+  /**
+   * One real preset, for a page that cannot draw them all together.
+   *
+   * The choice in force, or with "All" the deployment's default, so a
+   * coverage map or a gaps list never mixes radios that cannot hear
+   * each other (AGENTS.md 9.7).
+   */
+  function single() {
+    const name = current();
+    if (name !== ALL) return name;
     const preferred = fallbackPreset();
     return available.includes(preferred) ? preferred : available[0];
   }
@@ -135,7 +165,7 @@ window.SonoranPreset = (function build() {
 
   /** Choose a preset. Returns true when it actually changed. */
   function set(name) {
-    if (typeof name !== 'string' || !available.includes(name)) return false;
+    if (typeof name !== 'string' || (name !== ALL && !available.includes(name))) return false;
     if (name === current()) return false;
     chosen = name;
     remember(name);
@@ -206,8 +236,11 @@ window.SonoranPreset = (function build() {
    * misses reads as "hide everything".
    */
   function matches(name) {
-    return String(name ?? '') === current();
+    return isAll() || String(name ?? '') === current();
   }
 
-  return { current, options, setAvailable, set, onChange, onOptionsChange, matches, FALLBACK };
+  return {
+    current, options, setAvailable, set, onChange, onOptionsChange, matches, isAll, single,
+    ALL, FALLBACK,
+  };
 }());

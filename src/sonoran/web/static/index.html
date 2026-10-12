@@ -351,7 +351,10 @@
             then MediumFast and LongFast (`presetSwitchSlots` in app.js):
             a two-option select costs a tap to open before the tap that
             chooses. Every other preset goes in the
-            "More presets" select under it. Firmware 2.8.1 made every
+            "More presets" select under it, with "All presets" first:
+            every preset in one view, because the mesh does not run on
+            one preset yet. Pages that draw one preset (coverage, gaps,
+            the planner) keep the default then and say so below. Firmware 2.8.1 made every
             preset recognisable (#363), and a third one squeezed into the
             switch overflowed its slot and cut the last name off. The
             buttons and the select are built by app.js from the presets

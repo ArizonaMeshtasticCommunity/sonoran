@@ -271,5 +271,7 @@ def test_an_inbound_link_moves_the_whole_site_not_just_this_page() -> None:
         "an inbound link no longer moves the global preset, so the menu and "
         "this page would disagree"
     )
-    # And the page still follows the menu when no link names one.
-    assert "SonoranPreset.current()" in code, "the page does not follow the menu"
+    # And the page still follows the menu when no link names one. Through
+    # `single()`: under "All presets" gaps shows the default preset,
+    # because a gaps assessment is for one preset.
+    assert "SonoranPreset.single()" in code, "the page does not follow the menu"
