@@ -6,7 +6,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import ColumnElement, Select, and_, func, select, tuple_
+from sqlalchemy import ColumnElement, Select, and_, any_, case, func, literal, select, tuple_
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -20,8 +21,13 @@ from sonoran.api.dependencies import (
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.preset_scope import preset_filter, require_preset
 from sonoran.db.models import Packet, PacketSeen, TextMessage
+from sonoran.radio.presets import PRESETS
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# The channel names that name a preset. An untagged message on any other
+# channel is read as the deployment's default preset (#313).
+PRESET_NAMES = [preset.name for preset in PRESETS]
 
 # The tag of the weekly mesh network check-in.
 DEFAULT_TAG = "meshnet"
@@ -418,7 +424,10 @@ async def _as_messages(
 
 
 def _on_preset(
-    statement: Select[Any], preset: str | None, since: datetime | None = None
+    statement: Select[Any],
+    preset: str | None,
+    since: datetime | None,
+    default_preset: str,
 ) -> Select[Any]:
     """Keep the messages carried on one modem preset (#313).
 
@@ -429,6 +438,14 @@ def _on_preset(
     are the whole of `uq_packet_dedup` and find one row at most. A
     message with no packet row, or a packet written before the tag,
     falls back to its topic channel. See `api/preset_scope.py`.
+
+    **An untagged message on a topic channel belongs to the default
+    preset.** That is where the chat page put every topic channel before
+    #313 (`channelsFor` in `preset.js`). Without this, an old `azmsh` or
+    `Weather` message compares `'azmsh' = 'MediumFast'`, and every one of
+    them leaves the page on deploy. A channel named after a preset is
+    still read as that preset. The names come from `PRESETS`, so a mesh
+    on any of the nine presets is covered.
 
     **A correlated read, never a join.** The same lesson as the count in
     `routes/packets.py`: a join leaves the planner free to hash every
@@ -453,7 +470,11 @@ def _on_preset(
     if since is not None:
         same.append(Packet.first_seen_at >= since)
     tag = select(Packet.modem_preset).where(*same).correlate(TextMessage).scalar_subquery()
-    return statement.where(preset_filter(tag, TextMessage.channel, preset))
+    untagged = case(
+        (TextMessage.channel == any_(array(PRESET_NAMES)), TextMessage.channel),
+        else_=literal(default_preset),
+    )
+    return statement.where(preset_filter(tag, untagged, preset))
 
 
 def _apply_filters(
@@ -480,6 +501,7 @@ def _apply_filters(
 
 @router.get("")
 async def chat(
+    request: Request,
     channel: str | None = None,
     preset: str | None = None,
     from_node: str | None = Query(default=None, alias="from"),
@@ -508,7 +530,7 @@ async def chat(
     wanted = require_preset(preset)
     statement = select(TextMessage).order_by(TextMessage.seen_at.desc()).limit(limit)
     statement = _apply_filters(statement, channel, from_node, since, before)
-    statement = _on_preset(statement, wanted, since)
+    statement = _on_preset(statement, wanted, since, str(request.app.state.settings.default_preset))
     if not reactions:
         statement = statement.where(TextMessage.emoji.is_(False))
     if q:
@@ -550,6 +572,7 @@ async def overview(
     wanted = require_preset(preset)
     since = datetime.now(UTC) - timedelta(hours=hours)
     core = tuple(request.app.state.settings.core_channels)
+    default = str(request.app.state.settings.default_preset)
     # `count` counts messages the way `/api/chat` lists them: tapbacks
     # left out (#297). It counted every row, so MediumFast said "Open all
     # 1,252 messages" over a channel page that ends at 663 -- the other
@@ -569,6 +592,7 @@ async def overview(
                 ),
                 wanted,
                 since,
+                default,
             )
             .where(TextMessage.seen_at >= since)
             .group_by(TextMessage.channel)
@@ -599,6 +623,7 @@ async def overview(
             ),
             wanted,
             since,
+            default,
         )
         .where(TextMessage.seen_at >= since, TextMessage.emoji.is_(False))
         .subquery()

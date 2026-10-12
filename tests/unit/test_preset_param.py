@@ -13,7 +13,9 @@ from fastapi.testclient import TestClient
 from sonoran.api.app import create_app
 from sonoran.api.dependencies import get_session
 from sonoran.api.preset_scope import require_preset
+from sonoran.api.routes.chat import PRESET_NAMES
 from sonoran.config import Settings
+from sonoran.radio.presets import PRESETS
 from tests.unit.test_preset_param_legacy import RecordingSession, recorded_sql
 
 LIST_PAGES = [
@@ -70,7 +72,10 @@ def test_a_message_reads_its_one_packet_by_the_whole_unique_key(path: str, tmp_p
     for sql in statements:
         assert "JOIN packet" not in sql
         assert "coalesce((SELECT packet.modem_preset" in sql
-        assert "text_message.channel) = %(" in sql
+        # An untagged message falls back to its channel when the channel
+        # names a preset, and to the default preset when it does not.
+        assert "CASE WHEN (text_message.channel = ANY (ARRAY[" in sql
+        assert "THEN text_message.channel ELSE %(" in sql
         for pair in (
             "packet.from_node_num = text_message.from_node_num",
             "packet.packet_id = text_message.packet_id",
@@ -126,3 +131,18 @@ def test_the_portnum_cache_keeps_presets_apart(tmp_path: Any) -> None:
     second = recorded_sql("/api/stats/portnums?hours=6&preset=LongFast", tmp_path)
     assert second, "LongFast was answered from the MediumFast cache entry"
     assert "'LongFast'" in "".join(second) and "'MediumFast'" in "".join(first)
+
+
+def test_an_untagged_topic_channel_message_stays_on_the_default_preset(tmp_path: Any) -> None:
+    """Old azmsh and Weather messages must not leave the chat page (#313).
+
+    Before the tag, the chat page drew every topic channel under the
+    default preset. A message from before the deploy has no tag, so it
+    must read as the default preset, not as its topic channel's name,
+    or `'azmsh' = 'MediumFast'` hides all of them.
+    """
+    statements = _filtering(recorded_sql("/api/chat?preset=MediumFast", tmp_path))
+    assert statements
+    sql = statements[0]
+    assert "ELSE %(" in sql, "an untagged topic channel has no preset to fall back to"
+    assert PRESET_NAMES == [preset.name for preset in PRESETS], "a preset is missing"
