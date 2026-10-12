@@ -3963,6 +3963,28 @@ async function main() {
   });
 
   /*
+   * The other half of #283: a mouse keeps 15 px at a phone's width. The
+   * rule is keyed on the pointer, and a narrow desktop window is not a
+   * phone. Without this, a rule keyed on the width would pass the touch
+   * journey below as well.
+   */
+  await journey(context, 'a mouse keeps 15 px body text at any width (#283)', async (page) => {
+    const sizes = [];
+    for (const width of [390, 1500]) {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page, 'nodes', 2000);
+      const got = await page.evaluate(() => ({
+        coarse: matchMedia('(pointer: coarse)').matches,
+        body: getComputedStyle(document.body).fontSize,
+      }));
+      must(!got.coarse, 'this context reports a coarse pointer, so it cannot stand for a mouse');
+      must(got.body === '15px', `at ${width} px with a mouse the body is ${got.body}`);
+      sizes.push(`${width}:${got.body}`);
+    }
+    return sizes.join(' ');
+  });
+
+  /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
    * 400 percent zoom the criterion is derived from.
@@ -4130,6 +4152,70 @@ async function main() {
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
     return 'all 14 pages, no sideways document scroll';
+  });
+
+  /*
+   * #283. On a touch screen the body is 16 px and no text is under
+   * .78 rem (12.48 px). Keyed on the pointer, so this context is a touch
+   * one at every width, the iPad's 834 included.
+   *
+   * The pages are the ones with the widest tables, so a larger font that
+   * pushes the document sideways shows here first. Letters are 0.05em
+   * wider, as in the Who hears it journey, because CI's Linux fonts are
+   * wider than a Mac's. The sticky bar (#271) must still be at the top
+   * after a scroll, and `--bar-h` must still be its height, or the
+   * things that stick under it (#280, #286) hide behind it.
+   */
+  await journey(narrow, 'body text is 16 px on a touch screen, and nothing scrolls sideways (#283)', async (page) => {
+    const bad = [];
+    const facts = [];
+    for (const width of [320, 390, 834]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const name of ['dashboard', 'nodes', 'firehose', 'stats', 'gaps', 'chat']) {
+        await open(page, name, 2500);
+        await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+        await page.waitForTimeout(200);
+        await page.evaluate(() => window.scrollTo(0, 1200));
+        await page.waitForTimeout(200);
+        const got = await page.evaluate(() => {
+          let smallest = 99;
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const parent = node.parentElement;
+            if (!node.textContent.trim() || !parent || !parent.getClientRects().length) continue;
+            // A chart's SVG labels are sized by the chart, not by this rule.
+            if (parent.closest('svg')) continue;
+            smallest = Math.min(smallest, parseFloat(getComputedStyle(parent).fontSize));
+          }
+          const fields = [...document.querySelectorAll('.page.active input, .page.active select, .page.active textarea')]
+            .filter((field) => field.getClientRects().length && field.type !== 'checkbox' && field.type !== 'radio')
+            .map((field) => parseFloat(getComputedStyle(field).fontSize));
+          const bar = document.querySelector('.sidebar').getBoundingClientRect();
+          return {
+            body: getComputedStyle(document.body).fontSize,
+            smallest,
+            field: fields.length ? Math.min(...fields) : null,
+            scroll: document.documentElement.scrollWidth,
+            client: document.documentElement.clientWidth,
+            barTop: bar.top,
+            barHeight: Math.ceil(bar.height),
+            barVar: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')),
+            scrolled: window.scrollY,
+          };
+        });
+        const at = `${name} at ${width} px`;
+        if (got.body !== '16px') bad.push(`${at}: the body is ${got.body}`);
+        if (got.smallest < 12.4) bad.push(`${at}: text at ${got.smallest} px`);
+        if (got.field !== null && got.field < 16) bad.push(`${at}: a form field at ${got.field} px`);
+        if (got.scroll > got.client + 1) bad.push(`${at}: the page scrolls sideways, ${got.scroll}/${got.client}`);
+        if (got.scrolled > 0 && Math.abs(got.barTop) > 1) bad.push(`${at}: the bar scrolled away (top ${got.barTop})`);
+        if (Math.abs(got.barVar - got.barHeight) > 1) bad.push(`${at}: --bar-h is ${got.barVar}, the bar is ${got.barHeight}`);
+        if (width === 320) facts.push(`${name} ${got.scroll}/${got.client}`);
+      }
+    }
+    await page.setViewportSize({ width: 320, height: 640 });
+    must(bad.length === 0, bad.join('; '));
+    return `16 px body, no text under 12.5 px, at 320/390/834; at 320: ${facts.join(', ')}`;
   });
   await journey(narrow, 'the firehose reads as cards on a phone (#273)', async (page) => {
     /*
