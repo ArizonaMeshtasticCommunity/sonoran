@@ -29,9 +29,9 @@ phase 1. The engine work of phase 3 is the part that must join
 
 The run also writes the leaderboard counts for the Statistics windows
 the assessment does not hold: 24 h and 30 d by default. That is two
-aggregate reads for each preset and window that is due, and a 30 d read
-is due once in six hours. See `sonoran/gaps/boards.py` and
-`docs/GAPS.md` 6.1.
+aggregate reads and one traceroute read (#293) for each preset and
+window that is due, and a 30 d read is due once in six hours. See
+`sonoran/gaps/boards.py` and `docs/GAPS.md` 6.1 and 6.2.
 """
 
 import asyncio
@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api import traces
 from sonoran.api.names import display_name, format_node_id
 from sonoran.config import Settings, get_settings
 from sonoran.coverage import store as coverage_store
@@ -129,7 +130,8 @@ async def assess_preset(
 
     evidence = await signals.read_evidence(session, settings, channels, since, until)
     gateways = await signals.read_gateways(session, channels, since, until)
-    nodes = await _read_nodes(session, set(evidence))
+    answers = await signals.read_trace_answers(session, channels, since, until)
+    nodes = await _read_nodes(session, set(evidence) | set(answers))
     coverage = read_coverage(settings, preset)
     gateways_active = len(gateways)
 
@@ -213,7 +215,7 @@ async def assess_preset(
         "window_hours": window_hours,
         "generated_at": datetime.now(UTC).isoformat(),
         "gateways_active": gateways_active,
-        "node_count": len(nodes),
+        "node_count": len(set(nodes) & set(evidence)),
         "assessed_count": len(rows),
         "coverage": {
             "stamp": coverage.stamp,
@@ -229,6 +231,9 @@ async def assess_preset(
         "not_enough_evidence_count": not_enough_evidence,
         "reached_but_unpredicted_count": unpredicted,
         "caveats": [{"key": key, "text": text} for key, text in signals.CAVEATS],
+        # The reachable leaderboard's counts (#293). Not node rows: a node
+        # can be traced on this preset and send nothing else on it.
+        boards.TRACE_ANSWERS: answer_rows(answers, nodes),
         "thresholds": {
             "min_packets": settings.gaps_min_packets,
             "min_active_hours": settings.gaps_min_active_hours,
@@ -330,6 +335,31 @@ def board_rows(
     return rows
 
 
+def answer_rows(
+    answers: dict[int, traces.Answers], nodes: dict[int, Node]
+) -> list[dict[str, object]]:
+    """Return one row for each node traced: its name, traceroutes and answers.
+
+    Every node traced is written, under the floor or not. The floor is
+    the leaderboard's to apply, so it can say how many it left out.
+    """
+    rows: list[dict[str, object]] = []
+    for node_num, found in sorted(answers.items()):
+        node = nodes.get(node_num)
+        rows.append(
+            {
+                "node_id": format_node_id(node_num),
+                "display_name": display_name(
+                    node_num, node.long_name if node else None, node.short_name if node else None
+                ),
+                "requests": found.requests,
+                "answered": found.answered,
+                "senders": found.senders,
+            }
+        )
+    return rows
+
+
 async def write_board_windows(
     session: AsyncSession, settings: Settings, channels: dict[str, list[str]]
 ) -> list[tuple[str, int]]:
@@ -364,13 +394,15 @@ async def write_board_windows(
             started = time.monotonic()
             names = sorted(set(channels[preset]) | set(wider.get(preset, [])))
             evidence = await signals.read_reach_evidence(session, names, since, until)
-            nodes = await _read_nodes(session, set(evidence))
+            answers = await signals.read_trace_answers(session, names, since, until)
+            nodes = await _read_nodes(session, set(evidence) | set(answers))
             document: dict[str, object] = {
                 "preset": preset,
                 "channels": names,
                 "window_hours": hours,
                 "generated_at": datetime.now(UTC).isoformat(),
                 "nodes": board_rows(evidence, nodes),
+                boards.TRACE_ANSWERS: answer_rows(answers, nodes),
             }
             if store.write_boards(settings, preset, asked, document) is not None:
                 written.append((preset, asked))

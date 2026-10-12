@@ -310,8 +310,8 @@ sonoran-gaps-once
 ### 6.1 The leaderboard windows (#294)
 
 Two leaderboards on the Statistics page rank nodes from this job's
-evidence: "Most consistently reachable" and "Heard directly by the most
-gateways". The page has a range control with 24 h, 7 d and 30 d. Will
+evidence: "Most reliably answers traceroutes" (6.2) and "Heard directly
+by the most gateways". The page has a range control with 24 h, 7 d and 30 d. Will
 chose on 2026-10-08 that these two boards follow it (option A).
 
 **What the job writes.** The assessment holds `GAPS_WINDOW_HOURS`, which
@@ -321,20 +321,25 @@ quick range the job writes one more small file for each preset:
     {coverage_cache_dir}/gaps/boards-{preset}-{hours}.json
 
 `hours` is the range as the page names it: 24 or 720 by default. The
-file holds `preset`, `channels`, `window_hours`, `generated_at` and
-`nodes`. Each node row holds `node_id`, `display_name`, `packets`,
-`active_hours`, `rf_hours` and `direct_gateways`, with the names the
-assessment rows use. The assessment file does not change shape, so the
-gaps page and the node page read it as before.
+file holds `preset`, `channels`, `window_hours`, `generated_at`, `nodes`
+and `trace_answers`. Each node row holds `node_id`, `display_name`,
+`packets` and `direct_gateways`, with the names the assessment rows
+use. `trace_answers` is described in 6.2, and the assessment holds the
+same key for its own window. The node rows of the assessment do not
+change, so the gaps page and the node page read it as before.
+`/api/gaps` does not serve `trace_answers`.
 
-**What it does not compute.** No signals, no siting, no neighbour,
-traceroute or position reads. A board needs none of them.
-`signals.read_reach_evidence` makes only the two reads that hold the
-counts, and they are the same reads the assessment makes
+**What it does not compute.** No signals, no siting, no neighbour or
+position reads, and not the full traceroute read. A board needs none of
+them. `signals.read_reach_evidence` makes only the two reads that hold
+the counts, and they are the same reads the assessment makes
 (`_packet_summary` and `_read_direct_gateways`), not copies.
+`signals.read_trace_answers` is the third read, and the assessment
+makes it too.
 
 **What it costs.** For each preset and window that is due, two aggregate
-reads over `packet`, `packet_seen` and `mesh_packet_metrics`. A 30 d
+reads over `packet`, `packet_seen` and `mesh_packet_metrics`, and the
+traceroute read of 6.2. A 30 d
 window that is longer than the assessment also reads its own channel
 names, once for all presets. The cost of these reads grows with the
 rows in the window, so against the 7 d assessment:
@@ -373,15 +378,102 @@ happens for any `hours` that is not a quick range, and before the job
 has written a window's file, for example just after a deploy: an older
 deployment's files still serve.
 
-**The awake floor.** "Most consistently reachable" ranks a node awake
-for at least 24 hours. A 24 h window cannot hold 24 awake hours for
-most nodes, so the floor is half the window when that is smaller: 12
-hours at 24 h.
+**A file without traceroute counts is rebuilt at once.** A board file
+written before #293 has no `trace_answers`. `boards.is_due` treats it as
+due, so the 30 d file does not go on serving "not counted yet" for six
+hours after a deploy.
 
 **One function.** `_reachable_board` in `api/routes/leaderboards.py` is
-the whole of what "most consistently reachable" measures, for every
-window. #293 will change that measure. It changes that function, and
-`board_rows` in `jobs/gaps.py` if it needs another count.
+the whole of what the reachable board measures, for every window: the
+floor, the order and the words. The job writes the counts and nothing
+else.
+
+### 6.2 Reachability: answered traceroutes (#293)
+
+"Most consistently reachable" used to rank the share of the hours a
+node was awake in which a gateway heard it. Will said that this is
+uptime, and he decided on 2026-10-08 to replace it. It
+was one way only: it said that a gateway heard the node, and nothing
+about whether traffic sent **to** the node arrived. A node beside any
+gateway scored 100 percent by sending one packet an hour, and ties were
+then broken by hours awake.
+
+The board is now "Most reliably answers traceroutes". It ranks the
+share of traceroutes sent to a node that it answered. A traceroute
+request and its reply are the only round trip this database can prove.
+
+**How a request is matched to its answer.** A request has `request_id`
+NULL and its own `packet_id`. A reply carries the request's `packet_id`
+in `request_id` (`AGENTS.md` 9.8), and it travels back, so its `from` is
+the node that was asked (9.18). `traces.answer_counts` reads every row
+through `trace_endpoints`, so a request and its answer give the same
+key: (asker, target, request packet ID). The asker is in the key
+because a packet ID belongs to its sender.
+
+- A request or a reply seen more than once counts once.
+- A reply whose request was never seen counts in neither number.
+- A reply from a node that was not asked does not count.
+- A self-trace is ignored. A sender is a distinct `from_node_num` of a
+  request, and it must not be the target.
+- A traceroute to the broadcast address names no target.
+
+**Unanswered as far as we can tell.** Only what a gateway uploaded is in
+the database (9.5.1). A node can answer and no gateway hear the answer.
+The board says this in its hint, in those words.
+
+**The window.** The board follows the page range, like the direct
+board (6.1). A request counts when we received it inside the window, on
+our clock (9.4), and on this preset, by `traceroute.channel` (9.7). The
+last 15 minutes are left out (`ANSWER_GRACE` in `gaps/signals.py`),
+because an answer to a request sent a moment ago may still be on the
+way. A reply counts when it was received before the end of the window.
+It is matched to its request, so it is not filtered by channel again.
+
+**The floor.** A node needs at least 10 traceroutes from at least 2
+senders (`MIN_TRACES`, `MIN_SENDERS`). Below ten, one lost answer moves
+the share by more than ten points. One sender is one vantage point, and
+its own path to the node would decide the whole score. A node below the
+floor is not ranked, and the board says how many were left out. A node
+that nobody traceroutes is not on the board at all, and is not counted
+as left out.
+
+**The order.** By the low end of the Wilson 95 percent interval, then
+the share, then the number of traceroutes. So 95 of 100 ranks above
+10 of 10: the second is the better share and the weaker evidence. The
+value shown is the plain share, with "N of M answered, S senders".
+
+**What the job writes.** `trace_answers` in the assessment and in each
+board file: one row for every node traced, below the floor or not, with
+`node_id`, `display_name`, `requests`, `answered` and `senders`. The
+floor is the route's, so it can count what it left out. These rows are
+not node rows: a node can be traced on a preset and send nothing else
+on it.
+
+**What it costs.** One statement for each preset and window. It reads
+the distinct requests in the window through
+`ix_traceroute_channel_time`, and only the replies that join to one of
+them. The assessment already reads every traceroute row of its window
+as a whole ORM object for the trace signal, so this read is the smaller
+of the two. 9.19 gives about two thousand traceroutes a day, so a 30 d
+window holds about 60 000 rows, and it is read once in six hours.
+Reasoned, not measured: the `gaps boards` log line times the whole
+board file, this read included.
+
+**What it cannot know.**
+
+- An answer that no gateway uploaded counts as unanswered.
+- People and automations choose which nodes they trace, so the sample
+  is not random.
+- A gateway uploads its own traffic, so traceroutes sent by gateways are
+  always seen. The sample leans towards gateway senders.
+- The route between sender and node counts as much as the node does.
+  The two-sender floor limits that, and does not remove it.
+
+**Not done here.** The share of `want_ack` messages that were
+acknowledged is closer to "packets that got through". It needs the
+acknowledged packet's ID, which is `Data.request_id` on a routing
+packet, and ingest stores that for traceroutes only. That needs a
+schema change. It is a separate piece of work.
 
 ## 7. Where it appears
 

@@ -13,8 +13,21 @@ rules live here so that the pages cannot disagree about what one row
 proves. See AGENTS.md 9.6.
 """
 
+from collections.abc import Iterable
+from dataclasses import dataclass
 from itertools import pairwise
-from typing import Protocol
+from typing import NamedTuple, Protocol
+
+
+class TraceEnds(Protocol):
+    """The columns that say which way a `traceroute` row travels."""
+
+    @property
+    def from_node_num(self) -> int: ...
+    @property
+    def to_node_num(self) -> int: ...
+    @property
+    def request_id(self) -> int | None: ...
 
 
 class TraceRow(Protocol):
@@ -53,7 +66,7 @@ UNKNOWN_SNR = -128
 Hop = tuple[int, int, float | None]
 
 
-def is_reply(trace: TraceRow) -> bool:
+def is_reply(trace: TraceEnds) -> bool:
     """Return true when this row is a traceroute reply.
 
     A reply answers a request, so it carries the request ID.
@@ -61,7 +74,7 @@ def is_reply(trace: TraceRow) -> bool:
     return trace.request_id is not None
 
 
-def trace_endpoints(trace: TraceRow) -> tuple[int, int]:
+def trace_endpoints(trace: TraceEnds) -> tuple[int, int]:
     """Return the request direction of one traceroute.
 
     A reply travels back from the node that answered, so the packet
@@ -132,3 +145,77 @@ def evidenced_hops(path: list[int], readings: list[object]) -> tuple[list[Hop], 
     if measured >= len(hops):
         return hops, True
     return hops[:measured], False
+
+
+# The destination of a broadcast. A traceroute to it names no target.
+BROADCAST = 0xFFFFFFFF
+
+
+class TraceKey(NamedTuple):
+    """The four columns that match a request to its answer (#293).
+
+    A request has `request_id` None and its own `packet_id`. A reply has
+    `request_id` set to the `packet_id` of the request it answers
+    (AGENTS.md 9.8).
+    """
+
+    from_node_num: int
+    to_node_num: int
+    request_id: int | None
+    packet_id: int | None
+
+
+@dataclass(frozen=True)
+class Answers:
+    """How often one node was traced, and how often it answered."""
+
+    requests: int
+    answered: int
+    senders: int
+
+
+def answer_counts(rows: Iterable[TraceKey]) -> dict[int, Answers]:
+    """Return, for each node asked, its traceroutes and its answers.
+
+    A request is answered when a reply carries its packet ID as the
+    request ID, comes from the node that was asked, and goes to the node
+    that asked. Packet IDs belong to their sender, so the asker is part
+    of the match. `trace_endpoints` turns a reply back into the request
+    direction, so a request and its answer give the same key.
+
+    - A request or a reply seen more than once counts once.
+    - A reply whose request was never seen counts in neither.
+    - A node that traces itself proves nothing about reaching it, so a
+      self-trace is ignored. The asker must be another node.
+    - A traceroute to the broadcast address names no target.
+
+    "Unanswered" means that no gateway uploaded an answer. The node may
+    have answered and no gateway heard it. See AGENTS.md 9.5.1.
+    """
+    asked: set[tuple[int, int, int]] = set()
+    answered: set[tuple[int, int, int]] = set()
+    for row in rows:
+        asker, target = trace_endpoints(row)
+        if asker == target or BROADCAST in (asker, target):
+            continue
+        if is_reply(row):
+            if row.request_id is not None:  # always true for a reply; said for mypy
+                answered.add((asker, target, row.request_id))
+        elif row.packet_id is not None:
+            asked.add((asker, target, row.packet_id))
+
+    requests: dict[int, int] = {}
+    replies: dict[int, int] = {}
+    senders: dict[int, set[int]] = {}
+    for key in asked:
+        asker, target, _ = key
+        requests[target] = requests.get(target, 0) + 1
+        senders.setdefault(target, set()).add(asker)
+        if key in answered:
+            replies[target] = replies.get(target, 0) + 1
+    return {
+        target: Answers(
+            requests=count, answered=replies.get(target, 0), senders=len(senders[target])
+        )
+        for target, count in requests.items()
+    }

@@ -1150,6 +1150,53 @@ async def main() -> None:
                 },
             )
 
+        # Traceroutes to two routers, with the answers some of them got.
+        #
+        # The reachable leaderboard ranks a node by the share of
+        # traceroutes sent to it that it answered (#293), and it ranks
+        # only a node with at least 10 traceroutes from 2 or more
+        # senders. The traces above are replies with no request, which
+        # count for nothing, so without these the board is always empty.
+        #
+        # One router on each preset, because the board shows the preset
+        # the menu has chosen. Every row is older than the newest trace
+        # above, so `/api/traceroutes?limit=1` still opens a real path.
+        # The route lists are empty: these rows evidence no hop, so the
+        # map and the graph draw nothing new.
+        asked_by = [0x0A51B001, 0x0A51B002, 0x0A51B003]
+        for preset, target, answered in (
+            (PRIMARY_PRESET, 0x0A51A002, 11),
+            (SECONDARY_PRESET, 0x0A51A001, 9),
+        ):
+            for index in range(12):
+                request = 700_000 + index + (0 if preset == PRIMARY_PRESET else 100)
+                asker = asked_by[index % len(asked_by)]
+                asked_at = NOW - timedelta(hours=2, minutes=index * 40)
+                rows = [(request, None, asker, target, asked_at)]
+                if index < answered:
+                    rows.append(
+                        (request + 1000, request, target, asker, asked_at + timedelta(seconds=20))
+                    )
+                for packet, answers, sender, receiver, at in rows:
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO traceroute (packet_id, request_id, from_node_num,
+                                to_node_num, channel, route, route_back, snr_towards,
+                                snr_back, seen_at)
+                            VALUES (:p, :req, :f, :to, :ch, '[]', '[]', '[]', '[]', :t)
+                            """
+                        ),
+                        {
+                            "p": packet,
+                            "req": answers,
+                            "f": sender,
+                            "to": receiver,
+                            "ch": preset,
+                            "t": at,
+                        },
+                    )
+
         # A tapback that several people sent.
         #
         # The chat page draws these as one chip listing every sender, and

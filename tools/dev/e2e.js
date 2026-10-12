@@ -1802,10 +1802,37 @@ async function main() {
     const fetched = [];
     page.on('request', (request) => fetched.push(new URL(request.url()).pathname));
     const heavy = /echarts\.min\.js|protobuf\.min\.js|js-yaml\.min\.js|config-check\.js/;
+    /*
+     * Leave a page only when its own render has ended (#354).
+     *
+     * A navigation aborts every request still in flight, and the
+     * collector counts each abort as an error. This waited for
+     * `networkidle`, which is the wrong signal: Playwright fires it once
+     * for each document and then answers at once. The node page asks for
+     * its signal and its packets only after it has drawn the history
+     * charts. A long history can take more than 500 ms to draw, with no
+     * request open, and that is all `networkidle` needs. So the event
+     * fired early, the wait returned at once, and the two requests were
+     * aborted: the exact lines of the issue. The `.catch` also hid a
+     * timeout.
+     *
+     * `loading` is true until a render has awaited every request it
+     * made, and `timelinePaging.busy` covers the one request the packet
+     * timeline makes outside a render. A page that does not settle fails
+     * here and says so.
+     *
+     * The wait is longer than the page's own `REQUEST_TIMEOUT_MS` (60 s).
+     * A request that hangs is then ended by the page itself, and its
+     * abort is reported with its address, which is the true fault. Do not
+     * filter `ERR_ABORTED` to quiet this journey: that hides that abort.
+     */
+    const settle = async (name) => must(await waitFor(page, () => !loading && !timelinePaging.busy, 90000),
+      `#${name} was still loading after 90 s`);
     await open(page, 'nodes', 3000);
     const early = fetched.filter((path) => heavy.test(path));
     must(early.length === 0, `the nodes page fetched ${early.join(', ')}`);
     must(!(await page.evaluate(() => Boolean(window.echarts))), 'echarts is defined on the nodes page');
+    await settle('nodes');
 
     const drew = [];
     for (const name of ['dashboard', 'stats', 'graph']) {
@@ -1820,9 +1847,7 @@ async function main() {
       }
       must(ok, `a cold load of #${name} drew no chart`);
       drew.push(name);
-      // Let the page's other requests land before leaving it, or the
-      // navigation aborts them and each one is counted as an error.
-      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await settle(name);
     }
     // The node page draws its charts once its panels arrive.
     const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
@@ -1832,7 +1857,7 @@ async function main() {
     must(await waitFor(page, () => [...document.querySelectorAll('[data-page="node"] canvas')]
       .some((canvas) => canvas.width > 0), 30000), `a cold load of node ${nodes[0].node_id} drew no chart`);
     drew.push('node');
-    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await settle('node');
 
     await page.goto('about:blank');
     await open(page, 'config', 500);
@@ -2174,6 +2199,40 @@ async function main() {
     return `${imperialLink} / ${metricLink}; "${imperialLine}"`;
   });
 
+  await journey(context, 'reachability is answered traceroutes, not hours awake (#293)', async (page) => {
+    /*
+     * Will: "I think uptime hours is an easy metric to achieve." The board
+     * now ranks the share of traceroutes sent to a node that it answered.
+     *
+     * Not patched: the seed sends 12 traceroutes from three nodes to one
+     * router on each preset, with some answers, and CI runs the gaps job
+     * before this. So the title, the percentage and the "N of M answered"
+     * line all come from the real job and the real route.
+     */
+    const reachable = () => {
+      const board = [...document.querySelectorAll('[data-page="stats"] .leaderboard')]
+        .find((panel) => /Most reliably answers traceroutes/.test(panel.querySelector('h3').textContent));
+      if (!board) return null;
+      const value = board.querySelector('.board .value');
+      const detail = board.querySelector('.board .detail');
+      return {
+        value: value ? value.textContent : null,
+        detail: detail ? detail.textContent : null,
+        measure: (board.querySelector('p.muted') || {}).textContent || '',
+      };
+    };
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    must(await waitFor(page, reachable, 30000), 'no board is titled "Most reliably answers traceroutes"');
+    const old = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+      .some((h) => /Most consistently reachable/.test(h.textContent)));
+    must(!old, 'the uptime board is still on the page');
+    const got = await page.evaluate(reachable);
+    must(/traceroutes/.test(got.measure), `the board does not say what it measures: ${got.measure}`);
+    must(got.value !== null && /^\d+(\.\d+)? %$/.test(got.value), `the first row is not a percentage: ${got.value}`);
+    must(/^\d+ of \d+ answered, \d+ senders?$/.test(got.detail || ''), `the detail line reads ${got.detail}`);
+    return `${got.value}, ${got.detail}`;
+  });
+
   await journey(context, 'the statistics range reaches every widget (#294)', async (page) => {
     /*
      * Will: "all the stats, widgets, etc should adjust to them. Default is
@@ -2459,6 +2518,86 @@ async function main() {
     must(sameCount && sameCount[0] === reached[0],
       `the same link reached ${sameCount && sameCount[0]} where the original reached ${reached[0]}`);
     return `${link.length} characters, reached ${reached[0]} in both`;
+  });
+
+  await journey(context, 'a Flagstaff site predicts on continental temperate (#239)', async (page) => {
+    /*
+     * The climate is read from the site's ground. Flagstaff is Köppen Dsb
+     * in the shipped data, which is continental temperate. Advanced must
+     * name it in the menu's "From the site" choice, and a run in Simple
+     * must hand the engine that climate (code 5), not the old desert (4).
+     *
+     * The climate is answered before the terrain is read, so the engine
+     * values are asserted whether or not this instance holds terrain. On
+     * an instance that can predict, the summary must say it too.
+     */
+    await open(page, 'planner', 5000);
+    await advanced(page);
+    await page.fill('[data-planner="lat"]', '35.1983');
+    await page.fill('[data-planner="lon"]', '-111.6513');
+    await page.locator('[data-planner="lon"]').blur();
+    const named = await valueOf(page, () => {
+      const menu = document.querySelector('[data-planner="radio_climate"]');
+      const first = menu && menu.querySelector('option[value="auto"]');
+      return first && first.textContent.includes('Köppen') ? { value: menu.value, text: first.textContent } : null;
+    });
+    must(named, 'the climate menu never named what it found at the site');
+    must(named.value === 'auto', `the menu opened on ${named.value}, not on the site`);
+    must(/Continental temperate/.test(named.text) && /Dsb/.test(named.text),
+      `Advanced offers "${named.text}" for Flagstaff`);
+    const note = await page.locator('[data-planner-climate-note]').textContent();
+    must(/Continental temperate/.test(note), `the note beside the site says "${note}"`);
+
+    await page.click('[data-planner-mode="simple"]');
+    // Simple asks for each picker that is on screen. Take the first real
+    // choice of each, which is what a newcomer does.
+    for (const picker of ['[data-board-type]', '[data-antenna-type="tx"]', '[data-antenna-type="rx"]', '[data-cable-type]']) {
+      const select = page.locator(picker);
+      if (!(await select.isVisible().catch(() => false))) continue;
+      const value = await select.evaluate((element) => {
+        const option = [...element.options].find((item) => item.value !== '');
+        return option ? option.value : null;
+      });
+      if (value !== null) await select.selectOption(value);
+    }
+    const run = await predict(page, () => page.click('[data-planner-run]'));
+    const used = await page.evaluate(() => {
+      const state = window.SonoranPlanner.state;
+      return {
+        climate: state.climate && state.climate.climate,
+        source: state.climate && state.climate.source,
+        code: state.params && state.params.radioClimate,
+      };
+    });
+    must(used.climate === 'continental_temperate' && used.source === 'site',
+      `the Simple run used ${used.climate} (${used.source})`);
+    must(used.code === 5, `the engine was handed climate code ${used.code}, not 5`);
+    const link = new URLSearchParams(page.url().split('?')[1] || '');
+    must(!link.has('radio_climate'), 'a climate read from the site went into the link as if chosen');
+    if (!run.ran) return `engine handed code 5; no prediction here (${run.why})`;
+    const said = await page.locator('[data-planner-climate-used]').textContent();
+    must(/Continental temperate/.test(said) && /Beck/.test(said), `the summary says "${said}"`);
+    return `engine handed code 5, and the summary says so`;
+  });
+
+  await journey(context, 'a planner link made before #239 keeps desert', async (page) => {
+    /*
+     * The issue's own risk: a link made before the climate was read from
+     * the site was made on desert and left it out, because it was the
+     * default. Opened now at Flagstaff it must still predict on desert,
+     * and say why, rather than quietly become continental temperate.
+     */
+    await page.goto(`${BASE}/#planner?v=1&lat=35.1983&lon=-111.6513&radius=5`, { waitUntil: 'load' });
+    const used = await valueOf(page, () => {
+      const state = window.SonoranPlanner && window.SonoranPlanner.state;
+      return state && state.climate ? { climate: state.climate.climate, code: state.params && state.params.radioClimate } : null;
+    }, 30000);
+    must(used, 'the link started no run');
+    must(used.climate === 'desert' && used.code === 4, `the old link ran on ${used.climate} (${used.code})`);
+    const said = await page.locator('[data-planner-shared]').textContent();
+    must(/keeps desert/.test(said), `the page did not say why: "${said}"`);
+    await predict(page, null);
+    return 'kept desert, and said so';
   });
 
   await journey(context, 'a planner link made in feet predicts the same in metres', async (page) => {
@@ -2992,12 +3131,16 @@ async function main() {
         const box = document.querySelector(selector).getBoundingClientRect();
         return box.height ? Math.round(box.bottom) : null;
       };
+      // What can be seen ends at the bottom bar on a phone (#282), not at
+      // the foot of the screen: a link under the bar is not on the screen.
+      const bar = document.querySelector('[data-tab-bar]');
+      const barTop = bar && !bar.hidden ? bar.getBoundingClientRect().top : Infinity;
       return {
         scrolled: document.querySelector('.sidebar').scrollTop + window.scrollY,
         preset: bottom('.preset-switch'),
         settings: bottom('.menu-settings-link'),
         link: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
-        height: window.innerHeight,
+        height: Math.round(Math.min(window.innerHeight, barTop)),
       };
     });
     must(got.scrolled === 0, `the drawer opened scrolled by ${got.scrolled} px`);
@@ -3007,6 +3150,251 @@ async function main() {
     return `preset ends at ${got.preset}, Settings at ${got.settings} of ${got.height}`;
   });
   await tall.close();
+
+  /*
+   * The bottom bar on a phone (#282). Will chose the set on 2026-10-08:
+   * Map, Nodes, Chat and Dashboard, then More, which opens the menu.
+   *
+   * Measured with the CI runner's wider fonts imitated (AGENTS.md 9.31),
+   * because five labels share 390 px and "Dashboard" is the widest.
+   * Every page here is in the first `goto` (AGENTS.md 9.33).
+   */
+  const BAR = () => {
+    const bar = document.querySelector('[data-tab-bar]');
+    if (!bar || bar.hidden || getComputedStyle(bar).display === 'none') return null;
+    const box = bar.getBoundingClientRect();
+    return {
+      top: Math.round(box.top),
+      bottom: Math.round(box.bottom),
+      name: bar.getAttribute('aria-label') || '',
+      sideways: bar.scrollWidth > bar.clientWidth,
+      items: [...bar.querySelectorAll('a, button')].map((item) => {
+        const r = item.getBoundingClientRect();
+        return {
+          text: item.textContent.trim(),
+          tag: item.tagName,
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          current: item.getAttribute('aria-current'),
+        };
+      }),
+    };
+  };
+  const SPREAD = '* { letter-spacing: .12em !important; }';
+
+  await journey(phone, 'the bottom bar holds four pages and More, each finger-sized (#282)', async (page) => {
+    await open(page, 'firehose', 2500);
+    await page.addStyleTag({ content: SPREAD });
+    await page.waitForTimeout(300);
+    const bar = await page.evaluate(BAR);
+    must(bar, 'there is no bottom bar on a 390 px touch screen');
+    must(bar.name.length > 0, 'the bar is a nav with no name, beside the menu that has one');
+    must(bar.bottom === page.viewportSize().height, `the bar ends at ${bar.bottom}, not at the foot of the screen`);
+    const words = bar.items.map((item) => item.text);
+    must(words.join() === 'Map,Nodes,Chat,Dashboard,More', `the bar holds ${JSON.stringify(words)}`);
+    must(bar.items.slice(0, 4).every((item) => item.tag === 'A'), 'a page in the bar is not a link');
+    must(bar.items[4].tag === 'BUTTON', 'More is not a button');
+    for (const item of bar.items) {
+      must(item.w >= 44 && item.h >= 44, `${item.text} is ${item.w} x ${item.h}, under 44 x 44`);
+    }
+    must(!bar.sideways, 'the five labels push the bar sideways with the wider fonts');
+    must(bar.items.every((item) => !item.current), 'the firehose lights a tab, and it is not one');
+
+    // A tap on Nodes goes there and marks it, and only it.
+    await page.locator('[data-tab-bar] a[data-tab="nodes"]').tap();
+    await page.waitForTimeout(1500);
+    must(/#nodes$/.test(page.url()), `Nodes did not navigate (${page.url()})`);
+    const after = await page.evaluate(BAR);
+    const lit = after.items.filter((item) => item.current);
+    must(lit.length === 1 && lit[0].text === 'Nodes' && lit[0].current === 'page',
+      `after a tap on Nodes the bar marks ${JSON.stringify(lit)}`);
+    return `${words.join(' · ')}, smallest ${Math.min(...bar.items.map((i) => Math.min(i.w, i.h)))} px; Nodes navigates and is marked`;
+  });
+
+  await journey(phone, 'More opens the one page list, clear of the bar (#282)', async (page) => {
+    await open(page, 'dashboard', 2500);
+    const more = page.locator('[data-tab-bar] [data-tab-more]');
+    must((await more.getAttribute('aria-controls')) === 'site-menu', 'More does not open the site menu');
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await more.tap();
+    await page.waitForTimeout(300);
+    must((await more.getAttribute('aria-expanded')) === 'true', 'More did not open the menu');
+    must(await page.locator('#site-nav').isVisible(), 'the page list is not on the screen');
+    // One list: the menu holds every page, and the bar's links are copies, not a second list.
+    const links = await page.locator('#site-nav a').count();
+    const pages = await page.locator('main .page').count();
+    must(links >= 10 && links <= pages, `the menu holds ${links} links for ${pages} pages`);
+    must(await page.locator('[data-tab-bar] [data-nav]').count() === 0,
+      'a bar link carries data-nav, so the router counts it as a second menu entry');
+    // The top button tells the same story.
+    must((await page.locator('[data-nav-toggle]').getAttribute('aria-expanded')) === 'true',
+      'the top menu button says the menu is closed while it is open');
+    // The open menu ends at the bar, so Settings can always be brought above it.
+    const top = (await page.evaluate(BAR)).top;
+    await page.locator('.menu-settings-link').scrollIntoViewIfNeeded();
+    const settings = await page.locator('.menu-settings-link').boundingBox();
+    must(settings && settings.y + settings.height <= top + 1,
+      `with the menu open, Settings ends at ${settings && Math.round(settings.y + settings.height)}, under the bar at ${top}`);
+    // Escape closes it and gives the focus back to More.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    must((await more.getAttribute('aria-expanded')) === 'false', 'Escape did not close the menu');
+    must(await page.evaluate(() => document.activeElement && document.activeElement.matches('[data-tab-more]')),
+      'Escape left the focus somewhere other than More');
+    // A page chosen from the menu closes it and lights no tab.
+    await more.tap();
+    await page.waitForTimeout(250);
+    await page.locator('#site-nav a[data-nav="stats"]').tap();
+    await page.waitForTimeout(1500);
+    must((await more.getAttribute('aria-expanded')) === 'false', 'the menu stayed open after a page was chosen');
+    must((await page.evaluate(BAR)).items.every((item) => !item.current), 'Statistics lights a tab');
+    return `${links} links in the menu, Settings ends at ${Math.round(settings.y + settings.height)} above the bar at ${top}`;
+  });
+
+  await journey(phone, 'a deep link lights the closest tab, or none (#282)', async (page) => {
+    // A real node and a real packet, from the API, so neither page is an error page.
+    const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
+    must(nodes.length > 0, 'no node to open');
+    const node = `#node/${encodeURIComponent(nodes[0].node_id)}`;
+    const packets = await (await page.request.get(`${BASE}/api/packets?limit=1&summary=true`)).json();
+    must(packets.length > 0, 'no packet to open');
+    // A summary row carries `packet_key` ("<from_num>:<packet_id>"), as the firehose reads it.
+    const packet = `#packet/${encodeURIComponent(packets[0].from_node)}/${packets[0].packet_key.split(':')[1]}`;
+    const lit = async (hash) => {
+      const fresh = await page.context().newPage();
+      await fresh.goto(`${BASE}/${hash}`, { waitUntil: 'load' });
+      await fresh.waitForTimeout(1500);
+      const items = (await fresh.evaluate(BAR)).items.filter((item) => item.current);
+      await fresh.close();
+      return items.map((item) => `${item.text}=${item.current}`).join();
+    };
+    const onNode = await lit(node);
+    must(onNode === 'Nodes=true', `${node} lights ${onNode || 'nothing'}, not Nodes as "true"`);
+    const onPacket = await lit(packet);
+    must(onPacket === '', `${packet} lights ${onPacket}; a packet belongs to no tab`);
+    const onChannel = await lit('#chat/LongFast');
+    must(onChannel === 'Chat=page', `a chat channel lights ${onChannel || 'nothing'}, not Chat`);
+    return `${node} lights Nodes (aria-current=true), a channel lights Chat, ${packet} lights none`;
+  });
+
+  await journey(phone, 'watch mode covers the bottom bar (#282)', async (page) => {
+    /*
+     * Watch mode fills the screen with the map and puts its panel at the
+     * foot, so the bar must not sit on top of it. Asked of the screen
+     * itself: what a finger at the bottom edge would touch.
+     */
+    await open(page, 'map', 4000);
+    await page.locator('[aria-label="Watch mode"]').first().tap();
+    await page.waitForTimeout(2000);
+    const got = await page.evaluate(() => {
+      const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight - 10);
+      return {
+        watching: document.body.classList.contains('watch-mode') || Boolean(document.fullscreenElement),
+        onBar: Boolean(hit && hit.closest('[data-tab-bar]')),
+      };
+    });
+    must(got.watching, 'watch mode did not open, so this proves nothing');
+    must(!got.onBar, 'the bottom bar sits on top of watch mode');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1000);
+    return 'the foot of the screen is the watch view, not the bar';
+  });
+
+  await journey(phone, 'no page ends under the bottom bar (#282)', async (page) => {
+    /*
+     * Scroll to the end and read the page's own bottom edge against the
+     * bar's top. The page's box ends at its last row, so a page whose
+     * last row hides under the bar fails here whatever that row is.
+     */
+    const out = [];
+    for (const name of ['dashboard', 'nodes', 'firehose', 'chat', 'map', 'stats', 'settings']) {
+      const fresh = await page.context().newPage();
+      await fresh.goto(`${BASE}/#${name}`, { waitUntil: 'load' });
+      await fresh.addStyleTag({ content: SPREAD });
+      await fresh.waitForTimeout(3500);
+      const got = await fresh.evaluate(async () => {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        await new Promise((done) => setTimeout(done, 300));
+        const bar = document.querySelector('[data-tab-bar]').getBoundingClientRect();
+        const pageBox = document.querySelector('.page.active').getBoundingClientRect();
+        const scroller = document.querySelector('.page.active .chat-scroll');
+        return {
+          end: Math.round(pageBox.bottom),
+          chat: scroller ? Math.round(scroller.getBoundingClientRect().bottom) : null,
+          top: Math.round(bar.top),
+          long: document.documentElement.scrollHeight > window.innerHeight,
+        };
+      });
+      await fresh.close();
+      must(got.end <= got.top + 1, `#${name} ends at ${got.end}, under the bar at ${got.top}`);
+      if (got.chat !== null) must(got.chat <= got.top + 1, `the chat column ends at ${got.chat}, under the bar at ${got.top}`);
+      out.push(`${name}:${got.end}/${got.top}`);
+    }
+    return out.join(' ');
+  });
+
+  await journey(phone, 'the node sheet and the offline notice stand on the bar (#282)', async (page) => {
+    await open(page, 'map', 2500);
+    const got = await page.evaluate(async () => {
+      // The offline notice (#331) is made by pwa.js on the browser's own event.
+      window.dispatchEvent(new Event('offline'));
+      await new Promise((done) => setTimeout(done, 300));
+      const notices = [...document.querySelectorAll('.app-notice')].map((n) => Math.round(n.getBoundingClientRect().bottom));
+      window.dispatchEvent(new Event('online'));
+      return { notices, top: Math.round(document.querySelector('[data-tab-bar]').getBoundingClientRect().top) };
+    });
+    must(got.notices.length > 0, 'no offline notice appeared, so this proves nothing');
+    must(Math.max(...got.notices) <= got.top, `an app notice ends at ${Math.max(...got.notices)}, under the bar at ${got.top}`);
+    // The node sheet, opened through its own interface on the first node drawn.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map && window.SonoranMap.marks.size > 0, 20000),
+      'the map drew no nodes');
+    const sheet = await page.evaluate(async () => {
+      const { marks } = window.SonoranMap;
+      const entry = [...marks.values()][0];
+      entry.marker.fire('click');
+      await new Promise((done) => setTimeout(done, 400));
+      const node = document.querySelector('.node-sheet');
+      if (!node || node.hidden) return null;
+      return {
+        bottom: Math.round(node.getBoundingClientRect().bottom),
+        top: Math.round(document.querySelector('[data-tab-bar]').getBoundingClientRect().top),
+      };
+    });
+    must(sheet, 'a node opened no sheet');
+    must(sheet.bottom <= sheet.top + 1, `the node sheet ends at ${sheet.bottom}, under the bar at ${sheet.top}`);
+    return `notice ends ${Math.max(...got.notices)}, sheet ends ${sheet.bottom}, bar at ${got.top}`;
+  });
+
+  /*
+   * The other half: the bar is for a phone held upright only. A mouse
+   * at desktop width, a narrow window with a mouse, an iPad in portrait
+   * and an iPhone SE on its side (568 px wide, under 40rem, and 320 px
+   * tall) keep the layout they had, with no bar and no space kept for one.
+   */
+  for (const [label, options] of [
+    ['a mouse at 1440 px', { viewport: { width: 1440, height: 900 } }],
+    ['a mouse at 390 px', { viewport: { width: 390, height: 844 } }],
+    ['an iPad in portrait', { viewport: { width: 834, height: 1112 }, isMobile: true, hasTouch: true }],
+    ['a small phone on its side', { viewport: { width: 568, height: 320 }, isMobile: true, hasTouch: true }],
+  ]) {
+    const other = await browser.newContext(options);
+    await journey(other, `${label} has no bottom bar (#282)`, async (page) => {
+      await open(page, 'dashboard', 2000);
+      const got = await page.evaluate(() => ({
+        bar: Boolean(document.querySelector('[data-tab-bar]')),
+        shown: (() => {
+          const bar = document.querySelector('[data-tab-bar]');
+          return Boolean(bar) && getComputedStyle(bar).display !== 'none' && bar.getBoundingClientRect().height > 0;
+        })(),
+        kept: getComputedStyle(document.documentElement).getPropertyValue('--tabbar-h').trim(),
+      }));
+      must(got.bar, 'the bar is missing from the markup, so this proves nothing');
+      must(!got.shown, `the bottom bar is drawn for ${label}`);
+      must(got.kept === '0px', `${label} keeps ${got.kept} for a bar it does not draw`);
+      return `no bar, --tabbar-h ${got.kept}`;
+    });
+    await other.close();
+  }
 
   await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
     /*
@@ -3569,18 +3957,34 @@ async function main() {
      * without writing to a shared database. `render('firehose')` is the
      * call the Live timer makes; Live is switched off so no timer poll
      * lands in the middle.
+     *
+     * The real rows are read ONCE, from the first answer, and every poll
+     * is built from that copy (#354). The stub used to build its packets
+     * from `rows[0]` of each answer. When the newest real row changed
+     * between polls -- a tie on `first_seen_at`, or a packet the seed
+     * added -- the "same" made packets took a new node in their keys,
+     * and every one of them counted as new: "9 new" where 4 was right.
+     * A real packet that arrived between polls counted as new as well.
+     * Now the count depends on `extra` alone.
      */
     let extra = 0;
+    let base = null;
     await page.route(/\/api\/packets\?/, async (route) => {
       const response = await route.fetch();
       const rows = await response.json();
-      if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+      if (!base) {
+        if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+        base = { rows, node: rows[0].packet_key.split(':')[0], at: Date.now() };
+      }
       const made = [];
       for (let n = extra; n > 0; n -= 1) {
-        const [node] = rows[0].packet_key.split(':');
-        made.push({ ...rows[0], packet_key: `${node}:${990000000 + n}`, first_seen_at: new Date().toISOString() });
+        made.push({
+          ...base.rows[0],
+          packet_key: `${base.node}:${990000000 + n}`,
+          first_seen_at: new Date(base.at + n * 1000).toISOString(),
+        });
       }
-      return route.fulfill({ response, json: [...made, ...rows].slice(0, rows.length) });
+      return route.fulfill({ response, json: [...made, ...base.rows].slice(0, base.rows.length) });
     });
     await open(page, 'firehose', 1000);
     must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
@@ -3994,6 +4398,28 @@ async function main() {
   });
 
   /*
+   * The other half of #283: a mouse keeps 15 px at a phone's width. The
+   * rule is keyed on the pointer, and a narrow desktop window is not a
+   * phone. Without this, a rule keyed on the width would pass the touch
+   * journey below as well.
+   */
+  await journey(context, 'a mouse keeps 15 px body text at any width (#283)', async (page) => {
+    const sizes = [];
+    for (const width of [390, 1500]) {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page, 'nodes', 2000);
+      const got = await page.evaluate(() => ({
+        coarse: matchMedia('(pointer: coarse)').matches,
+        body: getComputedStyle(document.body).fontSize,
+      }));
+      must(!got.coarse, 'this context reports a coarse pointer, so it cannot stand for a mouse');
+      must(got.body === '15px', `at ${width} px with a mouse the body is ${got.body}`);
+      sizes.push(`${width}:${got.body}`);
+    }
+    return sizes.join(' ');
+  });
+
+  /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
    * 400 percent zoom the criterion is derived from.
@@ -4161,6 +4587,70 @@ async function main() {
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
     return 'all 14 pages, no sideways document scroll';
+  });
+
+  /*
+   * #283. On a touch screen the body is 16 px and no text is under
+   * .78 rem (12.48 px). Keyed on the pointer, so this context is a touch
+   * one at every width, the iPad's 834 included.
+   *
+   * The pages are the ones with the widest tables, so a larger font that
+   * pushes the document sideways shows here first. Letters are 0.05em
+   * wider, as in the Who hears it journey, because CI's Linux fonts are
+   * wider than a Mac's. The sticky bar (#271) must still be at the top
+   * after a scroll, and `--bar-h` must still be its height, or the
+   * things that stick under it (#280, #286) hide behind it.
+   */
+  await journey(narrow, 'body text is 16 px on a touch screen, and nothing scrolls sideways (#283)', async (page) => {
+    const bad = [];
+    const facts = [];
+    for (const width of [320, 390, 834]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const name of ['dashboard', 'nodes', 'firehose', 'stats', 'gaps', 'chat']) {
+        await open(page, name, 2500);
+        await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+        await page.waitForTimeout(200);
+        await page.evaluate(() => window.scrollTo(0, 1200));
+        await page.waitForTimeout(200);
+        const got = await page.evaluate(() => {
+          let smallest = 99;
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const parent = node.parentElement;
+            if (!node.textContent.trim() || !parent || !parent.getClientRects().length) continue;
+            // A chart's SVG labels are sized by the chart, not by this rule.
+            if (parent.closest('svg')) continue;
+            smallest = Math.min(smallest, parseFloat(getComputedStyle(parent).fontSize));
+          }
+          const fields = [...document.querySelectorAll('.page.active input, .page.active select, .page.active textarea')]
+            .filter((field) => field.getClientRects().length && field.type !== 'checkbox' && field.type !== 'radio')
+            .map((field) => parseFloat(getComputedStyle(field).fontSize));
+          const bar = document.querySelector('.sidebar').getBoundingClientRect();
+          return {
+            body: getComputedStyle(document.body).fontSize,
+            smallest,
+            field: fields.length ? Math.min(...fields) : null,
+            scroll: document.documentElement.scrollWidth,
+            client: document.documentElement.clientWidth,
+            barTop: bar.top,
+            barHeight: Math.ceil(bar.height),
+            barVar: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')),
+            scrolled: window.scrollY,
+          };
+        });
+        const at = `${name} at ${width} px`;
+        if (got.body !== '16px') bad.push(`${at}: the body is ${got.body}`);
+        if (got.smallest < 12.4) bad.push(`${at}: text at ${got.smallest} px`);
+        if (got.field !== null && got.field < 16) bad.push(`${at}: a form field at ${got.field} px`);
+        if (got.scroll > got.client + 1) bad.push(`${at}: the page scrolls sideways, ${got.scroll}/${got.client}`);
+        if (got.scrolled > 0 && Math.abs(got.barTop) > 1) bad.push(`${at}: the bar scrolled away (top ${got.barTop})`);
+        if (Math.abs(got.barVar - got.barHeight) > 1) bad.push(`${at}: --bar-h is ${got.barVar}, the bar is ${got.barHeight}`);
+        if (width === 320) facts.push(`${name} ${got.scroll}/${got.client}`);
+      }
+    }
+    await page.setViewportSize({ width: 320, height: 640 });
+    must(bad.length === 0, bad.join('; '));
+    return `16 px body, no text under 12.5 px, at 320/390/834; at 320: ${facts.join(', ')}`;
   });
   await journey(narrow, 'the firehose reads as cards on a phone (#273)', async (page) => {
     /*

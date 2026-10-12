@@ -30,15 +30,30 @@ def _settings(cache: Path, **extra: Any) -> Settings:
     return Settings(_env_file=None, coverage_cache_dir=str(cache), **extra)
 
 
-def _row(node_id: str, active_hours: int, rf_hours: int, direct: int = 0) -> dict[str, object]:
+def _row(node_id: str, asked: int, answered: int, direct: int = 0) -> dict[str, object]:
+    """One node in both shapes a file holds: its counts and its answers.
+
+    `_rows` splits them into the node row and the traceroute row (#293).
+    """
     return {
         "node_id": node_id,
         "display_name": node_id,
-        "packets": active_hours,
-        "active_hours": active_hours,
-        "rf_hours": rf_hours,
+        "packets": asked,
         "direct_gateways": direct,
+        "requests": asked,
+        "answered": answered,
+        "senders": 3,
     }
+
+
+def _nodes(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    keys = ("node_id", "display_name", "packets", "direct_gateways")
+    return [{key: row[key] for key in keys} for row in rows]
+
+
+def _traces(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    keys = ("node_id", "display_name", "requests", "answered", "senders")
+    return [{key: row[key] for key in keys} for row in rows]
 
 
 # The seven day assessment ranks A first; the 24 hour file ranks B first.
@@ -54,7 +69,12 @@ def _write_assessment(settings: Settings, rows: list[dict[str, object]] = WEEK) 
     store.write_preset(
         settings,
         "LongFast",
-        {"preset": "LongFast", "window_hours": settings.gaps_window_hours, "nodes": rows},
+        {
+            "preset": "LongFast",
+            "window_hours": settings.gaps_window_hours,
+            "nodes": _nodes(rows),
+            "trace_answers": _traces(rows),
+        },
     )
 
 
@@ -67,7 +87,8 @@ def _write_board(settings: Settings, asked: int, hours: int, rows: list[dict[str
             "preset": "LongFast",
             "window_hours": hours,
             "generated_at": NOW.isoformat(),
-            "nodes": rows,
+            "nodes": _nodes(rows),
+            "trace_answers": _traces(rows),
         },
     )
     assert path is not None
@@ -203,7 +224,7 @@ def test_the_assessment_window_gets_no_second_file(tmp_path: Path) -> None:
 
 
 def _held(hours: int, age: timedelta) -> dict[str, object]:
-    return {"window_hours": hours, "generated_at": (NOW - age).isoformat()}
+    return {"window_hours": hours, "generated_at": (NOW - age).isoformat(), "trace_answers": []}
 
 
 def test_a_short_window_is_rebuilt_every_run_and_a_long_one_is_not() -> None:
@@ -236,29 +257,10 @@ def test_the_board_file_is_not_an_assessment_the_gaps_page_lists(tmp_path: Path)
     _write_board(settings, 24, 24, DAY)
     assert [item["preset"] for item in store.assessed_presets(settings)] == ["LongFast"]
     held = store.read_preset(settings, "LongFast")
-    assert held is not None and held["nodes"] == WEEK
+    assert held is not None and held["nodes"] == _nodes(WEEK)
 
 
 # --- one rule, in one place -----------------------------------------
-
-
-def test_the_reachable_ranking_is_one_function() -> None:
-    """#293 will change what this board measures. It swaps one function.
-
-    Nothing else in the route reads the two hour counts, so the ratio is
-    computed in exactly one place for every window.
-    """
-    source = inspect.getsource(leaderboards)
-    body = inspect.getsource(leaderboards._reachable_board)
-    assert source.count("rf_hours") == body.count("rf_hours")
-
-
-def test_the_awake_floor_scales_with_a_short_window() -> None:
-    """24 hours awake out of a 24 hour window would rank almost nobody."""
-    half_day = [_row("!0000000c", 12, 12)]
-    assert _order(leaderboards._reachable_board(half_day, 24)) == ["!0000000c"]
-    assert _order(leaderboards._reachable_board(half_day, 168)) == []
-    assert leaderboards.MIN_AWAKE_HOURS == 24
 
 
 def test_the_board_evidence_shares_the_assessment_query() -> None:

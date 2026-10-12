@@ -283,8 +283,6 @@ class Settings(BaseSettings):
     # sites are taken first. It is a guard against a run that never
     # ends, not a limit anybody should want to reach.
     coverage_max_nodes: int = 600
-    # The receiver the map assumes: a handheld with a stock antenna,
-    # held about a metre and a half above the ground.
     # How coarse a position may be and still anchor a prediction, in
     # bits. Zero turns the test off. See `sonoran/positions.py`.
     #
@@ -293,7 +291,29 @@ class Settings(BaseSettings):
     # the backbone reports 13 bits, which is 2.9 km, so most of it will
     # need a position in `config/nodes.yaml` to be a site at all. The
     # manifest counts what was left out for this reason.
+    #
+    # This may raise the floor. It may not lower it: a value from 1 to
+    # 15 is read as 16, and the job logs a warning (#315). Every
+    # published map predicts from precise positions only. To see the
+    # rounded ones as well, use COVERAGE_INCLUDE_APPROXIMATE below.
     coverage_min_precision_bits: int = 16
+    # Also publish an approximate map of each site set, which takes
+    # positions rounded down to COVERAGE_APPROXIMATE_MIN_BITS too.
+    #
+    # Off by default, and the cost is why: each approximate map is one
+    # more full prediction of its site set. With this off, a run costs
+    # what it did before.
+    #
+    # The approximate map is its own site set, with its own tiles, and
+    # the manifest marks it `approximate`. The precise infrastructure
+    # map stays the default view and the only map the public embed
+    # serves, whatever this is set to. See `AGENTS.md` 9.25 and 9.27.
+    coverage_include_approximate: bool = False
+    # The coarsest position the approximate map takes, in bits. 13 is
+    # 2.9 km. Zero takes every position, however rounded.
+    coverage_approximate_min_bits: int = 13
+    # The receiver the map assumes: a handheld with a stock antenna,
+    # held about a metre and a half above the ground.
     coverage_rx_height_m: float = 1.5
     coverage_rx_gain_dbi: float = 2.15
     # Which roles a run may predict from, as a comma separated list.
