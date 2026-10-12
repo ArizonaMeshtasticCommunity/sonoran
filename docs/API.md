@@ -1751,16 +1751,24 @@ reads `follows_window` and says "not the page range" where it is false.
 Response: `available`, `preset`, `presets`, `assessed`, `boards`.
 
 Each board: `key`, `title`, `measure`, `window_hours`, `cannot_know`,
-`rows`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
+`rows`. `reachable` also carries `not_ranked`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
 a link row also carries `other_id` and `other_name`.
 `unit` is SI (`km` for a link) or a word (`%`, `gateways`). The API does
 not convert. The page writes `value` and `unit` through
 `SonoranUnits.measure`, which gives miles or kilometres from the reader's
 setting (#291).
 
-- `reachable` — the share of the hours a node was awake in which
-  something on the air heard it. At least 24 hours awake, or half the
-  window when that is less: 12 hours at 24 h. Read from the gaps job.
+- `reachable` — "Most reliably answers traceroutes" (#293): the share
+  of traceroutes sent to a node by other nodes that it answered. A
+  request is answered when a reply carries its packet ID as
+  `request_id`, from the node asked, to the node that asked. A node
+  needs at least 10 traceroutes from at least 2 senders; the board
+  carries `not_ranked`, the number of traced nodes below that floor.
+  Ranked by the low end of the Wilson 95 percent interval. `value` is
+  the share in `%`; `detail` is "N of M answered, S senders". An answer
+  no gateway uploaded counts as unanswered. Read from the gaps job
+  (`docs/GAPS.md` 6.2). A gaps file written before #293 holds no counts,
+  and the board then says so in `measure` and has no rows.
 - `direct_gateways` — distinct gateways that heard the node with no hop
   used, never its own upload. Read from the gaps job.
 - `longest_link` — the longest links graded `two_way` by

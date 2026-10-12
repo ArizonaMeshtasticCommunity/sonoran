@@ -24,7 +24,7 @@ from pathlib import Path
 from fastapi import APIRouter, Query, Request
 
 from sonoran.config import Settings
-from sonoran.gaps import store
+from sonoran.gaps import boards, store
 from sonoran.gaps.signals import BAD, OK, SIGNAL_UNIT_LABELS, UNKNOWN, signal_key
 from sonoran.gaps.siting import SITING_CAVEATS
 from sonoran.radio.presets import preset_for_channel
@@ -212,8 +212,11 @@ async def gaps_summary(
     if document is None:
         return _unavailable("no_assessment", settings)
 
-    # Everything except the node rows, which have their own endpoint.
-    summary = {key: value for key, value in document.items() if key != "nodes"}
+    # Everything except the node rows, which have their own endpoint, and
+    # the leaderboard's traceroute counts (#293), which this page never
+    # reads and which grow with every node anybody traces.
+    left_out = ("nodes", boards.TRACE_ANSWERS)
+    summary = {key: value for key, value in document.items() if key not in left_out}
     thresholds = document.get("thresholds")
     return {
         **summary,

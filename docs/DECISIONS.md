@@ -1348,3 +1348,34 @@ detail.
   on the live box.
 - **The awake floor scales.** 24 awake hours in a 24 hour window would
   rank almost nobody, so the floor is half the window when that is less.
+
+## 2026-10-08 — reachability is answered traceroutes (#293)
+
+Will chose the recommended measure: "Most consistently reachable" is
+replaced by the share of traceroutes to a node that it answered. A node
+needs at least 10 traceroutes from 2 or more senders, and the board
+follows the page range. `docs/GAPS.md` 6.2 has the detail. Five choices
+were made to build it.
+
+- **Matched by (asker, target, request packet ID).** A reply carries the
+  request's packet ID, and a packet ID belongs to its sender, so the
+  asker is part of the key. The pairing reads each row through
+  `trace_endpoints`, the one reading of a reply's direction (`AGENTS.md`
+  9.18). A reply with no request seen counts in neither number.
+- **Computed in the gaps job, not the API.** The job already reads every
+  traceroute of the 7 d window, and it already writes a file for each
+  other window (#294). The route stays a file read. A bounded query in
+  the route would read up to 30 days of traceroutes for each preset and
+  window on a page load, and the 30 d answer barely moves in six hours.
+- **Ranked by the low end of the Wilson interval, shown as the share.**
+  Ten of ten would otherwise top a board that also holds 95 of 100. The
+  measure line says that more traceroutes count for more, so a lower
+  share above a higher one is explained on the page.
+- **The floor is applied by the route.** The job writes every node
+  traced. So the board can say how many it left out, and a change to the
+  floor does not wait for the job.
+- **The uptime ratio is gone from the board, and kept everywhere else.**
+  Will asked to replace it. The awake and heard hours are still in the
+  assessment, because the `rf_intermittent` signal, the gaps page and
+  the node page read them. The board files no longer carry them: nothing
+  else reads those files.
