@@ -1,5 +1,8 @@
 """Firmware 2.8.1: the protobufs, and the presets firmware has (#362).
 
+The sensitivities are 22 dBm minus the Meshtastic docs' link budgets;
+`radio/presets.py` names the source beside the table.
+
 The channel names, spreading factors and bandwidths below are firmware's
 own: `DisplayFormatters::getModemPresetDisplayName` and
 `modemPresetToParams` (`src/mesh/MeshRadio.h`) at firmware v2.8.1.8e6a88d.
@@ -68,7 +71,8 @@ def test_the_long_turbo_default_of_2_8_is_tagged_not_dropped() -> None:
 
 
 def test_a_preset_with_no_source_has_no_sensitivity_and_is_never_drawn() -> None:
-    """#362: no figure is made up for a preset the table does not model."""
+    """Long slow and Very long slow have no docs budget. No figure is made up."""
+    assert {preset.key for preset in RECOGNISED_ONLY} == {"LONG_SLOW", "VERY_LONG_SLOW"}
     for preset in RECOGNISED_ONLY:
         assert preset.sensitivity_dbm is None, preset.key
         assert modelled(preset) is None
@@ -111,7 +115,7 @@ def test_the_link_board_never_reads_a_missing_sensitivity_as_zero(
     monkeypatch.setattr(leaderboards, "_neighbor_edges", nothing)
     monkeypatch.setattr(leaderboards, "exact_positions", positions)
     monkeypatch.setattr(leaderboards, "resolve_names", names)
-    board = asyncio.run(leaderboards._link_board(None, "LongTurbo", 5.0))  # type: ignore[arg-type]
+    board = asyncio.run(leaderboards._link_board(None, "LongSlow", 5.0))  # type: ignore[arg-type]
     assert board["rows"] == [], "an unmodelled preset gave a link a margin"
     # The control: on a modelled preset the same link is ranked.
     control = asyncio.run(leaderboards._link_board(None, "LongFast", 5.0))  # type: ignore[arg-type]
@@ -147,3 +151,15 @@ def test_data_did_not_change_so_no_genuine_packet_can_fail_the_round_trip() -> N
         (9, "bitfield"),
         (10, "xeddsa_signature"),
     ]
+
+
+def test_every_sensitivity_is_the_docs_budget_at_22_dbm() -> None:
+    """#362: the docs' link budgets assume 22 dBm, so 22 minus the budget."""
+    budgets = {
+        "SHORT_TURBO": 140, "SHORT_FAST": 143, "SHORT_SLOW": 145.5, "MEDIUM_TURBO": 145,
+        "MEDIUM_FAST": 148, "MEDIUM_SLOW": 150.5, "LONG_TURBO": 150, "LONG_FAST": 153,
+        "LONG_MODERATE": 156, "LITE_FAST": 151, "LITE_SLOW": 153.5, "NARROW_FAST": 149,
+        "NARROW_SLOW": 151.5, "TINY_FAST": 155, "TINY_SLOW": 157.5,
+    }  # fmt: skip
+    assert {preset.key: 22 - preset.sensitivity_dbm for preset in PRESETS} == budgets  # type: ignore[operator]
+    assert preset_for_channel("LongFast").sensitivity_dbm == -131.0  # type: ignore[union-attr]

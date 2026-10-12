@@ -35,16 +35,15 @@ class ModemPreset:
     value stored in `neighbor_metrics.channel` and in `node.last_channel`.
 
     `sensitivity_dbm` is the threshold the planner and the coverage map
-    draw against. **Its source is in doubt (#362):** the table below was
-    labelled "SX1262 data sheet", but every figure is 14 dBm minus the
-    link budget the Meshtastic docs publish, and those budgets assume a
-    22 dBm transmitter, so the figures read about 8 dB better than the
-    docs support. Do not add a figure here until #362 settles the source.
+    draw against. It is the transmit power the Meshtastic docs assume,
+    22 dBm, minus the link budget they publish for the preset. See
+    `PRESETS`. It is the best a radio can do: where the band is shared
+    and noisy, a real radio does several dB worse.
 
-    A preset firmware has and this table does not model has
-    `sensitivity_dbm` None. It is recognised by name, so traffic on it
-    is tagged with the right preset, and every reader that needs a
-    sensitivity skips it through `modelled` instead of guessing one.
+    A preset with no published link budget has `sensitivity_dbm` None.
+    It is recognised by name, so traffic on it is tagged with the right
+    preset, and every reader that needs a sensitivity skips it through
+    `modelled` instead of guessing one.
     """
 
     key: str
@@ -55,46 +54,57 @@ class ModemPreset:
     sensitivity_dbm: float | None
 
 
-# The nine presets this table models, with a sensitivity each.
+# The transmit power the Meshtastic docs assume for every link budget
+# in their preset table, in dBm, with a 0 dB antenna.
+DOCS_TX_POWER_DBM = 22.0
+
+# The presets with a published link budget, shortest range first. It is
+# the order the pickers show.
 #
-# The order is from the shortest range to the longest. It is the order
-# the pickers show. The sensitivities are in doubt: see `ModemPreset`
-# and #362 before you use one as a fact or add one.
+# Source: the preset table of https://meshtastic.org/docs/overview/radio-settings/
+# (read 2026-10-12). It says its link budgets come from "the official
+# Semtech LoRa calculator" and "assume a transmit power of 22 dBm and an
+# antenna with 0 dB gain". So each sensitivity is 22 dBm minus that
+# budget, and each line names the budget it came from.
+#
+# Spreading factor and bandwidth agree with firmware's own
+# `modemPresetToParams` (`src/mesh/MeshRadio.h`), and each name is the
+# channel name from `DisplayFormatters::getModemPresetDisplayName`, both
+# at firmware v2.8.1.8e6a88d. The bandwidths are for a region without
+# wide LoRa.
+#
+# Before #362 this table read 8 dB better: it was 14 dBm minus the same
+# budgets and was labelled "SX1262 data sheet". Every coverage map and
+# margin drawn before #362 assumed that much more range.
 PRESETS: tuple[ModemPreset, ...] = (
-    ModemPreset("SHORT_TURBO", "ShortTurbo", "Short turbo", 7, 500_000, -126.0),
-    ModemPreset("SHORT_FAST", "ShortFast", "Short fast", 7, 250_000, -129.0),
-    ModemPreset("SHORT_SLOW", "ShortSlow", "Short slow", 8, 250_000, -131.5),
-    ModemPreset("MEDIUM_FAST", "MediumFast", "Medium fast", 9, 250_000, -134.0),
-    ModemPreset("MEDIUM_SLOW", "MediumSlow", "Medium slow", 10, 250_000, -136.5),
-    ModemPreset("LONG_FAST", "LongFast", "Long fast", 11, 250_000, -139.0),
-    # Firmware names this channel "LongMod", not "LongModerate"
-    # (`DisplayFormatters::getModemPresetDisplayName`, firmware v2.8.1).
-    # The old spelling stays readable, see `ALIASES`.
-    ModemPreset("LONG_MODERATE", "LongMod", "Long moderate", 11, 125_000, -142.0),
-    ModemPreset("LONG_SLOW", "LongSlow", "Long slow", 12, 125_000, -144.5),
-    ModemPreset("VERY_LONG_SLOW", "VeryLongSlow", "Very long slow", 12, 62_500, -147.5),
+    ModemPreset("SHORT_TURBO", "ShortTurbo", "Short turbo", 7, 500_000, 22 - 140.0),
+    ModemPreset("SHORT_FAST", "ShortFast", "Short fast", 7, 250_000, 22 - 143.0),
+    ModemPreset("MEDIUM_TURBO", "MediumTurbo", "Medium turbo", 9, 500_000, 22 - 145.0),
+    ModemPreset("SHORT_SLOW", "ShortSlow", "Short slow", 8, 250_000, 22 - 145.5),
+    ModemPreset("MEDIUM_FAST", "MediumFast", "Medium fast", 9, 250_000, 22 - 148.0),
+    ModemPreset("NARROW_FAST", "NarrowFast", "Narrow fast", 7, 62_500, 22 - 149.0),
+    ModemPreset("LONG_TURBO", "LongTurbo", "Long turbo", 11, 500_000, 22 - 150.0),
+    ModemPreset("MEDIUM_SLOW", "MediumSlow", "Medium slow", 10, 250_000, 22 - 150.5),
+    ModemPreset("LITE_FAST", "LiteFast", "Lite fast", 9, 125_000, 22 - 151.0),
+    ModemPreset("NARROW_SLOW", "NarrowSlow", "Narrow slow", 8, 62_500, 22 - 151.5),
+    ModemPreset("LONG_FAST", "LongFast", "Long fast", 11, 250_000, 22 - 153.0),
+    ModemPreset("LITE_SLOW", "LiteSlow", "Lite slow", 10, 125_000, 22 - 153.5),
+    ModemPreset("TINY_FAST", "TinyFast", "Tiny fast", 7, 15_600, 22 - 155.0),
+    # Firmware names this channel "LongMod", not "LongModerate". The old
+    # spelling stays readable, see `ALIASES`.
+    ModemPreset("LONG_MODERATE", "LongMod", "Long moderate", 11, 125_000, 22 - 156.0),
+    ModemPreset("TINY_SLOW", "TinySlow", "Tiny slow", 8, 15_600, 22 - 157.5),
 )
 
-# The presets firmware has that this table does not model yet (#362).
-#
-# Spreading factor and bandwidth are firmware's own, from
-# `modemPresetToParams` in `src/mesh/MeshRadio.h`, and the channel names
-# from `DisplayFormatters::getModemPresetDisplayName` in
-# `src/DisplayFormatters.cpp`, both at firmware v2.8.1.8e6a88d. The
-# figures are for a region without wide LoRa. LONG_TURBO is the US
-# default for a new node from firmware 2.8.
-#
-# No sensitivity: see the note on `ModemPreset`. These are not offered
-# by the planner or drawn by the coverage map until #362 gives them one.
+# Presets that older firmware still runs and the docs table no longer
+# lists. Their traffic is recognised and tagged. They have no published
+# link budget, so the planner and the coverage map do not draw them.
+# Very long slow is gone from firmware 2.8.1 (it falls back to Long fast
+# settings); Long slow is still in firmware. Remove them when no node on
+# this mesh runs them any more.
 RECOGNISED_ONLY: tuple[ModemPreset, ...] = (
-    ModemPreset("MEDIUM_TURBO", "MediumTurbo", "Medium turbo", 9, 500_000, None),
-    ModemPreset("LONG_TURBO", "LongTurbo", "Long turbo", 11, 500_000, None),
-    ModemPreset("LITE_FAST", "LiteFast", "Lite fast", 9, 125_000, None),
-    ModemPreset("LITE_SLOW", "LiteSlow", "Lite slow", 10, 125_000, None),
-    ModemPreset("NARROW_FAST", "NarrowFast", "Narrow fast", 7, 62_500, None),
-    ModemPreset("NARROW_SLOW", "NarrowSlow", "Narrow slow", 8, 62_500, None),
-    ModemPreset("TINY_FAST", "TinyFast", "Tiny fast", 7, 15_600, None),
-    ModemPreset("TINY_SLOW", "TinySlow", "Tiny slow", 8, 15_600, None),
+    ModemPreset("LONG_SLOW", "LongSlow", "Long slow", 12, 125_000, None),
+    ModemPreset("VERY_LONG_SLOW", "VeryLongSlow", "Very long slow", 12, 62_500, None),
 )
 
 # Every preset a channel name or a key can name: the modelled ones and
@@ -156,7 +166,7 @@ def sensitivity_of(preset: ModemPreset) -> float:
     drawn against a number nobody chose.
     """
     if preset.sensitivity_dbm is None:
-        raise ValueError(f"{preset.key} has no modelled sensitivity (#362)")
+        raise ValueError(f"{preset.key} has no published link budget to model")
     return preset.sensitivity_dbm
 
 

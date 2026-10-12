@@ -67,12 +67,12 @@ def test_the_comment_stripping_does_not_hide_a_real_value() -> None:
     """Positive control for the stripper.
 
     `DEFAULTS` explains the Medium fast choice in a comment that names
-    Long fast's -139 dBm. Reading the block without stripping comments
+    Long fast's -131 dBm. Reading the block without stripping comments
     would find that number and could be made to agree with a stale
     document -- the exact bug this file exists to catch, passing itself.
     """
     values = _defaults()
-    assert values["sensitivity"] == "-134", (
+    assert values["sensitivity"] == "-126", (
         f"sensitivity parsed as {values['sensitivity']!r}; a comment may be leaking in"
     )
 
@@ -84,7 +84,7 @@ def test_the_receiver_defaults_match_the_document() -> None:
         f"the document names a preset the form does not use; form says {values['preset']!r}"
     )
     assert values["preset"] == "MEDIUM_FAST"
-    assert "-134" in _row("Sensitivity"), (
+    assert "-126" in _row("Sensitivity"), (
         f"the document states a sensitivity the form does not use: {values['sensitivity']!r}"
     )
 

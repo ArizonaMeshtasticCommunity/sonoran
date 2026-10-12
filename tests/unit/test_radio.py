@@ -84,7 +84,7 @@ def test_the_python_and_javascript_preset_tables_agree() -> None:
 
 def test_preset_lookup_by_key() -> None:
     assert preset_by_key("LONG_FAST") is not None
-    assert preset_by_key("LONG_FAST").sensitivity_dbm == -139.0  # type: ignore[union-attr]
+    assert preset_by_key("LONG_FAST").sensitivity_dbm == -131.0  # type: ignore[union-attr]
     assert preset_by_key("NOT_A_PRESET") is None
 
 
