@@ -33,7 +33,7 @@ Created in the first migration:
 |------|--------|---------|
 | `azmsh_ingest` | INSERT, UPDATE on all tables. No DELETE. No table-level SELECT. SELECT on a few columns only, because PostgreSQL requires SELECT on each column an UPDATE names in its WHERE clause: `node.node_num` (0006); `node.uplink_preset`, `node.uplink_preset_at` and `node.last_preset_at` (i313); and the key of `packet`, `from_node_num`, `packet_id` and `first_seen_at` (i313). No other column of `packet` is readable. | ingest process |
 | `azmsh_api` | SELECT on all tables | api process |
-| `azmsh_jobs` | SELECT, INSERT on `daily_snapshot`. DELETE where retention fallback needs it | jobs process |
+| `azmsh_jobs` | SELECT, INSERT on `daily_snapshot`. DELETE where retention fallback needs it. SELECT, INSERT and DELETE on the job output tables (5B, i351), and no UPDATE: a run is replaced, never edited | jobs process |
 
 ### 2.1 The role passwords
 
@@ -376,6 +376,53 @@ role can read or write `rf_operator_log`; `rf_trust` and
 `thing_id` is the identity of what was heard: the ICAO address, lower
 case, for aircraft. `rssi_db` is in the receiver's own units, so it
 compares one station with itself and never two stations.
+
+## 5B. Job output tables (#351)
+
+What the background jobs compute, and the API serves. Before #351 these
+were JSON files beside the coverage runs. The coverage tiles and the
+run manifest stay on disk.
+
+**Each table holds the latest run only.** A job replaces a whole run in
+one transaction: it deletes the run's rows, inserts the new ones, and
+commits once. A reader sees the old run or the new one, never half of
+each. None is a hypertable, and none grows with time: the size is about
+nodes x windows x presets.
+
+| Table | Key | Holds | Written by |
+|---|---|---|---|
+| `gaps_index` | `id` (always 1) | When the gaps job last ran, and its window | `jobs/gaps.py` |
+| `gaps_run` | `preset`, `scope`, `asked_hours` | One assessment (`scope` `assessment`, `asked_hours` 0), or one Statistics window of leaderboard counts (`scope` `board`, `asked_hours` 24 or 720). `summary` (`jsonb`) holds the top-level fields | `jobs/gaps.py` |
+| `gaps_node` | run key, `node_num` | One node of one run: the evidence counts as columns, and `rank`, the order the job set (worst first). `node_num` references `node` | `jobs/gaps.py` |
+| `gaps_signal` | run key, `node_num`, `signal` | One signal of one node: `state`, `reason`, `value` and `unit` as columns, `position` (the job's order), and `evidence` as `jsonb`, because its shape is the signal's own | `jobs/gaps.py` |
+| `gaps_trace_answer` | run key, `node_num` | The traceroute counts of the reachable board (#293) | `jobs/gaps.py` |
+| `gaps_siting` | `preset` | One preset's siting answer. `summary` holds the cost, the thresholds, the coverage it used and the caveats | `jobs/gaps_siting.py` |
+| `gaps_siting_area` | `preset`, `area` | One neighbourhood of struggling nodes: counts, node numbers, centroid, bounds and width | `jobs/gaps_siting.py` |
+| `gaps_siting_point` | `preset`, `area`, `position` | One demand point of an area: its place, its node numbers and their names | `jobs/gaps_siting.py` |
+| `gaps_siting_candidate` | `preset`, `position` | One candidate place, in the order the job ranked it: every field of `gaps.siting.Candidate` as a column | `jobs/gaps_siting.py` |
+| `coverage_calibration` | `id` (always 1) | The fit as a whole: bias, scatter, rounds, summary | `jobs/calibrate.py` |
+| `coverage_calibration_node` | `node_num` | What the measurements say about one node | `jobs/calibrate.py` |
+
+**Foreign keys.** Every child row belongs to its run or answer and is
+deleted with it (`ON DELETE CASCADE`), so deleting a run is one
+statement. `gaps_node.node_num` references `node`: the job leaves out,
+and logs, a row whose node has no record yet, so that key never fails a
+run. `gaps_trace_answer` does not reference `node`, because a node can
+be traced and never send anything.
+
+**What stays `jsonb`.** A run's `summary` (its window, thresholds,
+labels, caveats and counts) and a signal's `evidence`. Both are read
+whole and never filtered on. Everything a page filters, sorts or pages
+by is a column.
+
+**Names are read live.** `gaps_node` stores no name, short name or role.
+A reader joins `node`, so a node renamed after a run reads with its new
+name. The position stays as the job assessed it, because the findings
+belong to that position.
+
+**The old files are imported once.** The jobs process imports the old
+JSON files at start into any of these tables that is empty
+(`jobs/legacy_import.py`), and leaves the files in place for a rollback.
 
 ## 6. Retention policy
 

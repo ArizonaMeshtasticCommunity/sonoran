@@ -25,7 +25,7 @@ from sonoran.coverage import store as coverage_store
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.gaps import store
 from sonoran.jobs import coverage, gaps
-from tests.integration.conftest import role_url
+from tests.integration.conftest import role_url, run_store, wipe_job_outputs
 
 # A node number range of this file's own, so two test files cannot
 # collide in a shared database.
@@ -69,6 +69,8 @@ def clean(migrated_engine) -> Iterator[None]:  # type: ignore[no-untyped-def]
 
 
 def _wipe(migrated_engine) -> None:  # type: ignore[no-untyped-def]
+    # First: a gaps row references its node, so the node goes after it.
+    wipe_job_outputs(migrated_engine)
     with migrated_engine.begin() as connection:
         for table, column in (
             ("packet_seen", "from_node_num"),
@@ -225,7 +227,7 @@ def _run(settings: Settings, job):  # type: ignore[no-untyped-def]
 
 def _rows(settings: Settings, preset: str = "LongFast") -> dict[str, dict]:
     """Return the written assessment, keyed by node ID."""
-    document = store.read_preset(settings, preset)
+    document = run_store(settings, store.read_preset, preset)
     assert document is not None, "the job wrote no assessment"
     listed = document["nodes"]
     assert isinstance(listed, list)
@@ -444,7 +446,7 @@ def test_a_node_that_hears_the_mesh_and_is_not_heard_back(
     assert "receiver works" in found["sentence"]
     assert "transmit side" in found["sentence"]
     # It is the top of the list, because the ranking puts it there.
-    listed = store.read_preset(settings, "LongFast")
+    listed = run_store(settings, store.read_preset, "LongFast")
     assert listed is not None
     assert listed["nodes"][0]["node_id"] == _ident(node)
 
@@ -550,7 +552,7 @@ def test_a_gateway_clock_that_is_a_day_ahead_moves_nothing(
     assert row["packets"] == 6
     assert row["active_hours"] == 6
 
-    document = store.read_preset(settings, "LongFast")
+    document = run_store(settings, store.read_preset, "LongFast")
     assert document is not None
     assert row["active_hours"] <= document["window_hours"]
 
@@ -591,8 +593,8 @@ def test_two_presets_get_two_assessments_that_borrow_nothing(
     assert bad["preset"] == "MediumSlow"
 
     # And there is no file that merges them.
-    assert store.read_preset(settings, "All") is None
-    index = store.read_index(settings)
+    assert run_store(settings, store.read_preset, "All") is None
+    index = run_store(settings, store.read_index)
     assert index is not None
     assert sorted(item["preset"] for item in index["presets"]) == ["LongFast", "MediumSlow"]
 
@@ -626,14 +628,14 @@ def test_a_channel_that_names_no_preset_is_left_out(
 # --- the artefact and the API -----------------------------------------
 
 
-def test_the_api_reads_the_artefact_and_computes_nothing(
+def test_the_api_reads_the_stored_rows_and_computes_nothing(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """Delete the file and the endpoint says so, rather than recomputing.
+    """Delete the rows and the endpoint says so, rather than recomputing.
 
-    This is the whole point of the artefact. A request that ran these
-    queries would be heavier than the endpoint `docs/ISSUES.md` 2.9 is
-    already an open warning about.
+    This is the whole point of storing the run (#351). A request that ran
+    these queries would be heavier than the endpoint `docs/ISSUES.md` 2.9
+    is already an open warning about.
     """
     node, gateway = BASE + 101, BASE + 109
     settings = _settings(timescale_url, tmp_path)
@@ -658,8 +660,8 @@ def test_the_api_reads_the_artefact_and_computes_nothing(
         assert listing["available"] is True
         assert any(row["node_id"] == _ident(node) for row in listing["nodes"])
 
-    # Now take the artefact away.
-    store.clear(settings)
+    # Now take the run away.
+    run_store(settings, store.clear)
     with TestClient(create_app(settings)) as client:
         body = client.get("/api/gaps?channel=LongFast").json()
         assert body["available"] is False
@@ -722,7 +724,7 @@ def test_the_unknown_bucket_is_counted_and_not_folded_into_healthy(
             )
 
     _run(settings, gaps.run_once)
-    document = store.read_preset(settings, "LongFast")
+    document = run_store(settings, store.read_preset, "LongFast")
     assert document is not None
     row = _rows(settings)[_ident(node)]
 
@@ -876,7 +878,7 @@ def test_a_deployment_with_no_traffic_of_its_own_is_a_working_state(
     settings = _settings(timescale_url, tmp_path)
     written = _run(settings, gaps.run_once)
 
-    index = store.read_index(settings)
+    index = run_store(settings, store.read_index)
     assert index is not None
     assert [item["preset"] for item in index["presets"]] == written
 
@@ -986,12 +988,12 @@ def test_a_24_hour_board_differs_from_a_7_day_board_when_the_data_does(
     _run(settings, gaps.run_once)
 
     # The job wrote the two extra windows; the assessment is the 7 d one.
-    day_file = store.read_boards(settings, "LongFast", 24)
-    month_file = store.read_boards(settings, "LongFast", 720)
+    day_file = run_store(settings, store.read_boards, "LongFast", 24)
+    month_file = run_store(settings, store.read_boards, "LongFast", 720)
     assert day_file is not None and month_file is not None
     assert day_file["window_hours"] == 24
     assert month_file["window_hours"] == 720
-    assert store.read_boards(settings, "LongFast", 168) is None
+    assert run_store(settings, store.read_boards, "LongFast", 168) is None
 
     week_rows = list(_rows(settings).values())
     # B was heard directly only before the last day.
@@ -1035,13 +1037,15 @@ def test_the_month_board_is_not_rebuilt_on_every_run(
     _run(settings, gaps.run_once)
     one_run_ago = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
     for hours in (24, 720):
-        held = store.read_boards(settings, "LongFast", hours)
+        held = run_store(settings, store.read_boards, "LongFast", hours)
         assert held is not None, hours
-        store.write_boards(settings, "LongFast", hours, held | {"generated_at": one_run_ago})
+        run_store(
+            settings, store.write_boards, "LongFast", hours, held | {"generated_at": one_run_ago}
+        )
 
     _run(settings, gaps.run_once)
-    day = store.read_boards(settings, "LongFast", 24)
-    month = store.read_boards(settings, "LongFast", 720)
+    day = run_store(settings, store.read_boards, "LongFast", 24)
+    month = run_store(settings, store.read_boards, "LongFast", 720)
     assert day is not None and month is not None
     assert day["generated_at"] != one_run_ago, "the 24 h board was not rebuilt"
     assert month["generated_at"] == one_run_ago, "the 30 d board was rebuilt on every run"
@@ -1175,8 +1179,13 @@ def test_the_reachable_board_ranks_answered_traceroutes(
 
     _run(settings, gaps.run_once)
 
-    week = {row["node_id"]: row for row in _answers(store.read_preset(settings, "LongFast"))}
-    day = {row["node_id"]: row for row in _answers(store.read_boards(settings, "LongFast", 24))}
+    week = {
+        row["node_id"]: row for row in _answers(run_store(settings, store.read_preset, "LongFast"))
+    }
+    day = {
+        row["node_id"]: row
+        for row in _answers(run_store(settings, store.read_boards, "LongFast", 24))
+    }
     assert (week[_ident(steady)]["requests"], week[_ident(steady)]["answered"]) == (20, 19)
     assert week[_ident(steady)]["senders"] == 3
     assert (week[_ident(patchy)]["requests"], week[_ident(patchy)]["answered"]) == (20, 10)
@@ -1186,7 +1195,10 @@ def test_the_reachable_board_ranks_answered_traceroutes(
     assert week[_ident(few)]["requests"] == 9
     assert _ident(alone) not in week, "a self-trace was counted"
     assert _ident(other) not in week, "another preset was counted"
-    medium = {row["node_id"]: row for row in _answers(store.read_preset(settings, "MediumFast"))}
+    medium = {
+        row["node_id"]: row
+        for row in _answers(run_store(settings, store.read_preset, "MediumFast"))
+    }
     assert (medium[_ident(other)]["requests"], medium[_ident(other)]["answered"]) == (12, 12)
 
     ours = {_ident(node) for node in (steady, patchy, lonely, few, alone, other)}

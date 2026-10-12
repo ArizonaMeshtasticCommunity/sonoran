@@ -310,17 +310,31 @@ def _sql(statement: Any) -> tuple[str, dict[str, Any]]:
     """The statement without its paging, and its parameters.
 
     A time parameter (`active_hours` and the like) is measured from "now"
-    on each call, so it is compared to the second rather than exactly.
+    on each call. It is left out here and compared by `_same_query` with
+    a tolerance: rounding both to the second still failed whenever the
+    two calls fell either side of a second boundary.
     """
     compiled = statement.compile(dialect=postgresql.dialect())
     text = re.sub(r"\s+(LIMIT|OFFSET) %\(\w+\)s", "", str(compiled))
     paging = {name for name in re.findall(r"(?:LIMIT|OFFSET) %\((\w+)\)s", str(compiled))}
     params = {
-        key: (value.replace(microsecond=0) if isinstance(value, datetime) else value)
+        key: ("<now>" if isinstance(value, datetime) else value)
         for key, value in compiled.params.items()
         if key not in paging
     }
     return text, params
+
+
+def _times(statement: Any) -> list[datetime]:
+    compiled = statement.compile(dialect=postgresql.dialect())
+    return [value for value in compiled.params.values() if isinstance(value, datetime)]
+
+
+def _same_query(mine: Any, theirs: Any) -> None:
+    """The same SQL and parameters, and times measured within 2 s of each other."""
+    assert _sql(mine) == _sql(theirs)
+    for one, two in zip(_times(mine), _times(theirs), strict=True):
+        assert abs((one - two).total_seconds()) <= 2, (one, two)
 
 
 @pytest.mark.parametrize(
@@ -351,7 +365,7 @@ def test_the_export_runs_the_list_query(
     exported = sessions[-1].statements
     assert len(listed) == len(exported) == 2
     for mine, theirs in zip(listed, exported, strict=True):
-        assert _sql(mine) == _sql(theirs)
+        _same_query(mine, theirs)
 
 
 @pytest.mark.parametrize("path", ["/api/nodes", "/api/nodes/export"])

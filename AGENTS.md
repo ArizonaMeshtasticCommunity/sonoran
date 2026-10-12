@@ -53,6 +53,10 @@ All documentation and code comments use ASD-STE100 Simplified Technical English.
 - The API has GET endpoints only. Never add a POST, PUT, or DELETE endpoint.
 - The API database role has SELECT rights only.
 - The ingest database role has INSERT and UPDATE rights only.
+- The jobs database role replaces what it computes (the job output
+  tables, `docs/DATABASE.md` 5B) with DELETE and INSERT in one
+  transaction. It has no UPDATE on them. A job output is a table, not
+  a JSON file, except the coverage tiles and the run manifest (#351).
 - Modules talk to each other through small, documented interfaces.
 - Keep functions small. Keep modules small.
 

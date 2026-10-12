@@ -10,6 +10,7 @@ gets, what is said when no file can answer it, how often each file is
 rebuilt, and that the ranking itself lives in one function.
 """
 
+import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,6 +23,7 @@ from sonoran.api.app import create_app
 from sonoran.api.routes import leaderboards
 from sonoran.config import Settings
 from sonoran.gaps import boards, signals, store
+from tests.unit.job_outputs import JobOutputs
 
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
 
@@ -62,12 +64,21 @@ DAY = [_row("!0000000a", 20, 2, direct=4), _row("!0000000b", 20, 20, direct=0)]
 LONG = [_row("!0000000a", 300, 30), _row("!0000000b", 300, 300)]
 
 
+# The job outputs of the test in progress. See `tests/unit/job_outputs.py`.
+_memory: JobOutputs
+
+
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    global _memory
+    _memory = job_outputs
+
+
 def _write_assessment(settings: Settings, rows: list[dict[str, object]] = WEEK) -> None:
-    store.write_index(
-        settings, {"presets": [{"preset": "LongFast", "label": "Long fast", "node_count": 2}]}
+    _memory.write_index(
+        {"presets": [{"preset": "LongFast", "label": "Long fast", "node_count": 2}]}
     )
-    store.write_preset(
-        settings,
+    _memory.write_preset(
         "LongFast",
         {
             "preset": "LongFast",
@@ -79,8 +90,7 @@ def _write_assessment(settings: Settings, rows: list[dict[str, object]] = WEEK) 
 
 
 def _write_board(settings: Settings, asked: int, hours: int, rows: list[dict[str, object]]) -> None:
-    path = store.write_boards(
-        settings,
+    _memory.write_boards(
         "LongFast",
         asked,
         {
@@ -91,7 +101,6 @@ def _write_board(settings: Settings, asked: int, hours: int, rows: list[dict[str
             "trace_answers": _traces(rows),
         },
     )
-    assert path is not None
 
 
 @pytest.fixture
@@ -241,26 +250,27 @@ def test_a_file_from_another_window_or_unreadable_is_rebuilt() -> None:
     assert boards.is_due({"window_hours": 720}, 720, NOW)
 
 
-def test_a_board_file_name_is_checked_before_it_is_a_path(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    assert store.boards_path(settings, "../etc", 24) is None
-    assert store.boards_path(settings, "LongFast", 25) is None
-    expected = tmp_path / "gaps" / "boards-LongFast-24.json"
-    assert store.boards_path(settings, "LongFast", 24) == expected
-    assert store.read_boards(settings, "LongFast", 24) is None
+def test_a_board_run_key_is_checked_before_it_is_stored() -> None:
+    """A preset that is not a name, or a window no page asks for, is refused.
+
+    Both are refused before the database is touched, so no session is
+    needed to show it.
+    """
+    document = {"generated_at": NOW.isoformat(), "nodes": []}
+    assert asyncio.run(store.write_boards(None, "LongFast", 25, document)) is False  # type: ignore[arg-type]
+    assert asyncio.run(store.write_boards(None, "../etc", 24, document)) is False  # type: ignore[arg-type]
+    assert asyncio.run(store.write_preset(None, "Long Fast", document)) is False  # type: ignore[arg-type]
 
 
-def test_the_board_file_is_not_an_assessment_the_gaps_page_lists(tmp_path: Path) -> None:
-    """`assessed_presets` reads the index, so a board file adds no preset."""
+def test_the_board_run_is_not_an_assessment_the_gaps_page_lists(tmp_path: Path) -> None:
+    """`assessed_presets` reads the index, so a board run adds no preset."""
     settings = _settings(tmp_path)
     _write_assessment(settings)
     _write_board(settings, 24, 24, DAY)
-    assert [item["preset"] for item in store.assessed_presets(settings)] == ["LongFast"]
-    held = store.read_preset(settings, "LongFast")
+    listed = asyncio.run(store.assessed_presets(None, settings))  # type: ignore[arg-type]
+    assert [item["preset"] for item in listed] == ["LongFast"]
+    held = asyncio.run(store.read_preset(None, "LongFast"))  # type: ignore[arg-type]
     assert held is not None and held["nodes"] == _nodes(WEEK)
-
-
-# --- one rule, in one place -----------------------------------------
 
 
 def test_the_board_evidence_shares_the_assessment_query() -> None:

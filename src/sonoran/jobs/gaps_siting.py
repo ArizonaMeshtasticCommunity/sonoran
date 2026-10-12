@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import numpy as np
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.coverage import store as coverage_store
@@ -56,6 +57,7 @@ from sonoran.coverage.clutter import terminal_loss_db
 from sonoran.coverage.grid import NO_COVERAGE, Grid, Levels, combine_min, shift, to_dbm
 from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ
 from sonoran.coverage.sites import Site, downlink_offset_db, make_site, uplink_offset_db
+from sonoran.db.session import make_engine, make_session_factory
 from sonoran.gaps import siting, store
 from sonoran.gaps.siting import (
     BAD,
@@ -574,16 +576,16 @@ def site_preset(
     }
 
 
-async def run_once(settings: Settings) -> list[str]:
+async def run_once(session: AsyncSession, settings: Settings) -> list[str]:
     """Make one siting answer for every assessed preset. Return the names.
 
-    It takes no database session, because it asks the database nothing.
-    The demand set is the per node assessment the gaps job already wrote,
-    the baseline is the coverage run's own artefact, and everything else
-    is terrain. An empty list is a working state: a box whose gaps job
-    has not run yet has nothing to site against.
+    The session reads the per node assessment the gaps job already wrote,
+    and stores the answer (#351). It asks the mesh nothing: the baseline
+    is the coverage run's own artefact, and everything else is terrain.
+    An empty list is a working state: a box whose gaps job has not run
+    yet has nothing to site against.
     """
-    index = store.read_index(settings)
+    index = await store.read_index(session)
     if index is None:
         logger.info("no gap assessment has been made yet, so there is nothing to site against")
         return []
@@ -601,11 +603,11 @@ async def run_once(settings: Settings) -> list[str]:
         # the one reader of that spelling. `preset_by_key` takes
         # `LONG_FAST` and would find nothing at all here.
         preset = preset_for_channel(name)
-        document = store.read_preset(settings, name)
+        document = await store.read_preset(session, name)
         if preset is None or document is None:
             continue
         answer = await asyncio.to_thread(site_preset, settings, preset, document)
-        if store.write_siting(settings, preset.name, answer) is None:
+        if not await store.write_siting(session, preset.name, answer):
             continue
         written.append(preset.name)
         cost = answer["cost"]
@@ -627,7 +629,13 @@ async def main() -> None:
     if not settings.gaps_enabled or not settings.gaps_siting_enabled:
         logger.info("the coverage gaps siting job is turned off")
         return
-    await run_once(settings)
+    engine = make_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            await run_once(session, settings)
+    finally:
+        await engine.dispose()
 
 
 def run() -> None:

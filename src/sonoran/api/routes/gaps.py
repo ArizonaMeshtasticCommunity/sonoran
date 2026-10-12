@@ -1,9 +1,10 @@
 """Read-only coverage gap endpoints.
 
-**These routes read the artefact the gaps job wrote and nothing else.**
-They open no database session and they compute no signal. A request that
-ran the gap queries would be heavier than the one `docs/ISSUES.md` 2.9
-already warns about, and the map refreshes that one every 15 seconds.
+**These routes read the rows the gaps job wrote and nothing else.**
+They compute no signal (#351). A request that ran the gap queries would
+be heavier than the one `docs/ISSUES.md` 2.9 already warns about, and
+the map refreshes that one every 15 seconds. What they do run is a
+select by key, with the filters and the limit in SQL.
 
 `available: false` is a working state, not an error, exactly as
 `/api/coverage` treats a missing run. The page then says the assessment
@@ -17,141 +18,74 @@ There is no route under `/api/embed` for any of this, and
 router to keep it that way.
 """
 
-import time
-from collections.abc import Callable
-from pathlib import Path
+import base64
+import binascii
+import json
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api.dependencies import get_session
 from sonoran.config import Settings
-from sonoran.gaps import boards, store
+from sonoran.gaps import store
 from sonoran.gaps.signals import BAD, OK, SIGNAL_UNIT_LABELS, UNKNOWN, signal_key
 from sonoran.gaps.siting import SITING_CAVEATS
 from sonoran.radio.presets import preset_for_channel
 
 router = APIRouter(prefix="/api/gaps", tags=["gaps"])
 
-# How long a served answer is held in the process.
-#
-# The artefact is rewritten every `GAPS_INTERVAL_MINUTES`, which is 30
-# by default, so a short cache costs no freshness worth having and saves
-# reading and parsing a file on every request. This is the convention
-# `api/routes/embed.py` uses. `/api/coverage` reads its manifest from
-# disk on every request with no cache at all; that is not the example to
-# follow.
-#
-# JSON endpoints in this project set no `Cache-Control` and no `ETag`.
-CACHE_SECONDS = 30.0
-
 # The filter values a request may ask for.
 STATES = (BAD, OK, UNKNOWN)
 
-# key -> (when it was read, what the file looked like, the document)
-#
-# The key is the preset for the per node assessment and `siting:` plus
-# the preset for the siting answer. The two files are written by
-# different jobs on different clocks, so they are held apart.
-_cache: dict[str, tuple[float, tuple[int, int], dict[str, object]]] = {}
 
+def page_cursor(stamp: str, after: int) -> str:
+    """Return the opaque cursor of the next page of one run.
 
-def _read_siting(settings: Settings, preset: str) -> dict[str, object] | None:
-    """Return one preset's siting answer, cached the same way.
-
-    The siting answer is rewritten once a coverage cycle, which is every
-    six hours by default, so the file check does nearly all of the work
-    and the timer does almost none.
+    It names the run (`stamp`, when the job made it) and the place in
+    it (`after`: the rank of a node, or the position of a candidate).
     """
-    return _read_file(
-        f"siting:{preset}",
-        store.siting_path(settings, preset),
-        lambda: store.read_siting(settings, preset),
-    )
+    raw = json.dumps({"run": stamp, "after": after}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
-def _read(settings: Settings, preset: str) -> dict[str, object] | None:
-    """Return one preset's assessment, from the cache when it is still true.
+def read_cursor(cursor: str | None, stamp: str | None) -> int | None:
+    """Return the place a cursor names, or None for the first page.
 
-    The cache holds the **parsed** document, which is the expensive part,
-    and checks the file on every request, which is not. A cache that
-    trusted a timer alone would go on serving an assessment after the
-    file was removed, and would serve a stale one for up to
-    `CACHE_SECONDS` after the job rewrote it. Both are a cache answering
-    a question about the world from memory, which is the thing a cache
-    must not do here: this endpoint's whole contract is that it reports
-    what is on disk.
-
-    `st_mtime_ns` and `st_size` together change whenever the job writes,
-    because the job writes to a temporary name and renames over the old
-    file. A rename gives a new inode and a new timestamp.
+    A cursor that is not one is a bad request (422). A cursor from an
+    older run is refused (409): the job rewrites the run every half
+    hour, and a page that mixed two runs would list a node twice or
+    not at all, with nothing to show it.
     """
-    return _read_file(
-        preset,
-        store.preset_path(settings, preset),
-        lambda: store.read_preset(settings, preset),
-    )
-
-
-def read_assessment(settings: Settings, preset: str) -> dict[str, object] | None:
-    """Return one preset's assessment for another route to read.
-
-    The node page reads the same rows through the same cache, so the
-    two pages cannot hold different copies of one node's findings.
-    """
-    return _read(settings, preset)
-
-
-def read_board_window(settings: Settings, preset: str, hours: int) -> dict[str, object] | None:
-    """Return one preset's leaderboard counts for one Statistics window.
-
-    Held in the same cache as the assessment, under its own key, because
-    the job rewrites the two files on different schedules (#294).
-    """
-    return _read_file(
-        f"boards:{preset}:{hours}",
-        store.boards_path(settings, preset, hours),
-        lambda: store.read_boards(settings, preset, hours),
-    )
-
-
-def _read_file(
-    key: str,
-    path: Path | None,
-    load: Callable[[], dict[str, object] | None],
-) -> dict[str, object] | None:
-    """Return one artefact, from the cache when the cache is still true."""
-    if path is None:
+    if cursor is None:
         return None
     try:
-        stat = path.stat()
-    except OSError:
-        # Gone, or unreadable. Say so at once rather than from memory.
-        _cache.pop(key, None)
-        return None
-
-    mark = (stat.st_mtime_ns, stat.st_size)
-    now = time.monotonic()
-    held = _cache.get(key)
-    if held is not None and held[1] == mark and now - held[0] < CACHE_SECONDS:
-        return held[2]
-
-    document = load()
-    if document is None:
-        _cache.pop(key, None)
-        return None
-    _cache[key] = (now, mark, document)
-    return document
+        padded = cursor + "=" * (-len(cursor) % 4)
+        held = json.loads(base64.urlsafe_b64decode(padded.encode()))
+        run, after = held["run"], held["after"]
+    except (binascii.Error, ValueError, KeyError, TypeError) as error:
+        raise HTTPException(status_code=422, detail="not a cursor") from error
+    if not isinstance(run, str) or not isinstance(after, int) or isinstance(after, bool):
+        raise HTTPException(status_code=422, detail="not a cursor")
+    if run != stamp:
+        raise HTTPException(
+            status_code=409,
+            detail="the run was rewritten since the first page; start again without a cursor",
+        )
+    return after
 
 
-def _presets(settings: Settings) -> list[dict[str, object]]:
+async def _presets(session: AsyncSession, settings: Settings) -> list[dict[str, object]]:
     """Return the presets that have an assessment, for the picker.
 
     Ordered by `store.assessed_presets`, so the deployment's own preset
     is first in the picker as well as selected.
     """
-    return store.assessed_presets(settings)
+    return await store.assessed_presets(session, settings)
 
 
-def _resolve(channel: str | None, settings: Settings) -> tuple[str | None, str | None]:
+async def _resolve(
+    session: AsyncSession, channel: str | None, settings: Settings
+) -> tuple[str | None, str | None]:
     """Return the preset to serve, and the reason when there is none.
 
     A channel that names no modem preset is refused rather than guessed
@@ -166,7 +100,7 @@ def _resolve(channel: str | None, settings: Settings) -> tuple[str | None, str |
         # used to take the index in its written order, which is channel
         # NAME order -- "LongFast" above "MediumFast" -- so the page
         # opened on a preset this mesh does not run.
-        listed = _presets(settings)
+        listed = await _presets(session, settings)
         if not listed:
             return None, "no_assessment"
         first = listed[0].get("preset")
@@ -177,12 +111,12 @@ def _resolve(channel: str | None, settings: Settings) -> tuple[str | None, str |
     return preset.name, None
 
 
-def _unavailable(reason: str, settings: Settings) -> dict[str, object]:
+async def _unavailable(session: AsyncSession, reason: str, settings: Settings) -> dict[str, object]:
     """Return the working "there is nothing to show" answer."""
     return {
         "available": False,
         "reason": reason,
-        "presets": _presets(settings),
+        "presets": await _presets(session, settings),
         "signals": {},
         "nodes": [],
     }
@@ -192,6 +126,7 @@ def _unavailable(reason: str, settings: Settings) -> dict[str, object]:
 async def gaps_summary(
     request: Request,
     channel: str | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return the counts for one preset, and what they cannot tell you.
 
@@ -201,32 +136,29 @@ async def gaps_summary(
     this is where that is said out loud.
 
     `hours` is not a parameter. The window is whatever the job measured
-    and it is echoed back as `window_hours`, because the artefact holds
-    one window and a request cannot ask for another without recomputing.
+    and it is echoed back as `window_hours`, because the job holds one
+    window and a request cannot ask for another without recomputing.
     """
     settings: Settings = request.app.state.settings
-    preset, reason = _resolve(channel, settings)
+    preset, reason = await _resolve(session, channel, settings)
     if preset is None:
-        return _unavailable(reason or "no_assessment", settings)
-    document = _read(settings, preset)
-    if document is None:
-        return _unavailable("no_assessment", settings)
-
+        return await _unavailable(session, reason or "no_assessment", settings)
     # Everything except the node rows, which have their own endpoint, and
     # the leaderboard's traceroute counts (#293), which this page never
-    # reads and which grow with every node anybody traces.
-    left_out = ("nodes", boards.TRACE_ANSWERS)
-    summary = {key: value for key, value in document.items() if key not in left_out}
-    thresholds = document.get("thresholds")
+    # reads. Both are in their own tables, so the summary holds neither.
+    summary = await store.read_summary(session, preset)
+    if summary is None:
+        return await _unavailable(session, "no_assessment", settings)
+    thresholds = summary.get("thresholds")
     return {
         **summary,
-        "presets": _presets(settings),
+        "presets": await _presets(session, settings),
         # What each column's number is measured in, and what each column
         # means for a newcomer (#265). Both are definitions, so they come
-        # from `gaps/signals.py` as it is now rather than from the file,
+        # from `gaps/signals.py` as it is now rather than from the run,
         # and an assessment written before they existed still gets a key.
         # The unit of each VALUE is different: it rides on the signal in
-        # the file, because it belongs to the number the job wrote.
+        # the row, because it belongs to the number the job wrote.
         "signal_units": dict(SIGNAL_UNIT_LABELS),
         "signal_key": signal_key(thresholds if isinstance(thresholds, dict) else {}),
     }
@@ -239,29 +171,34 @@ async def gaps_nodes(
     signal: str | None = None,
     state: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None, max_length=256),
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    """Return the assessed nodes of one preset, worst first.
+    """Return the assessed nodes of one preset, worst first, a page at a time.
 
-    The order is set by the job, once, so that every reader gets the
-    same one and no page holds a copy of the ranking rule. It is
-    `bad_count`, then a fixed severity order between the signals, then
-    the packet count. **It is not a score, and a row's colour comes from
-    `worst_state` and never from a number.**
+    The order is set by the job, once, and stored as each row's `rank`,
+    so that every reader gets the same one and no page holds a copy of
+    the ranking rule. It is `bad_count`, then a fixed severity order
+    between the signals, then the packet count. **It is not a score, and
+    a row's colour comes from `worst_state` and never from a number.**
 
-    `signal` and `state` filter the precomputed list. They select; they
-    never recompute.
+    `signal` and `state` filter the stored rows, in SQL. They select;
+    they never recompute.
+
+    **Paging is by cursor.** An answer with more rows after it carries
+    `next_cursor`; pass it back as `cursor`, with the same filters, for
+    the next page. A cursor names its run and is refused (409) once the
+    job has written a new one.
     """
     settings: Settings = request.app.state.settings
-    preset, reason = _resolve(channel, settings)
+    preset, reason = await _resolve(session, channel, settings)
     if preset is None:
-        return _unavailable(reason or "no_assessment", settings)
-    document = _read(settings, preset)
-    if document is None:
-        return _unavailable("no_assessment", settings)
+        return await _unavailable(session, reason or "no_assessment", settings)
+    summary = await store.read_summary(session, preset)
+    if summary is None:
+        return await _unavailable(session, "no_assessment", settings)
 
-    listed = document.get("nodes")
-    rows = [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
-    order = document.get("signal_order")
+    order = summary.get("signal_order")
     known = [name for name in order if isinstance(name, str)] if isinstance(order, list) else []
 
     if signal is not None and signal not in known:
@@ -281,20 +218,23 @@ async def gaps_nodes(
             "nodes": [],
         }
 
-    if signal is not None or state is not None:
-        rows = [row for row in rows if _matches(row, signal, state)]
-
+    stamp = await store.run_stamp(session, preset)
+    after = read_cursor(cursor, stamp)
+    matched, rows, following = await store.node_rows(session, preset, signal, state, limit, after)
     return {
         "available": True,
         "preset": preset,
-        "window_hours": document.get("window_hours"),
-        "generated_at": document.get("generated_at"),
-        "gateways_active": document.get("gateways_active"),
+        "window_hours": summary.get("window_hours"),
+        "generated_at": summary.get("generated_at"),
+        "gateways_active": summary.get("gateways_active"),
         "signal_order": known,
-        "signal_labels": document.get("signal_labels", {}),
-        "matched_count": len(rows),
+        "signal_labels": summary.get("signal_labels", {}),
+        "matched_count": matched,
         "limit": limit,
-        "nodes": rows[:limit],
+        "nodes": rows,
+        "next_cursor": (
+            page_cursor(stamp, following) if stamp is not None and following is not None else None
+        ),
     }
 
 
@@ -302,11 +242,12 @@ async def gaps_nodes(
 async def gaps_areas(
     request: Request,
     channel: str | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return the neighbourhoods that hold the struggling nodes.
 
     **This half is a measurement and the candidates are a prediction.**
-    They are served from one file because they were computed together,
+    They are served from one answer because they were computed together,
     and the page must never draw them in the same colour.
 
     An area is a group of at least `GAPS_MIN_CLUSTER` places that want
@@ -318,15 +259,13 @@ async def gaps_areas(
     coverage run has no answer yet.
     """
     settings: Settings = request.app.state.settings
-    preset, reason = _resolve(channel, settings)
+    preset, reason = await _resolve(session, channel, settings)
     if preset is None:
-        return _no_siting(reason or "no_assessment", settings)
-    document = _read_siting(settings, preset)
-    if document is None:
-        return _no_siting("no_siting_run", settings)
-    return {key: value for key, value in document.items() if key not in ("candidates",)} | {
-        "presets": _presets(settings)
-    }
+        return await _no_siting(session, reason or "no_assessment", settings)
+    summary = await store.read_siting(session, preset)
+    if summary is None:
+        return await _no_siting(session, "no_siting_run", settings)
+    return summary | {"presets": await _presets(session, settings)}
 
 
 @router.get("/candidates")
@@ -335,8 +274,10 @@ async def gaps_candidates(
     channel: str | None = None,
     area: int | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None, max_length=256),
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    """Return the places a node could go, best first inside each area.
+    """Return the places a node could go, best first inside each area, a page at a time.
 
     Every row carries `method`. `terrain_screen` is a cheap ranking and
     **not a prediction**; `splat` is the engine, and only those rows
@@ -348,34 +289,38 @@ async def gaps_candidates(
     state is `unknown`. A candidate standing on ground we hold no
     terrain for has not been judged, and "no benefit" is a different
     answer.
+
+    Paging is by cursor, as for `/api/gaps/nodes`.
     """
     settings: Settings = request.app.state.settings
-    preset, reason = _resolve(channel, settings)
+    preset, reason = await _resolve(session, channel, settings)
     if preset is None:
-        return _no_siting(reason or "no_assessment", settings)
-    document = _read_siting(settings, preset)
-    if document is None:
-        return _no_siting("no_siting_run", settings)
+        return await _no_siting(session, reason or "no_assessment", settings)
+    summary = await store.read_siting(session, preset)
+    if summary is None:
+        return await _no_siting(session, "no_siting_run", settings)
 
-    listed = document.get("candidates")
-    rows = [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
-    if area is not None:
-        rows = [row for row in rows if row.get("area") == area]
+    stamp = await store.siting_stamp(session, preset)
+    after = read_cursor(cursor, stamp)
+    matched, rows, following = await store.read_candidates(session, preset, area, limit, after)
     return {
         "available": True,
         "preset": preset,
         "area": area,
-        "generated_at": document.get("generated_at"),
-        "assumed_radio": document.get("assumed_radio"),
-        "coverage": document.get("coverage"),
-        "caveats": document.get("caveats", []),
-        "matched_count": len(rows),
+        "generated_at": summary.get("generated_at"),
+        "assumed_radio": summary.get("assumed_radio"),
+        "coverage": summary.get("coverage"),
+        "caveats": summary.get("caveats", []),
+        "matched_count": matched,
         "limit": limit,
-        "candidates": rows[:limit],
+        "candidates": rows,
+        "next_cursor": (
+            page_cursor(stamp, following) if stamp is not None and following is not None else None
+        ),
     }
 
 
-def _no_siting(reason: str, settings: Settings) -> dict[str, object]:
+async def _no_siting(session: AsyncSession, reason: str, settings: Settings) -> dict[str, object]:
     """Return the working "no siting answer yet" response.
 
     The caveats are served even when there is nothing to site, because
@@ -385,26 +330,8 @@ def _no_siting(reason: str, settings: Settings) -> dict[str, object]:
     return {
         "available": False,
         "reason": reason,
-        "presets": _presets(settings),
+        "presets": await _presets(session, settings),
         "areas": [],
         "candidates": [],
         "caveats": [{"key": key, "text": text} for key, text in SITING_CAVEATS],
     }
-
-
-def _matches(row: dict[str, object], signal: str | None, state: str | None) -> bool:
-    """Return true when one row passes the signal and state filters.
-
-    With a signal and no state, any state of that signal matches. With a
-    state and no signal, a row matches when **any** signal holds that
-    state, which is how "show me the unknowns" is asked for.
-    """
-    holder = row.get("signals")
-    if not isinstance(holder, dict):
-        return False
-    if signal is not None:
-        found = holder.get(signal)
-        if not isinstance(found, dict):
-            return False
-        return state is None or found.get("state") == state
-    return any(isinstance(found, dict) and found.get("state") == state for found in holder.values())

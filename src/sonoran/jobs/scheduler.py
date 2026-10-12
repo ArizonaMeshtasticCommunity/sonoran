@@ -31,7 +31,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.jobs import calibrate, coverage, gaps, gaps_siting, rf_rollup, snapshots
+from sonoran.jobs import (
+    calibrate,
+    coverage,
+    gaps,
+    gaps_siting,
+    legacy_import,
+    rf_rollup,
+    snapshots,
+)
 from sonoran.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -72,7 +80,7 @@ async def _coverage_cycle(session: AsyncSession, settings: Settings, run_calibra
     """Run one clock's worth of engine work, in order.
 
     A due calibration runs first, because the coverage run consumes the
-    file it writes. The siting half of the coverage gaps feature runs
+    fit it stores. The siting half of the coverage gaps feature runs
     last, because it reads the run that coverage just published.
 
     **Everything that uses the engine belongs on this one clock.** The
@@ -86,9 +94,9 @@ async def _coverage_cycle(session: AsyncSession, settings: Settings, run_calibra
         await calibrate.run_once(session, settings)
     await coverage.run_once(session, settings)
     if settings.gaps_enabled and settings.gaps_siting_enabled:
-        # It reads the artefacts the two jobs above wrote and asks the
-        # database nothing, so it takes no session.
-        await gaps_siting.run_once(settings)
+        # It reads the coverage run above and the gaps assessment, and
+        # stores its answer (#351).
+        await gaps_siting.run_once(session, settings)
 
 
 def _attempt_file(settings: Settings, name: str) -> Path:
@@ -293,9 +301,26 @@ def build_tasks(settings: Settings) -> list[Task]:
     return tasks
 
 
+async def _import_old_files(settings: Settings) -> None:
+    """Import the JSON files from before #351 into empty tables, once.
+
+    See `sonoran/jobs/legacy_import.py`. Before any task starts, so a
+    coverage run never predicts without the calibration it had.
+    """
+    engine = make_engine(settings.database_url)
+    try:
+        async with make_session_factory(engine)() as session:
+            await legacy_import.run_once(session, settings)
+    except Exception:
+        logger.exception("could not import the files from before #351")
+    finally:
+        await engine.dispose()
+
+
 async def service() -> None:
     """Run every task until the process is stopped."""
     settings = get_settings()
+    await _import_old_files(settings)
     tasks = build_tasks(settings)
     logger.info("jobs running: %s", ", ".join(task.name for task in tasks))
     await asyncio.gather(*(_run_forever(task, settings) for task in tasks))

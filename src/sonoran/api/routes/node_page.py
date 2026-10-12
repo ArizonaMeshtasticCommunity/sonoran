@@ -24,10 +24,8 @@ from sqlalchemy.types import DateTime as SqlDateTime
 from sonoran.api.cache import KeyedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.api.routes.gaps import read_assessment
 from sonoran.api.routes.graph import _mentions, _trace_links
 from sonoran.api.sightings import direct, sightings
-from sonoran.config import Settings
 from sonoran.db.models import (
     DeviceMetrics,
     NeighborMetrics,
@@ -81,21 +79,23 @@ def bucket_seconds(hours: int) -> int:
 
 
 @router.get("/{node_id}/gaps")
-async def node_gaps(node_id: str, request: Request) -> dict[str, object]:
+async def node_gaps(
+    node_id: str, request: Request, session: AsyncSession = Depends(get_session)
+) -> dict[str, object]:
     """Return what the gaps assessment says about one node, per preset.
 
-    This reads the artefact the gaps job wrote and nothing else. It opens
-    no database session. A node can need help on one preset and be fine
-    on another, so each preset keeps its own row. See AGENTS.md 9.7.
+    This reads the rows the gaps job wrote and nothing else (#351): one
+    row per preset, by the node's key. A node can need help on one
+    preset and be fine on another, so each preset keeps its own row. See
+    AGENTS.md 9.7.
 
     `available: false` is a working state: no assessment has been
     written yet. A node that is absent from an assessment is named in
     `not_listed`, because "not assessed" is a different answer from
     "assessed and fine".
     """
-    wanted = format_node_id(require_node_num(node_id))
-    settings: Settings = request.app.state.settings
-    index = gaps_store.read_index(settings)
+    node_num = require_node_num(node_id)
+    index = await gaps_store.read_index(session)
     listed = index.get("presets") if index else None
     presets = [
         item["preset"]
@@ -105,32 +105,25 @@ async def node_gaps(node_id: str, request: Request) -> dict[str, object]:
     if not presets:
         return {"available": False, "reason": "no_assessment", "assessments": [], "not_listed": []}
 
+    rows = await gaps_store.assessed_nodes(session, node_num)
     assessments: list[dict[str, object]] = []
     not_listed: list[str] = []
     for preset in presets:
-        document = read_assessment(settings, preset)
-        if document is None:
+        summary = await gaps_store.read_summary(session, preset)
+        if summary is None:
             continue
-        rows = document.get("nodes")
-        row = next(
-            (
-                item
-                for item in (rows if isinstance(rows, list) else [])
-                if isinstance(item, dict) and item.get("node_id") == wanted
-            ),
-            None,
-        )
+        row = rows.get(preset)
         if row is None:
             not_listed.append(preset)
             continue
         assessments.append(
             {
                 "preset": preset,
-                "window_hours": document.get("window_hours"),
-                "generated_at": document.get("generated_at"),
-                "gateways_active": document.get("gateways_active"),
-                "signal_order": document.get("signal_order", []),
-                "signal_labels": document.get("signal_labels", {}),
+                "window_hours": summary.get("window_hours"),
+                "generated_at": summary.get("generated_at"),
+                "gateways_active": summary.get("gateways_active"),
+                "signal_order": summary.get("signal_order", []),
+                "signal_labels": summary.get("signal_labels", {}),
                 "node": row,
             }
         )

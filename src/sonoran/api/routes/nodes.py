@@ -37,7 +37,6 @@ from sonoran.api.preset_scope import preset_filter, require_preset
 from sonoran.api.schemas import NodeSummary
 from sonoran.api.sightings import direct as direct_sighting
 from sonoran.api.sightings import sightings
-from sonoran.config import Settings
 from sonoran.coverage.store import calibration_offsets
 from sonoran.db.models import (
     AirQualityMetrics,
@@ -608,7 +607,7 @@ class NodeListQuery:
     ordering: tuple[Any, ...]
 
 
-def _node_list_query(request: Request, params: NodeListParams) -> NodeListQuery:
+async def _node_list_query(session: AsyncSession, params: NodeListParams) -> NodeListQuery:
     """Build the node list's row and count statements.
 
     The list and its export both call this, so they cannot disagree
@@ -659,7 +658,7 @@ def _node_list_query(request: Request, params: NodeListParams) -> NodeListQuery:
                 status_code=422,
                 detail="gaps needs gaps_preset: a node can need help on one preset and not another",
             )
-        wanted = _gaps_node_nums(request, params.gaps_preset, params.gaps)
+        wanted = await _gaps_node_nums(session, params.gaps_preset, params.gaps)
         if wanted is None:
             # Not an empty result. Nothing has been assessed, and saying
             # "no nodes" would be an answer we do not have.
@@ -712,7 +711,7 @@ async def list_nodes(
     and `_node_list_query`, which `export_nodes` uses too (#350).
     """
     after = None if cursor is None else _read_node_cursor(cursor, params.sort, params.order)
-    query = _node_list_query(request, params)
+    query = await _node_list_query(session, params)
     statement = query.rows
 
     total = await session.scalar(query.count)
@@ -757,7 +756,7 @@ async def export_nodes(
         chosen = export.parse_columns(columns)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    query = _node_list_query(request, params)
+    query = await _node_list_query(session, params)
     limit = export.EXPORT_LIMIT
     total = await session.scalar(query.count) or 0
     if total > limit:
@@ -790,30 +789,17 @@ def _too_many(found: int, limit: int) -> str:
     )
 
 
-def _gaps_node_nums(request: Request, preset: str, state: str) -> set[int] | None:
+async def _gaps_node_nums(session: AsyncSession, preset: str, state: str) -> set[int] | None:
     """Return the nodes the gaps assessment puts in one state, or None.
 
     None means no assessment has been written for that preset, which is
     a different answer from "no nodes are in that state" and must not be
     served as an empty filter that silently matches nothing.
 
-    This reads the artefact the gaps job already wrote, through the same
-    store its own routes use. It recomputes nothing and asks the
-    database for nothing.
+    This reads the rows the gaps job already wrote, by `worst_state`
+    (#351). It recomputes nothing.
     """
-    settings: Settings = request.app.state.settings
-    assessment = gaps_store.read_preset(settings, preset)
-    if assessment is None:
-        return None
-    wanted: set[int] = set()
-    nodes = cast(list[dict[str, object]], assessment.get("nodes") or [])
-    for node in nodes:
-        if node.get("worst_state") == state:
-            try:
-                wanted.add(parse_node_id(str(node["node_id"])))
-            except (KeyError, ValueError):
-                continue
-    return wanted
+    return await gaps_store.node_nums(session, preset, state)
 
 
 @router.get("/facets")
@@ -913,15 +899,14 @@ async def node_facets(
     # The gaps states, per preset, because a node can need help on one
     # mesh and be fine on another. Offering "needs help" without saying
     # on which would be the merge AGENTS.md 9.7 forbids.
-    settings: Settings = request.app.state.settings
     gaps_options: list[dict[str, object]] = []
-    index = gaps_store.read_index(settings) or {}
+    index = await gaps_store.read_index(session) or {}
     for entry in cast(list[dict[str, object]], index.get("presets") or []):
         preset = str(entry.get("preset") or "")
         if not preset:
             continue
         for state in ("bad", "unknown"):
-            wanted = _gaps_node_nums(request, preset, state)
+            wanted = await _gaps_node_nums(session, preset, state)
             if not wanted:
                 continue
             total = await session.scalar(
@@ -1098,9 +1083,8 @@ async def node_radio(
         raise HTTPException(status_code=404, detail="node not found")
 
     identifier = format_node_id(node_num)
-    settings = request.app.state.settings
     overrides = request.app.state.radio_overrides
-    offsets = calibration_offsets(settings)
+    offsets = await calibration_offsets(session)
     profile = resolve_profile(
         identifier, node.hw_model, overrides, offsets.get(identifier), role=node.role
     )

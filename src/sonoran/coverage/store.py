@@ -34,6 +34,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sqlalchemy import delete, insert, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from sonoran.config import Settings
 from sonoran.coverage.calibrate import (
     MAX_TRUSTED_BIAS_DB,
@@ -44,6 +47,7 @@ from sonoran.coverage.calibrate import (
     Calibration,
 )
 from sonoran.coverage.render import RAMP_SPAN_DB
+from sonoran.db.models import CoverageCalibration, CoverageCalibrationNode
 from sonoran.logging import get_logger
 from sonoran.radio.resolve import clamp_calibration
 
@@ -461,56 +465,24 @@ def read_run_tile(
 
 # --- the calibration ---------------------------------------------------
 #
-# The calibration lives beside the runs rather than in a database table.
-# It is a computed thing, like the tiles: a run of the job replaces it
-# whole, nothing else writes it, and the API only reads it. A table
-# would need a fourth database role and a migration to hold a file that
-# one process writes and one process reads.
+# The calibration lives in two tables (#351): `coverage_calibration`
+# holds the fit as a whole, one row or none, and
+# `coverage_calibration_node` holds one row per node. The calibration job
+# replaces both in one transaction, so a reader sees the old fit or the
+# new one and never half of each. The coverage job and the API read it.
+#
+# It used to be `calibration.json` beside the runs. The jobs process
+# imports that file once when the tables are empty, see
+# `sonoran/jobs/legacy_import.py`, which is the only reader of the path.
 
 
 def calibration_path(settings: Settings) -> Path:
-    """Return where the calibration is kept."""
+    """Return where the calibration file was kept, before #351."""
     return Path(settings.coverage_cache_dir) / CALIBRATION_NAME
 
 
-def write_calibration(
-    settings: Settings, calibration: Calibration, summary: dict[str, float]
-) -> None:
-    """Write the calibration, in one step.
-
-    The file is written beside itself and moved into place, so a reader
-    never sees half of it.
-    """
-    document = {
-        "generated_at": datetime.now(UTC).isoformat(),
-        "summary": summary,
-        **asdict(calibration),
-    }
-    path = calibration_path(settings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(document, indent=1), encoding="utf-8")
-    temporary.replace(path)
-    logger.info("wrote the calibration for %s nodes", len(calibration.nodes))
-
-
-def clear_calibration(settings: Settings) -> None:
-    """Remove a stale calibration when the current window has none."""
-    try:
-        calibration_path(settings).unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as error:
-        logger.warning("cannot remove the stale calibration: %s", error)
-
-
-def read_calibration(settings: Settings) -> dict[str, object] | None:
-    """Return the calibration, or None when there is none.
-
-    A deployment that has never run the job has none, and a deployment
-    whose file is broken must still draw a map. Both give None, and the
-    prediction then uses the nameplate figures.
-    """
+def read_calibration_file(settings: Settings) -> dict[str, object] | None:
+    """Return the calibration file of a box from before #351, or None."""
     try:
         document = json.loads(calibration_path(settings).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -518,16 +490,136 @@ def read_calibration(settings: Settings) -> dict[str, object] | None:
     return document if isinstance(document, dict) else None
 
 
-def calibration_offsets(settings: Settings) -> dict[str, float]:
+async def write_calibration(
+    session: AsyncSession, calibration: Calibration, summary: dict[str, float]
+) -> None:
+    """Replace the calibration with a new fit, and commit."""
+    await write_calibration_document(
+        session,
+        {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "summary": summary,
+            **asdict(calibration),
+        },
+    )
+    logger.info("wrote the calibration for %s nodes", len(calibration.nodes))
+
+
+async def write_calibration_document(session: AsyncSession, document: dict[str, object]) -> bool:
+    """Replace the calibration with a document of the old file's shape.
+
+    Return False, and change nothing, when the document is not a fit.
+    """
+    try:
+        generated = datetime.fromisoformat(str(document["generated_at"]))
+        bias = float(document["model_bias_db"])  # type: ignore[arg-type]
+        spread = float(document.get("residual_spread_db") or 0.0)  # type: ignore[arg-type]
+        rounds = int(document.get("rounds") or 0)  # type: ignore[call-overload]
+    except (KeyError, TypeError, ValueError):
+        logger.warning("refusing to store a calibration that is not a fit")
+        return False
+    rows: list[dict[str, object]] = []
+    listed = document.get("nodes")
+    for item in listed if isinstance(listed, list) else []:
+        if not isinstance(item, dict):
+            continue
+        node_id = item.get("node_id")
+        if not isinstance(node_id, str) or not re.fullmatch(r"![0-9a-fA-F]{8}", node_id):
+            continue
+        try:
+            rows.append(
+                {
+                    "node_num": int(node_id[1:], 16),
+                    "offset_db": float(item["offset_db"]),
+                    "observations": int(item.get("observations") or 0),
+                    "counterparties": int(item.get("counterparties") or 0),
+                    "censored": int(item.get("censored") or 0),
+                    "reported": int(item.get("reported") or 0),
+                    "residual_spread_db": float(item.get("residual_spread_db") or 0.0),
+                    "locked": item.get("locked") is True,
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    summary = document.get("summary")
+    await session.execute(delete(CoverageCalibrationNode))
+    await session.execute(delete(CoverageCalibration))
+    await session.execute(
+        insert(CoverageCalibration).values(
+            id=1,
+            generated_at=generated,
+            model_bias_db=bias,
+            residual_spread_db=spread,
+            rounds=rounds,
+            summary=summary if isinstance(summary, dict) else {},
+        )
+    )
+    if rows:
+        await session.execute(insert(CoverageCalibrationNode), rows)
+    await session.commit()
+    return True
+
+
+async def clear_calibration(session: AsyncSession) -> None:
+    """Remove a stale calibration when the current window has none."""
+    await session.execute(delete(CoverageCalibrationNode))
+    await session.execute(delete(CoverageCalibration))
+    await session.commit()
+
+
+async def read_calibration(session: AsyncSession) -> dict[str, object] | None:
+    """Return the calibration, or None when there is none.
+
+    The shape is the old file's, so a reader written for the file reads
+    it unchanged. A deployment that has never run the job has none, and
+    the prediction then uses the nameplate figures.
+    """
+    fit = await session.scalar(select(CoverageCalibration).where(CoverageCalibration.id == 1))
+    if fit is None:
+        return None
+    nodes = (
+        await session.scalars(
+            select(CoverageCalibrationNode).order_by(CoverageCalibrationNode.node_num)
+        )
+    ).all()
+    return {
+        "generated_at": fit.generated_at.isoformat(),
+        "summary": fit.summary,
+        "model_bias_db": fit.model_bias_db,
+        "nodes": [
+            {
+                "node_id": f"!{node.node_num:08x}",
+                "offset_db": node.offset_db,
+                "observations": node.observations,
+                "counterparties": node.counterparties,
+                "censored": node.censored,
+                "reported": node.reported,
+                "residual_spread_db": node.residual_spread_db,
+                "locked": node.locked,
+            }
+            for node in nodes
+        ],
+        "rounds": fit.rounds,
+        "residual_spread_db": fit.residual_spread_db,
+    }
+
+
+async def calibration_offsets(session: AsyncSession) -> dict[str, float]:
     """Return the offsets that have enough evidence, by node ID.
 
-    This is what a prediction reads. A node with thin evidence is absent
-    rather than present with a zero, so a caller can tell "measured and
-    found to be right" from "never measured".
+    This is what a prediction reads. See `offsets_of`.
     """
-    document = read_calibration(settings)
-    if document is None:
-        return {}
+    document = await read_calibration(session)
+    return {} if document is None else offsets_of(document)
+
+
+def offsets_of(document: dict[str, object]) -> dict[str, float]:
+    """Return the offsets of a calibration that have enough evidence, by node ID.
+
+    A node with thin evidence is absent rather than present with a
+    zero, so a caller can tell "measured and found to be right" from
+    "never measured".
+    """
     raw_bias = document.get("model_bias_db")
     bias = float(raw_bias) if isinstance(raw_bias, int | float) else math.nan
     # A fit whose measurements disagree this widely is not describing

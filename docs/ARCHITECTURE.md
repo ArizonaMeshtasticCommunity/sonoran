@@ -360,11 +360,12 @@ channel, Data message metadata, and receive time.
 - `signals.py` is the only place that decides what a per node signal
   means. `siting.py` is the only place that decides what a demand
   point, an area, a candidate and the terrain screen mean.
-- `store.py` is where an answer is written and read. Two files for each
-  preset, beside the coverage runs: `{preset}.json` from the per node
-  job and `siting-{preset}.json` from the siting job. They are written
-  by different jobs on different clocks, so one file holding both would
-  always be half stale.
+- `store.py` is where an answer is written and read: the job output
+  tables in `docs/DATABASE.md` 5B (#351). The per node job writes
+  `gaps_run`, `gaps_node` and `gaps_trace_answer`; the siting job writes
+  `gaps_siting` and `gaps_siting_candidate`. They are written by
+  different jobs on different clocks, so each replaces only its own
+  rows. A route reads by key, with its filters and its limit in SQL.
 - Every signal and every candidate has **three** states, and the third
   is `unknown`. It is never served as a zero and never as a pass.
 - `siting.py` reads terrain out of the cache through

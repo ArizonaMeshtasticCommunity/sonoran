@@ -23,8 +23,9 @@ from sonoran.api.app import create_app
 from sonoran.api.routes import leaderboards
 from sonoran.api.traces import TraceKey, answer_counts
 from sonoran.config import Settings
-from sonoran.gaps import boards, signals, store
+from sonoran.gaps import boards, signals
 from sonoran.jobs import gaps as gaps_job
+from tests.unit.job_outputs import JobOutputs
 
 A, B, C, T = 0x0A, 0x0B, 0x0C, 0x7E  # three askers and one target
 
@@ -226,12 +227,13 @@ def test_the_read_selects_by_window_and_preset_never_by_recency() -> None:
     assert "answer_counts(" in body
 
 
-def test_the_gaps_summary_does_not_carry_the_trace_counts(tmp_path: Path) -> None:
-    """The gaps page has no use for them; they stay in the file."""
+def test_the_gaps_summary_does_not_carry_the_trace_counts(
+    tmp_path: Path, job_outputs: JobOutputs
+) -> None:
+    """The gaps page has no use for them; they have their own table."""
     settings = Settings(_env_file=None, coverage_cache_dir=str(tmp_path))
-    store.write_index(settings, {"presets": [{"preset": "LongFast", "node_count": 0}]})
-    store.write_preset(
-        settings,
+    job_outputs.write_index({"presets": [{"preset": "LongFast", "node_count": 0}]})
+    job_outputs.write_preset(
         "LongFast",
         {
             "preset": "LongFast",
