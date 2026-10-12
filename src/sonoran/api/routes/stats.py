@@ -202,14 +202,18 @@ async def _window_counts(session: AsyncSession, start: datetime, end: datetime) 
 async def _kept(session: AsyncSession, model: Any, time: Any, count: Any) -> int:
     """Count every row a raw table still keeps, through the hourly totals.
 
-    From its oldest row to an hour from now: the totals are kept longer
-    than the raw rows, so the oldest raw row, not the oldest total, is
-    where the count starts. The hour ahead takes in the live hour.
+    From its oldest row to its newest, both included. The totals are
+    kept longer than the raw rows, so the oldest raw row, not the oldest
+    total, is where the count starts. The newest row may be dated in the
+    future by a gateway clock from before AGENTS.md 9.4, and this count
+    has always held every row, so it ends after the newest row.
     """
-    oldest = await session.scalar(select(func.min(time)).select_from(model))
-    if oldest is None:
+    oldest, newest = (
+        await session.execute(select(func.min(time), func.max(time)).select_from(model))
+    ).one()
+    if oldest is None or newest is None:
         return 0
-    return int(await count(session, oldest, datetime.now(UTC) + timedelta(hours=1)))
+    return int(await count(session, oldest, newest + timedelta(microseconds=1)))
 
 
 async def _read_summary(session: AsyncSession) -> dict[str, int]:
