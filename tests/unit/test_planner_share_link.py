@@ -154,6 +154,6 @@ def test_the_docs_describe_the_link_and_stop_denying_it_exists() -> None:
     assert "cannot be saved or linked to" not in DOC, (
         "PLANNER.md still says a plan cannot be linked to"
     )
-    assert "#planner?v=1" in DOC, "PLANNER.md does not show the link format"
+    assert "#planner?v=2" in DOC, "PLANNER.md does not show the link format"
     for name in _share_names():
         assert name in DOC, f"PLANNER.md does not name {name} in the link"

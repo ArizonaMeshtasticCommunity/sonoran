@@ -3505,6 +3505,8 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .planner-slot-note[hidden] { display: none; }
 .planner-slot-note { font-size: .78rem; margin: -.2rem 0 .6rem; }
 .board-note { font-size: .78rem; margin: .3rem 0 .6rem; }
+/* The climate the next run uses, and where it came from (#239). */
+.planner-climate-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 .antenna-note { font-size: .78rem; margin: .3rem 0 .6rem; }
 /* The link budget under the planner's summary tiles (#113). */
 .link-budget { margin: .9rem 0 .3rem; }

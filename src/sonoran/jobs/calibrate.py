@@ -32,6 +32,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.climate import climate_at
 from sonoran.config import Settings, get_settings
 from sonoran.coverage import store
 from sonoran.coverage.calibrate import (
@@ -234,6 +235,9 @@ def _params(settings: Settings, listener: Peer) -> EngineParams:
         rx_height_m=settings.coverage_rx_height_m,
         erp_watts=erp_watts(profile.tx_power_dbm, profile.antenna_gain_dbi, profile.cable_loss_db),
         radius_m=CANDIDATE_RANGE_KM * 1000.0,
+        # The same climate the map predicts with, so the fit measures the
+        # model the map draws (#239).
+        radio_climate=climate_at(listener.latitude, listener.longitude).climate,
     )
 
 

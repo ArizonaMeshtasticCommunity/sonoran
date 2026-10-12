@@ -2097,6 +2097,74 @@ What it guarantees, and why each one is there:
 - **Cached.** Bounded to 128 answers for an hour, which the upstream's
   usage policy asks for.
 
+### 11.4 `GET /api/climate/page/{tile}`
+
+Returns the Köppen-Geiger classes of one degree square, for the
+planner's radio climate (#239). See `docs/PLANNER.md` 4.3.
+
+`tile` is a skadi name, as in 11.1, and is named for the square's
+south-west corner: Phoenix, at 112.07 W, is in `N33W113`. Anything else
+is rejected with 422.
+
+The body is **not** JSON. It is 14 400 bytes: a 120 x 120 grid, one
+byte for each cell, holding the class number of the source legend (1 =
+Af to 30 = EF), or 0 where the map has no class. **Row 0 is the north
+edge and column 0 the west edge**, which is not the order of a terrain
+page.
+
+| Response | Meaning |
+|---|---|
+| 200 | The page follows. |
+| 404 | The square is outside the configured region, or outside the data that ships. |
+| 422 | Not a tile name. |
+
+Headers:
+
+```
+Content-Type: application/octet-stream
+Cache-Control: public, max-age=31536000, immutable
+ETag: "climate-N35W112-14400"
+```
+
+The data ships inside the package (`sonoran/climate/`), so this never
+reads a cache and never makes an outbound request. It answers for the
+configured region only, by the same test as 11.1
+(`TERRAIN_LAT_MIN` and the rest), so it is not a general source of
+climate data. The data itself covers 30 to 38 north and 116 to 108
+west; a region set wider than that gets 404 past the edge.
+
+There is deliberately **no** endpoint that answers one point. The
+planner sends no site to the server (`docs/PLANNER.md` 2), so it asks
+for the square, as it does for terrain, and reads the cell itself.
+
+### 11.5 `GET /api/climate/classes`
+
+Returns the Köppen to ITM table the planner and the coverage job both
+use, and what the data is. The planner keeps no copy of the table.
+
+```json
+{
+  "source": "Köppen-Geiger 1991-2020, Beck et al. (2023), CC BY 4.0",
+  "cells_per_degree": 120,
+  "page_bytes": 14400,
+  "fallback": "desert",
+  "extent": {"lat_min": 30, "lat_max": 38, "lon_min": -116, "lon_max": -108},
+  "classes": [
+    {
+      "code": 18,
+      "symbol": "Dsb",
+      "name": "Cold, dry summer, warm summer",
+      "climate": "continental_temperate",
+      "reason": "..."
+    }
+  ]
+}
+```
+
+`classes` holds all 30 classes, in order. `climate` is a key of
+`CLIMATE_CODES` in `coverage/params.py`. `fallback` is the climate used
+where no class is known; the planner says so when it uses it.
+
 ## 12. RF map endpoints
 
 What the community's own receivers hear beyond Meshtastic, aircraft

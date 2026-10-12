@@ -2518,6 +2518,86 @@ async function main() {
     return `${link.length} characters, reached ${reached[0]} in both`;
   });
 
+  await journey(context, 'a Flagstaff site predicts on continental temperate (#239)', async (page) => {
+    /*
+     * The climate is read from the site's ground. Flagstaff is Köppen Dsb
+     * in the shipped data, which is continental temperate. Advanced must
+     * name it in the menu's "From the site" choice, and a run in Simple
+     * must hand the engine that climate (code 5), not the old desert (4).
+     *
+     * The climate is answered before the terrain is read, so the engine
+     * values are asserted whether or not this instance holds terrain. On
+     * an instance that can predict, the summary must say it too.
+     */
+    await open(page, 'planner', 5000);
+    await advanced(page);
+    await page.fill('[data-planner="lat"]', '35.1983');
+    await page.fill('[data-planner="lon"]', '-111.6513');
+    await page.locator('[data-planner="lon"]').blur();
+    const named = await valueOf(page, () => {
+      const menu = document.querySelector('[data-planner="radio_climate"]');
+      const first = menu && menu.querySelector('option[value="auto"]');
+      return first && first.textContent.includes('Köppen') ? { value: menu.value, text: first.textContent } : null;
+    });
+    must(named, 'the climate menu never named what it found at the site');
+    must(named.value === 'auto', `the menu opened on ${named.value}, not on the site`);
+    must(/Continental temperate/.test(named.text) && /Dsb/.test(named.text),
+      `Advanced offers "${named.text}" for Flagstaff`);
+    const note = await page.locator('[data-planner-climate-note]').textContent();
+    must(/Continental temperate/.test(note), `the note beside the site says "${note}"`);
+
+    await page.click('[data-planner-mode="simple"]');
+    // Simple asks for each picker that is on screen. Take the first real
+    // choice of each, which is what a newcomer does.
+    for (const picker of ['[data-board-type]', '[data-antenna-type="tx"]', '[data-antenna-type="rx"]', '[data-cable-type]']) {
+      const select = page.locator(picker);
+      if (!(await select.isVisible().catch(() => false))) continue;
+      const value = await select.evaluate((element) => {
+        const option = [...element.options].find((item) => item.value !== '');
+        return option ? option.value : null;
+      });
+      if (value !== null) await select.selectOption(value);
+    }
+    const run = await predict(page, () => page.click('[data-planner-run]'));
+    const used = await page.evaluate(() => {
+      const state = window.SonoranPlanner.state;
+      return {
+        climate: state.climate && state.climate.climate,
+        source: state.climate && state.climate.source,
+        code: state.params && state.params.radioClimate,
+      };
+    });
+    must(used.climate === 'continental_temperate' && used.source === 'site',
+      `the Simple run used ${used.climate} (${used.source})`);
+    must(used.code === 5, `the engine was handed climate code ${used.code}, not 5`);
+    const link = new URLSearchParams(page.url().split('?')[1] || '');
+    must(!link.has('radio_climate'), 'a climate read from the site went into the link as if chosen');
+    if (!run.ran) return `engine handed code 5; no prediction here (${run.why})`;
+    const said = await page.locator('[data-planner-climate-used]').textContent();
+    must(/Continental temperate/.test(said) && /Beck/.test(said), `the summary says "${said}"`);
+    return `engine handed code 5, and the summary says so`;
+  });
+
+  await journey(context, 'a planner link made before #239 keeps desert', async (page) => {
+    /*
+     * The issue's own risk: a link made before the climate was read from
+     * the site was made on desert and left it out, because it was the
+     * default. Opened now at Flagstaff it must still predict on desert,
+     * and say why, rather than quietly become continental temperate.
+     */
+    await page.goto(`${BASE}/#planner?v=1&lat=35.1983&lon=-111.6513&radius=5`, { waitUntil: 'load' });
+    const used = await valueOf(page, () => {
+      const state = window.SonoranPlanner && window.SonoranPlanner.state;
+      return state && state.climate ? { climate: state.climate.climate, code: state.params && state.params.radioClimate } : null;
+    }, 30000);
+    must(used, 'the link started no run');
+    must(used.climate === 'desert' && used.code === 4, `the old link ran on ${used.climate} (${used.code})`);
+    const said = await page.locator('[data-planner-shared]').textContent();
+    must(/keeps desert/.test(said), `the page did not say why: "${said}"`);
+    await predict(page, null);
+    return 'kept desert, and said so';
+  });
+
   await journey(context, 'a planner link made in feet predicts the same in metres', async (page) => {
     /*
      * #246. The boxes read in the reader's units and the link carries
