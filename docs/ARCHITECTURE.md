@@ -657,8 +657,8 @@ What each kind shows under "What it said":
 | `TELEMETRY_APP` | Named readings with units: device, environment, air quality or power. | the four telemetry tables |
 | `NEIGHBORINFO_APP` | A table of the neighbors it reported, each by name, with the SNR it heard it at. | `neighbor_metrics`, named through `node` |
 | `TRACEROUTE_APP` | The path, hop by hop, and the mesh-graph drawing. | `traceroute` |
-| `NODEINFO_APP` | A sentence saying it is not stored, and a link to the node page. | not stored per packet |
-| `ROUTING_APP` | A sentence saying it is not stored. | not stored |
+| `NODEINFO_APP` | The names, hardware, role and key the node sent. A packet stored before 2026-09-22 shows a sentence saying it is not stored, and a link to the node page. | `packet.payload_json` |
+| `ROUTING_APP` | The result: an acknowledgement or the error reason. A packet stored before 2026-09-22 shows a sentence saying it is not stored. The ID of the packet it acknowledges is not stored, so an ACK cannot be matched to its message (#293). | `packet.payload_json` |
 | any other | "No decoded value is stored for this packet." | none |
 
 The envelope says which key sealed the packet: the recipient's public

@@ -8,8 +8,10 @@ The gaps job writes one assessment for `GAPS_WINDOW_HOURS`, which is
 7 days by default. That assessment is the board for its own window. For
 each other window the job writes a small file beside it, with only the
 counts the boards rank by. It does not repeat the signals, the siting,
-or the neighbour, traceroute and position reads: a leaderboard needs
-none of them, and they are most of what one assessment costs.
+the neighbour and position reads, or the full traceroute read: a
+leaderboard needs none of them, and they are most of what one
+assessment costs. It reads only the traceroute requests and their
+answers, for the reachable board (#293).
 
 **A custom from/to range has no file.** It is a fixed period, and the
 job cannot know in advance which periods a reader will ask for. The
@@ -39,10 +41,19 @@ BOARD_WINDOW_HOURS: tuple[int, ...] = (24, 168, 720)
 #: 120 keeps every board within 1 percent of its window of fresh.
 REFRESH_SHARE = 120
 
-#: The counts a board ranks by, copied from the evidence of each node.
-#: They have the names the assessment rows use, so one ranking function
-#: reads either.
-EVIDENCE_KEYS: tuple[str, ...] = ("packets", "active_hours", "rf_hours", "direct_gateways")
+#: The counts the direct gateways board ranks by, copied from the
+#: evidence of each node. They have the names the assessment rows use,
+#: so one ranking function reads either.
+#:
+#: The awake and heard hours were here for the old reachable board. #293
+#: replaced that board with answered traceroutes, which are written under
+#: `TRACE_ANSWERS`, and nothing else reads a board file.
+EVIDENCE_KEYS: tuple[str, ...] = ("packets", "direct_gateways")
+
+#: The key that holds each traced node's traceroutes and answers (#293).
+#: The assessment carries it too. A file without it was written before
+#: the measure existed, and is rebuilt at once.
+TRACE_ANSWERS = "trace_answers"
 
 
 def window_hours(settings: Settings, asked: int) -> int:
@@ -77,9 +88,13 @@ def is_due(held: dict[str, object] | None, hours: int, now: datetime) -> bool:
 
     A file that is missing, unreadable, or written for another window is
     always due. The last case is a retention change: a file that holds
-    14 days must not go on answering for 30.
+    14 days must not go on answering for 30. So is a file with no
+    traceroute counts: it was written before #293, and the reachable
+    board would say "not counted yet" for up to six hours.
     """
     if held is None or held.get("window_hours") != hours:
+        return True
+    if not isinstance(held.get(TRACE_ANSWERS), list):
         return True
     stamp = held.get("generated_at")
     if not isinstance(stamp, str):

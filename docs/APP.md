@@ -70,6 +70,12 @@ In an installed app there is no browser back button. The node, link,
 packet and traceroute pages have a **Back** button there. In a browser
 tab they do not, because the browser has its own.
 
+On a phone, a bar at the bottom of the screen holds Map, Nodes, Chat
+and Dashboard, and **More**, which opens the full menu (#282). The bar
+is the same in the app and in a browser tab. In the app it fills the
+area of the home indicator, and its words stay above the indicator. The
+offline notice and the update notice show above the bar.
+
 ## 4. For operators
 
 ### 4.1 The login proxy
@@ -158,4 +164,5 @@ with no session cookie to a login page on another origin:
 Still to check on real devices: the install itself on Android and iOS
 against production, the Keycloak login inside an iOS home-screen app,
 and the safe areas and status bar of a notched iPhone in standalone
-mode.
+mode. The safe areas include the bottom bar's space for the home
+indicator (#282). Emulation reads every safe-area inset as 0.
