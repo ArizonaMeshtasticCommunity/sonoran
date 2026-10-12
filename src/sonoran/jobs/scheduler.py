@@ -306,15 +306,23 @@ async def _import_old_files(settings: Settings) -> None:
 
     See `sonoran/jobs/legacy_import.py`. Before any task starts, so a
     coverage run never predicts without the calibration it had.
+
+    Nothing here may stop the jobs process: every task writes its tables
+    anyway on its next run. So the engine is made inside the `try` too.
+    It uses the jobs role's URL, as every task does. The first deploy of
+    #351 used `database_url`, which the jobs container does not set, and
+    the process stopped at start.
     """
-    engine = make_engine(settings.database_url)
+    engine = None
     try:
+        engine = make_engine(settings.database_url_jobs)
         async with make_session_factory(engine)() as session:
             await legacy_import.run_once(session, settings)
     except Exception:
         logger.exception("could not import the files from before #351")
     finally:
-        await engine.dispose()
+        if engine is not None:
+            await engine.dispose()
 
 
 async def service() -> None:
