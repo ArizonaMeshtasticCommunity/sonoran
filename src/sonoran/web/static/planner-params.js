@@ -303,6 +303,16 @@ const DEFAULTS = {
   frequency_mhz: frequencyForSlot(DEFAULT_PRESET_KEY, DEFAULT_SLOT),
   rx_height: 1,
   rx_gain: 2.15,
+  /*
+   * Aiming, for a directional antenna only.
+   *
+   * Both default to null and NOT to 0. Zero is a real bearing -- due
+   * north -- so a 0 default would silently aim every Yagi at the north
+   * pole and look like a deliberate choice. Null means "not aimed", and
+   * the raster is left omnidirectional until both are present.
+   */
+  tx_azimuth: null,
+  tx_beamwidth: null,
   // Medium fast, because that is what this mesh actually runs (#105).
   // The sensitivity has to move with it -- the two are one choice, and
   // a form that opens on Medium fast with Long fast's -139 dBm would
@@ -457,6 +467,8 @@ const SHARE_FIELDS = [
   'tx_height',
   'tx_power',
   'tx_gain',
+  'tx_azimuth',
+  'tx_beamwidth',
   'frequency_mhz',
   'preset',
   'sensitivity',
@@ -502,6 +514,8 @@ const SHARE_BOUNDS = {
   tx_height: [0, 3000],
   tx_power: [-30, 60],
   tx_gain: [-20, 40],
+  tx_azimuth: [0, 360],
+  tx_beamwidth: [1, 360],
   frequency_mhz: [20, 20000],
   sensitivity: [-174, 0],
   rx_height: [0, 3000],

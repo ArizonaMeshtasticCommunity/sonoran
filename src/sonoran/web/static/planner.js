@@ -479,6 +479,11 @@ const FIELDS = [
   'tx_height',
   'tx_power',
   'tx_gain',
+  // Aiming. Read like any other field so a share link restores it and
+  // `request` carries it into the pattern shaping; both are empty
+  // unless a directional antenna is chosen.
+  'tx_azimuth',
+  'tx_beamwidth',
   'frequency_mhz',
   'rx_height',
   'rx_gain',
@@ -496,6 +501,16 @@ const FIELDS = [
 ];
 
 const NUMERIC = new Set(FIELDS.filter((name) => name !== 'site_name' && name !== 'radio_climate' && name !== 'polarization'));
+
+/*
+ * Numbers that may be left empty.
+ *
+ * The aiming boxes are empty for every omni, and empty means "not
+ * aimed". Without this set an empty bearing stops every run with "tx
+ * azimuth needs a number", including runs for an omni that hides the
+ * box. A value that is typed must still be a number.
+ */
+const OPTIONAL = new Set(['tx_azimuth', 'tx_beamwidth']);
 
 function field(name) {
   return document.querySelector(`[data-planner="${name}"]`);
@@ -549,6 +564,10 @@ function readForm() {
       request[name] = raw;
       continue;
     }
+    if (OPTIONAL.has(name) && raw.trim() === '') {
+      request[name] = null;
+      continue;
+    }
     // A unit box is read through the reader's units back into metres.
     const value = SonoranPlannerParams.UNIT_BOXES[name] ? boxValue(name) : Number(raw);
     if (raw === '' || value === null || Number.isNaN(value)) {
@@ -557,6 +576,16 @@ function readForm() {
       return null;
     }
     request[name] = value;
+  }
+  /*
+   * An antenna that has to be aimed needs a bearing. Without one the map
+   * would be drawn for an omni while the picker names a Yagi, so the run
+   * asks instead, as an empty picker does (#314).
+   */
+  if (request.tx_azimuth === null && siteAntennaIsAimed()) {
+    setNotice('Say which way the antenna points: degrees clockwise from north, 0 to 359.', 'bad');
+    field('tx_azimuth').focus();
+    return null;
   }
   // The radius is asked for in kilometres and used in metres.
   request.radius = request.radius * 1000;
@@ -771,6 +800,7 @@ async function applyShareLink() {
   // empty them rather than keep whatever was typed before.
   for (const name of ['lat', 'lon']) if (filled[name] == null) filled[name] = '';
   fillForm(filled);
+  revealLinkedAiming(filled);
   const preset = document.querySelector('[data-planner="preset"]');
   if (preset) preset.value = filled.preset;
 
@@ -1088,6 +1118,7 @@ async function runCoverage() {
     for (let i = 0; i < cells; i += 1) {
       dbm[i] = (merged.mask[i] & 248) !== 0 ? merged.signal[i] - 200 : NaN;
     }
+    shapeByAntennaPattern(dbm, region, request);
 
     state.result = {
       width: region.width,
@@ -1190,7 +1221,11 @@ function linkBudget(request, threshold) {
 
   const lines = [
     `The radio sends ${txPower.toFixed(1)} dBm.`,
-    `Its antenna adds ${txGain.toFixed(1)} dB.`,
+    // An aimed antenna has this gain in one direction only. See 4.4 in
+    // docs/PLANNER.md.
+    request.tx_azimuth == null
+      ? `Its antenna adds ${txGain.toFixed(1)} dB.`
+      : `Its antenna adds ${txGain.toFixed(1)} dB in the direction it points, and less to the sides.`,
   ];
   if (loss > 0) {
     lines.push(`The cable loses ${loss.toFixed(2)} dB at each end.`);
@@ -1996,6 +2031,14 @@ async function wireBoardRun() {
 }
 
 /*
+ * The pattern maths, from `antenna-pattern.js`. Aliased once here so a
+ * missing script tag fails loudly at load rather than silently leaving
+ * every Yagi modelled as an omni -- which would look like a working
+ * map and be wrong by up to the full gain of the antenna.
+ */
+const AntennaPattern = window.SonoranAntennaPattern;
+
+/*
  * Pick the antenna instead of typing its gain (#111, #113).
  *
  * "Antenna gain (dBi)" asks for a number printed on a box the buyer no
@@ -2044,6 +2087,7 @@ async function wireAntennaRun(end, gainField) {
 
   picker.addEventListener('change', () => {
     const antenna = antennas.find((item) => item.key === picker.value);
+    showAiming(end, antenna);
     if (!antenna) {
       note.hidden = true;
       return;
@@ -2065,6 +2109,183 @@ async function wireAntennaRun(end, gainField) {
   });
 
   run.hidden = false;
+}
+
+/**
+ * Bend a finished omnidirectional raster into a directional one.
+ *
+ * The engine has no azimuth input, so the run was made with the
+ * antenna's BORESIGHT gain radiated in every direction. This subtracts,
+ * per cell, the gain that antenna does not actually have in that
+ * direction.
+ *
+ * It is exact rather than approximate, and the reason is worth keeping:
+ * in the ITM model the path loss between two points does not depend on
+ * transmitted power, so received level = radiated power + gain in that
+ * direction - path loss. The raster is a linear dB scale (dBm + 200
+ * before the offset above), so a per-direction subtraction in dB is the
+ * same arithmetic the engine would have done with a pattern of its own.
+ *
+ * Does nothing unless an antenna that must be aimed has been chosen AND
+ * a bearing given AND a beamwidth is available. A missing beamwidth
+ * leaves the map omnidirectional rather than inventing a shape, which is
+ * why the picker says so in words.
+ *
+ * Mutates `dbm` in place: it has just been allocated here and copying a
+ * float per cell of a 150 km raster to avoid a mutation would cost more
+ * than the whole pattern calculation.
+ */
+function shapeByAntennaPattern(dbm, region, request) {
+  if (!AntennaPattern) return;
+  // Checked before `Number`, because `Number(null)` is 0, which is due
+  // north. An empty bearing would otherwise aim the antenna at the pole.
+  if (request.tx_azimuth == null || request.tx_azimuth === '') return;
+  const boresight = Number(request.tx_azimuth);
+  const beamwidth = Number(request.tx_beamwidth);
+  if (!Number.isFinite(boresight) || !Number.isFinite(beamwidth) || beamwidth <= 0) return;
+
+  const site = { lat: Number(request.lat), lon: Number(request.lon) };
+  if (!Number.isFinite(site.lat) || !Number.isFinite(site.lon)) return;
+
+  const { width, height } = region;
+  const latSpan = region.north - region.south;
+  const lonSpan = region.east - region.west;
+  for (let row = 0; row < height; row += 1) {
+    // Cell CENTRES, matching how `sampleDbm` and the drawing code read
+    // the same raster. Using the corner would shift the whole pattern
+    // by half a cell, which at 150 km is a visible rotation near the
+    // transmitter.
+    const lat = region.north - ((row + 0.5) / height) * latSpan;
+    for (let column = 0; column < width; column += 1) {
+      const index = row * width + column;
+      if (Number.isNaN(dbm[index])) continue;
+      const lon = region.west + ((column + 0.5) / width) * lonSpan;
+      dbm[index] -= AntennaPattern.lossTowardsDb(site, { lat, lon }, boresight, beamwidth);
+    }
+  }
+}
+
+/**
+ * Show the aiming controls, and only for an antenna that needs aiming.
+ *
+ * A bearing box beside an omni is a question with no answer, so the
+ * whole group stays hidden until a directional antenna is chosen. The
+ * beamwidth box appears only when the catalogue has no figure -- the
+ * L-Com Yagi's listing states none, and a pattern cannot be drawn
+ * without one.
+ *
+ * The far end gets a sentence instead of a bearing, which is not
+ * laziness. A coverage map answers "who can hear this site", so the
+ * receiver is every point on the map at once and there is no single
+ * direction it faces. The only coherent reading is that the far end is
+ * aimed AT the site -- its best case -- and saying so is worth more
+ * than a box that cannot mean anything.
+ */
+/*
+ * The beamwidth the catalogue last wrote into the box, as text, or null.
+ * It tells a catalogue figure from a typed one when the antenna changes.
+ */
+let prefilledBeamwidth = null;
+
+/** Write an aiming box, and tell the share link when it changed. */
+function setAimBox(box, value) {
+  if (!box || box.value === value) return;
+  box.value = value;
+  box.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/** True when the antenna chosen at the site has to be aimed. */
+function siteAntennaIsAimed() {
+  const picker = document.querySelector('[data-antenna-type="tx"]');
+  if (!picker || !picker.value || !antennaCatalogue) return false;
+  const antenna = antennaCatalogue.find((item) => item.key === picker.value);
+  return Boolean(antenna && antenna.directional);
+}
+
+/*
+ * A shared link carries the bearing and the width, but not the antenna.
+ * When it is aimed, show both boxes, so the reader can see what shapes
+ * the map. Hidden values that shape the map are not acceptable.
+ */
+function revealLinkedAiming(values) {
+  if (values.tx_azimuth == null || values.tx_azimuth === '') return;
+  const group = document.querySelector('[data-antenna-aim="tx"]');
+  const widthBox = document.querySelector('[data-antenna-beamwidth="tx"]');
+  if (group) group.hidden = false;
+  if (widthBox) widthBox.hidden = false;
+}
+
+function showAiming(end, antenna) {
+  const directional = Boolean(antenna && antenna.directional);
+  const group = document.querySelector(`[data-antenna-aim="${end}"]`);
+  const aimNote = document.querySelector(`[data-antenna-aim-note="${end}"]`);
+  const widthBox = document.querySelector(`[data-antenna-beamwidth="${end}"]`);
+
+  if (group) group.hidden = !directional || end !== 'tx';
+
+  /*
+   * Fill the beamwidth from the catalogue, the way the picker fills the
+   * gain. Without this the 12 dBi Yagi -- which DOES state 36 degrees --
+   * would have left the box empty, and the raster pass reads the box, so
+   * choosing it would have produced an unshaped omnidirectional map with
+   * a Yagi named in the picker. The most convincing kind of wrong.
+   *
+   * `chosenBeamwidth` decides, so a figure typed for an antenna whose
+   * listing states none is never overwritten. The box is shown only for
+   * such an antenna, so that is the only place a person can type one.
+   * For an antenna that states a width the box is hidden, and the
+   * catalogue figure is used: a width typed for another antenna is not
+   * a width for this one. A figure the catalogue wrote for the antenna
+   * chosen before is not a typed one either: the 12 dBi Yagi's 36
+   * degrees must not become the L-Com Yagi's width.
+   *
+   * An antenna that is not aimed takes both boxes back to empty. They
+   * are hidden then, and a hidden bearing that still shaped the map
+   * would be a control nobody can see deciding the prediction.
+   */
+  if (end === 'tx') {
+    const box = field('tx_beamwidth');
+    const bearing = field('tx_azimuth');
+    if (directional && box) {
+      const stated = Number.isFinite(antenna.horizontal_beamwidth_deg);
+      const typed = stated || box.value === prefilledBeamwidth ? '' : box.value;
+      const chosen = AntennaPattern.chosenBeamwidth(antenna, typed);
+      setAimBox(box, chosen === null ? '' : String(chosen));
+      prefilledBeamwidth = stated ? box.value : null;
+    } else if (!directional) {
+      setAimBox(box, '');
+      setAimBox(bearing, '');
+      prefilledBeamwidth = null;
+    }
+  }
+
+  if (widthBox) {
+    // Hidden when the catalogue already states a width: offering an
+    // empty box beside a known figure invites somebody to overwrite a
+    // sourced number with a guess.
+    const stated = antenna && Number.isFinite(antenna.horizontal_beamwidth_deg);
+    widthBox.hidden = !directional || Boolean(stated);
+  }
+  if (!aimNote) return;
+  if (!directional) {
+    aimNote.hidden = true;
+    return;
+  }
+  aimNote.hidden = false;
+  if (end !== 'tx') {
+    aimNote.textContent =
+      'This antenna has to be aimed. The map assumes the far end is pointed straight at '
+      + 'your site, which is its best case — a receiver aimed anywhere else hears less.';
+    return;
+  }
+  const stated = Number.isFinite(antenna.horizontal_beamwidth_deg)
+    ? `Its pattern is about ${antenna.horizontal_beamwidth_deg}° wide.`
+    : 'Its listing states no beamwidth, so enter one or the map cannot shape the pattern.';
+  aimNote.textContent =
+    `Degrees clockwise from true north: 0 is north, 90 east, 180 south, 270 west. ${stated} `
+    + `Behind the antenna the prediction stops at ${AntennaPattern.MAX_MODELLED_REJECTION_DB} dB `
+    + 'down — no listing gives a front-to-back figure, so that area is the least trustworthy '
+    + 'part of the map.';
 }
 
 async function wireCableRun() {
