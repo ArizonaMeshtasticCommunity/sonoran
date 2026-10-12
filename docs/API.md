@@ -227,6 +227,76 @@ Response item:
 }
 ```
 
+### 3.1.2 `GET /api/nodes/export`
+
+Returns every node the list would show, as one file to download (#350).
+The Nodes page uses it for its **Export** control.
+
+It takes every filter of 3.1 and its `sort` and `order`. The list and
+the export read them through one dependency (`node_list_params`) and
+build their query with one function (`_node_list_query`), so a filter
+cannot reach one and miss the other. The rows are the rows the list
+gives for the same query, in the same order. The export does not page:
+`limit`, `offset` and `cursor` are not read.
+
+Parameters:
+
+- `format` — `csv` (default) or `json`. Anything else is 422.
+- `columns` — the list's columns, comma-separated, in the order the page
+  draws them. Default: every column, in the order of the page. An
+  unknown or repeated name is 422.
+
+| Column | CSV headings | Fields of 3.1 |
+|---|---|---|
+| `name` | Name, Short name | `display_name`, `short_name` |
+| `node_id` | Node ID | `node_id` |
+| `hw` | Hardware | `hw_model` |
+| `role` | Role | `role` |
+| `flags` | Gateway, Position | `is_mqtt_gateway`, `has_position` |
+| `last_heard` | Last heard | `last_heard` |
+
+The file holds **no field that the list does not show**. It holds no
+coordinates: the list shows only whether a node has a position.
+
+The values are the values of 3.1. A time is ISO 8601 in UTC, which
+stays true after the file is saved. The page shows "5m ago", which does
+not. A role is the value the firmware sent, such as `CLIENT_MUTE`. The
+page shows it in words.
+
+The CSV file:
+
+- RFC 4180, UTF-8, with a byte order mark so that Excel reads names with
+  accents and emoji correctly. Lines end with CRLF.
+- `true` and `false` for the two flags. An empty cell for no value.
+- A cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return
+  gets `'` before it. A spreadsheet runs such a cell as a formula, and a
+  node name is typed by whoever owns the node. The JSON file is not
+  changed.
+
+The JSON file is an array of objects. Each object holds the fields of
+the columns, in column order.
+
+Headers:
+
+- `Content-Disposition: attachment; filename="sonoran-nodes-YYYYMMDD-HHMMSSZ.csv"`
+  (or `.json`), stamped in UTC.
+- `Content-Type: text/csv; charset=utf-8` or `application/json`.
+- `X-Total-Count`: the number of rows in the file.
+- `Cache-Control: no-store`.
+
+**Ceiling.** One file holds at most 10,000 nodes (`EXPORT_LIMIT` in
+`api/export.py`). The whole Arizona mesh was 2,372. Over the ceiling the
+export answers **422** with a sentence that says how many nodes match,
+and it does not cut the file: a file that stops at a limit and does not
+say so gives a wrong answer about the mesh. The count is checked first,
+and the rows are read one past the ceiling, so nodes that arrive
+between the two queries are found too.
+
+One export is one request of the general request budget (1.1).
+
+A CSV answer is an exception to rule 2, as the coverage tiles and the
+terrain pages are. An error is JSON, as always.
+
 ### 3.2 `GET /api/nodes/{node_id}`
 
 Returns full detail for one node.
