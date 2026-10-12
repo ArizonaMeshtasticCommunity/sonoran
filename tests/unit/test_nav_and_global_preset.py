@@ -446,54 +446,81 @@ def test_a_shared_plan_link_still_decides_its_own_preset() -> None:
 # nodes, and it is where somebody goes to find a specific one.
 
 
-def test_one_helper_decides_the_preset_for_all_three() -> None:
-    """Three call sites, one rule, so they cannot drift apart."""
+def test_one_helper_decides_the_preset_for_every_list_page() -> None:
+    """One rule for every call site, so they cannot drift apart."""
     code = _code("app.js")
-    assert "function presetChannel()" in code
-    assert code.count("presetChannel()") >= 3, (
+    assert "function menuPreset()" in code
+    assert "function presetQuery()" in code
+    assert code.count("menuPreset()") >= 4, (
         "not every page that gained the filter is using the shared helper"
     )
+
+
+def test_the_menu_preset_travels_as_preset_never_as_channel() -> None:
+    """#313: `channel=LongFast` hid every azmsh message carried on LongFast.
+
+    The list pages send `preset=`, which the server reads from the tag
+    ingest wrote. A page that went back to `channel=` would bring the bug
+    back while every test of the server still passed.
+    """
+    code = _code("app.js")
+    helpers = code[code.index("function menuPreset()") :]
+    helpers = helpers[: helpers.index("async function mapChannels()")]
+    assert "&preset=" in helpers
+    assert "&channel=" not in helpers
 
 
 def test_the_firehose_asks_for_one_preset() -> None:
     code = _code("app.js")
     body = code[code.index("limit: '150', summary: 'true'") :]
     body = body[: body.index("api/packets?")]
-    assert "params.set('channel'" in body, "the firehose still shows every preset"
+    assert "params.set('preset'" in body, "the firehose still shows every preset"
+    assert "params.set('channel'" not in body
 
 
 def test_the_dashboard_feed_asks_for_one_preset() -> None:
     code = _code("app.js")
-    assert "chatFeedChannel()" in code, "the dashboard feed still mixes presets"
+    assert "`api/chat?limit=${DASHBOARD_MESSAGES}${presetQuery()}`" in code, (
+        "the dashboard feed still mixes presets"
+    )
+
+
+def test_the_chat_pages_ask_the_server_for_one_preset() -> None:
+    """The overview and each channel page name the preset (#313)."""
+    code = _code("app.js")
+    assert "`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}${presetQuery()}`" in code
+    fetch = code[code.index("async function chatFetch(") :]
+    fetch = fetch[: fetch.index("return get(`api/chat?${params}`)")]
+    assert "params.set('preset', preset)" in fetch
+    assert "channelsFor" not in code + _code("preset.js"), (
+        "the browser is deciding which channels ride on which preset again"
+    )
 
 
 def test_the_node_list_asks_for_one_preset() -> None:
     code = _code("app.js")
     body = code[code.index("function nodeQuery(") :]
     body = body[: body.index("api/nodes?")]
-    assert "presetChannel()" in body, "the node list still shows every preset"
+    assert "params.set('preset', preset)" in body, "the node list still shows every preset"
 
 
-def test_a_filter_chosen_in_the_panel_still_beats_the_menu() -> None:
-    """The existing precedence rule, kept.
+def test_a_channel_chosen_in_the_panel_narrows_the_menu_preset() -> None:
+    """The panel's channel and the menu's preset are separate parameters.
 
-    The panel wins where both can say the same thing, because the panel is
-    the one that SHOWS what it chose. So the menu's channel has to be set
-    before the panel loop overwrites it -- set after, a reader picking a
-    channel in the panel would watch it be ignored.
+    The menu's preset was sent as `channel`, so a channel picked in the
+    panel replaced it. Now both are sent and the server applies both: the
+    panel can narrow the preset's nodes and cannot widen past them.
     """
     code = _code("app.js")
     body = code[code.index("function nodeQuery(") :]
     body = body[: body.index("api/nodes?")]
-    assert body.index("presetChannel()") < body.index("for (const [key, chosen] of nodeFilters)"), (
-        "the menu's preset is applied after the panel, so the panel no longer wins"
-    )
+    assert "params.set('channel'" not in body, "the menu preset is sent as a channel again"
 
 
 def test_the_facet_counts_follow_the_same_filters_as_the_rows() -> None:
     """Counts that describe a larger set than the rows are a lie.
 
-    `nodeFacetQuery` derives its query from `nodeQuery`, so the channel
+    `nodeFacetQuery` derives its query from `nodeQuery`, so the preset
     reaches both. Held because the two could easily be built separately.
     """
     code = _code("app.js")

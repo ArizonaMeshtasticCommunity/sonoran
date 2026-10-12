@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
 from sonoran.api.packet_summary import summaries, text_of
+from sonoran.api.preset_scope import preset_filter, require_preset
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
@@ -93,6 +94,7 @@ async def list_packets(
     from_node: str | None = Query(default=None, alias="from"),
     to_node: str | None = Query(default=None, alias="to"),
     channel: str | None = None,
+    preset: str | None = None,
     since: datetime | None = None,
     before: datetime | None = None,
     limit: int = Query(default=100, ge=1, le=500),
@@ -103,7 +105,11 @@ async def list_packets(
 
     Set `summary=true` to add a one line `summary` of what each packet
     said, read from the decoded tables. See `api/packet_summary.py`.
+
+    Set `preset` to keep the packets carried on one modem preset. It
+    works beside `channel`. See `api/preset_scope.py`.
     """
+    wanted = require_preset(preset)
     # Pick the page first, count second.
     #
     # This used to group the whole join before applying the limit, so
@@ -132,6 +138,11 @@ async def list_packets(
         picked = picked.where(Packet.to_node_num == require_node_num(to_node))
     if channel:
         picked = picked.where(Packet.channel == channel)
+    if wanted is not None:
+        # The same newest-first scan of the time index as `channel`: the
+        # filter is checked on each row the scan reaches. See the PR for
+        # why there is no index on the tag.
+        picked = picked.where(preset_filter(Packet.modem_preset, Packet.channel, wanted))
     if since:
         picked = picked.where(Packet.first_seen_at >= since)
     if before:

@@ -95,6 +95,12 @@ A cookie would only be needed if the server had to render units itself.
 
 ### 2.4 Radio climate from the location — we cannot do this properly
 
+> **Update, 2026-10-09.** #239 has since shipped the lookup this section
+> costed: a cropped Köppen-Geiger map in `sonoran/climate/`, and Simple
+> now predicts on the climate of the site. The text below is the record
+> of the decision as it was made, and is kept as it was. See
+> `docs/PLANNER.md` 4.3.
+
 You asked whether Phoenix vs Flagstaff can be determined. Checked:
 `coverage/params.py` holds five ITM climate codes with `desert` as the
 default, and there is **no dataset in this repo that maps a coordinate to

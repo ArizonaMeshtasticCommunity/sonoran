@@ -40,6 +40,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+# The modem preset columns (#313) are `deferred=True`: a SELECT of a whole
+# row does not name them, so every query written before them runs the
+# same SQL as before. A reader that wants one names the column. See
+# `tests/unit/test_preset_param_legacy.py` and `ingest/presets.py`.
+
 
 class Base(DeclarativeBase):
     """Base class for all models."""
@@ -71,6 +76,18 @@ class Node(Base):
     is_mqtt_gateway: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     last_mqtt_topic: Mapped[str | None] = mapped_column(Text)
     last_channel: Mapped[str | None] = mapped_column(Text)
+    # The modem preset of the newest packet from this node whose preset
+    # is known, and that packet's receive time. NULL until ingest has
+    # tagged one (#313). This is what keeps a quiet node on its mesh
+    # when its last packet was on a topic channel such as `azmsh`.
+    last_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
+    last_preset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), deferred=True)
+    # The modem preset this node uploads on as an MQTT gateway: the one
+    # its newest preset-named topic named. Ingest reads it back at start.
+    uplink_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
+    uplink_preset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), deferred=True
+    )
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -120,6 +137,10 @@ class Packet(Base):
     # written before this was recorded. NULL is not a fourth state --
     # see that module, and do not fold it into the commonest value.
     payload_state: Mapped[str | None] = mapped_column(Text)
+    # The modem preset that carried the packet: the majority of its
+    # observations' presets (#313). NULL on rows written before that,
+    # and on a packet no gateway with a known preset uploaded.
+    modem_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "first_seen_at"),
@@ -165,6 +186,10 @@ class PacketSeen(Base):
     # NULL on rows written before revision 0017. See `api/sightings.py`.
     hop_start: Mapped[int | None] = mapped_column(Integer)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The modem preset of this one upload (#313): the topic's own preset
+    # when the topic is preset-named, else the gateway's current preset,
+    # else NULL. See `ingest/presets.py`.
+    modem_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "seen_at"),

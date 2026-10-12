@@ -39,6 +39,11 @@ await new Promise((resolve) => setTimeout(resolve, 5));
 ok('the default range keeps one key across redraws', chatKey('MediumFast', null) === first,
   `${first} then ${chatKey('MediumFast', null)}`);
 ok('another channel is another key', chatKey('Weather', null) !== first);
+// #313: azmsh on LongFast and azmsh on MediumFast are different rows.
+ok('another preset is another key',
+  chatKey('azmsh', null, 'LongFast') !== chatKey('azmsh', null, 'MediumFast'));
+ok('the same preset keeps its key',
+  chatKey('azmsh', null, 'LongFast') === chatKey('azmsh', null, 'LongFast'));
 
 const tuesday = { from: new Date('2026-09-22T18:00:00Z'), to: new Date('2026-09-22T20:00:00Z') };
 const keyed = chatKey('MediumFast', tuesday);

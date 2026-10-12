@@ -330,6 +330,7 @@ def _sql(statement: Any) -> tuple[str, dict[str, Any]]:
         "role=ROUTER&active_hours=24&sort=name&order=asc",
         "gateway=true&position=none&channel=LongFast&sort=hw&order=desc",
         "licensed=true&quiet_hours=24&first_seen_hours=720&hw=TBEAM&sort=position",
+        "preset=LongFast&active_hours=24",
         "",
     ],
 )
@@ -351,6 +352,24 @@ def test_the_export_runs_the_list_query(
     assert len(listed) == len(exported) == 2
     for mine, theirs in zip(listed, exported, strict=True):
         assert _sql(mine) == _sql(theirs)
+
+
+@pytest.mark.parametrize("path", ["/api/nodes", "/api/nodes/export"])
+def test_the_menu_preset_reaches_the_query(
+    fake: tuple[TestClient, list[_FakeSession]], path: str
+) -> None:
+    """The list and the file both keep the menu's modem preset (#313).
+
+    Comparing the two statements is not enough: a preset dropped from
+    both gives two equal statements.
+    """
+    client, sessions = fake
+    client.make(total=0, rows=[])  # type: ignore[attr-defined]
+    assert client.get(f"{path}?preset=LongFast").status_code == 200
+    for statement in sessions[-1].statements:
+        text, params = _sql(statement)
+        assert "node.last_preset" in text, f"{path} dropped the preset"
+        assert "LongFast" in params.values()
 
 
 def test_the_export_is_counted_in_the_request_budget() -> None:
