@@ -1800,10 +1800,37 @@ async function main() {
     const fetched = [];
     page.on('request', (request) => fetched.push(new URL(request.url()).pathname));
     const heavy = /echarts\.min\.js|protobuf\.min\.js|js-yaml\.min\.js|config-check\.js/;
+    /*
+     * Leave a page only when its own render has ended (#354).
+     *
+     * A navigation aborts every request still in flight, and the
+     * collector counts each abort as an error. This waited for
+     * `networkidle`, which is the wrong signal: Playwright fires it once
+     * for each document and then answers at once. The node page asks for
+     * its signal and its packets only after it has drawn the history
+     * charts. A long history can take more than 500 ms to draw, with no
+     * request open, and that is all `networkidle` needs. So the event
+     * fired early, the wait returned at once, and the two requests were
+     * aborted: the exact lines of the issue. The `.catch` also hid a
+     * timeout.
+     *
+     * `loading` is true until a render has awaited every request it
+     * made, and `timelinePaging.busy` covers the one request the packet
+     * timeline makes outside a render. A page that does not settle fails
+     * here and says so.
+     *
+     * The wait is longer than the page's own `REQUEST_TIMEOUT_MS` (60 s).
+     * A request that hangs is then ended by the page itself, and its
+     * abort is reported with its address, which is the true fault. Do not
+     * filter `ERR_ABORTED` to quiet this journey: that hides that abort.
+     */
+    const settle = async (name) => must(await waitFor(page, () => !loading && !timelinePaging.busy, 90000),
+      `#${name} was still loading after 90 s`);
     await open(page, 'nodes', 3000);
     const early = fetched.filter((path) => heavy.test(path));
     must(early.length === 0, `the nodes page fetched ${early.join(', ')}`);
     must(!(await page.evaluate(() => Boolean(window.echarts))), 'echarts is defined on the nodes page');
+    await settle('nodes');
 
     const drew = [];
     for (const name of ['dashboard', 'stats', 'graph']) {
@@ -1818,9 +1845,7 @@ async function main() {
       }
       must(ok, `a cold load of #${name} drew no chart`);
       drew.push(name);
-      // Let the page's other requests land before leaving it, or the
-      // navigation aborts them and each one is counted as an error.
-      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await settle(name);
     }
     // The node page draws its charts once its panels arrive.
     const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
@@ -1830,7 +1855,7 @@ async function main() {
     must(await waitFor(page, () => [...document.querySelectorAll('[data-page="node"] canvas')]
       .some((canvas) => canvas.width > 0), 30000), `a cold load of node ${nodes[0].node_id} drew no chart`);
     drew.push('node');
-    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await settle('node');
 
     await page.goto('about:blank');
     await open(page, 'config', 500);
@@ -3497,18 +3522,34 @@ async function main() {
      * without writing to a shared database. `render('firehose')` is the
      * call the Live timer makes; Live is switched off so no timer poll
      * lands in the middle.
+     *
+     * The real rows are read ONCE, from the first answer, and every poll
+     * is built from that copy (#354). The stub used to build its packets
+     * from `rows[0]` of each answer. When the newest real row changed
+     * between polls -- a tie on `first_seen_at`, or a packet the seed
+     * added -- the "same" made packets took a new node in their keys,
+     * and every one of them counted as new: "9 new" where 4 was right.
+     * A real packet that arrived between polls counted as new as well.
+     * Now the count depends on `extra` alone.
      */
     let extra = 0;
+    let base = null;
     await page.route(/\/api\/packets\?/, async (route) => {
       const response = await route.fetch();
       const rows = await response.json();
-      if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+      if (!base) {
+        if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+        base = { rows, node: rows[0].packet_key.split(':')[0], at: Date.now() };
+      }
       const made = [];
       for (let n = extra; n > 0; n -= 1) {
-        const [node] = rows[0].packet_key.split(':');
-        made.push({ ...rows[0], packet_key: `${node}:${990000000 + n}`, first_seen_at: new Date().toISOString() });
+        made.push({
+          ...base.rows[0],
+          packet_key: `${base.node}:${990000000 + n}`,
+          first_seen_at: new Date(base.at + n * 1000).toISOString(),
+        });
       }
-      return route.fulfill({ response, json: [...made, ...rows].slice(0, rows.length) });
+      return route.fulfill({ response, json: [...made, ...base.rows].slice(0, base.rows.length) });
     });
     await open(page, 'firehose', 1000);
     must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
