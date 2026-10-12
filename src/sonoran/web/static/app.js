@@ -674,7 +674,15 @@ function messageBody(text) {
 const REACTION_CAP = 4;
 
 /*
- * The auto-ack rule lives in `labels.js`, as `SonoranLabels.isAutoAck`.
+ * The digit tapbacks are drawn as "Hop-count tapbacks", not
+ * "Auto-acked" (#312). A digit says how many hops the message took to
+ * reach whoever sent it, and that is true whether an automation or a
+ * person sent it. Nothing in the packet says which, so the label claims
+ * only what the digit means. Tyler asked for the name rather than a
+ * rule that guesses, such as a time window.
+ *
+ * The rule for which marks count lives in `labels.js`, as
+ * `SonoranLabels.isAutoAck`.
  * It is pure -- an emoji and a channel in, a yes or no out -- so it is
  * tested directly rather than through this page, and there is one
  * definition of which marks count and where.
@@ -750,7 +758,7 @@ function reactionChips(reactions, channel) {
           senders: acks.flatMap((reaction) => (reaction.senders || []).map((sender) => ({
             ...sender, display_name: `${sender.display_name}: ${SonoranLabels.autoAckMeaning(reaction.emoji)}`,
           }))),
-        }, 'Auto-acked', 'auto-ack')
+        }, 'Hop-count tapbacks', 'auto-ack')
       : null);
 }
 
