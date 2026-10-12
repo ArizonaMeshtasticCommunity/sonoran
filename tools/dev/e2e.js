@@ -2945,12 +2945,16 @@ async function main() {
         const box = document.querySelector(selector).getBoundingClientRect();
         return box.height ? Math.round(box.bottom) : null;
       };
+      // What can be seen ends at the bottom bar on a phone (#282), not at
+      // the foot of the screen: a link under the bar is not on the screen.
+      const bar = document.querySelector('[data-tab-bar]');
+      const barTop = bar && !bar.hidden ? bar.getBoundingClientRect().top : Infinity;
       return {
         scrolled: document.querySelector('.sidebar').scrollTop + window.scrollY,
         preset: bottom('.preset-switch'),
         settings: bottom('.menu-settings-link'),
         link: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
-        height: window.innerHeight,
+        height: Math.round(Math.min(window.innerHeight, barTop)),
       };
     });
     must(got.scrolled === 0, `the drawer opened scrolled by ${got.scrolled} px`);
@@ -2960,6 +2964,251 @@ async function main() {
     return `preset ends at ${got.preset}, Settings at ${got.settings} of ${got.height}`;
   });
   await tall.close();
+
+  /*
+   * The bottom bar on a phone (#282). Will chose the set on 2026-10-08:
+   * Map, Nodes, Chat and Dashboard, then More, which opens the menu.
+   *
+   * Measured with the CI runner's wider fonts imitated (AGENTS.md 9.31),
+   * because five labels share 390 px and "Dashboard" is the widest.
+   * Every page here is in the first `goto` (AGENTS.md 9.33).
+   */
+  const BAR = () => {
+    const bar = document.querySelector('[data-tab-bar]');
+    if (!bar || bar.hidden || getComputedStyle(bar).display === 'none') return null;
+    const box = bar.getBoundingClientRect();
+    return {
+      top: Math.round(box.top),
+      bottom: Math.round(box.bottom),
+      name: bar.getAttribute('aria-label') || '',
+      sideways: bar.scrollWidth > bar.clientWidth,
+      items: [...bar.querySelectorAll('a, button')].map((item) => {
+        const r = item.getBoundingClientRect();
+        return {
+          text: item.textContent.trim(),
+          tag: item.tagName,
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          current: item.getAttribute('aria-current'),
+        };
+      }),
+    };
+  };
+  const SPREAD = '* { letter-spacing: .12em !important; }';
+
+  await journey(phone, 'the bottom bar holds four pages and More, each finger-sized (#282)', async (page) => {
+    await open(page, 'firehose', 2500);
+    await page.addStyleTag({ content: SPREAD });
+    await page.waitForTimeout(300);
+    const bar = await page.evaluate(BAR);
+    must(bar, 'there is no bottom bar on a 390 px touch screen');
+    must(bar.name.length > 0, 'the bar is a nav with no name, beside the menu that has one');
+    must(bar.bottom === page.viewportSize().height, `the bar ends at ${bar.bottom}, not at the foot of the screen`);
+    const words = bar.items.map((item) => item.text);
+    must(words.join() === 'Map,Nodes,Chat,Dashboard,More', `the bar holds ${JSON.stringify(words)}`);
+    must(bar.items.slice(0, 4).every((item) => item.tag === 'A'), 'a page in the bar is not a link');
+    must(bar.items[4].tag === 'BUTTON', 'More is not a button');
+    for (const item of bar.items) {
+      must(item.w >= 44 && item.h >= 44, `${item.text} is ${item.w} x ${item.h}, under 44 x 44`);
+    }
+    must(!bar.sideways, 'the five labels push the bar sideways with the wider fonts');
+    must(bar.items.every((item) => !item.current), 'the firehose lights a tab, and it is not one');
+
+    // A tap on Nodes goes there and marks it, and only it.
+    await page.locator('[data-tab-bar] a[data-tab="nodes"]').tap();
+    await page.waitForTimeout(1500);
+    must(/#nodes$/.test(page.url()), `Nodes did not navigate (${page.url()})`);
+    const after = await page.evaluate(BAR);
+    const lit = after.items.filter((item) => item.current);
+    must(lit.length === 1 && lit[0].text === 'Nodes' && lit[0].current === 'page',
+      `after a tap on Nodes the bar marks ${JSON.stringify(lit)}`);
+    return `${words.join(' · ')}, smallest ${Math.min(...bar.items.map((i) => Math.min(i.w, i.h)))} px; Nodes navigates and is marked`;
+  });
+
+  await journey(phone, 'More opens the one page list, clear of the bar (#282)', async (page) => {
+    await open(page, 'dashboard', 2500);
+    const more = page.locator('[data-tab-bar] [data-tab-more]');
+    must((await more.getAttribute('aria-controls')) === 'site-menu', 'More does not open the site menu');
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await more.tap();
+    await page.waitForTimeout(300);
+    must((await more.getAttribute('aria-expanded')) === 'true', 'More did not open the menu');
+    must(await page.locator('#site-nav').isVisible(), 'the page list is not on the screen');
+    // One list: the menu holds every page, and the bar's links are copies, not a second list.
+    const links = await page.locator('#site-nav a').count();
+    const pages = await page.locator('main .page').count();
+    must(links >= 10 && links <= pages, `the menu holds ${links} links for ${pages} pages`);
+    must(await page.locator('[data-tab-bar] [data-nav]').count() === 0,
+      'a bar link carries data-nav, so the router counts it as a second menu entry');
+    // The top button tells the same story.
+    must((await page.locator('[data-nav-toggle]').getAttribute('aria-expanded')) === 'true',
+      'the top menu button says the menu is closed while it is open');
+    // The open menu ends at the bar, so Settings can always be brought above it.
+    const top = (await page.evaluate(BAR)).top;
+    await page.locator('.menu-settings-link').scrollIntoViewIfNeeded();
+    const settings = await page.locator('.menu-settings-link').boundingBox();
+    must(settings && settings.y + settings.height <= top + 1,
+      `with the menu open, Settings ends at ${settings && Math.round(settings.y + settings.height)}, under the bar at ${top}`);
+    // Escape closes it and gives the focus back to More.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    must((await more.getAttribute('aria-expanded')) === 'false', 'Escape did not close the menu');
+    must(await page.evaluate(() => document.activeElement && document.activeElement.matches('[data-tab-more]')),
+      'Escape left the focus somewhere other than More');
+    // A page chosen from the menu closes it and lights no tab.
+    await more.tap();
+    await page.waitForTimeout(250);
+    await page.locator('#site-nav a[data-nav="stats"]').tap();
+    await page.waitForTimeout(1500);
+    must((await more.getAttribute('aria-expanded')) === 'false', 'the menu stayed open after a page was chosen');
+    must((await page.evaluate(BAR)).items.every((item) => !item.current), 'Statistics lights a tab');
+    return `${links} links in the menu, Settings ends at ${Math.round(settings.y + settings.height)} above the bar at ${top}`;
+  });
+
+  await journey(phone, 'a deep link lights the closest tab, or none (#282)', async (page) => {
+    // A real node and a real packet, from the API, so neither page is an error page.
+    const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
+    must(nodes.length > 0, 'no node to open');
+    const node = `#node/${encodeURIComponent(nodes[0].node_id)}`;
+    const packets = await (await page.request.get(`${BASE}/api/packets?limit=1&summary=true`)).json();
+    must(packets.length > 0, 'no packet to open');
+    // A summary row carries `packet_key` ("<from_num>:<packet_id>"), as the firehose reads it.
+    const packet = `#packet/${encodeURIComponent(packets[0].from_node)}/${packets[0].packet_key.split(':')[1]}`;
+    const lit = async (hash) => {
+      const fresh = await page.context().newPage();
+      await fresh.goto(`${BASE}/${hash}`, { waitUntil: 'load' });
+      await fresh.waitForTimeout(1500);
+      const items = (await fresh.evaluate(BAR)).items.filter((item) => item.current);
+      await fresh.close();
+      return items.map((item) => `${item.text}=${item.current}`).join();
+    };
+    const onNode = await lit(node);
+    must(onNode === 'Nodes=true', `${node} lights ${onNode || 'nothing'}, not Nodes as "true"`);
+    const onPacket = await lit(packet);
+    must(onPacket === '', `${packet} lights ${onPacket}; a packet belongs to no tab`);
+    const onChannel = await lit('#chat/LongFast');
+    must(onChannel === 'Chat=page', `a chat channel lights ${onChannel || 'nothing'}, not Chat`);
+    return `${node} lights Nodes (aria-current=true), a channel lights Chat, ${packet} lights none`;
+  });
+
+  await journey(phone, 'watch mode covers the bottom bar (#282)', async (page) => {
+    /*
+     * Watch mode fills the screen with the map and puts its panel at the
+     * foot, so the bar must not sit on top of it. Asked of the screen
+     * itself: what a finger at the bottom edge would touch.
+     */
+    await open(page, 'map', 4000);
+    await page.locator('[aria-label="Watch mode"]').first().tap();
+    await page.waitForTimeout(2000);
+    const got = await page.evaluate(() => {
+      const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight - 10);
+      return {
+        watching: document.body.classList.contains('watch-mode') || Boolean(document.fullscreenElement),
+        onBar: Boolean(hit && hit.closest('[data-tab-bar]')),
+      };
+    });
+    must(got.watching, 'watch mode did not open, so this proves nothing');
+    must(!got.onBar, 'the bottom bar sits on top of watch mode');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1000);
+    return 'the foot of the screen is the watch view, not the bar';
+  });
+
+  await journey(phone, 'no page ends under the bottom bar (#282)', async (page) => {
+    /*
+     * Scroll to the end and read the page's own bottom edge against the
+     * bar's top. The page's box ends at its last row, so a page whose
+     * last row hides under the bar fails here whatever that row is.
+     */
+    const out = [];
+    for (const name of ['dashboard', 'nodes', 'firehose', 'chat', 'map', 'stats', 'settings']) {
+      const fresh = await page.context().newPage();
+      await fresh.goto(`${BASE}/#${name}`, { waitUntil: 'load' });
+      await fresh.addStyleTag({ content: SPREAD });
+      await fresh.waitForTimeout(3500);
+      const got = await fresh.evaluate(async () => {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        await new Promise((done) => setTimeout(done, 300));
+        const bar = document.querySelector('[data-tab-bar]').getBoundingClientRect();
+        const pageBox = document.querySelector('.page.active').getBoundingClientRect();
+        const scroller = document.querySelector('.page.active .chat-scroll');
+        return {
+          end: Math.round(pageBox.bottom),
+          chat: scroller ? Math.round(scroller.getBoundingClientRect().bottom) : null,
+          top: Math.round(bar.top),
+          long: document.documentElement.scrollHeight > window.innerHeight,
+        };
+      });
+      await fresh.close();
+      must(got.end <= got.top + 1, `#${name} ends at ${got.end}, under the bar at ${got.top}`);
+      if (got.chat !== null) must(got.chat <= got.top + 1, `the chat column ends at ${got.chat}, under the bar at ${got.top}`);
+      out.push(`${name}:${got.end}/${got.top}`);
+    }
+    return out.join(' ');
+  });
+
+  await journey(phone, 'the node sheet and the offline notice stand on the bar (#282)', async (page) => {
+    await open(page, 'map', 2500);
+    const got = await page.evaluate(async () => {
+      // The offline notice (#331) is made by pwa.js on the browser's own event.
+      window.dispatchEvent(new Event('offline'));
+      await new Promise((done) => setTimeout(done, 300));
+      const notices = [...document.querySelectorAll('.app-notice')].map((n) => Math.round(n.getBoundingClientRect().bottom));
+      window.dispatchEvent(new Event('online'));
+      return { notices, top: Math.round(document.querySelector('[data-tab-bar]').getBoundingClientRect().top) };
+    });
+    must(got.notices.length > 0, 'no offline notice appeared, so this proves nothing');
+    must(Math.max(...got.notices) <= got.top, `an app notice ends at ${Math.max(...got.notices)}, under the bar at ${got.top}`);
+    // The node sheet, opened through its own interface on the first node drawn.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map && window.SonoranMap.marks.size > 0, 20000),
+      'the map drew no nodes');
+    const sheet = await page.evaluate(async () => {
+      const { marks } = window.SonoranMap;
+      const entry = [...marks.values()][0];
+      entry.marker.fire('click');
+      await new Promise((done) => setTimeout(done, 400));
+      const node = document.querySelector('.node-sheet');
+      if (!node || node.hidden) return null;
+      return {
+        bottom: Math.round(node.getBoundingClientRect().bottom),
+        top: Math.round(document.querySelector('[data-tab-bar]').getBoundingClientRect().top),
+      };
+    });
+    must(sheet, 'a node opened no sheet');
+    must(sheet.bottom <= sheet.top + 1, `the node sheet ends at ${sheet.bottom}, under the bar at ${sheet.top}`);
+    return `notice ends ${Math.max(...got.notices)}, sheet ends ${sheet.bottom}, bar at ${got.top}`;
+  });
+
+  /*
+   * The other half: the bar is for a phone held upright only. A mouse
+   * at desktop width, a narrow window with a mouse, an iPad in portrait
+   * and an iPhone SE on its side (568 px wide, under 40rem, and 320 px
+   * tall) keep the layout they had, with no bar and no space kept for one.
+   */
+  for (const [label, options] of [
+    ['a mouse at 1440 px', { viewport: { width: 1440, height: 900 } }],
+    ['a mouse at 390 px', { viewport: { width: 390, height: 844 } }],
+    ['an iPad in portrait', { viewport: { width: 834, height: 1112 }, isMobile: true, hasTouch: true }],
+    ['a small phone on its side', { viewport: { width: 568, height: 320 }, isMobile: true, hasTouch: true }],
+  ]) {
+    const other = await browser.newContext(options);
+    await journey(other, `${label} has no bottom bar (#282)`, async (page) => {
+      await open(page, 'dashboard', 2000);
+      const got = await page.evaluate(() => ({
+        bar: Boolean(document.querySelector('[data-tab-bar]')),
+        shown: (() => {
+          const bar = document.querySelector('[data-tab-bar]');
+          return Boolean(bar) && getComputedStyle(bar).display !== 'none' && bar.getBoundingClientRect().height > 0;
+        })(),
+        kept: getComputedStyle(document.documentElement).getPropertyValue('--tabbar-h').trim(),
+      }));
+      must(got.bar, 'the bar is missing from the markup, so this proves nothing');
+      must(!got.shown, `the bottom bar is drawn for ${label}`);
+      must(got.kept === '0px', `${label} keeps ${got.kept} for a bar it does not draw`);
+      return `no bar, --tabbar-h ${got.kept}`;
+    });
+    await other.close();
+  }
 
   await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
     /*

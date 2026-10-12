@@ -920,6 +920,8 @@ map-first and full-screen.
 - **Effort:** L. **Risk:** high on iOS 26 Safari, and it depends on item 6.
 - **Needs Will:** which four pages. Suggested: Map, Nodes, Chat, Dashboard.
   Ship item 6 first and decide from how that feels.
+- **Decided (Will, 2026-10-08):** the suggested four, then More. Built in
+  #282. The trigger and the reasons are in the PR and in `tab-bar.js`.
 
 **18. Body text at 16 px on touch screens**
 
