@@ -629,7 +629,7 @@ async def main() -> None:
     if not settings.gaps_enabled or not settings.gaps_siting_enabled:
         logger.info("the coverage gaps siting job is turned off")
         return
-    engine = make_engine(settings.database_url)
+    engine = make_engine(settings.database_url_jobs)
     factory = make_session_factory(engine)
     try:
         async with factory() as session:
