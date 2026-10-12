@@ -11242,13 +11242,41 @@ function presetInitials(name) {
   return (words[0] || '').slice(0, 2);
 }
 
+/* How many presets the switch shows as buttons. The rest go in the
+   "More presets" select, because a switch slot is too narrow for a
+   third name. */
+const PRESET_SWITCH_SLOTS = 2;
+
+/*
+ * The presets on the switch's buttons: the deployment's default, then
+ * the two this mesh runs, then whatever else is offered, in that order.
+ *
+ * Fixed, not the first two of the list on offer. That list comes from
+ * several endpoints, and the channel list sorts by traffic: on a busy
+ * LongTurbo day LongFast would drop into the select, and the switch
+ * would change between pages.
+ */
+function presetSwitchSlots(offered) {
+  const configured = (window.SONORAN && window.SONORAN.defaultPreset) || '';
+  const wanted = [configured, ...SonoranPreset.FALLBACK, ...offered];
+  return [...new Set(wanted.filter((name) => name && offered.includes(name)))]
+    .slice(0, PRESET_SWITCH_SLOTS);
+}
+
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
+  const more = $('[data-preset-more]');
 
   const draw = () => {
     const current = SonoranPreset.current();
-    const options = SonoranPreset.options();
+    const offered = SonoranPreset.options();
+    const options = presetSwitchSlots(offered);
+    const extras = offered.filter((name) => !options.includes(name));
+    // The chosen preset is in the select, so no button is chosen and
+    // the thumb hides. The first button keeps the Tab stop.
+    const pinned = options.includes(current);
+    holder.toggleAttribute('data-extra', !pinned);
     /*
      * The thumb's size and position, for the CSS (§3.5).
      *
@@ -11271,7 +11299,7 @@ function wirePresetSwitch() {
        * of buttons that each take a tab stop is the usual way this
        * control is got wrong.
        */
-      tabindex: name === current ? '0' : '-1',
+      tabindex: name === current || (!pinned && name === options[0]) ? '0' : '-1',
       onclick: () => { if (SonoranPreset.set(name)) draw(); },
       onkeydown: (event) => {
         const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -11279,7 +11307,10 @@ function wirePresetSwitch() {
         if (!step) return;
         event.preventDefault();
         const list = options;
-        const next = list[(list.indexOf(current) + step + list.length) % list.length];
+        // With the chosen preset in the select, Right goes to the first
+        // button and Left to the last, as from just outside the group.
+        const from = pinned ? list.indexOf(current) : (step > 0 ? -1 : 0);
+        const next = list[(from + step + list.length) % list.length];
         if (SonoranPreset.set(next)) draw();
         const moved = $(`[data-preset-switch] .preset-choice.active`);
         if (moved) moved.focus();
@@ -11295,7 +11326,21 @@ function wirePresetSwitch() {
      */
     el('span', { class: 'nav-label', text: SonoranLabels.presetLabel(name) }),
     el('span', { class: 'preset-short', 'aria-hidden': 'true', text: presetInitials(name) }))));
+
+    if (!more) return;
+    more.hidden = !extras.length;
+    more.classList.toggle('active', !pinned);
+    replace(more,
+      el('option', { value: '', text: 'More presets' }),
+      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
+    more.value = pinned ? '' : current;
   };
+
+  if (more) {
+    more.addEventListener('change', () => {
+      if (more.value && SonoranPreset.set(more.value)) draw();
+    });
+  }
 
   draw();
   // A change from anywhere -- another tab's storage, or the available
@@ -11304,6 +11349,9 @@ function wirePresetSwitch() {
     draw();
     render(currentPage);
   });
+  // The list grew or shrank with the same preset chosen: the page is
+  // still right, only the switch and the select change.
+  if (SonoranPreset.onOptionsChange) SonoranPreset.onOptionsChange(draw);
 
   /*
    * A setting changed in ANOTHER tab. `applySetting` already redraws for

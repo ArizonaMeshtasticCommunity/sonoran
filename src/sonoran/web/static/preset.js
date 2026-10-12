@@ -38,6 +38,9 @@ window.SonoranPreset = (function build() {
   let available = [...FALLBACK];
   let chosen = null;
   const listeners = new Set();
+  // Told when the list on offer changes, even when the chosen preset
+  // does not. The menu's switch needs it; a page does not.
+  const listListeners = new Set();
 
   /** The deployment's default, which the reader's choice overrides. */
   function fallbackPreset() {
@@ -106,11 +109,27 @@ window.SonoranPreset = (function build() {
     const names = [...new Set((list || []).filter((name) => typeof name === 'string' && name))];
     if (!names.length) return false;
     const before = current();
+    // Compared without order: the channel list sorts by traffic, so the
+    // same presets often come back in a new order, and a redraw then
+    // would take keyboard focus off the switch for nothing.
+    const listed = [...available].sort().join('|') !== [...names].sort().join('|');
     available = names;
     const after = current();
     // Announce only a real change: the reader's preset can move here if
     // the one they had chosen is no longer on offer.
     if (after !== before) announce(after);
+    // A longer list with the same choice redraws only the switch. Before
+    // this, a third preset showed in the menu only after some later
+    // change of preset happened to redraw it.
+    else if (listed) {
+      for (const listener of [...listListeners]) {
+        try {
+          listener(options());
+        } catch (error) {
+          if (window.console) window.console.warn('preset list listener failed', error);
+        }
+      }
+    }
     return after !== before;
   }
 
@@ -172,6 +191,13 @@ window.SonoranPreset = (function build() {
     return () => listeners.delete(fn);
   }
 
+  /** Run `fn` whenever the list on offer changes. Returns an unsubscribe. */
+  function onOptionsChange(fn) {
+    if (typeof fn !== 'function') return () => {};
+    listListeners.add(fn);
+    return () => listListeners.delete(fn);
+  }
+
   /**
    * True when `name` is the preset in force.
    *
@@ -183,5 +209,5 @@ window.SonoranPreset = (function build() {
     return String(name ?? '') === current();
   }
 
-  return { current, options, setAvailable, set, onChange, matches, FALLBACK };
+  return { current, options, setAvailable, set, onChange, onOptionsChange, matches, FALLBACK };
 }());
