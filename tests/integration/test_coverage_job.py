@@ -59,11 +59,12 @@ def _settings(timescale_url: str, tmp_path: Path, **extra: object) -> Settings:
 def clean(migrated_engine) -> Iterator[None]:  # type: ignore[no-untyped-def]
     """Leave the tables as they were found."""
     yield
+    # First: a gaps row references its node, so the node goes after it.
+    wipe_job_outputs(migrated_engine)
     with migrated_engine.begin() as connection:
         for table in ("neighbor_metrics", "node"):
             connection.execute(text(f"DELETE FROM {table} WHERE node_num >= 900000"))
         connection.execute(text("DELETE FROM node WHERE node_num >= 900000"))
-    wipe_job_outputs(migrated_engine)
 
 
 def _add_node(

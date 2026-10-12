@@ -69,6 +69,8 @@ def clean(migrated_engine) -> Iterator[None]:  # type: ignore[no-untyped-def]
 
 
 def _wipe(migrated_engine) -> None:  # type: ignore[no-untyped-def]
+    # First: a gaps row references its node, so the node goes after it.
+    wipe_job_outputs(migrated_engine)
     with migrated_engine.begin() as connection:
         for table, column in (
             ("packet_seen", "from_node_num"),
@@ -81,7 +83,6 @@ def _wipe(migrated_engine) -> None:  # type: ignore[no-untyped-def]
             ("node", "node_num"),
         ):
             connection.execute(text(f"DELETE FROM {table} WHERE {column} >= {BASE}"))
-    wipe_job_outputs(migrated_engine)
 
 
 def _add_node(

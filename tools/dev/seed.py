@@ -608,7 +608,11 @@ async def main() -> None:
 
     async with engine.begin() as conn:
         # Empty the tables first. A second run must not add duplicates.
-        for table in (
+        #
+        # One statement, because the job output tables (#351) reference
+        # `node`, and PostgreSQL truncates a referenced table only
+        # together with the tables that reference it.
+        tables = (
             "neighbor_metrics",
             "position_metrics",
             "device_metrics",
@@ -618,9 +622,18 @@ async def main() -> None:
             "packet_seen",
             "packet",
             "packet_key",
+            "gaps_index",
+            "gaps_run",
+            "gaps_node",
+            "gaps_signal",
+            "gaps_trace_answer",
+            "gaps_siting",
+            "gaps_siting_area",
+            "gaps_siting_point",
+            "gaps_siting_candidate",
             "node",
-        ):
-            await conn.execute(text(f"TRUNCATE {table}"))
+        )
+        await conn.execute(text(f"TRUNCATE {', '.join(tables)}"))
 
         # Nodes.
         for num, short, long_name, hw, role, lat, lon, alt, gw in NODES:
