@@ -10,6 +10,14 @@ only (AGENTS.md 9.1 and 9.2). Each statement here is shaped by that:
   generated `packet.id` cannot be read back and is never used.
 - Nothing here reads a `packet` row. The only read is the start-up
   read of each gateway's stored preset from `node`.
+- Every UPDATE sets `synchronize_session=False`. An ORM `update()`
+  otherwise picks a strategy from its WHERE clause, and for a
+  `BETWEEN` it falls back to "fetch": it first runs
+  `SELECT packet.id, packet.first_seen_at ... WHERE ...`. This role may
+  not read `packet.id`, so that SELECT is refused and the whole message
+  is lost. It happened on the first deploy of #313: every repeat of a
+  packet whose tally was lost in the restart failed. This process
+  holds no ORM objects for these rows, so there is nothing to sync.
 
 Revision i313 grants the column reads these statements need.
 """
@@ -60,6 +68,7 @@ async def store_packet_preset(
         update(Packet)
         .where(Packet.from_node_num == from_node, Packet.packet_id == packet_id, when)
         .values(modem_preset=change.preset)
+        .execution_options(synchronize_session=False)
     )
 
 
@@ -81,6 +90,7 @@ async def store_last_preset(
             or_(Node.last_preset_at.is_(None), Node.last_preset_at <= at),
         )
         .values(last_preset=preset, last_preset_at=at)
+        .execution_options(synchronize_session=False)
     )
 
 

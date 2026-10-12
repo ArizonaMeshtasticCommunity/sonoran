@@ -250,6 +250,35 @@ def test_a_restart_remembers_each_gateway(ingest_url: str, migrated_engine: Any)
     )
 
 
+def test_a_repeat_after_a_restart_updates_the_packet(ingest_url: str, migrated_engine: Any) -> None:
+    """The window update runs as the ingest role, with no read of `packet.id`.
+
+    After a restart the tally is gone, so a repeat of a packet stored
+    before it updates by a window of `first_seen_at`, not by its exact
+    time. An ORM `update()` with a BETWEEN syncs its session by reading
+    `packet.id` first, which this role may not do, and on the first
+    deploy of #313 every such message was refused and lost.
+    """
+    asyncio.run(
+        _ingest(ingest_url, _tracker(), [_message(SENDER, 400, GW_MED_1, "MediumFast", NOW)])
+    )
+    asyncio.run(
+        _ingest(
+            ingest_url,
+            _tracker(),
+            [_message(SENDER, 400, GW_LONG, "LongFast", NOW + timedelta(seconds=30))],
+        )
+    )
+    assert (
+        _scalar(
+            migrated_engine,
+            "SELECT modem_preset FROM packet WHERE from_node_num = :s AND packet_id = 400",
+            s=SENDER,
+        )
+        == "LongFast"
+    )
+
+
 def test_last_preset_only_moves_forward(ingest_url: str, migrated_engine: Any) -> None:
     asyncio.run(_ingest(ingest_url, _tracker(), [_announce(GW_LONG, "LongFast", NOW, 31)]))
 
