@@ -50,7 +50,7 @@ from sonoran.config import Settings
 from sonoran.gaps import boards as gaps_boards
 from sonoran.gaps import store as gaps_store
 from sonoran.gaps.siting import distance_km
-from sonoran.radio.presets import preset_for_channel, required_snr_db
+from sonoran.radio.presets import modelled, preset_for_channel, required_snr_db
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -366,8 +366,11 @@ async def _link_board(
     functions, so a link on this board is one the graph draws solid.
     Without a window it reads the last `LINK_WINDOW_HOURS`.
     """
-    modem = preset_for_channel(preset)
-    required = required_snr_db(modem) if modem else 0.0
+    # A preset with no modelled sensitivity (#362) has no required SNR,
+    # so no link on it can be shown to clear a margin. It used to be read
+    # as 0 dB, which is a margin made up for it.
+    modem = modelled(preset_for_channel(preset))
+    required = required_snr_db(modem) if modem else None
     if window is None:
         since = datetime.now(UTC) - timedelta(hours=LINK_WINDOW_HOURS)
         until = None
@@ -382,7 +385,10 @@ async def _link_board(
     strong: list[Edge] = [
         edge
         for edge in edges.values()
-        if edge.strength == TWO_WAY and edge.snr is not None and edge.snr - required >= margin_db
+        if required is not None
+        and edge.strength == TWO_WAY
+        and edge.snr is not None
+        and edge.snr - required >= margin_db
     ]
     ends = {end for edge in strong for end in (edge.source, edge.target)}
     positions = await exact_positions(session, ends)

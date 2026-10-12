@@ -90,7 +90,13 @@ from sonoran.positions import (
 )
 from sonoran.radio.overrides import EMPTY as EMPTY_OVERRIDES
 from sonoran.radio.overrides import Overrides, load_overrides
-from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
+from sonoran.radio.presets import (
+    ModemPreset,
+    modelled,
+    preset_by_key,
+    preset_for_channel,
+    sensitivity_of,
+)
 from sonoran.radio.resolve import resolve_profile
 from sonoran.roles import (
     EVERY_ROLE,
@@ -219,7 +225,10 @@ def group_by_preset(
     left_out: dict[str, Counter[str]] = {}
     coarse: list[dict[str, object]] = []
     for node in nodes:
-        preset = preset_for_channel(node.last_channel)
+        # A preset with no modelled sensitivity (#362) is left out with
+        # the channels that name no preset: there is no threshold to
+        # draw it against.
+        preset = modelled(preset_for_channel(node.last_channel))
         if preset is None:
             continue
         rejected = left_out.setdefault(preset.key, Counter())
@@ -884,7 +893,7 @@ def _empty_summary(key: str, rejected: "Counter[str]") -> store.PresetSummary:
     return store.PresetSummary(
         preset=preset.name,
         label=preset.label,
-        sensitivity_dbm=preset.sensitivity_dbm,
+        sensitivity_dbm=sensitivity_of(preset),
         node_count=0,
         candidate_count=sum(rejected.values()),
         site_count=0,
@@ -1052,7 +1061,7 @@ def _build_site_set(
         downlink = _charge_receiver(downlink, rx_loss)
         uplink = _charge_receiver(uplink, rx_loss)
         usable = _charge_receiver(usable, rx_loss)
-        threshold = preset.sensitivity_dbm
+        threshold = sensitivity_of(preset)
 
         tiles = 0
         for layer, levels in (

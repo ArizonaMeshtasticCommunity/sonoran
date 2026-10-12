@@ -51,7 +51,7 @@ from sonoran.db.session import make_engine, make_session_factory
 from sonoran.gaps import boards, signals, store
 from sonoran.gaps.signals import BAD, OK, UNKNOWN
 from sonoran.logging import configure_logging, get_logger
-from sonoran.radio.presets import ModemPreset, preset_for_channel
+from sonoran.radio.presets import ModemPreset, modelled, preset_for_channel
 from sonoran.roles import SITE_SET_INFRASTRUCTURE, role_name
 
 logger = get_logger(__name__)
@@ -272,6 +272,11 @@ async def run_once(session: AsyncSession, settings: Settings) -> list[str]:
     for name, names in sorted(channels.items()):
         preset = preset_for_channel(name)
         if preset is None:
+            continue
+        if modelled(preset) is None:
+            # Recognised, but with no sensitivity to measure a margin
+            # against (#362). No assessment beats one with a made-up one.
+            logger.info("gaps, preset %s: no modelled sensitivity yet, not assessed", preset.name)
             continue
         document = await assess_preset(session, settings, preset, names)
         if store.write_preset(settings, preset.name, document) is None:

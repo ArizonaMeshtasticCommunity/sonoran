@@ -216,8 +216,18 @@ prediction is ever sent to the server.
 | Long slow | SF12 | 125 kHz | -144.5 dBm |
 | Very long slow | SF12 | 62.5 kHz | -147.5 dBm |
 
-These are the figures from the SX1262 data sheet, which is the best a
-radio can do. Where the band is shared and noisy, take several dB off.
+**These figures are in doubt (#362).** They were labelled "SX1262 data
+sheet", but each one is 14 dBm minus the link budget the Meshtastic
+radio settings page publishes, and that page states its budgets assume
+a 22 dBm transmitter. Read that way, each figure is about 8 dB better
+than its source supports, and the planner predicts further than a radio
+reaches. Where the band is shared and noisy, a real radio also does
+several dB worse than any table.
+
+Firmware 2.8 has eight presets this table does not model (Medium turbo,
+Long turbo, Lite, Narrow and Tiny). Sonoran recognises their traffic by
+name, but the planner does not offer them until #362 gives each a
+sourced sensitivity.
 
 A preset is also a radio configuration, not only a sensitivity. A node
 on Long fast cannot hear a node on Medium fast at all. See `AGENTS.md`

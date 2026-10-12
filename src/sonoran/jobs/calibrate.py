@@ -52,7 +52,13 @@ from sonoran.landcover.store import class_at, clutter_at
 from sonoran.logging import get_logger
 from sonoran.positions import is_precise_enough, is_usable, precise_minimum_bits
 from sonoran.radio.overrides import Overrides, load_overrides
-from sonoran.radio.presets import ModemPreset, noise_floor_dbm, preset_for_channel
+from sonoran.radio.presets import (
+    ModemPreset,
+    modelled,
+    noise_floor_dbm,
+    preset_for_channel,
+    sensitivity_of,
+)
 from sonoran.radio.resolve import RadioProfile, resolve_profile
 from sonoran.terrain.store import coordinates_in_region
 
@@ -132,7 +138,8 @@ async def read_peers(
     )
     peers: dict[int, Peer] = {}
     for node in rows.all():
-        preset = preset_for_channel(node.last_channel)
+        # No modelled sensitivity (#362), no threshold to fit against.
+        preset = modelled(preset_for_channel(node.last_channel))
         if preset is None:
             continue
         identifier = f"!{node.node_num:08x}"
@@ -189,7 +196,7 @@ def _matches_current_preset(row: NeighborMetrics, peers: dict[int, Peer]) -> boo
     identify an old measurement. Unknown channel names ride on top of a
     preset and cannot be used without a guess.
     """
-    reported = preset_for_channel(row.channel)
+    reported = modelled(preset_for_channel(row.channel))
     listener = peers.get(row.node_num)
     neighbour = peers.get(row.neighbor_node_num)
     return bool(
@@ -300,7 +307,7 @@ def _fill(
             continue
 
         floor = noise_floor_dbm(listener.preset)
-        threshold = listener.preset.sensitivity_dbm
+        threshold = sensitivity_of(listener.preset)
         # The power the run was set up with, so a path loss can be
         # recovered from the field the engine reports.
         listener_eirp = listener.profile.effective_eirp_dbm
