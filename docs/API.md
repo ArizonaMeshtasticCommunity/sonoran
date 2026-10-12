@@ -1131,13 +1131,16 @@ See `AGENTS.md` 9.5 and 9.5.1 for why each rule is there.
 
 Tapbacks are grouped under the message they react to. The page draws
 each emoji once with its count, folds all but the four most sent into
-"+N more", and draws MeshMonitor's Auto Acknowledge tapbacks apart as
-"possibly auto-acked". MeshMonitor sends a keycap that says how the
-message arrived: `*` direct, `1` to `7` hops (`7` is seven or more), `#`
-via MQTT, and older builds `0` or a direct hit for direct (its
-`hopEmoji`, in `docs/features/automation-engine.md` of
-Yeraze/meshmonitor). The page writes each one out in words. A person can
-send those too, and nothing in the packet tells the two apart.
+"+N more", and draws the digit tapbacks apart as "Hop-count tapbacks"
+(#312). A digit says how the message arrived at whoever sent it: `*`
+direct, `1` to `7` hops (`7` is seven or more). MeshMonitor's Auto
+Acknowledge sends these (its `hopEmoji`, in
+`docs/features/automation-engine.md` of Yeraze/meshmonitor), and a
+person can send them too. Nothing in the packet tells the two apart, so
+the label names what the digit means and not who sent it. They are drawn
+apart only on MediumFast, LongFast and azmsh; on any other channel, such
+as Trivia, a digit is a person's answer and stays a reaction. The page
+writes each one out in words beside its sender.
 
 ### 5.2 `GET /api/chat/channels`
 

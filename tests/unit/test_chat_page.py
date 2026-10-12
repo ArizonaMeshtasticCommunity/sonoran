@@ -116,7 +116,10 @@ def test_numeral_tapbacks_are_auto_acks_only_where_they_cannot_be_people() -> No
     assert "function autoAckMeaning(emoji)" in labels
 
     app = _read("app.js")
-    assert "'Auto-acked'" in app, "the label still hedges"
+    # #312: the label names what a digit means, not who sent it. A
+    # person may send one too, and nothing in the packet says which.
+    assert "'Hop-count tapbacks'" in app, "the digit tapbacks lost their label"
+    assert "'Auto-acked'" not in app, "the label claims a bot sent it again"
     assert "'Possibly auto-acked'" not in app
     # The channel has to reach the renderer, or the rule can never fire.
     assert "reactionChips(message.reactions, message.channel)" in app, (
