@@ -316,13 +316,14 @@ chose on 2026-10-08 that these two boards follow it (option A).
 
 **What the job writes.** The assessment holds `GAPS_WINDOW_HOURS`, which
 is 7 d by default, and it is the board for that window. For each other
-quick range the job writes one more small file for each preset:
+quick range the job writes one more run for each preset (#351): a
+`gaps_run` row with `scope` `board` and `asked_hours` set to the range,
+and its `gaps_node` and `gaps_trace_answer` rows. See
+`docs/DATABASE.md` 5B.
 
-    {coverage_cache_dir}/gaps/boards-{preset}-{hours}.json
-
-`hours` is the range as the page names it: 24 or 720 by default. The
-file holds `preset`, `channels`, `window_hours`, `generated_at`, `nodes`
-and `trace_answers`. Each node row holds `node_id`, `display_name`,
+`asked_hours` is the range as the page names it: 24 or 720 by default.
+The run holds `preset`, `channels`, `window_hours`, `generated_at`, the
+node rows and the traceroute counts. Each node row holds `node_id`, `display_name`,
 `packets` and `direct_gateways`, with the names the assessment rows
 use. `trace_answers` is described in 6.2, and the assessment holds the
 same key for its own window. The node rows of the assessment do not

@@ -20,10 +20,14 @@ empty page in front of somebody. Where it is absent, the old behaviour
 stands.
 """
 
+import asyncio
 from pathlib import Path
 
-from sonoran.api.routes.leaderboards import _assessed_presets
+import pytest
+
+from sonoran.api.routes import leaderboards
 from sonoran.config import Settings
+from tests.unit.job_outputs import JobOutputs
 
 STATIC = Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static"
 
@@ -32,11 +36,22 @@ def _settings(tmp: Path, preset: str = "MediumFast") -> Settings:
     return Settings(_env_file=None, coverage_cache_dir=str(tmp), default_preset=preset)
 
 
-def _index(tmp: Path, presets: list[tuple[str, int]]) -> None:
-    from sonoran.gaps import store
+# The job outputs of the test in progress. See `tests/unit/job_outputs.py`.
+_memory: JobOutputs
 
-    store.write_index(
-        _settings(tmp),
+
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    global _memory
+    _memory = job_outputs
+
+
+def _assessed_presets(settings: Settings) -> list[str]:
+    return asyncio.run(leaderboards._assessed_presets(None, settings))  # type: ignore[arg-type]
+
+
+def _index(tmp: Path, presets: list[tuple[str, int]]) -> None:
+    _memory.write_index(
         {"presets": [{"preset": name, "label": name, "node_count": n} for name, n in presets]},
     )
 

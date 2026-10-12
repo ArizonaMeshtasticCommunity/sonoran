@@ -372,7 +372,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
     reports = await read_reports(session, settings, peers)
     if not reports:
         logger.info("no neighbour reports in the window, so no calibration")
-        store.clear_calibration(settings)
+        await store.clear_calibration(session)
         return None
 
     wanted: set[str] = set()
@@ -392,7 +392,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
         summary["mean_db"],
     )
     if not observations:
-        store.clear_calibration(settings)
+        await store.clear_calibration(session)
         return None
 
     # A node an operator pinned is held at zero inside the fit, not
@@ -403,7 +403,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
     if locked:
         logger.info("%s node(s) are pinned by lock_calibration and held at zero", len(locked))
     calibration = fit_offsets(observations, locked=locked)
-    store.write_calibration(settings, calibration, summary)
+    await store.write_calibration(session, calibration, summary)
     return calibration
 
 

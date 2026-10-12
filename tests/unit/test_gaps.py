@@ -9,6 +9,7 @@ prove nothing: the thresholds are starting points that
 import inspect
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import create_app
@@ -16,6 +17,7 @@ from sonoran.config import Settings
 from sonoran.gaps import signals
 from sonoran.gaps.signals import BAD, OK, UNKNOWN, CoverageLevels, NodeEvidence
 from sonoran.radio.presets import PRESETS, noise_floor_dbm, preset_by_key, required_snr_db
+from tests.unit.job_outputs import JobOutputs
 
 LONG_FAST = preset_by_key("LONG_FAST")
 assert LONG_FAST is not None
@@ -679,6 +681,11 @@ def test_the_unknown_state_is_never_drawn_as_a_warning() -> None:
 # ------------------------------------------------------------ the API
 
 
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    """Every route test here reads the job outputs from memory (#351)."""
+
+
 def _client(cache: str) -> TestClient:
     return TestClient(create_app(Settings(_env_file=None, coverage_cache_dir=cache)))
 
@@ -717,27 +724,28 @@ def test_the_gaps_routes_are_get_only(tmp_path: Path) -> None:
         # it can be served.
         "/api/gaps/areas",
         "/api/gaps/candidates",
-        # The node page reads one node's rows from the same artefact
-        # (#56). It opens no database session either.
+        # The node page reads one node's rows from the same tables
+        # (#56).
         "/api/nodes/{node_id}/gaps",
     }
     for path, methods in found:
         assert methods <= {"GET"}, path
 
 
-def test_the_gaps_route_opens_no_database_session() -> None:
-    """The endpoint reads the written artefact and computes nothing.
+def test_the_gaps_route_computes_nothing() -> None:
+    """The endpoint reads the rows the job wrote and computes nothing.
 
     `docs/ISSUES.md` 2.9 is an open warning about a public endpoint doing
     per-row work while the map refreshes it every 15 seconds, and the gap
-    queries are heavier than the one that warning is about.
+    queries are heavier than the one that warning is about. Since #351
+    the routes read stored rows through `gaps.store`, and they never
+    reach the evidence the job reads.
     """
     from sonoran.api.routes import gaps as route
 
     source = inspect.getsource(route)
-    assert "get_session" not in source
-    assert "AsyncSession" not in source
-    assert "select(" not in source
+    for computed in ("read_evidence", "read_gateways", "assess(", "select("):
+        assert computed not in source, computed
 
 
 # ------------------------------------------------------------ the leak

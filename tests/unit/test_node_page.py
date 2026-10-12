@@ -5,15 +5,17 @@ the parts that need no database: the gaps rows the node page reads from
 the artefact, the request rules, and the ranking of the boards.
 """
 
+import asyncio
 import inspect
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import create_app
 from sonoran.api.routes import leaderboards, node_page
 from sonoran.config import Settings
-from sonoran.gaps import store
+from tests.unit.job_outputs import JobOutputs
 
 NODE = "!0000abcd"
 
@@ -35,10 +37,18 @@ def _row(node_id: str, packets: int, **extra: object) -> dict[str, object]:
     } | extra
 
 
+# The job outputs of the test in progress. See `tests/unit/job_outputs.py`.
+_memory: JobOutputs
+
+
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    global _memory
+    _memory = job_outputs
+
+
 def _write(cache: Path, presets: dict[str, list[dict[str, object]]]) -> None:
-    settings = _settings(cache)
-    store.write_index(
-        settings,
+    _memory.write_index(
         {
             "presets": [
                 {"preset": name, "label": name, "node_count": len(rows)}
@@ -47,8 +57,7 @@ def _write(cache: Path, presets: dict[str, list[dict[str, object]]]) -> None:
         },
     )
     for name, rows in presets.items():
-        store.write_preset(
-            settings,
+        _memory.write_preset(
             name,
             {
                 "preset": name,
@@ -96,11 +105,12 @@ def test_a_node_gets_its_own_row_from_each_preset(tmp_path: Path) -> None:
     assert body["not_listed"] == ["ShortFast"]
 
 
-def test_the_node_gaps_route_opens_no_database_session() -> None:
-    """It reads the artefact, as `/api/gaps` does, and computes nothing."""
-    parameters = inspect.signature(node_page.node_gaps).parameters
-    assert "session" not in parameters
-    assert "select(" not in inspect.getsource(node_page.node_gaps)
+def test_the_node_gaps_route_reads_one_row_and_computes_nothing() -> None:
+    """It reads the node's rows by key (#351), never a whole assessment."""
+    body = inspect.getsource(node_page.node_gaps)
+    assert "assessed_nodes(" in body
+    assert "read_preset(" not in body
+    assert "select(" not in body
 
 
 # ------------------------------------------------------------- history
@@ -207,7 +217,8 @@ def test_no_board_counts_packets() -> None:
 
 def test_leaderboards_default_to_the_busiest_preset(tmp_path: Path) -> None:
     _write(tmp_path, {"LongFast": [_row(NODE, 1)], "MediumFast": [_row(NODE, 1), _row("!1", 1)]})
-    assert leaderboards._assessed_presets(_settings(tmp_path)) == ["MediumFast", "LongFast"]
+    held = asyncio.run(leaderboards._assessed_presets(None, _settings(tmp_path)))  # type: ignore[arg-type]
+    assert held == ["MediumFast", "LongFast"]
 
 
 def _health_cards_source() -> str:

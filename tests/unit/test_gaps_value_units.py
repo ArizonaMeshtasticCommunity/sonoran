@@ -28,9 +28,10 @@ import pytest
 
 from sonoran.api.routes.gaps import gaps_summary
 from sonoran.config import Settings
-from sonoran.gaps import signals, store
+from sonoran.gaps import signals
 from sonoran.gaps.signals import BAD, OK, CoverageLevels, NodeEvidence, Signal
 from sonoran.radio.presets import preset_for_channel
+from tests.unit.job_outputs import JobOutputs
 
 ROOT = Path(__file__).resolve().parents[2]
 CASES = ROOT / "tests" / "unit" / "js" / "gaps_value_cases.mjs"
@@ -156,11 +157,10 @@ def test_the_key_states_the_thresholds_this_run_used() -> None:
     assert "unknown" in signals.signal_key({})["rf_intermittent"]["problem"]
 
 
-def _summary(tmp: Path) -> dict[str, Any]:
+def _summary(tmp: Path, outputs: JobOutputs) -> dict[str, Any]:
     settings = _settings(coverage_cache_dir=str(tmp))
-    store.write_index(settings, {"presets": [{"preset": "MediumFast", "node_count": 1}]})
-    store.write_preset(
-        settings,
+    outputs.write_index({"presets": [{"preset": "MediumFast", "node_count": 1}]})
+    outputs.write_preset(
         "MediumFast",
         {
             "preset": "MediumFast",
@@ -171,12 +171,12 @@ def _summary(tmp: Path) -> dict[str, Any]:
         },
     )
     request: Any = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
-    return asyncio.run(gaps_summary(request, channel="MediumFast"))
+    return asyncio.run(gaps_summary(request, channel="MediumFast", session=None))  # type: ignore[arg-type]
 
 
-def test_the_summary_serves_the_units_and_the_key(tmp_path: Path) -> None:
+def test_the_summary_serves_the_units_and_the_key(tmp_path: Path, job_outputs: JobOutputs) -> None:
     """An assessment written before #265 still gets both: they are definitions."""
-    summary = _summary(tmp_path)
+    summary = _summary(tmp_path, job_outputs)
     assert summary["signal_units"]["rf_intermittent"] == "% of hours heard"
     assert "below 50%" in summary["signal_key"]["rf_intermittent"]["problem"]
 

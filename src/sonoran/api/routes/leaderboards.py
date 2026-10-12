@@ -12,12 +12,13 @@ something that makes the mesh work better for other people:
 - `longest_link`: the longest link measured in both directions with a
   healthy signal margin. Measured, never claimed.
 
-The first two read the counts the gaps job already wrote, so they cost
-no database work at all and cannot disagree with the gaps page. They
-follow the Statistics range (#294): the job writes their counts for
-24 h, 7 d and 30 d, and `_gaps_document` picks the one the page asked
-for. A custom range has no file, and those boards then say they hold
-another window.
+The first two read the counts the gaps job already wrote, so they
+compute nothing and cannot disagree with the gaps page. The ranking is
+one `ORDER BY ... LIMIT` on the stored rows (#351), with the names read
+live from `node`. They follow the Statistics range (#294): the job
+writes their counts for 24 h, 7 d and 30 d, and `_gaps_window` picks the
+one the page asked for. A custom range has no run, and those boards then
+say they hold another window.
 
 The third reads the same link evidence as the graph page, through the
 same functions, and is held for a while because it is the expensive one.
@@ -36,7 +37,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.api.cache import KeyedCache
 from sonoran.api.dependencies import get_session
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.api.routes.gaps import read_assessment, read_board_window
 from sonoran.api.routes.graph import (
     TWO_WAY,
     Edge,
@@ -111,7 +111,7 @@ async def leaderboards(
     say which boards follow its range and which do not.
     """
     settings: Settings = request.app.state.settings
-    presets = _assessed_presets(settings)
+    presets = await _assessed_presets(session, settings)
     asked = channel if channel is not None else (presets[0] if presets else None)
     modem = preset_for_channel(asked)
     if asked is None or modem is None:
@@ -131,12 +131,18 @@ async def leaderboards(
     # miss the 900-second hold on every one of them, which is exactly
     # the expensive read that hold exists for.
     preset = modem.name
-    document = read_assessment(settings, preset)
-    held, window, follows = _gaps_document(settings, preset, document, span)
+    document = await gaps_store.read_summary(session, preset)
+    held, window, follows = await _gaps_window(session, settings, preset, document, span)
 
+    if document is None:
+        answers: list[dict[str, object]] | None = []
+        rows: list[dict[str, object]] = []
+    else:
+        answers = await gaps_store.trace_answers(session, preset, held)
+        rows = await gaps_store.top_direct(session, preset, held, BOARD_SIZE)
     boards: list[dict[str, object]] = [
-        _reachable_board(_answers(held), window, follows),
-        _direct_board(_rows(held), window, follows),
+        _reachable_board(answers, window, follows),
+        _direct_board(rows, window, follows),
     ]
     boards.append(
         await _link_caches.get(
@@ -154,51 +160,53 @@ async def leaderboards(
     }
 
 
-def _assessed_presets(settings: Settings) -> list[str]:
+async def _assessed_presets(session: AsyncSession, settings: Settings) -> list[str]:
     """Return the assessed presets, the deployment's own one first.
 
     The ordering moved to `gaps_store.assessed_presets` so the gaps page
     can share it: it had this fix and the gaps page did not, which is
     exactly the drift a second copy of a sort produces.
     """
-    return [str(item["preset"]) for item in gaps_store.assessed_presets(settings)]
+    return [str(item["preset"]) for item in await gaps_store.assessed_presets(session, settings)]
 
 
-def _gaps_document(
+async def _gaps_window(
+    session: AsyncSession,
     settings: Settings,
     preset: str,
     document: dict[str, object] | None,
     span: Window | None,
-) -> tuple[dict[str, object] | None, object, bool]:
-    """Return the file the two gaps boards rank, its window, and whether it is the range.
+) -> tuple[int | None, object, bool]:
+    """Return the gaps run the two boards rank, its window, and whether it is the range.
 
-    In order:
+    The run is None for the assessment, or the window a page asked for,
+    for a board run (#294). In order:
 
-    1. No assessment: nothing, as before. A board file never stands in
+    1. No assessment: nothing, as before. A board run never stands in
        for a preset the job did not assess.
     2. A quick range the assessment holds: the assessment. That is 7 d
        by default.
-    3. A quick range with a board file: that file.
+    3. A quick range with a board run: that run.
     4. Anything else -- a custom range, an `hours` that is not a quick
-       range, a file the job has not written yet: the assessment, and
+       range, a run the job has not written yet: the assessment, and
        `follows` is false so the page says "not the page range".
 
     `follows` is true only when the window held is the window asked
-    for. A 30 d file that retention cut to 14 days does not follow.
+    for. A 30 d run that retention cut to 14 days does not follow.
     """
     own = document.get("window_hours") if document else None
     if document is None:
         return None, own, False
     asked = _quick_range(span)
     if asked is None:
-        return document, own, False
+        return None, own, False
     if own == gaps_boards.window_hours(settings, asked):
-        return document, own, own == asked
-    held = read_board_window(settings, preset, asked)
+        return None, own, own == asked
+    held = await gaps_store.read_board_summary(session, preset, asked)
     if held is None:
-        return document, own, False
+        return None, own, False
     window = held.get("window_hours")
-    return held, window, window == asked
+    return asked, window, window == asked
 
 
 def _quick_range(span: Window | None) -> int | None:
@@ -213,27 +221,6 @@ def _quick_range(span: Window | None) -> int | None:
         if span.key == f"h{hours}":
             return hours
     return None
-
-
-def _rows(document: dict[str, object] | None) -> list[dict[str, object]]:
-    listed = document.get("nodes") if document else None
-    return [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
-
-
-def _answers(document: dict[str, object] | None) -> list[dict[str, object]] | None:
-    """Return the traceroute counts of a file, or None when it has none.
-
-    None is not an empty list. No file means nothing was assessed, and
-    that is an empty board as before. A file without the key was written
-    before #293, so its board says the answers were not counted yet,
-    rather than that nobody qualified.
-    """
-    if document is None:
-        return []
-    listed = document.get(gaps_boards.TRACE_ANSWERS)
-    if not isinstance(listed, list):
-        return None
-    return [row for row in listed if isinstance(row, dict)]
 
 
 def _count(row: dict[str, object], key: str) -> int:

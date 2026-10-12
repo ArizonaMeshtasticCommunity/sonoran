@@ -11,7 +11,6 @@ because it is the state a new box starts in and the answer it must give
 is `unknown` and never "no benefit".
 """
 
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -25,7 +24,7 @@ from sonoran.coverage import store as coverage_store
 from sonoran.gaps import store
 from sonoran.jobs import coverage, gaps, gaps_siting
 from sonoran.terrain.srtm import PAGE_SIZE, page_cell, tile_name_of
-from tests.integration.conftest import role_url
+from tests.integration.conftest import role_url, run_store
 from tests.integration.test_gaps import (
     BASE,
     _add_node,
@@ -122,15 +121,15 @@ def _struggling(connection, node_num: int, latitude: float, longitude: float) ->
 
 
 def _siting(settings: Settings, preset: str = "LongFast") -> dict:
-    document = store.read_siting(settings, preset)
+    """Return the stored answer with its candidates, as the old file held it."""
+    document = run_store(settings, store.read_siting, preset)
     assert document is not None, "the siting job wrote nothing"
-    return document
+    _, candidates = run_store(settings, store.read_candidates, preset, None, 10_000)
+    return document | {"candidates": candidates}
 
 
 def _run_siting(settings: Settings) -> list[str]:
-    import asyncio
-
-    return asyncio.run(gaps_siting.run_once(settings))
+    return _run(settings, gaps_siting.run_once)
 
 
 # ------------------------------------------------------ the whole thing
@@ -351,7 +350,7 @@ def test_two_presets_get_two_siting_answers_that_borrow_nothing(
     assert medium_ids
     assert not (long_ids & medium_ids), "a node was counted on two presets at once"
     # And there is no merged answer anywhere.
-    assert store.read_siting(settings, "Every") is None
+    assert run_store(settings, store.read_siting, "Every") is None
 
 
 # ------------------------------------------------------- the engine cost
@@ -422,10 +421,10 @@ def test_a_prediction_over_a_worker_process_answers_the_same(
 # ------------------------------------------------------------- the API
 
 
-def test_the_api_reads_the_artefact_and_computes_nothing(
+def test_the_api_reads_the_stored_answer_and_computes_nothing(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """Delete the file and the endpoint says so, rather than recomputing."""
+    """Delete the answer and the endpoint says so, rather than recomputing."""
     settings = _settings(timescale_url, tmp_path)
     _write_terrain(settings)
     with migrated_engine.begin() as connection:
@@ -440,9 +439,9 @@ def test_the_api_reads_the_artefact_and_computes_nothing(
     client = TestClient(create_app(settings))
     assert client.get("/api/gaps/areas").json()["available"] is True
 
-    path = store.siting_path(settings, "LongFast")
-    assert path is not None
-    path.unlink()
+    with migrated_engine.begin() as connection:
+        connection.execute(text("DELETE FROM gaps_siting_candidate"))
+        connection.execute(text("DELETE FROM gaps_siting"))
 
     body = client.get("/api/gaps/areas").json()
     assert body["available"] is False
@@ -475,16 +474,24 @@ def test_the_siting_routes_take_no_writes(
             assert call(path).status_code in (404, 405)
 
 
-def test_a_torn_file_is_never_served(
+def test_a_new_answer_replaces_the_old_one_whole(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """The job writes to a temporary name and renames over the old file."""
+    """A run is replaced, never merged: no candidate of the old run survives (#351)."""
     settings = _settings(timescale_url, tmp_path)
-    root = Path(settings.coverage_cache_dir) / "gaps"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "index.json").write_text(json.dumps({"presets": [{"preset": "LongFast"}]}))
-    (root / "siting-LongFast.json").write_text("{ not json at all")
+    first = {
+        "available": True,
+        "preset": "LongFast",
+        "generated_at": "2026-10-12T00:00:00+00:00",
+        "areas": [{"area": 0}, {"area": 1}],
+        "candidates": [{"area": 0, "n": 1}, {"area": 1, "n": 2}, {"area": 1, "n": 3}],
+    }
+    second = first | {"areas": [{"area": 0}], "candidates": [{"area": 0, "n": 9}]}
+    assert run_store(settings, store.write_siting, "LongFast", first)
+    assert run_store(settings, store.write_siting, "LongFast", second)
 
-    client = TestClient(create_app(settings))
-    body = client.get("/api/gaps/areas").json()
-    assert body["available"] is False
+    matched, rows = run_store(settings, store.read_candidates, "LongFast", None, 100)
+    assert (matched, rows) == (1, [{"area": 0, "n": 9}])
+    held = run_store(settings, store.read_siting, "LongFast")
+    assert held["areas"] == [{"area": 0}]
+    assert "candidates" not in held

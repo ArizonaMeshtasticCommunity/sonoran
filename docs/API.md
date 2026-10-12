@@ -716,11 +716,12 @@ Long fast cannot hear a node on Medium fast, so a merged answer would
 invite a reader to fix a gap between two radios that have no way to
 reach each other. See `AGENTS.md` 9.7.
 
-**These endpoints read one written file and compute nothing.**
-`jobs/gaps.py` writes `{COVERAGE_CACHE_DIR}/gaps/{preset}.json` every
-`GAPS_INTERVAL_MINUTES`, and the routes read it and filter it. A request
-that ran the gap queries would be heavier than the endpoint
-`docs/ISSUES.md` 2.9 is already an open warning about.
+**These endpoints read the stored rows and compute nothing.**
+`jobs/gaps.py` writes the job output tables (`docs/DATABASE.md` 5B)
+every `GAPS_INTERVAL_MINUTES`, and the routes select from them by key,
+with the filters and the limit in SQL (#351). A request that ran the
+gap queries would be heavier than the endpoint `docs/ISSUES.md` 2.9 is
+already an open warning about.
 
 **Nothing here reaches the public embed, and nothing here ever will.** A
 list of weak nodes with positions is a list of houses with a reason to
@@ -899,8 +900,8 @@ second is the node's own voice. See `AGENTS.md` 9.5 and 9.5.1.
 ### The siting half
 
 Two more endpoints answer the other question: **where would one new node
-help the most of them**. They read a second written file,
-`{COVERAGE_CACHE_DIR}/gaps/siting-{preset}.json`, which
+help the most of them**. They read the stored siting answer
+(`gaps_siting` and `gaps_siting_candidate`), which
 `jobs/gaps_siting.py` writes **inside the coverage cycle** and never on
 a clock of its own. That job runs the SPLAT engine, so it must not be
 free to start during a coverage build. See `docs/GAPS.md` 10.

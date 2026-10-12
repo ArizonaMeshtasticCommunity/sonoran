@@ -238,7 +238,7 @@ jobs:
       - run: uv sync --extra dev
       - run: uv run alembic upgrade head
       - run: uv run python tools/dev/seed.py
-      # The gaps page reads a written artefact, not the database, so
+      # The gaps page reads the rows the gaps job wrote (#351), so
       # without this the gaps journeys walk an empty page.
       - run: uv run sonoran-gaps-once
       - name: Install the browser

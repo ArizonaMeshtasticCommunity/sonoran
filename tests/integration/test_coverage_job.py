@@ -26,7 +26,7 @@ from sonoran.db.session import make_engine, make_session_factory
 from sonoran.jobs import calibrate, coverage
 from sonoran.radio.overrides import load_overrides
 from sonoran.radio.resolve import MAX_CALIBRATION_DB
-from tests.integration.conftest import role_url
+from tests.integration.conftest import role_url, run_store, wipe_job_outputs
 
 
 def _jobs_url(timescale_url: str) -> str:
@@ -63,6 +63,7 @@ def clean(migrated_engine) -> Iterator[None]:  # type: ignore[no-untyped-def]
         for table in ("neighbor_metrics", "node"):
             connection.execute(text(f"DELETE FROM {table} WHERE node_num >= 900000"))
         connection.execute(text("DELETE FROM node WHERE node_num >= 900000"))
+    wipe_job_outputs(migrated_engine)
 
 
 def _add_node(
@@ -353,16 +354,24 @@ def test_calibration_with_no_reports_writes_nothing(
 ):  # type: ignore[no-untyped-def]
     """A new deployment has heard no neighbour lists yet."""
     settings = _settings(timescale_url, tmp_path)
-    path = store.calibration_path(settings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"old": true}', encoding="utf-8")
+    stale = {
+        "generated_at": "2026-10-01T00:00:00+00:00",
+        "model_bias_db": 0.0,
+        "residual_spread_db": 1.0,
+        "nodes": [
+            {"node_id": "!000dbba0", "offset_db": -3.0, "observations": 9, "counterparties": 4}
+        ],
+    }
+    assert run_store(settings, store.write_calibration_document, stale)
     with migrated_engine.begin() as connection:
         connection.execute(text("DELETE FROM neighbor_metrics"))
         _add_node(connection, 900050, 33.45, -112.07, role="ROUTER")
 
     assert _run(settings, calibrate.run_once) is None
-    assert store.calibration_offsets(settings) == {}
-    assert not path.exists(), "a stale fit must not survive an empty current window"
+    assert run_store(settings, store.calibration_offsets) == {}
+    assert run_store(settings, store.read_calibration) is None, (
+        "a stale fit must not survive an empty current window"
+    )
 
 
 def test_calibration_reads_the_neighbour_reports(
@@ -399,7 +408,7 @@ def test_calibration_reads_the_neighbour_reports(
     # Every offset is anchored, so they sum to nothing.
     assert abs(sum(fit.offset_db for fit in result.nodes)) < 0.5
 
-    document = store.read_calibration(settings)
+    document = run_store(settings, store.read_calibration)
     assert document is not None
     assert document["summary"]["count"] > 0
 
@@ -494,7 +503,7 @@ def test_a_locked_node_is_held_at_zero_by_the_fit(
     assert result.model_bias_db != unpinned.model_bias_db
 
     # And what the map reads never carries the pinned node.
-    assert pinned_id not in store.calibration_offsets(held)
+    assert pinned_id not in run_store(held, store.calibration_offsets)
     client = TestClient(create_app(held))
     report = client.get("/api/coverage/calibration").json()
     entry = next(item for item in report["nodes"] if item["node_id"] == pinned_id)
@@ -596,20 +605,32 @@ def test_calibration_uses_the_configured_position_precision(
     assert 900119 in _run(settings, peers)
 
 
-def test_a_broken_calibration_file_does_not_stop_a_run(
+def test_an_untrusted_fit_does_not_stop_a_run(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """A half written file must leave the map on its nameplate figures
-    rather than stop it being drawn."""
+    """A fit whose scatter is too wide must leave the map on its nameplate
+    figures rather than stop it being drawn."""
     settings = _settings(timescale_url, tmp_path)
-    path = store.calibration_path(settings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not json", encoding="utf-8")
+    untrusted = {
+        "generated_at": "2026-10-01T00:00:00+00:00",
+        "model_bias_db": 0.0,
+        "residual_spread_db": 99.0,
+        "nodes": [
+            {
+                "node_id": "!000dbba6",
+                "offset_db": -5.0,
+                "observations": 50,
+                "counterparties": 9,
+                "reported": 20,
+            }
+        ],
+    }
+    assert run_store(settings, store.write_calibration_document, untrusted)
 
     with migrated_engine.begin() as connection:
         _add_node(connection, 900070, 33.45, -112.07, role="ROUTER")
 
-    assert store.calibration_offsets(settings) == {}
+    assert run_store(settings, store.calibration_offsets) == {}
     manifest = _run(settings, coverage.run_once)
     assert manifest is not None
     assert manifest.calibrated_nodes == 0
@@ -618,10 +639,11 @@ def test_a_broken_calibration_file_does_not_stop_a_run(
 def test_the_jobs_role_never_writes_a_table_for_this(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """The coverage work writes files, not rows.
+    """The coverage run writes tiles and a manifest, not rows.
 
-    So it needs no new grant and no fourth database role. If that ever
-    changes, this test is the reminder that a migration is needed too.
+    Its calibration and the gaps tables are other jobs' outputs (#351).
+    If the coverage run ever writes a table, this test is the reminder
+    that a migration and a grant are needed too.
     """
     settings = _settings(timescale_url, tmp_path)
     with migrated_engine.begin() as connection:
