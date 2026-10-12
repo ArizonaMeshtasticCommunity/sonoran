@@ -11367,8 +11367,10 @@ function wirePresetSwitch() {
     more.hidden = false;
     more.classList.toggle('active', !pinned);
     replace(more,
-      el('option', { value: '', text: 'More presets' }),
-      el('option', { value: SonoranPreset.ALL, text: 'All presets' }),
+      // "More", not "More presets": on a phone the select shares the
+      // switch's row. Its accessible name says the rest.
+      el('option', { value: '', text: 'More' }),
+      el('option', { value: SonoranPreset.ALL, text: 'All' }),
       extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
     more.value = pinned ? '' : current;
   };

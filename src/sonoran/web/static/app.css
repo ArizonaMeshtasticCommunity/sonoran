@@ -4736,7 +4736,19 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   .menu-field .preset-switch { flex: 1 1 12rem; padding: .1rem; }
   .menu-field .preset-switch::before { top: .1rem; bottom: .1rem; left: .1rem; width: calc((100% - .2rem) / var(--preset-count, 2)); }
   .menu-field .preset-scope { flex: 1 1 100%; }
-  .menu-field .preset-more { flex: 1 1 100%; }
+  /*
+   * The "More presets" select shares the switch's row. It is always
+   * shown ("All presets" is always a choice), and on its own row it put
+   * Settings at 829 px, under the bar at 788 (#279 again). The word
+   * "Preset" gives up its place to it and stays for screen readers:
+   * the radio group is still labelled by it.
+   */
+  .menu-field #preset-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .menu-field .preset-switch { flex: 0 0 auto; }
+  .menu-field .preset-more { flex: 1 1 7rem; width: auto; min-width: 0; padding-inline: .3rem; }
   /* The top bar, the page's own padding (1rem above, 1rem below) and
      this bar all come out of one screen. */
   .page.active[data-page="chat"].chat-full {

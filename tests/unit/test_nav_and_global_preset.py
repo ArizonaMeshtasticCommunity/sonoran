@@ -795,7 +795,7 @@ def test_all_presets_is_a_choice_and_means_no_filter() -> None:
     )
     switch = code[code.index("function wirePresetSwitch") :]
     switch = switch[: switch.index("\nfunction ")]
-    assert "SonoranPreset.ALL" in switch and "All presets" in switch, "All is not offered"
+    assert "SonoranPreset.ALL" in switch and "text: 'All'" in switch, "All is not offered"
 
 
 def test_one_preset_pages_draw_the_default_under_all_and_say_so() -> None:
