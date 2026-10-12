@@ -679,7 +679,7 @@ function fromShareQuery(search) {
   /*
    * A link that names a preset and no sensitivity means the preset's
    * own figure, which is what the writer left out. Without this, a link
-   * to Long fast would open on Long fast with Medium fast's -134 dBm
+   * to Long fast would open on Long fast with Medium fast's -126 dBm
    * and predict a reach that preset does not have. See AGENTS.md 9.7.
    */
   if (values.preset && values.sensitivity == null) {
