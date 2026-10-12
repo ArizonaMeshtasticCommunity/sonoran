@@ -4,6 +4,11 @@ One file for each modem preset, beside the coverage runs:
 
     {coverage_cache_dir}/gaps/index.json
     {coverage_cache_dir}/gaps/{preset}.json
+    {coverage_cache_dir}/gaps/boards-{preset}-{hours}.json
+
+The third is the leaderboard counts for one more Statistics window
+(#294). It is never part of the assessment file, so a reader of the
+assessment sees the shape it always saw. See `sonoran/gaps/boards.py`.
 
 **Nothing is computed per request.** The job writes these files and the
 API reads them and filters. That is not a preference. `docs/ISSUES.md`
@@ -25,6 +30,7 @@ import re
 from pathlib import Path
 
 from sonoran.config import Settings
+from sonoran.gaps.boards import BOARD_WINDOW_HOURS
 from sonoran.logging import get_logger
 
 logger = get_logger(__name__)
@@ -103,6 +109,43 @@ def read_siting(settings: Settings, preset: str) -> dict[str, object] | None:
     yet and the page says so.
     """
     path = siting_path(settings, preset)
+    if path is None:
+        return None
+    return _read(path)
+
+
+def boards_path(settings: Settings, preset: str, hours: int) -> Path | None:
+    """Return the file of one preset's leaderboard counts for one window.
+
+    `hours` is the window as the page names it, one of
+    `BOARD_WINDOW_HOURS`. Any other number gets no path, so a request
+    cannot make up a file name.
+    """
+    if not PRESET_PATTERN.fullmatch(preset) or hours not in BOARD_WINDOW_HOURS:
+        return None
+    return gaps_dir(settings) / f"boards-{preset}-{hours}.json"
+
+
+def write_boards(
+    settings: Settings, preset: str, hours: int, document: dict[str, object]
+) -> Path | None:
+    """Write one preset's leaderboard counts for one window, or refuse."""
+    path = boards_path(settings, preset, hours)
+    if path is None:
+        logger.warning("refusing to write leaderboard counts for %r over %r hours", preset, hours)
+        return None
+    _write_atomically(path, document)
+    return path
+
+
+def read_boards(settings: Settings, preset: str, hours: int) -> dict[str, object] | None:
+    """Return one preset's leaderboard counts for one window, or None.
+
+    None is a working state. A deployment that ran the job before #294
+    has the assessment and no board file, and the boards then serve the
+    assessment and say it is not the page range.
+    """
+    path = boards_path(settings, preset, hours)
     if path is None:
         return None
     return _read(path)

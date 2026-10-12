@@ -79,7 +79,7 @@ MOVED = {
     "system_loss": "the picker works it out from the cable and its length",
     "frequency_mhz": "it follows the preset and the slot",
     "sensitivity": "it follows the preset",
-    "radio_climate": "desert, until #239 answers it from the coordinate",
+    "radio_climate": "it is read from the site (#239)",
     "polarization": "Meshtastic is vertical",
     "clutter_height": "it is a model input, not a thing you know",
     "radius": "30 km is a sensible first run",

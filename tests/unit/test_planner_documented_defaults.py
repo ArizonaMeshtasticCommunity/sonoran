@@ -133,8 +133,8 @@ def test_the_section_numbers_have_no_gaps() -> None:
     """A reference to a section that is not there sends people nowhere.
 
     The directional antenna section was written as 4.4 first, which read
-    as though two sections existed and had been skipped. It is 4.3 now,
-    after "Preset, slot and frequency".
+    as though two sections existed and had been skipped. It is 4.4 now,
+    after "Preset, slot and frequency" and "Radio climate".
     """
     doc = DOC.read_text(encoding="utf-8")
     numbers = sorted({m for m in re.findall(r"^### (4\.\d+)", doc, re.M)})

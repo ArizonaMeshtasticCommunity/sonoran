@@ -32,6 +32,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.climate import climate_at
 from sonoran.config import Settings, get_settings
 from sonoran.coverage import store
 from sonoran.coverage.calibrate import (
@@ -49,7 +50,7 @@ from sonoran.jobs.coverage import ensure_terrain, read_page, tiles_around
 from sonoran.landcover.classes import is_diffracting
 from sonoran.landcover.store import class_at, clutter_at
 from sonoran.logging import get_logger
-from sonoran.positions import is_precise_enough, is_usable
+from sonoran.positions import is_precise_enough, is_usable, precise_minimum_bits
 from sonoran.radio.overrides import Overrides, load_overrides
 from sonoran.radio.presets import ModemPreset, noise_floor_dbm, preset_for_channel
 from sonoran.radio.resolve import RadioProfile, resolve_profile
@@ -116,6 +117,10 @@ async def read_peers(
     calibration window are silent, so a handful of fuzzed positions
     move the whole fit.
 
+    The floor is the precise one the map uses, and a
+    `COVERAGE_MIN_PRECISION_BITS` below 16 is raised to 16 here as well
+    (#315). A peer an operator placed in the overrides file passes.
+
     Roles are **not** filtered here. Calibration needs both ends of a
     link and most links have a client at one end. A client is poor
     evidence of where the mesh reaches and good evidence of what a
@@ -139,7 +144,8 @@ async def read_peers(
         if not coordinates_in_region(settings, latitude, longitude):
             continue
         if given is None and not is_precise_enough(
-            node.last_position_precision_bits, settings.coverage_min_precision_bits
+            node.last_position_precision_bits,
+            precise_minimum_bits(settings.coverage_min_precision_bits),
         ):
             continue
         profile = resolve_profile(identifier, node.hw_model, overrides, role=node.role)
@@ -234,6 +240,9 @@ def _params(settings: Settings, listener: Peer) -> EngineParams:
         rx_height_m=settings.coverage_rx_height_m,
         erp_watts=erp_watts(profile.tx_power_dbm, profile.antenna_gain_dbi, profile.cable_loss_db),
         radius_m=CANDIDATE_RANGE_KM * 1000.0,
+        # The same climate the map predicts with, so the fit measures the
+        # model the map draws (#239).
+        radio_climate=climate_at(listener.latitude, listener.longitude).climate,
     )
 
 

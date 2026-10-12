@@ -86,6 +86,129 @@ async function fetchTerrainPage(tile) {
 }
 
 /* ---------------------------------------------------------------- */
+/* The radio climate of the site (#239)                              */
+
+/*
+ * The Köppen to ITM table, from `/api/climate/classes`. The page keeps
+ * no copy of its own, so the planner and the coverage map cannot map a
+ * class two ways. Held once it has arrived; a failed read is asked for
+ * again next time rather than remembered.
+ */
+let climateTable = null;
+
+/** Climate pages already read, by tile name. A 404 is held as null. */
+const climateMemory = new Map();
+
+async function fetchClimateTable() {
+  if (climateTable) return climateTable;
+  try {
+    climateTable = await get('api/climate/classes');
+  } catch (error) {
+    console.warn('the climate table is unavailable', error);
+    return null;
+  }
+  return climateTable;
+}
+
+/**
+ * Read the climate page of one degree square, or null.
+ *
+ * The page asks for the SQUARE, never for its site: the planner sends
+ * no coordinate to the server (PLANNER.md 2). It is the same square it
+ * asks terrain for. A 404 means no class is held there, which is an
+ * answer, and the run then says "not known here, using desert".
+ */
+async function fetchClimatePage(tile) {
+  if (climateMemory.has(tile)) return climateMemory.get(tile);
+  try {
+    const response = await apiFetch(api(`api/climate/page/${tile}`));
+    if (response.status === 404) {
+      climateMemory.set(tile, null);
+      return null;
+    }
+    if (!response.ok) throw new Error(`climate ${tile} failed (${response.status})`);
+    const page = new Uint8Array(await response.arrayBuffer());
+    climateMemory.set(tile, page);
+    return page;
+  } catch (error) {
+    console.warn('climate page unavailable', tile, error);
+    return null;
+  }
+}
+
+/** The Köppen class at a place, as the table describes it, or null. */
+async function lookupKoppen(latitude, longitude) {
+  const table = await fetchClimateTable();
+  if (!table) return null;
+  const page = await fetchClimatePage(SonoranPlannerParams.tileNameOf(latitude, longitude));
+  const code = SonoranPlannerParams.climateCell(page, latitude, longitude, table.cells_per_degree);
+  if (code == null) return null;
+  return table.classes.find((item) => item.code === code) || null;
+}
+
+/**
+ * The climate a request will run on, and where it came from.
+ *
+ * A climate somebody chose is used as it is, and nothing is looked up.
+ * `auto` is read from the site. See `resolveClimate`.
+ */
+async function siteClimate(request) {
+  const chosen = request.radio_climate;
+  const latitude = Number(request.lat);
+  const longitude = Number(request.lon);
+  const ask = chosen === SonoranPlannerParams.CLIMATE_AUTO
+    && Number.isFinite(latitude) && Number.isFinite(longitude);
+  const found = ask ? await lookupKoppen(latitude, longitude) : null;
+  return SonoranPlannerParams.resolveClimate(chosen, found);
+}
+
+/** The line that says which climate, with the map credited when it was used. */
+function climateLine(answer) {
+  const said = `Radio climate: ${SonoranPlannerParams.describeClimate(answer)}`;
+  if (answer.source !== 'site' || !climateTable) return `${said}.`;
+  return `${said} (${climateTable.source}).`;
+}
+
+/*
+ * Say which climate the next run will use, beside the site.
+ *
+ * The note is in both modes. In Advanced, the menu's first choice says
+ * the same thing, so somebody choosing another climate sees what they
+ * are replacing. A newer call wins over an older one still waiting on
+ * its page, so a quick second click is not overwritten by the first.
+ */
+let climateAsked = 0;
+
+async function showSiteClimate() {
+  const note = document.querySelector('[data-planner-climate-note]');
+  const menu = field('radio_climate');
+  const auto = menu ? menu.querySelector(`option[value="${SonoranPlannerParams.CLIMATE_AUTO}"]`) : null;
+  const latitude = Number.parseFloat(field('lat').value);
+  const longitude = Number.parseFloat(field('lon').value);
+  climateAsked += 1;
+  const asked = climateAsked;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    if (note) note.hidden = true;
+    if (auto) auto.textContent = 'From the site';
+    return;
+  }
+  const found = await lookupKoppen(latitude, longitude);
+  if (asked !== climateAsked) return;
+  const fromSite = SonoranPlannerParams.resolveClimate(SonoranPlannerParams.CLIMATE_AUTO, found);
+  if (auto) {
+    auto.textContent = fromSite.source === 'site'
+      ? `From the site: ${SonoranPlannerParams.climateLabel(fromSite.climate)} (Köppen ${fromSite.koppen})`
+      : 'From the site: not known here, so desert';
+  }
+  const chosen = menu ? menu.value : SonoranPlannerParams.CLIMATE_AUTO;
+  const answer = SonoranPlannerParams.resolveClimate(chosen, found);
+  if (note) {
+    note.textContent = climateLine(answer);
+    note.hidden = false;
+  }
+}
+
+/* ---------------------------------------------------------------- */
 /* Workers                                                           */
 
 const WORKER_COUNT = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, 4));
@@ -337,6 +460,13 @@ const state = {
    * from, and it must not outlive the prediction it describes.
    */
   ranOn: null,
+  /*
+   * The climate the last run used and where it came from (#239), and the
+   * engine values it was handed. Nothing reads these back; they make the
+   * answer checkable from the console and from the e2e journeys.
+   */
+  climate: null,
+  params: null,
 };
 
 /* ---------------------------------------------------------------- */
@@ -684,7 +814,9 @@ async function applyShareLink() {
     said.push('These settings came from a shared link.');
   }
   if (read.notes.length) said.push(`The link needed fixing: ${read.notes.join('; ')}.`);
+  said.push(...read.kept);
   setSharedNote(said.join(' '), read.notes.length ? 'warn' : '');
+  showSiteClimate().catch((error) => console.warn(error));
 
   if (filled.lat !== '' && filled.lon !== '' && !state.running) await runCoverage();
 }
@@ -757,6 +889,7 @@ function setSite(latitude, longitude, name, altitude) {
   // change most, so the address has to follow it.
   state.ranOn = null;
   writeAddress();
+  showSiteClimate().catch((error) => console.warn(error));
 }
 
 /** Put the one transmitter pin on the map, replacing any earlier one. */
@@ -886,7 +1019,6 @@ async function runCoverage() {
   hideLinkPanel();
   state.linkLayer.clearLayers();
 
-  const params = SonoranPlannerParams.toEngineParams(request);
   const runId = nextRunId;
   nextRunId += 1;
 
@@ -900,6 +1032,19 @@ async function runCoverage() {
   setNotice('', '');
 
   try {
+    /*
+     * The climate first (#239). `auto` becomes the climate of the site's
+     * own ground, or `desert` with a note where none is known. The form
+     * keeps `auto`, so a share link still says "from the site".
+     */
+    setProgress('Reading the radio climate of the site');
+    const climate = await siteClimate(request);
+    request.radio_climate = climate.climate;
+    state.climate = climate;
+    const params = SonoranPlannerParams.toEngineParams(request);
+    state.params = params;
+    showSiteClimate().catch((error) => console.warn(error));
+
     const workers = ensurePool();
 
     setProgress('Asking the engine which terrain it needs');
@@ -1076,7 +1221,7 @@ function linkBudget(request, threshold) {
 
   const lines = [
     `The radio sends ${txPower.toFixed(1)} dBm.`,
-    // An aimed antenna has this gain in one direction only. See 4.3 in
+    // An aimed antenna has this gain in one direction only. See 4.4 in
     // docs/PLANNER.md.
     request.tx_azimuth == null
       ? `Its antenna adds ${txGain.toFixed(1)} dB.`
@@ -1179,6 +1324,10 @@ function writeSummary(threshold) {
               + 'within 3 dB of that.'
             : ''))
         : null),
+    state.climate
+      ? el('p', { class: 'muted', 'data-planner-climate-used': '', style: 'margin:.75rem 0 0;font-size:.82rem' },
+        climateLine(state.climate))
+      : null,
     el('p', { class: 'muted', style: 'margin:.75rem 0 .25rem;font-size:.82rem' },
       'A prediction, not a promise. It assumes clear ground and the ' +
       'receiver figures in the form. Real radios do worse.'),
@@ -1205,8 +1354,12 @@ function writeSummary(threshold) {
 /* One link                                                          */
 
 async function runLink(node) {
-  const request = state.request || readForm();
-  if (!request) return;
+  const form = state.request || readForm();
+  if (!form) return;
+  // `state.request` already holds the climate its run used. A form read
+  // fresh may still say `auto`, and is answered the same way a run is.
+  const climate = await siteClimate(form);
+  const request = { ...form, radio_climate: climate.climate };
   const params = SonoranPlannerParams.toEngineParams(request);
   const runId = nextRunId;
   nextRunId += 1;
@@ -2184,8 +2337,15 @@ function wirePlanner() {
 
   const climate = field('radio_climate');
   if (climate) {
-    replace(climate, SonoranPlannerParams.CLIMATE_LABELS.map(([value, label]) =>
-      el('option', { value, text: label })));
+    /*
+     * "From the site" first, because it is the default (#239). Its
+     * words are filled in by `showSiteClimate` once there is a site.
+     */
+    replace(climate, [
+      el('option', { value: SonoranPlannerParams.CLIMATE_AUTO, text: 'From the site' }),
+      ...SonoranPlannerParams.CLIMATE_LABELS.map(([value, label]) =>
+        el('option', { value, text: label })),
+    ]);
   }
   const preset = document.querySelector('[data-planner="preset"]');
   if (preset) {
@@ -2283,6 +2443,9 @@ function wirePlanner() {
       // Before the address is written, so the link reads what was typed.
       holdTyped(name);
       writeAddress();
+      if (name === 'lat' || name === 'lon' || name === 'radio_climate') {
+        showSiteClimate().catch((error) => console.warn(error));
+      }
     });
   }
 

@@ -960,3 +960,170 @@ def test_the_precision_test_can_be_turned_off_for_a_private_broker(
     manifest = _run(settings, coverage.run_once)
     assert manifest is not None
     assert manifest.presets[0].site_count == 1
+
+
+# --- precise positions only, with operator positions (#315) -------------
+#
+# #318 let s.azmsh.dev set COVERAGE_MIN_PRECISION_BITS=13, so routers that
+# share a rounded position were predicted from. Logan and Tyler asked for
+# that to stop, and Will decided on 2026-10-08 to follow them: every
+# published map predicts from precise positions, and an operator places a
+# known router in the overrides file.
+
+# Where the broker says the router is, and where it really is: a rounded
+# point and the true one, about 1.7 km apart.
+_ROUNDED = (33.45, -112.07)
+_TRUE = (33.4612, -112.0833)
+
+
+def _position_file(tmp_path: Path, node_num: int, height: float | None = None) -> Path:
+    """Write an overrides file that places one node at `_TRUE`."""
+    path = tmp_path / "positions.yaml"
+    lines = [
+        "nodes:",
+        f'  "!{node_num:08x}":',
+        f"    latitude: {_TRUE[0]}",
+        f"    longitude: {_TRUE[1]}",
+    ]
+    if height is not None:
+        lines.append(f"    antenna_height_m: {height}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_a_rounded_router_is_not_a_site_on_the_setting_318_documented(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """s.azmsh.dev runs with 13. That no longer reaches the main map."""
+    settings = _settings(timescale_url, tmp_path, coverage_min_precision_bits=13)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900301, *_ROUNDED, role="ROUTER", precision_bits=13)
+        _add_node(connection, 900302, 33.50, -112.02, role="ROUTER", precision_bits=None)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    preset = manifest.presets[0]
+    assert preset.site_count == 1
+    assert preset.excluded_by_role == {"coarse-position": 1}
+    assert [item["node_id"] for item in manifest.coarse_sites] == [f"!{900301:08x}"]
+    assert [item.key for item in manifest.site_sets] == ["infrastructure"]
+
+
+def test_the_same_router_with_an_operator_position_is_a_site_there(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The fix for Towers 2: the operator says where it stands."""
+    positions = _position_file(tmp_path, 900303, height=20.0)
+    settings = _settings(
+        timescale_url,
+        tmp_path,
+        coverage_min_precision_bits=13,
+        radio_overrides_path=str(positions),
+    )
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900303, *_ROUNDED, role="ROUTER", precision_bits=13)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    preset = manifest.presets[0]
+    assert preset.site_count == 1
+    assert "coarse-position" not in preset.excluded_by_role
+    (site,) = [node for node in preset.nodes if node.get("used")]
+    assert site["position_source"] == "operator"
+    assert site["position_deviation_m"] is None
+    assert site["antenna_height_m"] == 20.0
+
+    # Predicted from the operator's point, not the broker's: the
+    # footprint is centred where the file says.
+    assert preset.data_bounds is not None
+    south, _west, north, _east = preset.data_bounds
+    middle = (south + north) / 2.0
+    assert abs(middle - _TRUE[0]) < abs(middle - _ROUNDED[0])
+
+    # The position itself is not written into the manifest, which the
+    # dashboard serves. Only the fact that an operator gave one.
+    root = store.current_root(settings)
+    assert root is not None
+    written = (root / "manifest.json").read_text(encoding="utf-8")
+    assert str(_TRUE[0]) not in written
+    assert str(_TRUE[1]) not in written
+
+
+def test_an_operator_position_does_not_make_a_client_a_site(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """An override places a node. It does not say what the node is."""
+    positions = _position_file(tmp_path, 900304)
+    settings = _settings(timescale_url, tmp_path, radio_overrides_path=str(positions))
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900304, *_ROUNDED, role="CLIENT", precision_bits=13)
+
+    manifest = _run(settings, coverage.run_once)
+    # Nothing to predict from is a working state, and no run is made.
+    assert manifest is None or manifest.presets[0].site_count == 0
+
+
+def test_the_approximate_map_is_its_own_site_set_and_never_public(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """COVERAGE_INCLUDE_APPROXIMATE adds a map. It replaces nothing."""
+    settings = _settings(timescale_url, tmp_path, coverage_include_approximate=True)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900305, *_ROUNDED, role="ROUTER", precision_bits=13)
+        _add_node(connection, 900306, 33.50, -112.02, role="ROUTER", precision_bits=None)
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    # The top level, which the embed reads, is the precise map.
+    assert manifest.presets[0].site_count == 1
+    assert manifest.is_diagnostic is False
+    by_key = {item.key: item for item in manifest.site_sets}
+    assert list(by_key) == ["infrastructure", "infrastructure_approximate"]
+    assert by_key["infrastructure"].approximate is False
+    assert by_key["infrastructure"].site_precision == "precise"
+    approximate = by_key["infrastructure_approximate"]
+    assert approximate.approximate is True
+    assert approximate.site_precision == "approximate"
+    assert approximate.presets[0].site_count == 2
+    rounded = [node for node in approximate.presets[0].nodes if node["node_id"] == f"!{900305:08x}"]
+    assert rounded[0]["position_deviation_m"] == 2900.0
+
+    root = store.current_root(settings)
+    assert root is not None
+    tile = next(root.glob("LongFast/infrastructure_approximate/usable/*/*/*.png"))
+    zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
+
+    # The dashboard has it, by the name the run wrote.
+    dashboard = TestClient(create_app(settings))
+    served = dashboard.get(
+        f"/api/coverage/tiles/{manifest.stamp}/LongFast/infrastructure_approximate/usable/"
+        f"{zoom}/{x}/{y}.png"
+    )
+    assert served.status_code == 200
+    assert served.content == tile.read_bytes()
+
+    # The public page has the precise map and nothing else.
+    public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
+    summary = public.get("/api/embed/coverage").json()
+    assert summary["available"] is True
+    assert [item["node_count"] for item in summary["presets"]] == [1]
+    assert "site_sets" not in summary
+
+
+def test_the_calibration_fit_leaves_out_a_rounded_peer_on_the_setting_318_documented(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """A fuzzed peer turns silence into false evidence. 13 is read as 16."""
+    settings = _settings(timescale_url, tmp_path, coverage_min_precision_bits=13)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900307, 33.45, -112.07, role="ROUTER", precision_bits=13)
+        _add_node(connection, 900308, 33.50, -112.02, role="ROUTER", precision_bits=None)
+
+    async def peers(session, given: Settings):  # type: ignore[no-untyped-def]
+        return await calibrate.read_peers(
+            session, given, load_overrides(given.radio_overrides_path)
+        )
+
+    found = _run(settings, peers)
+    assert 900307 not in found
+    assert 900308 in found

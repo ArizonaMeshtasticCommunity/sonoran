@@ -202,7 +202,7 @@ def test_the_pattern_script_is_loaded_before_the_planner() -> None:
 def test_the_decision_is_written_down_where_the_catalogue_promised() -> None:
     """`antennas.py` sent the reader to `docs/PLANNER.md`."""
     doc = (ROOT / "docs" / "PLANNER.md").read_text(encoding="utf-8")
-    assert "4.3 Directional antennas" in doc
+    assert "4.4 Directional antennas" in doc
     for claim in ("MAX_MODELLED_REJECTION_DB", "half-power", "front-to-back"):
         assert claim in doc, f"the model's {claim} is not documented"
 

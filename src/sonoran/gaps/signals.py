@@ -75,7 +75,7 @@ from datetime import UTC, datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
-from sqlalchemy import Select, and_, func, select
+from sqlalchemy import BigInteger, Select, Subquery, and_, cast, func, null, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api import traces
@@ -646,19 +646,12 @@ async def read_gateways(
     return set(rows.all())
 
 
-async def read_evidence(
-    session: AsyncSession,
-    settings: Settings,
-    channels: Sequence[str],
-    since: datetime,
-    until: datetime,
-) -> dict[int, NodeEvidence]:
-    """Return the evidence for every node that sent traffic on this preset.
+def _packet_summary(channels: Sequence[str], since: datetime, until: datetime) -> Subquery:
+    """Return one row for each sender: its packets and its awake and heard hours.
 
-    One preset, always. A node on Long fast cannot hear a node on
-    Medium fast, so a merged assessment would invite a reader to fix a
-    gap between two radios that have no way to reach each other. See
-    `AGENTS.md` 9.7.
+    The assessment and the leaderboard windows both read this, so the
+    rule that says when a packet was heard on the air is written once.
+    See `sonoran/gaps/boards.py`.
     """
     keys = _keys_cte(channels, since, until).cte("gap_keys")
 
@@ -735,6 +728,58 @@ async def read_evidence(
         .group_by(evidence.c.from_node_num)
         .subquery()
     )
+    return summary
+
+
+async def read_reach_evidence(
+    session: AsyncSession,
+    channels: Sequence[str],
+    since: datetime,
+    until: datetime,
+) -> dict[int, NodeEvidence]:
+    """Return only the evidence the leaderboards rank by, for one window.
+
+    The packets, the awake and heard hours, and the direct gateways. Every
+    other field keeps its default, so a signal must never be judged from
+    this. It is for the extra Statistics windows (#294), where a full
+    assessment would repeat the neighbour, traceroute and position reads
+    for a page that shows none of them.
+
+    The two reads are the ones `read_evidence` makes, not copies of them.
+    """
+    summary = _packet_summary(channels, since, until)
+    counted = (await session.execute(select(summary))).all()
+    direct = await _read_direct_gateways(session, channels, since, until)
+    return {
+        int(row.from_node_num): NodeEvidence(
+            node_num=int(row.from_node_num),
+            packets=_as_int(row.packets),
+            rf_packets=_as_int(row.rf_packets),
+            ambiguous_packets=_as_int(row.ambiguous_packets),
+            active_hours=_as_int(row.active_hours),
+            rf_hours=_as_int(row.rf_hours),
+            direct_gateways=direct.get(row.from_node_num, (0, None, 0))[0],
+            best_direct_snr=_as_float(row.best_direct_snr),
+        )
+        for row in counted
+    }
+
+
+async def read_evidence(
+    session: AsyncSession,
+    settings: Settings,
+    channels: Sequence[str],
+    since: datetime,
+    until: datetime,
+) -> dict[int, NodeEvidence]:
+    """Return the evidence for every node that sent traffic on this preset.
+
+    One preset, always. A node on Long fast cannot hear a node on
+    Medium fast, so a merged assessment would invite a reader to fix a
+    gap between two radios that have no way to reach each other. See
+    `AGENTS.md` 9.7.
+    """
+    summary = _packet_summary(channels, since, until)
 
     counted = (await session.execute(select(summary))).all()
     wanted = {int(row.from_node_num) for row in counted}
@@ -958,6 +1003,85 @@ async def read_trace_evidence(
                 record(source, snr)
                 record(target, snr)
     return found
+
+
+# How long a traceroute request waits for its answer before it is counted
+# (#293). A request sent in the last few minutes of a window may still
+# have its answer on the way, and counting it now would call it
+# unanswered. Live answers come back in seconds to a minute or two.
+ANSWER_GRACE = timedelta(minutes=15)
+
+
+async def read_trace_answers(
+    session: AsyncSession, channels: Sequence[str], since: datetime, until: datetime
+) -> dict[int, traces.Answers]:
+    """Return, for each node traced on this preset, its traceroutes and answers.
+
+    The requests are those seen inside the window on this preset, less
+    the last `ANSWER_GRACE`. The replies are only those that answer one
+    of them, read through the request ID index, so a reply to a request
+    outside the window is never read. `traces.answer_counts` does the
+    matching, so the rule lives in one place (AGENTS.md 9.18).
+
+    The window is bounded on **our** clock, `seen_at`, never a node's
+    (AGENTS.md 9.4). Rows are selected by the window and the preset and
+    never by recency (AGENTS.md 9.19).
+
+    A reply is matched to its request, so it is not filtered by channel
+    a second time. An answer is an answer whichever channel name the
+    gateway that uploaded it used.
+    """
+    asked = (
+        select(
+            Traceroute.from_node_num.label("from_node_num"),
+            Traceroute.to_node_num.label("to_node_num"),
+            Traceroute.packet_id.label("packet_id"),
+        )
+        .where(
+            _on_preset(Traceroute.channel, channels),
+            Traceroute.request_id.is_(None),
+            Traceroute.packet_id.is_not(None),
+            Traceroute.from_node_num != Traceroute.to_node_num,
+            Traceroute.seen_at >= since,
+            Traceroute.seen_at < until - ANSWER_GRACE,
+        )
+        .distinct()
+        .cte("trace_requests")
+    )
+    replies = (
+        select(
+            Traceroute.from_node_num,
+            Traceroute.to_node_num,
+            Traceroute.request_id,
+            cast(null(), BigInteger).label("packet_id"),
+        )
+        .join(
+            asked,
+            and_(
+                Traceroute.request_id == asked.c.packet_id,
+                Traceroute.from_node_num == asked.c.to_node_num,
+                Traceroute.to_node_num == asked.c.from_node_num,
+            ),
+        )
+        .where(Traceroute.seen_at >= since, Traceroute.seen_at < until)
+        .distinct()
+    )
+    requests = select(
+        asked.c.from_node_num,
+        asked.c.to_node_num,
+        cast(null(), BigInteger).label("request_id"),
+        asked.c.packet_id,
+    )
+    rows = (await session.execute(union_all(requests, replies))).all()
+    return traces.answer_counts(
+        traces.TraceKey(
+            int(row.from_node_num),
+            int(row.to_node_num),
+            None if row.request_id is None else int(row.request_id),
+            None if row.packet_id is None else int(row.packet_id),
+        )
+        for row in rows
+    )
 
 
 async def _read_position_spread(
