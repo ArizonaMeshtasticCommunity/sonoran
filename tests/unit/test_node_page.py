@@ -169,17 +169,21 @@ def test_the_packet_direction_is_sent_or_heard(tmp_path: Path) -> None:
 # -------------------------------------------------------- leaderboards
 
 
-def test_the_reachable_board_ranks_by_share_of_awake_hours() -> None:
+def test_the_reachable_board_ranks_by_answered_traceroutes() -> None:
+    """#293: the share of traceroutes answered, not the share of hours heard.
+
+    The full set of cases is in `test_trace_answers.py`.
+    """
     rows = [
-        _row("!00000001", 100, active_hours=100, rf_hours=50),
-        _row("!00000002", 100, active_hours=48, rf_hours=48),
-        # One lucky hour is not a record.
-        _row("!00000003", 5, active_hours=2, rf_hours=2),
-        _row("!00000004", 100, active_hours=200, rf_hours=200),
+        {"node_id": "!00000001", "requests": 20, "answered": 10, "senders": 3},
+        {"node_id": "!00000002", "requests": 40, "answered": 38, "senders": 4},
+        # Too few traceroutes to rank.
+        {"node_id": "!00000003", "requests": 4, "answered": 4, "senders": 2},
     ]
     board = leaderboards._reachable_board(rows, 168)
-    assert [row["node_id"] for row in board["rows"]] == ["!00000004", "!00000002", "!00000001"]
-    assert board["rows"][2]["value"] == 50.0
+    assert [row["node_id"] for row in board["rows"]] == ["!00000002", "!00000001"]
+    assert board["rows"][1]["value"] == 50.0
+    assert board["not_ranked"] == 1
     assert board["cannot_know"]
 
 

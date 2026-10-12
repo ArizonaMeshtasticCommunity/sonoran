@@ -1373,3 +1373,56 @@ This was proved by making the page re-render every 150 ms: the old read failed 2
 ### Environment
 - **Docker VM:** the Colima VM (2 CPUs, 1 GiB) ran six agents' Postgres containers. Postgres was OOM-killed more than once, and leftover test containers plus dangling images filled its 60 GB disk to 100%.
 - **Before fanning out:** check `df` inside the VM, and remove what you start.
+
+## 2026-10-08 — the gaps leaderboards follow the page range (#294)
+
+Will chose option A: the two gaps leaderboards follow the Statistics
+range. Four choices were made to build it. `docs/GAPS.md` 6.1 has the
+detail.
+
+- **A small file for each extra window, not a full assessment.** A board
+  needs four counts. The signals, the siting, and the neighbour,
+  traceroute and position reads are most of what an assessment costs,
+  and no board shows them. The assessment file keeps its shape, so the
+  gaps page and the node page are not touched.
+- **A custom range is never matched to a near window.** It holds the
+  job's own window and says "not the page range". A near window shown
+  as the range would be a claim about a period nobody measured.
+- **A long window is rebuilt less often.** A file is rebuilt once it is
+  older than 1/120 of its window, so 30 d is rebuilt every 6 hours. Its
+  read is about 4.3 times the 7 d one and its answer barely moves in
+  half an hour. The job logs each file's time, so the cost can be read
+  on the live box.
+- **The awake floor scales.** 24 awake hours in a 24 hour window would
+  rank almost nobody, so the floor is half the window when that is less.
+
+## 2026-10-08 — reachability is answered traceroutes (#293)
+
+Will chose the recommended measure: "Most consistently reachable" is
+replaced by the share of traceroutes to a node that it answered. A node
+needs at least 10 traceroutes from 2 or more senders, and the board
+follows the page range. `docs/GAPS.md` 6.2 has the detail. Five choices
+were made to build it.
+
+- **Matched by (asker, target, request packet ID).** A reply carries the
+  request's packet ID, and a packet ID belongs to its sender, so the
+  asker is part of the key. The pairing reads each row through
+  `trace_endpoints`, the one reading of a reply's direction (`AGENTS.md`
+  9.18). A reply with no request seen counts in neither number.
+- **Computed in the gaps job, not the API.** The job already reads every
+  traceroute of the 7 d window, and it already writes a file for each
+  other window (#294). The route stays a file read. A bounded query in
+  the route would read up to 30 days of traceroutes for each preset and
+  window on a page load, and the 30 d answer barely moves in six hours.
+- **Ranked by the low end of the Wilson interval, shown as the share.**
+  Ten of ten would otherwise top a board that also holds 95 of 100. The
+  measure line says that more traceroutes count for more, so a lower
+  share above a higher one is explained on the page.
+- **The floor is applied by the route.** The job writes every node
+  traced. So the board can say how many it left out, and a change to the
+  floor does not wait for the job.
+- **The uptime ratio is gone from the board, and kept everywhere else.**
+  Will asked to replace it. The awake and heard hours are still in the
+  assessment, because the `rf_intermittent` signal, the gaps page and
+  the node page read them. The board files no longer carry them: nothing
+  else reads those files.

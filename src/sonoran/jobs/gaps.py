@@ -24,21 +24,31 @@ database, and it wants to run every 30 minutes rather than every 6
 hours. So it is its own `Task`, which is what the design specifies for
 phase 1. The engine work of phase 3 is the part that must join
 `_coverage_cycle`.
+
+## The leaderboard windows (#294)
+
+The run also writes the leaderboard counts for the Statistics windows
+the assessment does not hold: 24 h and 30 d by default. That is two
+aggregate reads and one traceroute read (#293) for each preset and
+window that is due, and a 30 d read is due once in six hours. See
+`sonoran/gaps/boards.py` and `docs/GAPS.md` 6.1 and 6.2.
 """
 
 import asyncio
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api import traces
 from sonoran.api.names import display_name, format_node_id
 from sonoran.config import Settings, get_settings
 from sonoran.coverage import store as coverage_store
 from sonoran.db.models import Node
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.gaps import signals, store
+from sonoran.gaps import boards, signals, store
 from sonoran.gaps.signals import BAD, OK, UNKNOWN
 from sonoran.logging import configure_logging, get_logger
 from sonoran.radio.presets import ModemPreset, preset_for_channel
@@ -120,7 +130,8 @@ async def assess_preset(
 
     evidence = await signals.read_evidence(session, settings, channels, since, until)
     gateways = await signals.read_gateways(session, channels, since, until)
-    nodes = await _read_nodes(session, set(evidence))
+    answers = await signals.read_trace_answers(session, channels, since, until)
+    nodes = await _read_nodes(session, set(evidence) | set(answers))
     coverage = read_coverage(settings, preset)
     gateways_active = len(gateways)
 
@@ -204,7 +215,7 @@ async def assess_preset(
         "window_hours": window_hours,
         "generated_at": datetime.now(UTC).isoformat(),
         "gateways_active": gateways_active,
-        "node_count": len(nodes),
+        "node_count": len(set(nodes) & set(evidence)),
         "assessed_count": len(rows),
         "coverage": {
             "stamp": coverage.stamp,
@@ -220,6 +231,9 @@ async def assess_preset(
         "not_enough_evidence_count": not_enough_evidence,
         "reached_but_unpredicted_count": unpredicted,
         "caveats": [{"key": key, "text": text} for key, text in signals.CAVEATS],
+        # The reachable leaderboard's counts (#293). Not node rows: a node
+        # can be traced on this preset and send nothing else on it.
+        boards.TRACE_ANSWERS: answer_rows(answers, nodes),
         "thresholds": {
             "min_packets": settings.gaps_min_packets,
             "min_active_hours": settings.gaps_min_active_hours,
@@ -290,6 +304,117 @@ async def run_once(session: AsyncSession, settings: Settings) -> list[str]:
             "presets": index,
         },
     )
+
+    # After the index, so a slow or failed board read never holds back the
+    # assessment the gaps page and the node page read. A board without its
+    # file serves the assessment and says so.
+    await write_board_windows(
+        session, settings, {name: names for name, names in channels.items() if name in written}
+    )
+    return written
+
+
+def board_rows(
+    evidence: dict[int, signals.NodeEvidence], nodes: dict[int, Node]
+) -> list[dict[str, object]]:
+    """Return one leaderboard row for each node: its name and its counts.
+
+    The keys are the ones the assessment rows use, so the leaderboard
+    ranks either with the same function.
+    """
+    rows: list[dict[str, object]] = []
+    for node_num, found in sorted(evidence.items()):
+        node = nodes.get(node_num)
+        row: dict[str, object] = {
+            "node_id": format_node_id(node_num),
+            "display_name": display_name(
+                node_num, node.long_name if node else None, node.short_name if node else None
+            ),
+        }
+        rows.append(row | {key: getattr(found, key) for key in boards.EVIDENCE_KEYS})
+    return rows
+
+
+def answer_rows(
+    answers: dict[int, traces.Answers], nodes: dict[int, Node]
+) -> list[dict[str, object]]:
+    """Return one row for each node traced: its name, traceroutes and answers.
+
+    Every node traced is written, under the floor or not. The floor is
+    the leaderboard's to apply, so it can say how many it left out.
+    """
+    rows: list[dict[str, object]] = []
+    for node_num, found in sorted(answers.items()):
+        node = nodes.get(node_num)
+        rows.append(
+            {
+                "node_id": format_node_id(node_num),
+                "display_name": display_name(
+                    node_num, node.long_name if node else None, node.short_name if node else None
+                ),
+                "requests": found.requests,
+                "answered": found.answered,
+                "senders": found.senders,
+            }
+        )
+    return rows
+
+
+async def write_board_windows(
+    session: AsyncSession, settings: Settings, channels: dict[str, list[str]]
+) -> list[tuple[str, int]]:
+    """Write the leaderboard counts for each Statistics window that is due.
+
+    `channels` maps each preset this run assessed to its channel names.
+    Only those presets get a board file: a board borrows the assessment's
+    list of presets and never adds one.
+
+    A window longer than the assessment's reads its own channel names,
+    because a spelling used three weeks ago belongs in a 30 day count.
+    Return the (preset, window) pairs written.
+    """
+    now = datetime.now(UTC)
+    written: list[tuple[str, int]] = []
+    for asked in boards.extra_windows(settings):
+        hours = boards.window_hours(settings, asked)
+        due = [
+            preset
+            for preset in sorted(channels)
+            if boards.is_due(store.read_boards(settings, preset, asked), hours, now)
+        ]
+        if not due:
+            continue
+        since, until = signals.window_bounds(settings, hours)
+        wider = (
+            await signals.read_preset_channels(session, since, until)
+            if hours > settings.gaps_window_hours
+            else {}
+        )
+        for preset in due:
+            started = time.monotonic()
+            names = sorted(set(channels[preset]) | set(wider.get(preset, [])))
+            evidence = await signals.read_reach_evidence(session, names, since, until)
+            answers = await signals.read_trace_answers(session, names, since, until)
+            nodes = await _read_nodes(session, set(evidence) | set(answers))
+            document: dict[str, object] = {
+                "preset": preset,
+                "channels": names,
+                "window_hours": hours,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "nodes": board_rows(evidence, nodes),
+                boards.TRACE_ANSWERS: answer_rows(answers, nodes),
+            }
+            if store.write_boards(settings, preset, asked, document) is not None:
+                written.append((preset, asked))
+                # The time is logged because it is the cost #294 added to
+                # this job, and it can only be measured on live data.
+                logger.info(
+                    "gaps boards, preset %s: %s nodes over %s hours in %.2f s",
+                    preset,
+                    len(evidence),
+                    hours,
+                    time.monotonic() - started,
+                )
     return written
 
 

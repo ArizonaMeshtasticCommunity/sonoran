@@ -24,6 +24,7 @@ from sonoran import __version__
 from sonoran.api.html import as_script_json
 from sonoran.api.limits import Budget, RateLimitMiddleware
 from sonoran.api.routes.chat import router as chat_router
+from sonoran.api.routes.climate import router as climate_router
 from sonoran.api.routes.coverage import router as coverage_router
 from sonoran.api.routes.embed import router as embed_router
 from sonoran.api.routes.gaps import router as gaps_router
@@ -470,6 +471,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(stats_router)
     app.include_router(leaderboards_router)
     app.include_router(terrain_router)
+    app.include_router(climate_router)
     app.include_router(traceroutes_router)
     app.include_router(rf_router)
 

@@ -1151,13 +1151,16 @@ See `AGENTS.md` 9.5 and 9.5.1 for why each rule is there.
 
 Tapbacks are grouped under the message they react to. The page draws
 each emoji once with its count, folds all but the four most sent into
-"+N more", and draws MeshMonitor's Auto Acknowledge tapbacks apart as
-"possibly auto-acked". MeshMonitor sends a keycap that says how the
-message arrived: `*` direct, `1` to `7` hops (`7` is seven or more), `#`
-via MQTT, and older builds `0` or a direct hit for direct (its
-`hopEmoji`, in `docs/features/automation-engine.md` of
-Yeraze/meshmonitor). The page writes each one out in words. A person can
-send those too, and nothing in the packet tells the two apart.
+"+N more", and draws the digit tapbacks apart as "Hop-count tapbacks"
+(#312). A digit says how the message arrived at whoever sent it: `*`
+direct, `1` to `7` hops (`7` is seven or more). MeshMonitor's Auto
+Acknowledge sends these (its `hopEmoji`, in
+`docs/features/automation-engine.md` of Yeraze/meshmonitor), and a
+person can send them too. Nothing in the packet tells the two apart, so
+the label names what the digit means and not who sent it. They are drawn
+apart only on MediumFast, LongFast and azmsh; on any other channel, such
+as Trivia, a digit is a person's answer and stays a reaction. The page
+writes each one out in words beside its sender.
 
 ### 5.2 `GET /api/chat/channels`
 
@@ -1749,27 +1752,45 @@ Query parameters: `channel` — the preset. Without it, the assessed
 preset with the most nodes. A window (8.00) moves `longest_link` to it.
 Without one, that board reads its own 72 hours.
 
-`reachable` and `direct_gateways` do not follow the window. They are
-read from the gaps assessment, which the gaps job writes for one window,
-`GAPS_WINDOW_HOURS`. Each board's `window_hours` says which window it
-holds, and `longest_link` carries `follows_window`, so the page can say
-which boards follow its range.
+`reachable` and `direct_gateways` follow a quick range: `hours` of 24,
+168 or 720 (#294). The gaps job writes their counts for each of those
+windows (`docs/GAPS.md` 6.1). They do not follow:
+
+- a fixed window (`since`, `until`), which no job can write in advance;
+- any other `hours`;
+- a quick range whose file the job has not written yet.
+
+They then hold the gaps assessment's own window, `GAPS_WINDOW_HOURS`.
+A 720 hour window is cut to `RETENTION_DAYS_PACKET` and does not follow
+when that is shorter.
+
+Every board carries `window_hours`, the window it holds, and
+`follows_window`, true only when that is the window asked for. The page
+reads `follows_window` and says "not the page range" where it is false.
 
 Response: `available`, `preset`, `presets`, `assessed`, `boards`.
 
 Each board: `key`, `title`, `measure`, `window_hours`, `cannot_know`,
-`rows`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
+`rows`. `reachable` also carries `not_ranked`. Each row: `node_id`, `display_name`, `value`, `unit`, `detail`;
 a link row also carries `other_id` and `other_name`.
 `unit` is SI (`km` for a link) or a word (`%`, `gateways`). The API does
 not convert. The page writes `value` and `unit` through
 `SonoranUnits.measure`, which gives miles or kilometres from the reader's
 setting (#291).
 
-- `reachable` — the share of the hours a node was awake in which
-  something on the air heard it. At least 24 hours awake. Read from the
-  gaps assessment.
+- `reachable` — "Most reliably answers traceroutes" (#293): the share
+  of traceroutes sent to a node by other nodes that it answered. A
+  request is answered when a reply carries its packet ID as
+  `request_id`, from the node asked, to the node that asked. A node
+  needs at least 10 traceroutes from at least 2 senders; the board
+  carries `not_ranked`, the number of traced nodes below that floor.
+  Ranked by the low end of the Wilson 95 percent interval. `value` is
+  the share in `%`; `detail` is "N of M answered, S senders". An answer
+  no gateway uploaded counts as unanswered. Read from the gaps job
+  (`docs/GAPS.md` 6.2). A gaps file written before #293 holds no counts,
+  and the board then says so in `measure` and has no rows.
 - `direct_gateways` — distinct gateways that heard the node with no hop
-  used, never its own upload. Read from the gaps assessment.
+  used, never its own upload. Read from the gaps job.
 - `longest_link` — the longest links graded `two_way` by
   `GET /api/graph`, with an SNR at least `GAPS_MARGIN_BAD_DB` above what
   the preset needs, and an exact position at both ends. It reads 72
@@ -2095,6 +2116,74 @@ What it guarantees, and why each one is there:
   outbound request is silenced. Both are in `sonoran/logging.py`.
 - **Cached.** Bounded to 128 answers for an hour, which the upstream's
   usage policy asks for.
+
+### 11.4 `GET /api/climate/page/{tile}`
+
+Returns the Köppen-Geiger classes of one degree square, for the
+planner's radio climate (#239). See `docs/PLANNER.md` 4.3.
+
+`tile` is a skadi name, as in 11.1, and is named for the square's
+south-west corner: Phoenix, at 112.07 W, is in `N33W113`. Anything else
+is rejected with 422.
+
+The body is **not** JSON. It is 14 400 bytes: a 120 x 120 grid, one
+byte for each cell, holding the class number of the source legend (1 =
+Af to 30 = EF), or 0 where the map has no class. **Row 0 is the north
+edge and column 0 the west edge**, which is not the order of a terrain
+page.
+
+| Response | Meaning |
+|---|---|
+| 200 | The page follows. |
+| 404 | The square is outside the configured region, or outside the data that ships. |
+| 422 | Not a tile name. |
+
+Headers:
+
+```
+Content-Type: application/octet-stream
+Cache-Control: public, max-age=31536000, immutable
+ETag: "climate-N35W112-14400"
+```
+
+The data ships inside the package (`sonoran/climate/`), so this never
+reads a cache and never makes an outbound request. It answers for the
+configured region only, by the same test as 11.1
+(`TERRAIN_LAT_MIN` and the rest), so it is not a general source of
+climate data. The data itself covers 30 to 38 north and 116 to 108
+west; a region set wider than that gets 404 past the edge.
+
+There is deliberately **no** endpoint that answers one point. The
+planner sends no site to the server (`docs/PLANNER.md` 2), so it asks
+for the square, as it does for terrain, and reads the cell itself.
+
+### 11.5 `GET /api/climate/classes`
+
+Returns the Köppen to ITM table the planner and the coverage job both
+use, and what the data is. The planner keeps no copy of the table.
+
+```json
+{
+  "source": "Köppen-Geiger 1991-2020, Beck et al. (2023), CC BY 4.0",
+  "cells_per_degree": 120,
+  "page_bytes": 14400,
+  "fallback": "desert",
+  "extent": {"lat_min": 30, "lat_max": 38, "lon_min": -116, "lon_max": -108},
+  "classes": [
+    {
+      "code": 18,
+      "symbol": "Dsb",
+      "name": "Cold, dry summer, warm summer",
+      "climate": "continental_temperate",
+      "reason": "..."
+    }
+  ]
+}
+```
+
+`classes` holds all 30 classes, in order. `climate` is a key of
+`CLIMATE_CODES` in `coverage/params.py`. `fallback` is the climate used
+where no class is known; the planner says so when it uses it.
 
 ## 12. RF map endpoints
 

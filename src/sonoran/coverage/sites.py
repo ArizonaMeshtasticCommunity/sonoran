@@ -42,6 +42,7 @@ approximation.
 
 from dataclasses import dataclass
 
+from sonoran.climate import climate_at
 from sonoran.config import Settings
 from sonoran.coverage.clutter import terminal_loss_db
 from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ, EngineParams, erp_watts
@@ -161,6 +162,10 @@ def engine_params(settings: Settings, site: Site) -> EngineParams:
             profile.cable_loss_db,
         ),
         radius_m=settings.coverage_radius_km * 1000.0,
+        # The climate of the site's own ground, as the planner page uses
+        # it (#239). A site outside the shipped data gets `desert`, which
+        # is what every site got before.
+        radio_climate=climate_at(site.latitude, site.longitude).climate,
         # The engine is given no clutter on purpose.
         #
         # It uses the value by raising the ground, which costs nothing
