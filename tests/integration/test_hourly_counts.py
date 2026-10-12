@@ -107,8 +107,8 @@ WINDOWS = [
 def _check(timescale_url: str, migrated_engine: Any) -> None:
     for begin, finish in WINDOWS:
         start, end = BASE + begin, BASE + finish
-        packets, uploads, (days, upload_days), senders, by_hour, by_day = asyncio.run(
-            _counts(role_url(timescale_url, "azmsh_api"), start, end)
+        packets, uploads, (days, upload_days), senders, families_by_hour, families_by_day = (
+            asyncio.run(_counts(role_url(timescale_url, "azmsh_api"), start, end))
         )
         [(raw_packets,)] = _raw(
             migrated_engine,
@@ -154,8 +154,8 @@ def _check(timescale_url: str, migrated_engine: Any) -> None:
         assert senders == dict(per_sender), (begin, finish)
 
         for bucket, got in (
-            ("date_trunc('hour', first_seen_at)", by_hour),
-            ("timezone(:z, date_trunc('day', timezone(:z, first_seen_at)))", by_day),
+            ("date_trunc('hour', first_seen_at)", families_by_hour),
+            ("timezone(:z, date_trunc('day', timezone(:z, first_seen_at)))", families_by_day),
         ):
             families = _raw(
                 migrated_engine,
