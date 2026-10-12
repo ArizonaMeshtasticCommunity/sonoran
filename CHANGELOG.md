@@ -5,6 +5,36 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.12.2 — 2026-10-12
+
+3 pull requests merged, 2 issues closed.
+
+#### New features
+
+- Keep the background jobs' outputs in tables, not JSON files (#351) (#361) by @logans-stuff — done: #351
+  No visible change. A renamed node now shows its new name on the gaps page and the leaderboards at once.
+- Firmware 2.8.1 protobufs, every firmware preset, and docs-sourced sensitivity (#363) by @logans-stuff — done: #362
+  Ready for Meshtastic 2.8.1. Traffic on Long Turbo (the new US default), the other new presets, and Long Moderate is now recognised as its preset. New paging messages and hardware models show by name.
+
+  Coverage predictions are now about 8 dB more conservative. The old receiver sensitivities were too optimistic, and they now follow the Meshtastic docs.
+
+#### Fixes
+
+- The old-file import and the siting CLI connect as the jobs role (#351) (#364) by @logans-stuff
+
+#### Issues
+
+- Done: #351 Architecture: Migrate background job outputs from static JSON files to the Database (reported by @tylerpieper)
+- Done: #362 Preset sensitivity table is ~8 dB optimistic and wrongly sourced (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @tylerpieper, @logans-stuff
+- Code: @logans-stuff
+- Tested and helped: @tylerpieper
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12...v2026.10.12.2
+
 ## v2026.10.12 — 2026-10-12
 
 12 pull requests merged, 11 issues closed.

@@ -488,15 +488,35 @@ Keep indexes minimal. Each index slows inserts.
   cannot serve the fallback `OR (modem_preset IS NULL AND channel = ...)`,
   and every index on `packet_seen` costs every insert.
 
-## 8. Continuous aggregates (later phase)
+## 8. Continuous aggregates
 
-These are optional. Add them after phase 8 if query speed needs help.
+Two TimescaleDB continuous aggregates hold hourly totals (#366, revision
+i366). Statistics and the dashboard count from them.
 
-- Hourly packet counts per node.
-- Hourly channel utilization per node.
-- Daily gateway activity.
+| View | Columns | From |
+|---|---|---|
+| `packet_hourly` | `bucket` (the hour), `from_node_num`, `packets` | `packet.first_seen_at` |
+| `packet_seen_hourly` | `bucket` (the hour), `uploads` | `packet_seen.seen_at` |
 
-Use TimescaleDB continuous aggregates with refresh policies.
+- **Exact counts.** `sonoran/api/hourly.py` sums whole hours from these
+  views and counts the partial hour at each end of a window from the
+  raw rows. So a count equals the raw count, to the row. A 30 day count
+  reads about 720 rows instead of millions.
+- **Live.** `materialized_only = false`: TimescaleDB adds the hours
+  after the last refresh from the raw rows, so the current hour is
+  always counted.
+- **Senders per day.** `packet_hourly` is per sender, because a count
+  of distinct senders cannot be added up from plain hourly totals.
+- **Local days.** Hourly totals add up to local days only in a zone a
+  whole number of hours from UTC. Arizona is UTC-7. For another
+  `DISPLAY_TIMEZONE`, the daily counts read the raw rows.
+- **Refresh.** A policy refreshes every 30 minutes, over every
+  invalidated hour (`start_offset` NULL). The first run after the
+  migration fills the whole history.
+- **Retention.** `RETENTION_DAYS_PACKET` plus 14 days. Raw chunks can
+  outlive the retention by a few days, and the totals must cover every
+  hour the raw rows still hold.
+- **Grants.** `azmsh_api` has SELECT. Only TimescaleDB writes them.
 
 ## 9. Backup and restore
 
