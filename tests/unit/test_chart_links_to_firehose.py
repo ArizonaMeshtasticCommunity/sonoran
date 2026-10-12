@@ -244,7 +244,7 @@ def test_the_chart_is_scoped_to_the_preset_the_reader_chose() -> None:
     preset that never sends a type the link would open empty.
     """
     code = _code("app.js")
-    assert "presetChannel() ? `&channel=${encodeURIComponent(presetChannel())}` : ''" in code
+    assert "`api/stats/portnums?hours=${PORTNUM_CHART_HOURS}${presetQuery()}`" in code
 
 
 def test_an_empty_chart_says_which_filter_emptied_it() -> None:

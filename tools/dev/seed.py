@@ -465,6 +465,130 @@ def node_id(num: int) -> str:
     return f"!{num:08x}"
 
 
+# --- Modem presets (#313) -------------------------------------------
+#
+# Ingest tags each upload with a modem preset, and each packet with the
+# majority of its uploads. The seed writes its rows directly, so it tags
+# them the same way afterwards, in SQL, with no draw from `RNG`: every
+# random value the seed wrote before stays the same.
+#
+# - A gateway is on the preset of its node row (GLND is on LongFast).
+# - An upload on a preset-named topic is on that preset. Any other upload
+#   is on its gateway's preset. So azmsh is on both presets.
+# - A packet takes the majority of its uploads. A tie keeps the first.
+#
+# A node's `last_preset` is written with the node row, as the preset the
+# node is on, rather than worked out from its packets. The random traffic
+# goes through any gateway, so working it out would move routers between
+# the node lists at random, and every journey that looks for one there.
+
+# The default channel names of the presets, by their normalised key.
+PRESET_NAMES = {
+    "shortturbo": "ShortTurbo",
+    "shortfast": "ShortFast",
+    "shortslow": "ShortSlow",
+    "mediumfast": "MediumFast",
+    "mediumslow": "MediumSlow",
+    "longfast": "LongFast",
+    "longmoderate": "LongModerate",
+    "longslow": "LongSlow",
+    "verylongslow": "VeryLongSlow",
+}
+_PRESET_VALUES = ", ".join(f"('{key}', '{name}')" for key, name in PRESET_NAMES.items())
+
+TAG_UPLOADS = f"""
+    UPDATE packet_seen AS s SET modem_preset = coalesce(
+        (SELECT p.name FROM (VALUES {_PRESET_VALUES}) AS p(key, name)
+         WHERE p.key = lower(regexp_replace(s.channel, '[^A-Za-z0-9]+', '', 'g'))),
+        (SELECT g.uplink_preset FROM node AS g WHERE g.node_num = s.gateway_node_num))
+    WHERE s.modem_preset IS NULL AND s.seen_at >= :since
+"""
+
+TAG_PACKETS = """
+    UPDATE packet AS p SET modem_preset = v.preset
+    FROM (
+        SELECT DISTINCT ON (from_node_num, packet_id)
+            from_node_num, packet_id, modem_preset AS preset
+        FROM (
+            SELECT from_node_num, packet_id, modem_preset,
+                count(*) OVER w AS votes, min(id) OVER w AS first_id
+            FROM packet_seen
+            WHERE modem_preset IS NOT NULL AND seen_at >= :since
+            WINDOW w AS (PARTITION BY from_node_num, packet_id, modem_preset)
+        ) AS t
+        ORDER BY from_node_num, packet_id, votes DESC, first_id
+    ) AS v
+    WHERE p.from_node_num = v.from_node_num AND p.packet_id = v.packet_id
+        AND p.modem_preset IS NULL
+"""
+
+
+async def tag_presets(conn, since: datetime) -> None:
+    """Tag the uploads and packets written since a moment, as ingest would."""
+    await conn.execute(text(TAG_UPLOADS), {"since": since})
+    await conn.execute(text(TAG_PACKETS), {"since": since})
+
+
+# Two azmsh messages the preset journeys look for (#313). Written by
+# hand, after every random row, so they draw nothing from `RNG` and do
+# not become the message the seeded reactions answer.
+#
+# PRES is a LongFast node and GLND a LongFast gateway, so its message is
+# on LongFast. TEMP and SBPK are on MediumFast. The old `channel=` filter
+# showed neither on either preset, because neither topic names a preset.
+PRESET_MESSAGES = [
+    # (sender, gateway, packet id, preset, body)
+    (0x0A51B008, 0x0A51B003, 950_001, SECONDARY_PRESET, "Long Fast check-in on azmsh."),
+    (0x0A51B001, 0x0A51A001, 950_002, PRIMARY_PRESET, "Medium Fast check-in on azmsh."),
+]
+
+
+async def write_preset_messages(conn) -> None:
+    """Write the two azmsh messages, tagged as ingest would tag them."""
+    for minutes, (sender, gateway, packet_id, preset, body) in enumerate(PRESET_MESSAGES):
+        at = NOW - timedelta(minutes=2 + minutes)
+        values = {"f": sender, "g": gateway, "p": packet_id, "mp": preset, "body": body, "t": at}
+        await conn.execute(
+            text(
+                "INSERT INTO packet_key (from_node_num, packet_id, first_seen_at) "
+                "VALUES (:f, :p, :t) ON CONFLICT DO NOTHING"
+            ),
+            values,
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO packet (from_node_num, packet_id, to_node_num, portnum,
+                    channel, hop_start, hop_limit, want_ack, first_seen_at, modem_preset)
+                VALUES (:f, :p, 4294967295, 1, 'azmsh', 3, 2, false, :t, :mp)
+                """
+            ),
+            values,
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num,
+                    mqtt_topic, channel, rx_rssi, rx_snr, hop_limit, hop_start,
+                    seen_at, modem_preset)
+                VALUES (:f, :p, :g, 'msh/US/AZ/2/e/azmsh/' || :gid, 'azmsh', -97, 4.5,
+                    2, 3, :t, :mp)
+                """
+            ),
+            values | {"gid": node_id(gateway)},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO text_message (packet_id, from_node_num, to_node_num,
+                    channel, body, emoji, seen_at)
+                VALUES (:p, :f, 4294967295, 'azmsh', :body, false, :t)
+                """
+            ),
+            values,
+        )
+
+
 def drift(node: tuple) -> float:
     """Return the offset to add to a position.
 
@@ -531,10 +655,13 @@ async def main() -> None:
                         last_altitude, last_position_precision_bits,
                         position_time, last_heard,
                         is_mqtt_gateway, last_mqtt_topic, last_channel,
-                        first_seen, updated_at)
+                        first_seen, updated_at, last_preset, last_preset_at,
+                        uplink_preset, uplink_preset_at)
                     VALUES (:num, :nid, :long, :short, :hw, :role, false,
                         :lat, :lon, :alt, :bits, :ptime, :heard, :gw, :topic,
-                        :node_channel, :first, :heard)
+                        :node_channel, :first, :heard, :node_channel, :heard,
+                        CASE WHEN :gw THEN :node_channel END,
+                        CASE WHEN :gw THEN CAST(:heard AS timestamptz) END)
                     """
                 ),
                 {
@@ -1115,6 +1242,10 @@ async def main() -> None:
                     },
                 )
 
+        # Every upload and packet above, tagged as ingest would (#313).
+        await tag_presets(conn, NOW - timedelta(days=30))
+        await write_preset_messages(conn)
+
     async with engine.connect() as conn:
         for table in (
             "node",
@@ -1187,6 +1318,7 @@ async def live() -> None:
     print(f"==> live traffic every {every}s from packet id {packet_id}. Ctrl-C to stop.")
     while True:
         async with engine.begin() as conn:
+            batch_start = datetime.now(UTC)
             for _ in range(rng.randint(1, 3)):
                 packet_id += 1
                 seen_at = datetime.now(UTC)
@@ -1320,6 +1452,7 @@ async def live() -> None:
                         "t": datetime.now(UTC),
                     },
                 )
+            await tag_presets(conn, batch_start)
         await asyncio.sleep(every)
 
 

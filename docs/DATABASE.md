@@ -31,7 +31,7 @@ Created in the first migration:
 
 | Role | Rights | Used by |
 |------|--------|---------|
-| `azmsh_ingest` | INSERT, UPDATE on all tables. No DELETE. SELECT on `node.node_num` only, as PostgreSQL requires it for node updates. | ingest process |
+| `azmsh_ingest` | INSERT, UPDATE on all tables. No DELETE. No table-level SELECT. SELECT on a few columns only, because PostgreSQL requires SELECT on each column an UPDATE names in its WHERE clause: `node.node_num` (0006); `node.uplink_preset`, `node.uplink_preset_at` and `node.last_preset_at` (i313); and the key of `packet`, `from_node_num`, `packet_id` and `first_seen_at` (i313). No other column of `packet` is readable. | ingest process |
 | `azmsh_api` | SELECT on all tables | api process |
 | `azmsh_jobs` | SELECT, INSERT on `daily_snapshot`. DELETE where retention fallback needs it | jobs process |
 
@@ -111,6 +111,10 @@ One row per node. Latest known state.
 | `is_mqtt_gateway` | boolean | default false |
 | `last_mqtt_topic` | text | nullable |
 | `last_channel` | text | nullable |
+| `last_preset` | text | nullable. The modem preset of the newest packet from this node whose preset is known (#313). Moves forward in time only. NULL until ingest tags one; a reader then falls back to `last_channel` |
+| `last_preset_at` | timestamptz | nullable. The receive time of that packet |
+| `uplink_preset` | text | nullable. For a gateway: the preset its newest preset-named topic named. Ingest reads it back at start |
+| `uplink_preset_at` | timestamptz | nullable. When that upload arrived |
 | `first_seen` | timestamptz | not null |
 | `updated_at` | timestamptz | not null |
 
@@ -154,6 +158,7 @@ One row per unique packet. Hypertable on `first_seen_at`.
 | `first_seen_at` | timestamptz | not null. partition key |
 | `raw_bytes` | bytea | the raw MeshPacket protobuf |
 | `payload_json` | jsonb | what the packet carried, for node info, routing, traceroute, map report and pax counter only (`decode/stored.py`). NULL for every other family and for rows stored before 2026-09-22. |
+| `modem_preset` | text | nullable. The modem preset that carried the packet: the majority of its observations' `modem_preset`. A NULL observation does not vote, and a tie keeps the stored value (#313). NULL on rows written before revision i313, and when no observation had a known preset |
 
 Constraints:
 
@@ -178,6 +183,38 @@ One row per observation of a packet. Hypertable on `seen_at`.
 | `hop_limit` | integer | nullable. Hops left when the gateway heard it |
 | `hop_start` | integer | nullable. The same header's hop start, so `hop_start = hop_limit` says direct without a join (#304). NULL on rows written before revision 0017, which are not backfilled: read them through `api/sightings.py`, which joins those to `packet` |
 | `seen_at` | timestamptz | not null. partition key |
+| `modem_preset` | text | nullable. The modem preset of this upload (#313): the topic's own preset when the topic is preset-named, else the gateway's current preset, else NULL. NULL when the gateway is ambiguous: it uploaded two different preset-named topics within `GATEWAY_PRESET_CONFLICT_MINUTES` |
+
+#### 3.4.1 How ingest decides a modem preset
+
+A topic channel such as `azmsh` is not a preset. It rides on top of the
+preset the gateway is set to, and this mesh runs it on two presets.
+Firmware names an unnamed primary channel after its preset, so a gateway
+that uploads on `.../e/LongFast/...` is on LongFast.
+
+`sonoran/ingest/presets.py` holds the rules in memory and touches no
+database. `sonoran/ingest/preset_writes.py` stores the result. The
+rules are in that module's docstring. In short:
+
+1. An upload on a preset-named topic is on that preset, and it sets the
+   gateway's current preset. The newest wins, so a reconfigured gateway
+   switches at once.
+2. Any other upload is on its gateway's current preset. A gateway that
+   uploaded two different presets within the conflict window has no
+   current preset, so its uploads get NULL and cast no vote.
+3. A packet takes the majority of its uploads. Ingest has no SELECT on
+   `packet`, so it counts the votes in memory for about ten minutes and
+   runs `UPDATE packet ... WHERE from_node_num, packet_id, first_seen_at`
+   only when the majority changes. A packet's first vote is in its
+   INSERT. After a restart a packet's tally starts again at its next
+   upload.
+4. The sender's `node.last_preset` follows the packet's preset, with
+   `WHERE last_preset_at IS NULL OR last_preset_at <= :t`.
+
+There is no backfill. Old rows keep NULL, and the API reads a NULL row
+by its channel, as before (`docs/API.md` 1.2). MapReports are not
+stored, so they cannot help yet: `/2/map/` topics are dropped when the
+topic is parsed.
 
 ### 3.5 `traceroute`
 
@@ -398,6 +435,11 @@ Keep indexes minimal. Each index slows inserts.
   Index on (`reporting_gateway_node_num`, `time` desc).
 - `neighbor_metrics`: also index on (`channel`, `time` desc).
 - `node`: index on `last_heard`. Index on `short_name`.
+- No index on `modem_preset` or `last_preset` (#313). The list pages read
+  newest first through the time index they already use and test the tag
+  on each row they reach, as they did with `channel`. An index on the tag
+  cannot serve the fallback `OR (modem_preset IS NULL AND channel = ...)`,
+  and every index on `packet_seen` costs every insert.
 
 ## 8. Continuous aggregates (later phase)
 

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
+from sonoran.api.preset_scope import preset_filter, require_preset
 from sonoran.api.window import Window, optional_window, retained_from, window_query
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
@@ -264,6 +265,7 @@ async def portnums(
     request: Request,
     hours: int | None = Query(default=None, ge=1, le=8760),
     channel: str | None = None,
+    preset: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
     """Return packet counts grouped by port number, with readable names.
@@ -279,14 +281,19 @@ async def portnums(
     a window it was not holding.
     """
     settings: Settings = request.app.state.settings
-    key = f"{hours or 0}:{channel or ''}"
+    wanted = require_preset(preset)
+    # The preset is part of the key. Without it the dashboard on
+    # LongFast would be answered with the MediumFast counts.
+    key = f"{hours or 0}:{channel or ''}:{wanted or ''}"
     return await _portnums_cache.get(
-        key, settings.stats_cache_seconds, lambda: _read_portnums(session, hours, channel)
+        key,
+        settings.stats_cache_seconds,
+        lambda: _read_portnums(session, hours, channel, wanted),
     )
 
 
 async def _read_portnums(
-    session: AsyncSession, hours: int | None, channel: str | None
+    session: AsyncSession, hours: int | None, channel: str | None, preset: str | None = None
 ) -> list[dict[str, object]]:
     """Group packets by port number, optionally by window and channel."""
     statement = select(
@@ -302,6 +309,8 @@ async def _read_portnums(
         )
     if channel:
         statement = statement.where(Packet.channel == channel)
+    if preset is not None:
+        statement = statement.where(preset_filter(Packet.modem_preset, Packet.channel, preset))
     rows = await session.execute(statement)
     return [
         {

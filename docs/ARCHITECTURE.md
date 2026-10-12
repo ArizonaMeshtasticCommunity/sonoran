@@ -181,6 +181,9 @@ Key settings:
   The dashboard uses browser-relative URLs and local assets only.
   It does not require CDN, tile, canvas, or gateway rewrite support.
 - `STORE_TEXT_MESSAGES` — boolean. Default false until the privacy decision is final.
+- `GATEWAY_PRESET_CONFLICT_MINUTES` — default 60. A gateway that uploads
+  on two different preset-named topics within this many minutes is
+  ambiguous, and its other uploads get no modem preset (#313).
 - `RETENTION_DAYS_*` — retention policy overrides. Run the migration service
   after a value changes.
 - `LOG_LEVEL`.
@@ -245,9 +248,23 @@ def decode_payload(portnum: int, data: bytes) -> DecodedPayload
   2. Parse the envelope.
   3. Decrypt the payload.
   4. Decode the payload.
-  5. Call `dedup.store_packet`.
-  6. Call the matching handler.
-  7. Handle errors per packet. Log, count, continue.
+  5. Ask `presets.PresetTracker.observe` for the modem preset of this
+     upload (#313).
+  6. Call `dedup.store_packet`. The preset goes on the `packet_seen` row,
+     and on the `packet` row when the packet is new.
+  7. Call `preset_writes.store_vote`. It counts the upload's vote and
+     updates `packet.modem_preset` and `node.last_preset` when the
+     majority changes.
+  8. Call the matching handler.
+  9. Handle errors per packet. Log, count, continue.
+- `presets.py` decides the modem preset of each upload and packet. It
+  holds each gateway's current preset and a short tally of each recent
+  packet's votes, in memory, and touches no database. One tracker lives
+  for the life of the process. At start, `preset_writes.load_gateway_presets`
+  seeds it from `node.uplink_preset`. See `docs/DATABASE.md` 3.4.1.
+- `preset_writes.py` stores what `presets.py` decides, with plain
+  `UPDATE ... WHERE key = ...` statements. It never reads a `packet`
+  row and never uses `ON CONFLICT DO UPDATE` (AGENTS.md 9.1, 9.2).
 - `dedup.py` implements the deduplication contract:
   - Insert into `packet_key` with `ON CONFLICT DO NOTHING`.
     The affected row count says whether the packet is new.
@@ -736,7 +753,9 @@ MQTT broker
   -> decode.envelope (ParsedEnvelope with MeshPacket)
   -> crypto.decrypt (plaintext Data bytes)
   -> decode.payloads (typed payload object)
+  -> ingest.presets (the modem preset of this upload, from memory)
   -> ingest.dedup (packet row, packet_seen row, is_new flag)
+  -> ingest.preset_writes (packet.modem_preset, node.last_preset on a new majority)
   -> ingest.handlers.<family> (node update, metric rows)
 ```
 

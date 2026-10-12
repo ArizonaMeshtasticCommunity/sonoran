@@ -3,7 +3,9 @@
  *
  * A node on LongFast cannot hear a node on MediumFast (`AGENTS.md` 9.7),
  * so every page that draws links, coverage, gaps or a chat channel has
- * to pick ONE preset. Each page used to ask separately: the map had a
+ * to pick ONE preset. Which messages and packets belong to a preset is
+ * the server's answer, from the preset ingest tagged each packet with
+ * (#313); this module only holds the reader's choice. Each page used to ask separately: the map had a
  * picker for its link layer, coverage had one, gaps had one, the graph
  * had a tab strip. A reader who had chosen MediumFast on the gaps page
  * then found the map on LongFast, and nothing on the site agreed with
@@ -181,42 +183,5 @@ window.SonoranPreset = (function build() {
     return String(name ?? '') === current();
   }
 
-  /**
-   * The channels that belong to the preset in force.
-   *
-   * The rule Will asked for, and the reason it is not symmetrical:
-   *
-   * - on **MediumFast**, show MediumFast and the topic channels beside
-   *   it. Weather, Traffic, azmsh and the rest name no preset of their
-   *   own -- they ride on top of whatever the radio is set to
-   *   (`AGENTS.md` 9.7) -- and on this mesh they ride on MediumFast,
-   *   which is what the infrastructure runs. So they belong there.
-   * - on **LongFast**, show LongFast alone. A reader who has switched to
-   *   LongFast is looking at a different radio setting, and offering the
-   *   MediumFast topic channels would be offering traffic their radio
-   *   cannot hear.
-   *
-   * A channel is a preset when the SERVER says so: `api/channels.py`
-   * sets `group: "Presets"` and a non-empty `preset`, and leaves
-   * `preset` empty for the topic channels. Matching on the name would
-   * have put a second list of preset names in the browser.
-   *
-   * "Rides on the default preset" is the test for the topic channels
-   * rather than "is MediumFast", so a deployment whose `defaultPreset`
-   * is something else gets the same behaviour without editing this.
-   */
-  function channelsFor(sections) {
-    const list = [...(sections || [])];
-    const now = current();
-    const ridesOnThisPreset = now === fallbackPreset();
-    return list.filter((section) => {
-      if (!section) return false;
-      const named = String(section.preset || '');
-      const isPreset = section.group === 'Presets' || Boolean(named);
-      if (isPreset) return (named || String(section.channel || '')) === now;
-      return ridesOnThisPreset;
-    });
-  }
-
-  return { current, options, setAvailable, set, onChange, matches, channelsFor, FALLBACK };
+  return { current, options, setAvailable, set, onChange, matches, FALLBACK };
 }());

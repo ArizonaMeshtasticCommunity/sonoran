@@ -885,7 +885,9 @@ async function main() {
     const first = await state();
     must(first.hidden && first.name === 'Filters',
       `a first visit shows a badge: "${first.text}", named "${first.name}"`);
-    must(asked.length && /[?&]active_hours=24\b/.test(asked[0]) && /[?&]channel=/.test(asked[0]),
+    // The menu's preset travels as `preset=` since #313, never `channel=`.
+    must(asked.length && /[?&]active_hours=24\b/.test(asked[0]) && /[?&]preset=/.test(asked[0])
+      && !/[?&]channel=/.test(asked[0]),
       `the first request lost its window or preset: ${asked[0]}`);
 
     // One panel choice, applied, is one.
@@ -2858,6 +2860,76 @@ async function main() {
     return 'starts expanded, and collapses for the visit';
   });
   await nostore.close();
+
+  /*
+   * azmsh runs on both presets (#313). Ingest tags each packet with the
+   * preset that carried it, and the seed writes one azmsh message on each
+   * (`tools/dev/README.md`). The old filter was the topic channel, so it
+   * showed neither message on either preset, and the chat page put azmsh
+   * on the default preset only.
+   *
+   * A context of its own, because the chosen preset is kept in
+   * localStorage and must not leak into the journeys that share `context`.
+   */
+  const LONG_BODY = 'Long Fast check-in on azmsh.';
+  const MEDIUM_BODY = 'Medium Fast check-in on azmsh.';
+  const azmshText = (page) => page.evaluate(() => {
+    const link = [...document.querySelectorAll('[data-page="chat"] a.title[href^="#chat/"]')]
+      .find((anchor) => anchor.getAttribute('href') === '#chat/azmsh');
+    const panel = link ? link.closest('.panel') : null;
+    return panel ? panel.textContent : null;
+  });
+  const longFast = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await longFast.addInitScript(() => {
+    if (!window.sessionStorage.getItem('e2e-313')) {
+      window.sessionStorage.setItem('e2e-313', '1');
+      window.localStorage.setItem('sonoran.preset', 'LongFast');
+    }
+  });
+  await journey(longFast, 'azmsh on Long Fast shows the azmsh traffic Long Fast carried (#313)', async (page) => {
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/(packets|chat)(\/overview)?\?/.test(request.url())) asked.push(new URL(request.url()));
+    });
+    await open(page, 'chat', 500);
+    must(await waitFor(page, () => Boolean(document.querySelector(
+      '[data-page="chat"] [data-chat-body] .panel, [data-page="chat"] [data-chat-body] .empty')), 15000),
+    'the chat overview never drew');
+    const panel = await azmshText(page);
+    must(panel !== null, 'there is no azmsh section on Long Fast');
+    must(panel.includes(LONG_BODY), 'the azmsh message carried on Long Fast is missing');
+    must(!panel.includes(MEDIUM_BODY), 'an azmsh message carried on Medium Fast shows on Long Fast');
+
+    await open(page, 'firehose', 3000);
+    const firehose = asked.filter((url) => url.pathname.endsWith('/api/packets'));
+    must(firehose.length, 'the firehose asked for nothing');
+    const last = firehose[firehose.length - 1].searchParams;
+    must(last.get('preset') === 'LongFast' && !last.has('channel'),
+      `the firehose did not ask for Long Fast by preset: ${last}`);
+    const overview = asked.find((url) => url.pathname.endsWith('/api/chat/overview'));
+    must(overview && overview.searchParams.get('preset') === 'LongFast',
+      `the chat overview did not name the preset: ${overview}`);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('[data-firehose-table] tbody tr')]
+      .map((row) => row.textContent));
+    must(rows.some((text) => text.includes(LONG_BODY)),
+      'the firehose on Long Fast does not list the Long Fast azmsh packet');
+    must(!rows.some((text) => text.includes(MEDIUM_BODY)),
+      'the firehose on Long Fast lists the Medium Fast azmsh packet');
+    return `azmsh on Long Fast holds its own message only; firehose asked ${last}`;
+  });
+  await longFast.close();
+
+  await journey(context, 'azmsh on Medium Fast leaves out what Long Fast carried (#313)', async (page) => {
+    await open(page, 'chat', 500);
+    must(await waitFor(page, () => Boolean(document.querySelector(
+      '[data-page="chat"] [data-chat-body] .panel, [data-page="chat"] [data-chat-body] .empty')), 15000),
+    'the chat overview never drew');
+    const panel = await azmshText(page);
+    must(panel !== null, 'there is no azmsh section on Medium Fast');
+    must(panel.includes(MEDIUM_BODY), 'the azmsh message carried on Medium Fast is missing');
+    must(!panel.includes(LONG_BODY), 'an azmsh message carried on Long Fast shows on Medium Fast');
+    return 'azmsh on Medium Fast holds its own message only';
+  });
 
   /*
    * An iPad on its side (#267). 1112 px is wider than every phone

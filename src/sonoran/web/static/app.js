@@ -1731,8 +1731,8 @@ PAGES.dashboard = async (page) => {
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
-    // messages from channels a LongFast radio never hears.
-    `api/chat?limit=${DASHBOARD_MESSAGES}${chatFeedChannel()}`,
+    // messages that no LongFast node hears. `preset=` since #313.
+    `api/chat?limit=${DASHBOARD_MESSAGES}${presetQuery()}`,
     /*
      * The same 24 hours and the same preset the chart's own heading and
      * the firehose it links into use (§7.1).
@@ -1745,7 +1745,7 @@ PAGES.dashboard = async (page) => {
      * counting 500 all-time packets would have opened a table with none
      * in it, and an empty filtered table reads as a quiet mesh.
      */
-    `api/stats/portnums?hours=${PORTNUM_CHART_HOURS}${presetChannel() ? `&channel=${encodeURIComponent(presetChannel())}` : ''}`,
+    `api/stats/portnums?hours=${PORTNUM_CHART_HOURS}${presetQuery()}`,
   ]);
 
   replace($('[data-recent-nodes]', page), nodes
@@ -1757,12 +1757,12 @@ PAGES.dashboard = async (page) => {
     : failure(new Error('Cannot load nodes.')));
 
   /*
-   * No channel on each row (#296). The request is filtered to the preset's
-   * channel, so the label said the same word five times; it is said once,
+   * No preset on each row (#296). The request is filtered to one modem
+   * preset, so the label said the same word five times; it is said once,
    * in the heading.
    */
   const feedChannel = $('[data-recent-chat-channel]', page);
-  if (feedChannel) feedChannel.textContent = presetChannel() ? SonoranLabels.presetLabel(presetChannel()) : '';
+  if (feedChannel) feedChannel.textContent = menuPreset() ? SonoranLabels.presetLabel(menuPreset()) : '';
   replace($('[data-recent-chat]', page), messages
     ? (messages.length
         ? messages.map((message) => messageItem(message))
@@ -1770,7 +1770,7 @@ PAGES.dashboard = async (page) => {
     : [failure(new Error('Cannot load messages.'))]);
 
   const portnumChart = $('[data-portnum-chart]', page);
-  const preset = presetChannel();
+  const preset = menuPreset();
   if (!portnums) {
     chartEmpty(portnumChart, 'Cannot load the packet types.');
   } else if (!portnums.length) {
@@ -2653,25 +2653,31 @@ const CHANNELS_TTL_MS = 600000;
 const channelCache = { at: 0, value: null };
 
 /*
- * The preset every page filters by, or '' when there is nothing to add.
+ * The modem preset every list page filters by, or '' when there is none.
  *
- * One helper for the three pages that gained this -- the firehose, the
- * dashboard's message feed and the node list -- so they cannot drift into
- * asking for different things. Returns a plain string because all three
+ * One helper for the list pages -- the firehose, the dashboard's feed and
+ * chart, the chat page and the node list -- so they cannot drift into
+ * asking for different things. Returns a plain string because they all
  * build a query rather than an object.
+ *
+ * It travels as `preset=`, never as `channel=` (#313). A topic channel
+ * such as azmsh runs on more than one preset, so the old `channel=LongFast`
+ * hid every azmsh message carried on LongFast. `preset=` reads the preset
+ * ingest tagged each packet with, so azmsh on LongFast is in, and azmsh
+ * on MediumFast is out. `channel=` is still free to narrow further.
  *
  * Silent by design (Will, 2026-09-26): the menu says which preset is
  * selected, and a line on each page repeating it is the wordiness he had
  * just asked to be taken out of the nav.
  */
-function presetChannel() {
+function menuPreset() {
   return window.SonoranPreset ? SonoranPreset.current() : '';
 }
 
 /** The same, ready to append to a query that already has one parameter. */
-function chatFeedChannel() {
-  const channel = presetChannel();
-  return channel ? `&channel=${encodeURIComponent(channel)}` : '';
+function presetQuery() {
+  const preset = menuPreset();
+  return preset ? `&preset=${encodeURIComponent(preset)}` : '';
 }
 
 async function mapChannels() {
@@ -4917,21 +4923,21 @@ function nodeQuery(page, { offset = 0, cursor = null } = {}) {
   if (role) params.set('role', role);
   if (gateway) params.set('gateway', 'true');
   /*
-   * The menu's preset, set BEFORE the panel loop below so a channel
-   * chosen in the filter panel still overrides it -- the existing rule
-   * that the panel wins, because the panel is the one that shows what it
-   * chose.
+   * The menu's modem preset, as its own parameter (#313). It used to be
+   * sent as `channel`, so the panel's channel replaced it; now the two
+   * are different questions and both apply. The panel can narrow the
+   * preset's nodes to one topic channel, and cannot widen past the
+   * preset.
    *
-   * This is the riskiest of the three pages to filter, and worth naming:
-   * it HIDES nodes, and this is where somebody goes to find a specific
-   * one. A node quiet on the selected preset will not be in the list.
-   * The search box and the filter panel are both still there to get past
-   * it, and `nodeFacetQuery` derives from this function, so the counts
-   * beside each filter agree with the rows rather than describing a
-   * larger set.
+   * This is the riskiest page to filter, and worth naming: it HIDES
+   * nodes, and this is where somebody goes to find a specific one. The
+   * server reads `node.last_preset`, the preset of the node's newest
+   * tagged packet, so a node whose last packet was on azmsh stays on its
+   * mesh rather than vanishing. `nodeFacetQuery` derives from this
+   * function, so the counts beside each filter agree with the rows.
    */
-  const channel = presetChannel();
-  if (channel) params.set('channel', channel);
+  const preset = menuPreset();
+  if (preset) params.set('preset', preset);
   // The panel wins where both can say the same thing, because it is the
   // one that shows what it chose.
   for (const [key, chosen] of nodeFilters) params.set(key, chosen);
@@ -7996,6 +8002,9 @@ async function chatFetch(channel, { since, before, limit = CHAT_PAGE }) {
   const params = new URLSearchParams({
     channel, limit: String(limit), metrics: 'true',
   });
+  // The channel on the menu's preset only: azmsh runs on two (#313).
+  const preset = menuPreset();
+  if (preset) params.set('preset', preset);
   /*
    * A cursor may be the row's own `seen_at` string, sent as the API wrote
    * it. The column holds microseconds and a Date holds milliseconds, so a
@@ -8018,10 +8027,13 @@ async function chatFetch(channel, { since, before, limit = CHAT_PAGE }) {
  * every page the reader had scrolled in (#297). The default range is the
  * token `default` instead, which stays put.
  */
-function chatKey(channel, addressRange) {
-  if (!addressRange) return `${channel || ''}|default`;
+function chatKey(channel, addressRange, preset) {
+  // The preset is part of the conversation: azmsh on LongFast and azmsh on
+  // MediumFast are two different sets of rows (#313).
+  const scope = `${preset || ''}/${channel || ''}`;
+  if (!addressRange) return `${scope}|default`;
   return [
-    channel || '',
+    scope,
     addressRange.from ? addressRange.from.toISOString() : '',
     addressRange.to ? addressRange.to.toISOString() : '',
   ].join('|');
@@ -8390,7 +8402,7 @@ async function chatAppendNew() {
 }
 
 async function chatChannelPage(page, channel) {
-  const key = chatKey(channel, chatRangeFromAddress());
+  const key = chatKey(channel, chatRangeFromAddress(), menuPreset());
   const body = $('[data-chat-body]', page);
   chatDrawRange(page);
   if (chatTableWatch) chatTableWatch.disconnect();
@@ -8503,19 +8515,23 @@ PAGES.chat = async (page) => {
     `Messages from the last ${CHAT_OVERVIEW_WINDOW}. One section for each detected channel `
     + 'on the preset chosen in the menu, grouped by what it is for. New names land in Custom.');
   const body = $('[data-chat-body]', page);
-  const data = await get(`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}`).catch((error) => error);
+  /*
+   * The server keeps the messages carried on the menu's preset (#313).
+   * This used to fetch every channel and keep, in the browser, the topic
+   * channels on the deployment's default preset only, so azmsh was never
+   * shown on LongFast although the mesh uses it there.
+   */
+  const data = await get(`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}${presetQuery()}`)
+    .catch((error) => error);
   // A channel was opened while this loaded. Drawing the overview now
   // would put it over the channel page that is already there.
   if (currentChatChannel) return undefined;
   if (data instanceof Error) return replace(body, failure(data));
-  if (!data.sections.length) {
-    return replace(body, empty('No channels have stored messages. Text storage may be off.'));
-  }
-
-  const shown = SonoranPreset.channelsFor(data.sections);
+  const shown = data.sections;
   if (!shown.length) {
-    return replace(body, empty(
-      `No channels on ${SonoranLabels.presetLabel(SonoranPreset.current())} have stored messages.`));
+    return replace(body, empty(menuPreset()
+      ? `No channels on ${SonoranLabels.presetLabel(menuPreset())} have stored messages.`
+      : 'No channels have stored messages. Text storage may be off.'));
   }
 
   const groups = new Map();
@@ -8530,9 +8546,9 @@ PAGES.chat = async (page) => {
 };
 
 /*
- * The rule for which channels belong to the preset in force lives in
- * `preset.js`, as `SonoranPreset.channelsFor`. It is pure, so it is
- * tested directly rather than through this page.
+ * Which channels belong to the preset in force is the server's answer,
+ * from the preset ingest gave each packet (#313). It used to be a rule in
+ * `preset.js` that put every topic channel on the default preset.
  */
 
 
@@ -9056,12 +9072,13 @@ PAGES.firehose = async (page) => {
     params.set('since', since.toISOString());
   }
   /*
-   * One preset, like every other page. The firehose showed all of them,
-   * so a reader on LongFast watched MediumFast traffic scroll past that
-   * their radio cannot hear (AGENTS.md 9.7).
+   * One modem preset, like every other page. The firehose showed all of
+   * them, so a reader on LongFast watched MediumFast traffic scroll past
+   * that no LongFast node can hear (AGENTS.md 9.7). Sent as `preset`, so
+   * azmsh traffic carried on LongFast is in (#313).
    */
-  const channel = presetChannel();
-  if (channel) params.set('channel', channel);
+  const preset = menuPreset();
+  if (preset) params.set('preset', preset);
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
   if (rows instanceof Error) {
@@ -9088,8 +9105,8 @@ PAGES.firehose = async (page) => {
    * match the filter." left a reader with no way to tell a quiet mesh
    * from a type that never runs on the preset they are looking at.
    */
-  const nothing = portnum || channel || firehoseFilter.hours
-    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${channel ? ` on ${channel}` : ''}`
+  const nothing = portnum || preset || firehoseFilter.hours
+    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${preset ? ` on ${preset}` : ''}`
       + `${firehoseFilter.hours ? ` in the ${windowWord.toLowerCase()}` : ' at any time'}. `
       + 'The mesh may be quiet, or this may not be traffic that runs here.'
     : 'No packets match the filter.';
@@ -10752,9 +10769,9 @@ if (!POPOVER) {
  *   code.
  * - **Grepping each page function** for the store said `stats` ignores it.
  *   The leaderboards read it from a separate function.
- * - **Looking for which modules mention the store** says `chat` ignores it.
- *   Chat filters its channel sections client-side through `channelsFor`,
- *   so the request never names a preset.
+ * - **Looking for which modules mention the store** said `chat` ignores it.
+ *   Chat then filtered its channel sections client-side, so the request
+ *   never named a preset. It names one now (#313), as `preset=`.
  *
  * A note that says "not used here" is a CLAIM about what the reader is
  * looking at. Getting it wrong on coverage would tell somebody the switch
