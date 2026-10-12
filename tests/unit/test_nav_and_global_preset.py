@@ -264,7 +264,7 @@ def test_the_controls_can_be_reached_by_keyboard() -> None:
 
 
 def test_the_preset_switch_is_a_radio_group() -> None:
-    """Two one-word options. A select would cost a tap to open first."""
+    """Two buttons. A select would cost a tap to open first."""
     html = _html()
     holder = html[html.index("data-preset-switch") - 200 : html.index("data-preset-switch") + 80]
     assert 'role="radiogroup"' in holder, holder
@@ -740,3 +740,72 @@ def test_a_collapsed_label_leaves_the_screen_but_not_the_tree() -> None:
     start = css.index('html[data-sidebar="collapsed"] .sidebar .nav-label')
     rule = css[start : css.index("}", start)]
     assert "clip-path: inset(50%)" in rule and "display: none" not in rule
+
+
+# --- more than two presets (#363 made every preset recognisable) ----
+
+
+def test_the_switch_keeps_two_buttons_and_lists_the_rest_in_a_select() -> None:
+    """A third preset squeezed into the switch overflowed its slot.
+
+    Seen live 2026-10-12: with LongTurbo on offer, "Medium Fast" ran past
+    its third of the track and "Long Turbo" was cut off at the edge.
+    """
+    html = _html()
+    menu = html[html.index("data-preset-switch") : html.index("data-preset-scope")]
+    assert "data-preset-more" in menu, "no select for the presets after the first two"
+    code = _code("app.js")
+    body = code[code.index("function wirePresetSwitch") :]
+    body = body[: body.index("\nfunction ")]
+    assert "presetSwitchSlots(offered)" in body, "the buttons are not limited to the slots"
+    assert "data-extra" in body, "the thumb is not hidden when the select holds the preset"
+    css = (STATIC / "app.css").read_text(encoding="utf-8")
+    assert ".preset-switch[data-extra]::before" in css
+    assert ".preset-more:focus-visible" in css, "the select has no focus style"
+
+
+def test_the_buttons_are_chosen_by_a_fixed_rule_not_by_traffic() -> None:
+    """The channel list sorts by traffic, so its first two can change.
+
+    The buttons are the deployment's default, then MediumFast and
+    LongFast, so a busy LongTurbo day does not move LongFast into the
+    select on one page and leave it on the switch on another.
+    """
+    code = _code("app.js")
+    body = code[code.index("function presetSwitchSlots") :]
+    body = body[: body.index("\nfunction ")]
+    assert "defaultPreset" in body
+    assert "SonoranPreset.FALLBACK" in body
+    assert "PRESET_SWITCH_SLOTS" in body
+
+
+# --- "All presets" (Logan, 2026-10-12) ------------------------------
+
+
+def test_all_presets_is_a_choice_and_means_no_filter() -> None:
+    """Every preset in one view, while the mesh does not run on one yet."""
+    store = _code("preset.js")
+    for name in ("const ALL", "function isAll", "function single"):
+        assert name in store, f"preset.js has no {name}"
+    code = _code("app.js")
+    body = code[code.index("function menuPreset") :]
+    body = body[: body.index("\nfunction ")]
+    assert "SonoranPreset.isAll()" in body and "return ''" in body, (
+        "under All the pages would still send one preset"
+    )
+    switch = code[code.index("function wirePresetSwitch") :]
+    switch = switch[: switch.index("\nfunction ")]
+    assert "SonoranPreset.ALL" in switch and "text: 'All'" in switch, "All is not offered"
+
+
+def test_one_preset_pages_draw_the_default_under_all_and_say_so() -> None:
+    """Coverage, gaps and the planner are each for one radio setting."""
+    code = _code("app.js")
+    assert "ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps'])" in code
+    scope = code[code.index("function drawPresetScope") :]
+    scope = scope[: scope.index("\nfunction ")]
+    assert "SonoranPreset.single()" in scope, "the note does not name the preset drawn"
+    labels = _code("labels.js")
+    assert "store.single" in labels, "preferredPreset would hand '*' to coverage"
+    assert "SonoranPreset.single()" in _code("gaps.js")
+    assert "SonoranPreset.single" in _code("planner.js")

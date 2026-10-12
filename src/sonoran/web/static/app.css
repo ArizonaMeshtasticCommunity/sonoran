@@ -4031,6 +4031,31 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   transform: translateX(calc(var(--preset-index, 0) * 100%));
   transition: transform .18s ease;
 }
+/* The chosen preset is in the "More presets" select, so no button is
+   chosen and the thumb has nothing to sit behind. */
+.preset-switch[data-extra]::before { opacity: 0; }
+/*
+ * Every preset after the switch's two. A select, because the list is
+ * open-ended: firmware 2.8.1 has 17 presets (#363). Filled with the
+ * accent while it holds the chosen preset, as the thumb is for a button.
+ */
+.preset-more {
+  width: 100%;
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 550;
+  padding: .4rem .5rem;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+  cursor: pointer;
+}
+.preset-more:hover { color: var(--text); }
+.preset-more.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.preset-more option { background: var(--panel); color: var(--text); }
+.preset-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preset-more[hidden] { display: none; }
 /* Somebody who has asked for less movement gets the state, not the
    journey. WCAG 2.3.3. */
 @media (prefers-reduced-motion: reduce) {
@@ -4341,6 +4366,9 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
     transform: translateY(calc(var(--preset-index, 0) * 100%));
   }
   html[data-sidebar="collapsed"] .preset-choice { padding-inline: 0; }
+  /* Too narrow for a name. The select keeps its place, and its fill
+     still says when the chosen preset is in it. */
+  html[data-sidebar="collapsed"] .preset-more { padding-inline: .15rem; font-size: max(.65rem, var(--text-floor)); text-overflow: clip; }
   html[data-sidebar="collapsed"] .preset-short { display: inline; }
 
   /*
@@ -4708,6 +4736,19 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   .menu-field .preset-switch { flex: 1 1 12rem; padding: .1rem; }
   .menu-field .preset-switch::before { top: .1rem; bottom: .1rem; left: .1rem; width: calc((100% - .2rem) / var(--preset-count, 2)); }
   .menu-field .preset-scope { flex: 1 1 100%; }
+  /*
+   * The "More presets" select shares the switch's row. It is always
+   * shown ("All presets" is always a choice), and on its own row it put
+   * Settings at 829 px, under the bar at 788 (#279 again). The word
+   * "Preset" gives up its place to it and stays for screen readers:
+   * the radio group is still labelled by it.
+   */
+  .menu-field #preset-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .menu-field .preset-switch { flex: 0 0 auto; }
+  .menu-field .preset-more { flex: 1 1 7rem; width: auto; min-width: 0; padding-inline: .3rem; }
   /* The top bar, the page's own padding (1rem above, 1rem below) and
      this bar all come out of one screen. */
   .page.active[data-page="chat"].chat-full {
@@ -4719,3 +4760,14 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    so the bar steps out of the way, as the top bar does. */
 body.watch-mode .tab-bar { display: none; }
 body.watch-mode { --tabbar-h: 0px; }
+
+/*
+ * The "More presets" select on a touch screen. Its own font size beats
+ * the element rule that keeps every select at 16 px there, and iOS
+ * zooms the page into a smaller control when it takes focus. Last in
+ * the file, so it also wins over the collapsed rail's size.
+ */
+@media (hover: none) {
+  .preset-more,
+  html[data-sidebar="collapsed"] .preset-more { font-size: max(16px, 1em); }
+}

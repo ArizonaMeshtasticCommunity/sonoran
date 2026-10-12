@@ -2393,7 +2393,7 @@ function wirePlanner() {
   const defaults = { ...SonoranPlannerParams.FORM_DEFAULTS };
   if (window.SonoranPreset) {
     const flat = (text) => String(text ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
-    const wanted = flat(SonoranPreset.current());
+    const wanted = flat(SonoranPreset.single ? SonoranPreset.single() : SonoranPreset.current());
     const match = SonoranPlannerParams.PRESETS.find((item) => flat(item.key) === wanted);
     if (match) {
       defaults.preset = match.key;

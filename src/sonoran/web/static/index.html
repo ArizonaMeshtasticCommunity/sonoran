@@ -347,11 +347,19 @@
             could be on one preset while gaps was on another. This is
             that choice, once, for all of them.
 
-            A radio group and not a `<select>`: there are two options,
-            both are one word, and a two-option select costs a tap to
-            open before the tap that chooses. The buttons are built by
-            app.js from the presets actually on offer, so a deployment
-            running something else is not stuck with ours.
+            A radio group for two presets, the deployment's default and
+            then MediumFast and LongFast (`presetSwitchSlots` in app.js):
+            a two-option select costs a tap to open before the tap that
+            chooses. Every other preset goes in the
+            "More presets" select under it, with "All presets" first:
+            every preset in one view, because the mesh does not run on
+            one preset yet. Pages that draw one preset (coverage, gaps,
+            the planner) keep the default then and say so below. Firmware 2.8.1 made every
+            preset recognisable (#363), and a third one squeezed into the
+            switch overflowed its slot and cut the last name off. The
+            buttons and the select are built by app.js from the presets
+            actually on offer, so a deployment running something else is
+            not stuck with ours.
 
             There was a line of explanation under it -- "Every page shows
             Medium Fast only. Radios on one preset cannot hear the other."
@@ -365,6 +373,7 @@
             <span class="menu-field-label" id="preset-label">Preset</span>
             <div class="preset-switch" role="radiogroup" aria-labelledby="preset-label"
                  data-preset-switch></div>
+            <select class="preset-more" data-preset-more aria-label="More presets" hidden></select>
             <!--
               Says so when the page in view ignores the preset (#232). A note
               rather than a dimmed control: a disabled-looking switch says

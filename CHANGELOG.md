@@ -5,6 +5,25 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.12.4 — 2026-10-12
+
+1 pull request merged, 1 issue closed.
+
+#### Fixes
+
+- Activity from hourly family totals, graph from lean rows (#368) (#369) by @logans-stuff — done: #368
+
+#### Issues
+
+- Done: #368 Activity chart and graph load slowly: count families from hourly totals, read lean rows (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.3...v2026.10.12.4
+
 ## v2026.10.12.3 — 2026-10-12
 
 1 pull request merged, 1 issue closed.

@@ -1606,7 +1606,9 @@ async function loadLeaderboards(page, { query = '', span = '' } = {}) {
    * question, and the one easiest to miss because the control was built
    * in JavaScript rather than sitting in the markup.
    */
-  const wanted = window.SonoranPreset ? SonoranPreset.current() : leaderboardPreset;
+  // One preset even under "All": a link board ranks links, and links on
+  // two presets cannot exist. The note under the boards names it.
+  const wanted = window.SonoranPreset ? SonoranPreset.single() : leaderboardPreset;
   const params = [wanted ? `channel=${encodeURIComponent(wanted)}` : '', query].filter(Boolean).join('&');
   const data = await get(`api/stats/leaderboards${params ? `?${params}` : ''}`).catch(() => null);
   if (!data) return replace(target, failure(new Error('Cannot load the leaderboards.')));
@@ -2671,7 +2673,10 @@ const channelCache = { at: 0, value: null };
  * just asked to be taken out of the nav.
  */
 function menuPreset() {
-  return window.SonoranPreset ? SonoranPreset.current() : '';
+  // "All presets" is no filter: every request built from this leaves
+  // `preset` off, and the server answers for every preset.
+  if (!window.SonoranPreset || SonoranPreset.isAll()) return '';
+  return SonoranPreset.current();
 }
 
 /** The same, ready to append to a query that already has one parameter. */
@@ -2762,6 +2767,11 @@ async function linkChannelOptions(page) {
    */
   const chosen = channels.find((item) => item.channel === linkChannel);
   mapPresetLabel = (chosen && chosen.label) || linkChannel;
+  // "All presets": every layer unfiltered, unless a link named a preset.
+  // The watch bar then reads "Every preset".
+  const everyPreset = window.SonoranPreset && SonoranPreset.isAll()
+    && !(mapFocus && mapFocus.preset && linkChannel === mapFocus.preset);
+  if (everyPreset) mapPresetLabel = '';
 
   /*
    * Tell the global control which presets this mesh actually carries.
@@ -2784,7 +2794,7 @@ async function linkChannelOptions(page) {
       .map((item) => String(item.preset));
     if (presets.length) SonoranPreset.setAvailable(presets);
   }
-  return linkChannel;
+  return everyPreset ? '' : linkChannel;
 }
 
 /* The label of the preset the map is drawn for, for the watch status
@@ -3476,9 +3486,13 @@ PAGES.map = async (page) => {
    * failure that removing the map's preset picker caused, which is why
    * this is a deliberate simplification and not a left-behind flag.
    */
+  // Without a channel ("All presets") the nodes HEARD in the same
+  // window, not every node that ever had a position.
   const nodes = await mapNodes(
     'api/map/nodes'
-    + (channel ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}` : ''),
+    + (channel
+      ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}`
+      : `?active_hours=${LINK_HOURS}`),
   );
   if (!nodes) return;
   const [traffic, edges, traces] = await getAll([
@@ -3486,8 +3500,12 @@ PAGES.map = async (page) => {
       ? `api/map/traffic?minutes=${minutes}&limit=${TRAFFIC_LIMIT}` +
         (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
-    showLinks && channel
-      ? `api/map/edges?hours=${LINK_HOURS}&limit=1500&channel=${encodeURIComponent(channel)}`
+    // "All presets" reads more rows: the newest 1500 of every preset
+    // were nearly all MediumFast and left out 7 of 33 LongFast links.
+    // 5000 is the API's ceiling; live held 4519 rows in the window.
+    showLinks
+      ? `api/map/edges?hours=${LINK_HOURS}&limit=${channel ? 1500 : 5000}`
+        + (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
     showTraces
       ? 'api/map/traceroute-paths?minutes=30&limit=60' +
@@ -3511,7 +3529,7 @@ PAGES.map = async (page) => {
    */
   mapNodeScope = channel
     ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
-    : `${count(nodes.length)} nodes, every preset`;
+    : `${count(nodes.length)} nodes heard on every preset in ${LINK_HOURS} h`;
 
   // Held so the legend filter can redraw without another request.
   mapState.lastNodes = nodes;
@@ -4232,6 +4250,9 @@ function graphTabs(page, all) {
   if (!channels.length) return;
   const wanted = SonoranLabels.preferredPreset(channels, (item) => item.channel);
   if (wanted) graphChannel = wanted.channel;
+  // "All presets": one graph of every channel. The API holds them all
+  // together without `channel`, and the heading says so.
+  if (window.SonoranPreset && SonoranPreset.isAll()) graphChannel = '';
   // Only the presets, and only those with links, so the menu never offers
   // a choice that opens an empty graph here.
   if (window.SonoranPreset) {
@@ -4310,7 +4331,8 @@ PAGES.graph = async (page) => {
   }
 
   const data = await get(
-    `api/graph?hours=${hours}&channel=${encodeURIComponent(graphChannel)}`,
+    `api/graph?hours=${hours}`
+    + (graphChannel ? `&channel=${encodeURIComponent(graphChannel)}` : ''),
   ).catch((error) => error);
   if (data instanceof Error) {
     $('[data-graph-counts]', page).textContent = 'Cannot load the graph.';
@@ -4424,7 +4446,7 @@ PAGES.graph = async (page) => {
     }
   }
   const heading = $('[data-graph-counts]', page);
-  const label = selected ? selected.label : graphChannel;
+  const label = selected ? selected.label : (graphChannel || 'Every preset');
   const focusName = graphFocus
     ? (data.nodes.find((node) => node.node_id === graphFocus) || {}).display_name
     : null;
@@ -10889,6 +10911,13 @@ const PRESET_FREE_PAGES = new Set([
   'node', 'packet', 'link', 'traceroute',
 ]);
 
+/*
+ * Preset pages that cannot show "All presets". A coverage map, a gaps
+ * assessment and a planner prediction are each for one radio setting,
+ * so under "All" they draw the deployment's default (`single()`).
+ */
+const ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps']);
+
 /** True when the menu's preset changes what this page shows. */
 function presetAppliesTo(name) {
   return PRESET_PAGES.has(name);
@@ -10909,8 +10938,14 @@ function drawPresetScope(name) {
   const note = $('[data-preset-scope]');
   if (!note) return;
   const applies = presetAppliesTo(name);
-  note.hidden = applies;
-  note.textContent = applies ? '' : 'Not used on this page.';
+  // Under "All presets" a page that draws one preset says which one it
+  // drew, so the reader does not take one mesh for the whole state.
+  const one = applies && ONE_PRESET_PAGES.has(name)
+    && window.SonoranPreset && SonoranPreset.isAll();
+  note.hidden = applies && !one;
+  note.textContent = one
+    ? `Shows ${SonoranLabels.presetLabel(SonoranPreset.single())} only. This page draws one preset.`
+    : applies ? '' : 'Not used on this page.';
 }
 
 /*
@@ -11242,13 +11277,41 @@ function presetInitials(name) {
   return (words[0] || '').slice(0, 2);
 }
 
+/* How many presets the switch shows as buttons. The rest go in the
+   "More presets" select, because a switch slot is too narrow for a
+   third name. */
+const PRESET_SWITCH_SLOTS = 2;
+
+/*
+ * The presets on the switch's buttons: the deployment's default, then
+ * the two this mesh runs, then whatever else is offered, in that order.
+ *
+ * Fixed, not the first two of the list on offer. That list comes from
+ * several endpoints, and the channel list sorts by traffic: on a busy
+ * LongTurbo day LongFast would drop into the select, and the switch
+ * would change between pages.
+ */
+function presetSwitchSlots(offered) {
+  const configured = (window.SONORAN && window.SONORAN.defaultPreset) || '';
+  const wanted = [configured, ...SonoranPreset.FALLBACK, ...offered];
+  return [...new Set(wanted.filter((name) => name && offered.includes(name)))]
+    .slice(0, PRESET_SWITCH_SLOTS);
+}
+
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
+  const more = $('[data-preset-more]');
 
   const draw = () => {
     const current = SonoranPreset.current();
-    const options = SonoranPreset.options();
+    const offered = SonoranPreset.options();
+    const options = presetSwitchSlots(offered);
+    const extras = offered.filter((name) => !options.includes(name));
+    // The chosen preset is in the select, so no button is chosen and
+    // the thumb hides. The first button keeps the Tab stop.
+    const pinned = options.includes(current);
+    holder.toggleAttribute('data-extra', !pinned);
     /*
      * The thumb's size and position, for the CSS (§3.5).
      *
@@ -11271,7 +11334,7 @@ function wirePresetSwitch() {
        * of buttons that each take a tab stop is the usual way this
        * control is got wrong.
        */
-      tabindex: name === current ? '0' : '-1',
+      tabindex: name === current || (!pinned && name === options[0]) ? '0' : '-1',
       onclick: () => { if (SonoranPreset.set(name)) draw(); },
       onkeydown: (event) => {
         const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -11279,7 +11342,10 @@ function wirePresetSwitch() {
         if (!step) return;
         event.preventDefault();
         const list = options;
-        const next = list[(list.indexOf(current) + step + list.length) % list.length];
+        // With the chosen preset in the select, Right goes to the first
+        // button and Left to the last, as from just outside the group.
+        const from = pinned ? list.indexOf(current) : (step > 0 ? -1 : 0);
+        const next = list[(from + step + list.length) % list.length];
         if (SonoranPreset.set(next)) draw();
         const moved = $(`[data-preset-switch] .preset-choice.active`);
         if (moved) moved.focus();
@@ -11295,7 +11361,25 @@ function wirePresetSwitch() {
      */
     el('span', { class: 'nav-label', text: SonoranLabels.presetLabel(name) }),
     el('span', { class: 'preset-short', 'aria-hidden': 'true', text: presetInitials(name) }))));
+
+    if (!more) return;
+    // Always shown: "All presets" is always a choice.
+    more.hidden = false;
+    more.classList.toggle('active', !pinned);
+    replace(more,
+      // "More", not "More presets": on a phone the select shares the
+      // switch's row. Its accessible name says the rest.
+      el('option', { value: '', text: 'More' }),
+      el('option', { value: SonoranPreset.ALL, text: 'All' }),
+      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
+    more.value = pinned ? '' : current;
   };
+
+  if (more) {
+    more.addEventListener('change', () => {
+      if (more.value && SonoranPreset.set(more.value)) draw();
+    });
+  }
 
   draw();
   // A change from anywhere -- another tab's storage, or the available
@@ -11304,6 +11388,9 @@ function wirePresetSwitch() {
     draw();
     render(currentPage);
   });
+  // The list grew or shrank with the same preset chosen: the page is
+  // still right, only the switch and the select change.
+  if (SonoranPreset.onOptionsChange) SonoranPreset.onOptionsChange(draw);
 
   /*
    * A setting changed in ANOTHER tab. `applySetting` already redraws for
