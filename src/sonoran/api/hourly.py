@@ -1,7 +1,8 @@
-"""Count packets and uploads from the hourly totals, exactly (#366).
+"""Count packets and uploads from the hourly totals, exactly (#366, #368).
 
-`packet_hourly` and `packet_seen_hourly` are TimescaleDB continuous
-aggregates (revision i366). A count over a window is:
+`packet_hourly` and `packet_seen_hourly` (revision i366) and
+`packet_family_hourly` (revision i368) are TimescaleDB continuous
+aggregates. A count over a window is:
 
 - the whole hours inside it, summed from the aggregate, and
 - the partial hour at each end, counted from the raw rows.
@@ -29,6 +30,13 @@ HOUR = timedelta(hours=1)
 
 PACKET_HOURLY = table("packet_hourly", column("bucket"), column("from_node_num"), column("packets"))
 PACKET_SEEN_HOURLY = table("packet_seen_hourly", column("bucket"), column("uploads"))
+PACKET_FAMILY_HOURLY = table(
+    "packet_family_hourly",
+    column("bucket"),
+    column("portnum"),
+    column("payload_state"),
+    column("packets"),
+)
 
 
 def floor_hour(moment: datetime) -> datetime:
@@ -195,3 +203,110 @@ async def daily_counts(
         {row.day: (int(row.packets), int(row.nodes)) for row in packet_rows},
         {row.day: int(row.uploads) for row in upload_rows},
     )
+
+
+def _raw_by_sender(start: datetime, end: datetime) -> Select[Any]:
+    return (
+        select(Packet.from_node_num.label("node"), func.count().label("packets"))
+        .where(Packet.first_seen_at >= start, Packet.first_seen_at < end)
+        .group_by(Packet.from_node_num)
+    )
+
+
+async def counts_by_sender(session: AsyncSession, start: datetime, end: datetime) -> dict[int, int]:
+    """Return the packets each sender sent in `[start, end)`.
+
+    The graph gives each node its packet count from this. Whole hours
+    come from `packet_hourly`, which is already per sender.
+    """
+    hours = split(start, end)
+    if hours is None:
+        parts = [_raw_by_sender(start, end)]
+    else:
+        low, high = hours
+        parts = [
+            _raw_by_sender(start, low),
+            select(
+                PACKET_HOURLY.c.from_node_num.label("node"),
+                func.sum(PACKET_HOURLY.c.packets).label("packets"),
+            )
+            .where(PACKET_HOURLY.c.bucket >= low, PACKET_HOURLY.c.bucket < high)
+            .group_by(PACKET_HOURLY.c.from_node_num),
+            _raw_by_sender(high, end),
+        ]
+    joined = union_all(*parts).subquery()
+    rows = await session.execute(
+        select(joined.c.node, func.sum(joined.c.packets)).group_by(joined.c.node)
+    )
+    return {int(node): int(packets) for node, packets in rows.all()}
+
+
+def _raw_by_family(bucket: Any, start: datetime, end: datetime) -> Select[Any]:
+    return (
+        select(
+            bucket.label("bucket"),
+            Packet.portnum.label("portnum"),
+            Packet.payload_state.label("payload_state"),
+            func.count().label("packets"),
+        )
+        .where(Packet.first_seen_at >= start, Packet.first_seen_at < end)
+        .group_by(bucket, Packet.portnum, Packet.payload_state)
+    )
+
+
+async def family_counts(
+    session: AsyncSession, zone_name: str, start: datetime, end: datetime, *, by_day: bool
+) -> list[tuple[datetime, int, str | None, int]]:
+    """Return (bucket, portnum, payload_state, packets) for `[start, end)`, by bucket.
+
+    The activity chart reads this. A bucket is the hour, or with
+    `by_day` the local midnight that starts the day. Whole hours come
+    from `packet_family_hourly` and the partial hour at each end from
+    the raw rows, so each count equals the raw count.
+
+    One exception. A payload recovery (`sonoran.ingest.recover`) can
+    change the port and state of old packets. Until the next refresh,
+    at most 30 minutes later, those hours show the packets in their old
+    family. The total of each hour does not change.
+    """
+    zone = ZoneInfo(zone_name)
+    if by_day:
+        raw_bucket = _local_day(Packet.first_seen_at, zone_name)
+        hourly_bucket = _local_day(PACKET_FAMILY_HOURLY.c.bucket, zone_name)
+    else:
+        raw_bucket = func.date_trunc("hour", Packet.first_seen_at)
+        hourly_bucket = PACKET_FAMILY_HOURLY.c.bucket
+    hours = split(start, end)
+    if hours is None or (by_day and not whole_hour_zone(zone, start, end)):
+        parts = [_raw_by_family(raw_bucket, start, end)]
+    else:
+        low, high = hours
+        parts = [
+            _raw_by_family(raw_bucket, start, low),
+            select(
+                hourly_bucket.label("bucket"),
+                PACKET_FAMILY_HOURLY.c.portnum.label("portnum"),
+                PACKET_FAMILY_HOURLY.c.payload_state.label("payload_state"),
+                func.sum(PACKET_FAMILY_HOURLY.c.packets).label("packets"),
+            )
+            .where(PACKET_FAMILY_HOURLY.c.bucket >= low, PACKET_FAMILY_HOURLY.c.bucket < high)
+            .group_by(
+                hourly_bucket, PACKET_FAMILY_HOURLY.c.portnum, PACKET_FAMILY_HOURLY.c.payload_state
+            ),
+            _raw_by_family(raw_bucket, high, end),
+        ]
+    joined = union_all(*parts).subquery()
+    rows = await session.execute(
+        select(
+            joined.c.bucket,
+            joined.c.portnum,
+            joined.c.payload_state,
+            func.sum(joined.c.packets),
+        )
+        .group_by(joined.c.bucket, joined.c.portnum, joined.c.payload_state)
+        .order_by(joined.c.bucket)
+    )
+    return [
+        (bucket, portnum, payload_state, int(packets))
+        for bucket, portnum, payload_state, packets in rows.all()
+    ]

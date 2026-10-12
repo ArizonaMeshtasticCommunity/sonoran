@@ -1,4 +1,4 @@
-"""The hourly totals give the raw counts, exactly (#366).
+"""The hourly totals give the raw counts, exactly (#366, #368).
 
 Every count here is checked against the same count read from the raw
 rows, for windows that start and end inside an hour. Each check runs
@@ -22,6 +22,8 @@ from tests.integration.test_gaps import _packet
 
 SENDERS = (0x0DC0_0001, 0x0DC0_0002, 0x0DC0_0003)
 ZONE = "America/Phoenix"
+VIEWS = ("packet_hourly", "packet_seen_hourly", "packet_family_hourly")
+REVISIONS = ("i366_hourly_counts", "i368_family_hourly")
 BASE = (datetime.now(UTC) - timedelta(days=3)).replace(minute=0, second=0, microsecond=0)
 
 
@@ -49,6 +51,16 @@ def traffic(migrated_engine: Any) -> Iterator[None]:
                 gateways,
                 seen_at=BASE + timedelta(minutes=17 * k, seconds=k % 7),
             )
+        # Several families, so the activity counts have more than one
+        # group per hour. Port 0 in two states is two families.
+        connection.execute(
+            text(
+                "UPDATE packet SET portnum = packet_id % 4, payload_state = "
+                "CASE packet_id % 3 WHEN 0 THEN NULL WHEN 1 THEN 'readable' ELSE 'pki' END "
+                "WHERE from_node_num = ANY(:s)"
+            ),
+            {"s": list(SENDERS)},
+        )
     yield
     wipe()
 
@@ -57,7 +69,7 @@ def _refresh(timescale_url: str) -> None:
     engine = create_engine(timescale_url, isolation_level="AUTOCOMMIT")
     try:
         with engine.connect() as connection:
-            for view in ("packet_hourly", "packet_seen_hourly"):
+            for view in VIEWS:
                 connection.execute(text(f"CALL refresh_continuous_aggregate('{view}', NULL, NULL)"))
     finally:
         engine.dispose()
@@ -68,7 +80,7 @@ def _raw(engine: Any, sql: str, **params: Any) -> Any:
         return connection.execute(text(sql), params).all()
 
 
-async def _counts(url: str, start: datetime, end: datetime) -> tuple[int, int, Any]:
+async def _counts(url: str, start: datetime, end: datetime) -> tuple[Any, ...]:
     engine = make_engine(url)
     try:
         async with make_session_factory(engine)() as session:
@@ -76,6 +88,9 @@ async def _counts(url: str, start: datetime, end: datetime) -> tuple[int, int, A
                 await hourly.count_packets(session, start, end),
                 await hourly.count_uploads(session, start, end),
                 await hourly.daily_counts(session, ZONE, start, end),
+                await hourly.counts_by_sender(session, start, end),
+                await hourly.family_counts(session, ZONE, start, end, by_day=False),
+                await hourly.family_counts(session, ZONE, start, end, by_day=True),
             )
     finally:
         await engine.dispose()
@@ -92,7 +107,7 @@ WINDOWS = [
 def _check(timescale_url: str, migrated_engine: Any) -> None:
     for begin, finish in WINDOWS:
         start, end = BASE + begin, BASE + finish
-        packets, uploads, (days, upload_days) = asyncio.run(
+        packets, uploads, (days, upload_days), senders, by_hour, by_day = asyncio.run(
             _counts(role_url(timescale_url, "azmsh_api"), start, end)
         )
         [(raw_packets,)] = _raw(
@@ -129,6 +144,33 @@ def _check(timescale_url: str, migrated_engine: Any) -> None:
         )
         assert upload_days == dict(uploads_by_day), (begin, finish)
 
+        per_sender = _raw(
+            migrated_engine,
+            "SELECT from_node_num, count(*) FROM packet "
+            "WHERE first_seen_at >= :a AND first_seen_at < :b GROUP BY 1",
+            a=start,
+            b=end,
+        )
+        assert senders == dict(per_sender), (begin, finish)
+
+        for bucket, got in (
+            ("date_trunc('hour', first_seen_at)", by_hour),
+            ("timezone(:z, date_trunc('day', timezone(:z, first_seen_at)))", by_day),
+        ):
+            families = _raw(
+                migrated_engine,
+                f"SELECT {bucket}, portnum, payload_state, count(*) FROM packet "
+                "WHERE first_seen_at >= :a AND first_seen_at < :b GROUP BY 1, 2, 3",
+                z=ZONE,
+                a=start,
+                b=end,
+            )
+            assert sorted(got, key=repr) == sorted(map(tuple, families), key=repr), (
+                begin,
+                finish,
+                bucket,
+            )
+
 
 def test_the_hourly_counts_equal_the_raw_counts_before_any_refresh(
     timescale_url: str, migrated_engine: Any, traffic: None
@@ -151,27 +193,26 @@ def refreshed(timescale_url: str) -> Iterator[None]:
 
 
 def _empty(timescale_url: str) -> None:
-    """Recreate both aggregates with no data, as revision i366 creates them."""
+    """Recreate the aggregates with no data, as revisions i366 and i368 create them."""
     import importlib.util
     from pathlib import Path
 
     import sonoran
 
-    path = (
-        Path(sonoran.__file__).parent / "db" / "migrations" / "versions" / "i366_hourly_counts.py"
-    )
-    spec = importlib.util.spec_from_file_location("i366_hourly_counts", path)
-    assert spec is not None and spec.loader is not None
-    revision = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(revision)
-    keep = revision._retention_days() + revision.KEEP_LONGER_DAYS
     engine = create_engine(timescale_url, isolation_level="AUTOCOMMIT")
     try:
-        with engine.connect() as connection:
-            for name in revision.VIEWS:
-                connection.execute(text(f"DROP MATERIALIZED VIEW IF EXISTS {name}"))
-            for statement in revision.create_statements(keep):
-                connection.execute(text(statement))
+        for module in REVISIONS:
+            path = Path(sonoran.__file__).parent / "db" / "migrations" / "versions" / f"{module}.py"
+            spec = importlib.util.spec_from_file_location(module, path)
+            assert spec is not None and spec.loader is not None
+            revision = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(revision)
+            keep = revision._retention_days() + revision.KEEP_LONGER_DAYS
+            with engine.connect() as connection:
+                for name in revision.VIEWS:
+                    connection.execute(text(f"DROP MATERIALIZED VIEW IF EXISTS {name}"))
+                for statement in revision.create_statements(keep):
+                    connection.execute(text(statement))
     finally:
         engine.dispose()
 
@@ -188,7 +229,7 @@ def test_the_api_role_reads_the_totals_and_cannot_write_them(
     engine = create_engine(role_url(timescale_url, "azmsh_api").replace("+asyncpg", "+psycopg"))
     try:
         with engine.connect() as connection:
-            for view in ("packet_hourly", "packet_seen_hourly"):
+            for view in VIEWS:
                 connection.execute(text(f"SELECT count(*) FROM {view}"))
     finally:
         engine.dispose()

@@ -1,4 +1,4 @@
-"""Counting from the hourly totals: the hour arithmetic (#366).
+"""Counting from the hourly totals: the hour arithmetic (#366, #368).
 
 The SQL is checked against raw counts in
 `tests/integration/test_hourly_counts.py`.
@@ -49,3 +49,16 @@ def test_the_slow_counts_go_through_the_hourly_totals() -> None:
         source = inspect.getsource(function)
         assert "select_from(PacketSeen)" not in source, function.__name__
         assert "hourly." in source or "_kept(" in source, function.__name__
+
+
+def test_the_activity_chart_and_graph_counts_go_through_the_hourly_totals() -> None:
+    """#368: the activity chart and the graph's node counts read the totals too."""
+    from sonoran.api.routes import graph
+
+    for function, call in (
+        (stats._read_activity, "hourly.family_counts"),
+        (graph._packet_counts, "hourly.counts_by_sender"),
+    ):
+        source = inspect.getsource(function)
+        assert call in source, function.__name__
+        assert "func.count()" not in source, function.__name__

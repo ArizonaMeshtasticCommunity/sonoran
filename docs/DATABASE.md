@@ -490,13 +490,15 @@ Keep indexes minimal. Each index slows inserts.
 
 ## 8. Continuous aggregates
 
-Two TimescaleDB continuous aggregates hold hourly totals (#366, revision
-i366). Statistics and the dashboard count from them.
+Three TimescaleDB continuous aggregates hold hourly totals (#366, revision
+i366; #368, revision i368). Statistics, the dashboard, the activity chart
+and the graph's node counts count from them.
 
 | View | Columns | From |
 |---|---|---|
 | `packet_hourly` | `bucket` (the hour), `from_node_num`, `packets` | `packet.first_seen_at` |
 | `packet_seen_hourly` | `bucket` (the hour), `uploads` | `packet_seen.seen_at` |
+| `packet_family_hourly` | `bucket` (the hour), `portnum`, `payload_state`, `packets` | `packet.first_seen_at` |
 
 - **Exact counts.** `sonoran/api/hourly.py` sums whole hours from these
   views and counts the partial hour at each end of a window from the
@@ -507,6 +509,15 @@ i366). Statistics and the dashboard count from them.
   always counted.
 - **Senders per day.** `packet_hourly` is per sender, because a count
   of distinct senders cannot be added up from plain hourly totals.
+- **Families.** `packet_family_hourly` keeps `payload_state` as well as
+  `portnum`, because port 0 is a different family in each state. The
+  activity chart reads it (`/api/stats/activity`). A payload recovery
+  (`sonoran.ingest.recover`) changes the port and state of old packets.
+  Those hours show the old family until the next refresh, at most 30
+  minutes later.
+- **Not the graph links.** A link is built in Python from traceroute
+  paths, and nearly every neighbour report is its own (hour, pair)
+  group, so an aggregate would not make the graph smaller to read.
 - **Local days.** Hourly totals add up to local days only in a zone a
   whole number of hours from UTC. Arizona is UTC-7. For another
   `DISPLAY_TIMEZONE`, the daily counts read the raw rows.

@@ -587,16 +587,6 @@ async def _node_health(
 HOURLY_UP_TO_HOURS = 72
 
 
-def _local_day(column: Any, zone: str) -> Any:
-    """The local midnight that starts the day `column` falls in.
-
-    The day is the mesh's own (`DISPLAY_TIMEZONE`), not UTC. In Arizona
-    a UTC day starts at 5 pm local, so a UTC bucket would put one
-    evening in two days.
-    """
-    return func.timezone(zone, func.date_trunc("day", func.timezone(zone, column)))
-
-
 @router.get("/daily")
 async def daily(
     request: Request,
@@ -690,26 +680,19 @@ async def _read_activity(
     session: AsyncSession, settings: Settings, window: Window
 ) -> dict[str, object]:
     """Group the window's packets by bucket and family."""
-    start, now = window.start, window.end
     by_day = window.hours > HOURLY_UP_TO_HOURS
-    bucket = (
-        _local_day(Packet.first_seen_at, settings.display_timezone)
-        if by_day
-        else func.date_trunc("hour", Packet.first_seen_at)
-    ).label("bucket")
-    rows = (
-        await session.execute(
-            select(bucket, Packet.portnum, Packet.payload_state, func.count().label("total"))
-            # The upper bound is not redundant. `packet.first_seen_at`
-            # holds the gateway's own clock when it sent one, and those
-            # clocks run wrong: rows dated more than a day ahead exist.
-            # Without this the chart grows hours that have not happened.
-            # See docs/ISSUES.md 1.5.
-            .where(Packet.first_seen_at >= start, Packet.first_seen_at < now)
-            .group_by(bucket, Packet.portnum, Packet.payload_state)
-            .order_by(bucket)
-        )
-    ).all()
+    # From the hourly totals by family, with the partial hour at each
+    # end from the raw rows (#368). It grouped every raw packet of the
+    # window: 525 ms of database time for 30 days.
+    #
+    # The window's upper bound still matters. `packet.first_seen_at`
+    # holds the gateway's own clock when it sent one, and those clocks
+    # run wrong: rows dated more than a day ahead exist. Without the
+    # bound the chart grows hours that have not happened. See
+    # docs/ISSUES.md 1.5.
+    rows = await hourly.family_counts(
+        session, settings.display_timezone, window.start, window.end, by_day=by_day
+    )
 
     hours_seen: list[datetime] = []
     seen: set[datetime] = set()
