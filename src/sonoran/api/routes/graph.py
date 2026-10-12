@@ -9,8 +9,10 @@ configuration, so a node on LongFast cannot hear a node on MediumFast.
 Drawing them together would show links that cannot exist.
 """
 
+from bisect import insort
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from heapq import merge
 from typing import cast
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -19,6 +21,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from sonoran.api import hourly
 from sonoran.api.cache import KeyedCache
 from sonoran.api.channels import CORE_TIER, UNKNOWN_CHANNEL, channel_filter, classify
 from sonoran.api.dependencies import get_session, require_node_num
@@ -182,13 +185,14 @@ class Edge:
     kinds: set[str] = field(default_factory=set)
     # Every SNR measured on this link in the window, so `snr` can be a
     # summary rather than whichever hop happened to be measured last.
-    # See `snr_summary` below for why that mattered.
+    # See `snr_summary` below for why that mattered. Kept sorted: a
+    # caller that passes `samples` must pass them in order.
     samples: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.kinds.add(self.kind)
         if self.snr is not None:
-            self.samples.append(self.snr)
+            insort(self.samples, self.snr)
 
     @property
     def snr_summary(self) -> float | None:
@@ -235,7 +239,10 @@ class Edge:
         """
         if not self.samples:
             return None
-        ordered = sorted(self.samples)
+        # `samples` is kept in order as it grows, so this reads it and
+        # does not sort it. Sorting on each report made a busy link cost
+        # O(n^2 log n): 77,000 sorts and about 0.9 s of a 168 h graph.
+        ordered = self.samples
         middle = len(ordered) // 2
         if len(ordered) % 2:
             return ordered[middle]
@@ -311,7 +318,7 @@ def _add(edges: EdgeMap, edge: Edge) -> None:
     known.kinds.add(edge.kind)
     known.confirmed = known.confirmed or edge.confirmed
     if edge.snr is not None:
-        known.samples.append(edge.snr)
+        insort(known.samples, edge.snr)
     # Kept in step with the summary so there is no second, staler
     # answer to "what is this link's SNR". The existing tests read
     # `.snr` directly and are right to -- one value, one meaning.
@@ -334,7 +341,7 @@ def _merge(edges: EdgeMap, edge: Edge) -> None:
     known.backward += edge.backward if same else edge.forward
     known.kinds |= edge.kinds
     known.confirmed = known.confirmed or edge.confirmed
-    known.samples.extend(edge.samples)
+    known.samples = list(merge(known.samples, edge.samples))
     known.snr = known.snr_summary
     known.time = max(known.time, edge.time)
 
@@ -349,12 +356,17 @@ async def _neighbor_edges(
     `until` ends the window before now, for the Statistics range (#294).
     """
     # The whole window, not a page of it. See `mesh_graph` for why.
-    statement = select(NeighborMetrics).where(
-        NeighborMetrics.time >= since, channel_filter(NeighborMetrics.channel, channel)
-    )
+    # Only the four columns read below. A whole mapped row per report
+    # cost more than the links built from it (the #290 lesson).
+    statement = select(
+        NeighborMetrics.node_num,
+        NeighborMetrics.neighbor_node_num,
+        NeighborMetrics.snr,
+        NeighborMetrics.time,
+    ).where(NeighborMetrics.time >= since, channel_filter(NeighborMetrics.channel, channel))
     if until is not None:
         statement = statement.where(NeighborMetrics.time < until)
-    rows = (await session.scalars(statement)).all()
+    rows = (await session.execute(statement)).all()
     edges: EdgeMap = {}
     for row in rows:
         if row.node_num == row.neighbor_node_num:
@@ -414,12 +426,20 @@ async def _traceroute_edges(
     window before now, for the Statistics range (#294).
     """
     # The whole window, not a page of it. See `mesh_graph` for why.
-    statement = select(Traceroute).where(
-        Traceroute.seen_at >= since, channel_filter(Traceroute.channel, channel)
-    )
+    # Only the columns `_trace_links` and `is_reply` read (`TraceRow`).
+    statement = select(
+        Traceroute.from_node_num,
+        Traceroute.to_node_num,
+        Traceroute.request_id,
+        Traceroute.route,
+        Traceroute.route_back,
+        Traceroute.snr_towards,
+        Traceroute.snr_back,
+        Traceroute.seen_at,
+    ).where(Traceroute.seen_at >= since, channel_filter(Traceroute.channel, channel))
     if until is not None:
         statement = statement.where(Traceroute.seen_at < until)
-    rows = (await session.scalars(statement)).all()
+    rows = (await session.execute(statement)).all()
     edges: EdgeMap = {}
     for row in rows:
         confirmed = is_reply(row)
@@ -439,13 +459,17 @@ async def _traceroute_edges(
 
 
 async def _packet_counts(session: AsyncSession, since: datetime) -> dict[int, int]:
-    """Return the packet count of each node in the window."""
-    rows = await session.execute(
-        select(Packet.from_node_num, func.count().label("count"))
-        .where(Packet.first_seen_at >= since)
-        .group_by(Packet.from_node_num)
-    )
-    return {node_num: count for node_num, count in rows.all()}
+    """Return the packet count of each node in the window.
+
+    From the hourly totals, exactly (#366). The raw count had no upper
+    bound, so it also held rows a gateway clock dated in the future. To
+    give the same numbers, the window ends just after the newest row.
+    """
+    newest = await session.scalar(select(func.max(Packet.first_seen_at)))
+    end = datetime.now(UTC)
+    if newest is not None:
+        end = max(end, newest + timedelta(microseconds=1))
+    return await hourly.counts_by_sender(session, since, end)
 
 
 def _node_json(

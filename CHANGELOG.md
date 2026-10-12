@@ -5,6 +5,26 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.12.3 — 2026-10-12
+
+1 pull request merged, 1 issue closed.
+
+#### Fixes
+
+- Count packets and uploads from hourly totals (#366) (#367) by @logans-stuff — done: #366
+  Statistics and the dashboard load much faster. The numbers do not change.
+
+#### Issues
+
+- Done: #366 Statistics loads slowly: count from hourly totals, not raw rows (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.2...v2026.10.12.3
+
 ## v2026.10.12.2 — 2026-10-12
 
 3 pull requests merged, 2 issues closed.
