@@ -186,21 +186,21 @@ def test_the_whole_siting_pipeline_from_rows_to_the_api(
     assert cost["engine_seconds"] > 0
 
     # The API serves the written file and nothing else.
-    client = TestClient(create_app(settings))
-    served = client.get("/api/gaps/areas").json()
-    assert served["available"] is True
-    assert len(served["areas"]) == 1
-    assert "candidates" not in served
-    assert served["caveats"], "the limits travel with the answer"
+    with TestClient(create_app(settings)) as client:
+        served = client.get("/api/gaps/areas").json()
+        assert served["available"] is True
+        assert len(served["areas"]) == 1
+        assert "candidates" not in served
+        assert served["caveats"], "the limits travel with the answer"
 
-    rows = client.get("/api/gaps/candidates").json()
-    assert rows["matched_count"] == len(candidates)
-    assert rows["assumed_radio"]["tx_power_dbm"] == settings.gaps_candidate_tx_power_dbm
-    assert rows["assumed_radio"]["antenna_height_m"] == settings.gaps_candidate_height_m
+        rows = client.get("/api/gaps/candidates").json()
+        assert rows["matched_count"] == len(candidates)
+        assert rows["assumed_radio"]["tx_power_dbm"] == settings.gaps_candidate_tx_power_dbm
+        assert rows["assumed_radio"]["antenna_height_m"] == settings.gaps_candidate_height_m
 
-    one = client.get("/api/gaps/candidates?area=0").json()
-    assert one["matched_count"] == len(candidates)
-    assert client.get("/api/gaps/candidates?area=7").json()["matched_count"] == 0
+        one = client.get("/api/gaps/candidates?area=0").json()
+        assert one["matched_count"] == len(candidates)
+        assert client.get("/api/gaps/candidates?area=7").json()["matched_count"] == 0
 
 
 def test_a_box_with_no_terrain_says_unknown_and_never_no_benefit(
@@ -436,19 +436,19 @@ def test_the_api_reads_the_stored_answer_and_computes_nothing(
     _run(settings, gaps.run_once)
     _run_siting(settings)
 
-    client = TestClient(create_app(settings))
-    assert client.get("/api/gaps/areas").json()["available"] is True
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/gaps/areas").json()["available"] is True
 
-    with migrated_engine.begin() as connection:
-        connection.execute(text("DELETE FROM gaps_siting_candidate"))
-        connection.execute(text("DELETE FROM gaps_siting"))
+        with migrated_engine.begin() as connection:
+            connection.execute(text("DELETE FROM gaps_siting_candidate"))
+            connection.execute(text("DELETE FROM gaps_siting"))
 
-    body = client.get("/api/gaps/areas").json()
-    assert body["available"] is False
-    assert body["reason"] == "no_siting_run"
-    assert body["areas"] == []
-    # And the limits are still served, because they do not depend on a run.
-    assert body["caveats"]
+        body = client.get("/api/gaps/areas").json()
+        assert body["available"] is False
+        assert body["reason"] == "no_siting_run"
+        assert body["areas"] == []
+        # And the limits are still served, because they do not depend on a run.
+        assert body["caveats"]
 
 
 def test_a_channel_that_names_no_preset_is_refused_not_guessed(
@@ -456,22 +456,21 @@ def test_a_channel_that_names_no_preset_is_refused_not_guessed(
 ):  # type: ignore[no-untyped-def]
     """Weather rides on top of a preset and does not name one."""
     settings = _settings(timescale_url, tmp_path)
-    client = TestClient(create_app(settings))
-
-    body = client.get("/api/gaps/candidates?channel=Weather").json()
-    assert body["available"] is False
-    assert body["reason"] == "not_a_preset"
-    assert body["candidates"] == []
+    with TestClient(create_app(settings)) as client:
+        body = client.get("/api/gaps/candidates?channel=Weather").json()
+        assert body["available"] is False
+        assert body["reason"] == "not_a_preset"
+        assert body["candidates"] == []
 
 
 def test_the_siting_routes_take_no_writes(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
     settings = _settings(timescale_url, tmp_path)
-    client = TestClient(create_app(settings))
-    for path in ("/api/gaps/areas", "/api/gaps/candidates"):
-        for call in (client.post, client.put, client.patch, client.delete):
-            assert call(path).status_code in (404, 405)
+    with TestClient(create_app(settings)) as client:
+        for path in ("/api/gaps/areas", "/api/gaps/candidates"):
+            for call in (client.post, client.put, client.patch, client.delete):
+                assert call(path).status_code in (404, 405)
 
 
 def test_a_new_answer_replaces_the_old_one_whole(

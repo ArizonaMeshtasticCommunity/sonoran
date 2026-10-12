@@ -244,39 +244,39 @@ def test_a_run_makes_tiles_the_api_serves(
     assert manifest.missing_terrain_tiles
 
     # And the API serves what the job wrote.
-    client = TestClient(create_app(settings))
-    summary = client.get("/api/coverage").json()
-    assert summary["available"] is True
-    assert [item["preset"] for item in summary["presets"]] == ["LongFast"]
-    stamp = summary["stamp"]
+    with TestClient(create_app(settings)) as client:
+        summary = client.get("/api/coverage").json()
+        assert summary["available"] is True
+        assert [item["preset"] for item in summary["presets"]] == ["LongFast"]
+        stamp = summary["stamp"]
 
-    root = store.current_root(settings)
-    assert root is not None
-    # A default run publishes the infrastructure site set, so the tiles
-    # and the URL both carry that segment now. See the site-sets work.
-    tile = next(root.glob("LongFast/infrastructure/usable/*/*/*.png"))
-    zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
-    response = client.get(
-        f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/usable/{zoom}/{x}/{y}.png"
-    )
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "image/png"
-    assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
-    assert "immutable" in response.headers.get("Cache-Control", "")
+        root = store.current_root(settings)
+        assert root is not None
+        # A default run publishes the infrastructure site set, so the tiles
+        # and the URL both carry that segment now. See the site-sets work.
+        tile = next(root.glob("LongFast/infrastructure/usable/*/*/*.png"))
+        zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
+        response = client.get(
+            f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/usable/{zoom}/{x}/{y}.png"
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
+        assert "immutable" in response.headers.get("Cache-Control", "")
 
-    # And the public embed serves the same pixels from its own route,
-    # which is the one an operator opens at the proxy. The site set is
-    # not in that URL: the route serves the infrastructure map and has
-    # nowhere to be told otherwise. See `docs/API.md` 3B.4.
-    public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
-    embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
-    assert embedded.status_code == 200
-    assert embedded.content == response.content
-    # With the embed off, as it ships, that path does not exist at all.
-    assert (
-        client.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png").status_code
-        == 404
-    )
+        # And the public embed serves the same pixels from its own route,
+        # which is the one an operator opens at the proxy. The site set is
+        # not in that URL: the route serves the infrastructure map and has
+        # nowhere to be told otherwise. See `docs/API.md` 3B.4.
+        public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
+        embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
+        assert embedded.status_code == 200
+        assert embedded.content == response.content
+        # With the embed off, as it ships, that path does not exist at all.
+        assert (
+            client.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png").status_code
+            == 404
+        )
 
 
 def test_two_presets_are_predicted_apart(
@@ -414,14 +414,14 @@ def test_calibration_reads_the_neighbour_reports(
     assert document["summary"]["count"] > 0
 
     # And the API shows it.
-    client = TestClient(create_app(settings))
-    report = client.get("/api/coverage/calibration").json()
-    assert report["available"] is True
-    assert len(report["nodes"]) == len(result.nodes)
-    assert all(
-        item["offset_db"] is None or abs(item["offset_db"]) <= MAX_CALIBRATION_DB
-        for item in report["nodes"]
-    )
+    with TestClient(create_app(settings)) as client:
+        report = client.get("/api/coverage/calibration").json()
+        assert report["available"] is True
+        assert len(report["nodes"]) == len(result.nodes)
+        assert all(
+            item["offset_db"] is None or abs(item["offset_db"]) <= MAX_CALIBRATION_DB
+            for item in report["nodes"]
+        )
 
 
 def _four_reporting_nodes(migrated_engine, first: int) -> None:  # type: ignore[no-untyped-def]
@@ -505,12 +505,12 @@ def test_a_locked_node_is_held_at_zero_by_the_fit(
 
     # And what the map reads never carries the pinned node.
     assert pinned_id not in run_store(held, store.calibration_offsets)
-    client = TestClient(create_app(held))
-    report = client.get("/api/coverage/calibration").json()
-    entry = next(item for item in report["nodes"] if item["node_id"] == pinned_id)
-    assert entry["locked"] is True
-    assert entry["applied"] is False
-    assert entry["offset_db"] is None
+    with TestClient(create_app(held)) as client:
+        report = client.get("/api/coverage/calibration").json()
+        entry = next(item for item in report["nodes"] if item["node_id"] == pinned_id)
+        assert entry["locked"] is True
+        assert entry["applied"] is False
+        assert entry["offset_db"] is None
 
 
 def test_calibration_rejects_a_report_from_another_preset(

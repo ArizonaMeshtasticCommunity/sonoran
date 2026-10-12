@@ -60,10 +60,12 @@ def _add_node(engine: Any, node_num: int, long_name: str, role: str | None = "RO
     with engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO node (node_num, long_name, short_name, role, first_seen, updated_at)"
-                " VALUES (:n, :l, :s, :r, now(), now()) ON CONFLICT (node_num) DO NOTHING"
+                "INSERT INTO node (node_num, node_id, long_name, short_name, role,"
+                " first_seen, updated_at, is_mqtt_gateway)"
+                " VALUES (:n, :i, :l, :s, :r, now(), now(), false)"
+                " ON CONFLICT (node_num) DO NOTHING"
             ),
-            {"n": node_num, "l": long_name, "s": long_name[:4], "r": role},
+            {"n": node_num, "i": _id(node_num), "l": long_name, "s": long_name[:4], "r": role},
         )
 
 
