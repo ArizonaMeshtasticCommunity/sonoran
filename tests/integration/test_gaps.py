@@ -789,7 +789,6 @@ def test_the_coverage_run_writes_the_level_at_each_node(
     # `threshold_level` travels with it, so a reader needs no preset
     # table to decide what counts as usable.
     from sonoran.coverage.grid import to_level
-
     from sonoran.radio.presets import preset_by_key, sensitivity_of
 
     # Long fast's own threshold, read from the table rather than written
