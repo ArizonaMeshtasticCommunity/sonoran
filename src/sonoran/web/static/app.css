@@ -4368,7 +4368,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   html[data-sidebar="collapsed"] .preset-choice { padding-inline: 0; }
   /* Too narrow for a name. The select keeps its place, and its fill
      still says when the chosen preset is in it. */
-  html[data-sidebar="collapsed"] .preset-more { padding-inline: .15rem; font-size: .65rem; text-overflow: clip; }
+  html[data-sidebar="collapsed"] .preset-more { padding-inline: .15rem; font-size: max(.65rem, var(--text-floor)); text-overflow: clip; }
   html[data-sidebar="collapsed"] .preset-short { display: inline; }
 
   /*
