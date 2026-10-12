@@ -1,40 +1,54 @@
 """Where a gap assessment is kept: in the database (#351).
 
 The gaps job used to write one JSON file per preset beside the coverage
-runs, and the API read the files. It now writes these tables:
+runs, and the API read the files. It now writes these tables. See
+`docs/DATABASE.md` 5B.
 
 - `gaps_index`: when the job last ran, and over what window.
 - `gaps_run`: one assessment of a preset (`scope` `assessment`), or the
   leaderboard counts of one more Statistics window (`scope` `board`,
   `asked_hours` 24 or 720, see `sonoran/gaps/boards.py`). `summary`
-  holds every top-level field the old file held except the rows.
-- `gaps_node`: the rows, one per node, in the order the job ranked them.
+  holds the run's own fields: its window, thresholds, labels, caveats
+  and counts.
+- `gaps_node`: one row per node, in the order the job ranked them.
+- `gaps_signal`: one row per node per signal. Its state, reason, value
+  and unit are columns, and its evidence, whose shape is the signal's
+  own, is `jsonb`.
 - `gaps_trace_answer`: the traceroute counts of the reachable board.
-- `gaps_siting` and `gaps_siting_candidate`: the siting answer.
+- `gaps_siting`, `gaps_siting_area`, `gaps_siting_point` and
+  `gaps_siting_candidate`: the siting answer.
 
 **Nothing is computed per request.** The job writes the rows and the
 API selects and filters them. `docs/ISSUES.md` 2.9 still holds: a gap
-signal is never worked out while a page waits.
+signal is never worked out while a page waits. A signal's sentence and
+a candidate's sentence are words looked up for a stored reason, not a
+finding.
 
-**A run is replaced, never edited.** Each write deletes the run's rows
-and inserts the new ones, and commits once, so a reader sees the old run
-or the new one and never half of each. The jobs role has SELECT, INSERT
-and DELETE on these tables and no UPDATE.
+**A run is replaced, never edited.** Each write deletes the run, whose
+rows go with it (`ON DELETE CASCADE`), inserts the new one, and commits
+once, so a reader sees the old run or the new one and never half of
+each. The jobs role has SELECT, INSERT and DELETE on these tables and
+no UPDATE.
 
 **Names are read live.** A row does not store the node's name, short
 name or role. A reader joins `node`, so a node renamed after the run
 reads with its new name. The position stays as the job assessed it,
 because the findings belong to that position.
 
+**A node row names a real node.** `gaps_node.node_num` references
+`node`. The job leaves out a row whose node has no record, and says so
+in the log, so that key can never fail a whole run.
+
 The documents these functions return have the shape the JSON files had,
 so a reader written for the files reads them unchanged.
 """
 
 import re
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, delete, exists, func, insert, literal, select
+from sqlalchemy import Select, delete, exists, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.names import display_name, format_node_id
@@ -45,12 +59,17 @@ from sonoran.db.models import (
     GapsIndex,
     GapsNode,
     GapsRun,
+    GapsSignal,
     GapsSiting,
+    GapsSitingArea,
     GapsSitingCandidate,
+    GapsSitingPoint,
     GapsTraceAnswer,
     Node,
 )
 from sonoran.gaps.boards import BOARD_WINDOW_HOURS, EVIDENCE_KEYS, TRACE_ANSWERS
+from sonoran.gaps.signals import sentence_for
+from sonoran.gaps.siting import Candidate, candidate_sentence
 from sonoran.logging import get_logger
 from sonoran.roles import role_name
 
@@ -68,7 +87,8 @@ PRESET_PATTERN = re.compile(r"^[A-Za-z]{1,32}$")
 ASSESSMENT_HOURS = 0
 
 # The columns of an assessment row, in the order the old file wrote them
-# after `node_id`, `display_name`, `role` and `preset`.
+# after `node_id`, `display_name`, `role` and `preset`. `signals` comes
+# last, from `gaps_signal`.
 ROW_COLUMNS = (
     "latitude",
     "longitude",
@@ -86,7 +106,6 @@ ROW_COLUMNS = (
     "worst_state",
     "bad_count",
     "unknown_count",
-    "signals",
 )
 
 # Set in a run's summary when the document it came from held no
@@ -107,6 +126,11 @@ def node_num_of(node_id: object) -> int | None:
     return int(node_id[1:], 16)
 
 
+def _nums(node_ids: object) -> list[int]:
+    listed = node_ids if isinstance(node_ids, list | tuple) else []
+    return [num for item in listed if (num := node_num_of(item)) is not None]
+
+
 def _when(value: object) -> datetime | None:
     if isinstance(value, datetime):
         return value
@@ -122,7 +146,21 @@ def _int(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
 # --- writing ------------------------------------------------------------
+
+
+async def _known(session: AsyncSession, nums: list[int]) -> set[int]:
+    """Return which of these node numbers have a `node` record."""
+    if not nums:
+        return set()
+    rows = await session.scalars(select(Node.node_num).where(Node.node_num.in_(nums)))
+    return set(rows.all())
 
 
 async def _write_run(
@@ -155,22 +193,58 @@ async def _write_run(
         )
     )
 
+    known = await _known(session, [num for row in rows if (num := node_num_of(row.get("node_id")))])
     node_rows: list[dict[str, Any]] = []
+    signal_rows: list[dict[str, Any]] = []
+    left_out = 0
     for rank, row in enumerate(rows):
         node_num = node_num_of(row.get("node_id"))
         if node_num is None:
+            continue
+        if node_num not in known:
+            left_out += 1
             continue
         values: dict[str, Any] = {**key, "node_num": node_num, "rank": rank}
         for column in ROW_COLUMNS:
             if column in row:
                 values[column] = row[column]
         node_rows.append(values)
+        signals = row.get("signals")
+        for position, (name, signal) in enumerate(
+            signals.items() if isinstance(signals, dict) else []
+        ):
+            if not isinstance(signal, dict) or not isinstance(signal.get("state"), str):
+                continue
+            evidence = signal.get("evidence")
+            signal_rows.append(
+                {
+                    **key,
+                    "node_num": node_num,
+                    "signal": str(name),
+                    "position": position,
+                    "state": signal["state"],
+                    "reason": str(signal.get("reason") or ""),
+                    "value": _float(signal.get("value")),
+                    "unit": signal.get("unit") if isinstance(signal.get("unit"), str) else None,
+                    "evidence": evidence if isinstance(evidence, dict) else {},
+                }
+            )
+    if left_out:
+        logger.warning(
+            "gaps run %s %s %s: %s rows left out, their node has no record yet",
+            preset,
+            scope,
+            asked,
+            left_out,
+        )
     if node_rows:
         # One INSERT per distinct set of columns: an assessment row fills
         # every column and a board row only its counts.
         for columns in {tuple(sorted(values)) for values in node_rows}:
             same = [values for values in node_rows if tuple(sorted(values)) == columns]
             await session.execute(insert(GapsNode), same)
+    if signal_rows:
+        await session.execute(insert(GapsSignal), signal_rows)
 
     answer_rows: list[dict[str, Any]] = []
     for row in answers if isinstance(answers, list) else []:
@@ -193,12 +267,12 @@ async def _write_run(
 
 
 async def _delete_run(session: AsyncSession, preset: str, scope: str, asked: int) -> None:
-    for table in (GapsTraceAnswer, GapsNode, GapsRun):
-        await session.execute(
-            delete(table).where(
-                table.preset == preset, table.scope == scope, table.asked_hours == asked
-            )
+    """Delete one run. Its nodes, signals and counts go with it (CASCADE)."""
+    await session.execute(
+        delete(GapsRun).where(
+            GapsRun.preset == preset, GapsRun.scope == scope, GapsRun.asked_hours == asked
         )
+    )
 
 
 async def write_preset(session: AsyncSession, preset: str, document: dict[str, object]) -> bool:
@@ -238,10 +312,8 @@ async def write_index(session: AsyncSession, document: dict[str, object]) -> Non
         for item in (listed if isinstance(listed, list) else [])
         if isinstance(item, dict) and isinstance(item.get("preset"), str)
     ]
-    for table in (GapsTraceAnswer, GapsNode, GapsRun):
-        await session.execute(delete(table).where(table.preset.not_in(kept)))
-    for siting_table in (GapsSitingCandidate, GapsSiting):
-        await session.execute(delete(siting_table).where(siting_table.preset.not_in(kept)))
+    await session.execute(delete(GapsRun).where(GapsRun.preset.not_in(kept)))
+    await session.execute(delete(GapsSiting).where(GapsSiting.preset.not_in(kept)))
     await session.execute(delete(GapsIndex))
     if generated is not None and window is not None:
         await session.execute(
@@ -255,45 +327,104 @@ async def write_siting(session: AsyncSession, preset: str, document: dict[str, o
     if not _valid(preset):
         logger.warning("refusing to write a siting answer for the name %r", preset)
         return False
-    listed = document.get("candidates")
-    candidates = (
-        [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
-    )
-    summary = {key: value for key, value in document.items() if key != "candidates"}
-    await session.execute(delete(GapsSitingCandidate).where(GapsSitingCandidate.preset == preset))
+    areas = [row for row in _list(document.get("areas")) if isinstance(row, dict)]
+    candidates = [row for row in _list(document.get("candidates")) if isinstance(row, dict)]
+    summary = {key: value for key, value in document.items() if key not in ("areas", "candidates")}
     await session.execute(delete(GapsSiting).where(GapsSiting.preset == preset))
     await session.execute(
         insert(GapsSiting).values(
             preset=preset, generated_at=_when(document.get("generated_at")), summary=summary
         )
     )
-    if candidates:
-        await session.execute(
-            insert(GapsSitingCandidate),
-            [
+
+    area_rows: list[dict[str, Any]] = []
+    point_rows: list[dict[str, Any]] = []
+    for item in areas:
+        area = _int(item.get("area"))
+        centroid = _list(item.get("centroid"))
+        bounds = _list(item.get("bounds"))
+        if area is None or len(centroid) != 2 or len(bounds) != 4:
+            continue
+        area_rows.append(
+            {
+                "preset": preset,
+                "area": area,
+                "point_count": _int(item.get("point_count")) or 0,
+                "node_count": _int(item.get("node_count")) or 0,
+                "node_nums": _nums(item.get("node_ids")),
+                "centroid_lat": float(centroid[0]),
+                "centroid_lon": float(centroid[1]),
+                "south": float(bounds[0]),
+                "west": float(bounds[1]),
+                "north": float(bounds[2]),
+                "east": float(bounds[3]),
+                "width_km": _float(item.get("width_km")) or 0.0,
+            }
+        )
+        for position, point in enumerate(_list(item.get("points"))):
+            if not isinstance(point, dict):
+                continue
+            point_rows.append(
                 {
                     "preset": preset,
+                    "area": area,
                     "position": position,
-                    "area": _int(row.get("area")),
-                    "candidate": row,
+                    "latitude": _float(point.get("latitude")) or 0.0,
+                    "longitude": _float(point.get("longitude")) or 0.0,
+                    "node_count": _int(point.get("node_count")) or 0,
+                    "node_nums": _nums(point.get("node_ids")),
+                    "names": [str(name) for name in _list(point.get("names"))],
                 }
-                for position, row in enumerate(candidates)
-            ],
+            )
+    if area_rows:
+        await session.execute(insert(GapsSitingArea), area_rows)
+    if point_rows:
+        await session.execute(insert(GapsSitingPoint), point_rows)
+
+    candidate_rows: list[dict[str, Any]] = []
+    for position, row in enumerate(candidates):
+        area = _int(row.get("area"))
+        latitude, longitude = _float(row.get("latitude")), _float(row.get("longitude"))
+        if area is None or latitude is None or longitude is None:
+            continue
+        candidate_rows.append(
+            {
+                "preset": preset,
+                "position": position,
+                "kind": str(row.get("kind") or ""),
+                "area": area,
+                "latitude": latitude,
+                "longitude": longitude,
+                "elevation_m": _int(row.get("elevation_m")),
+                "prominence_m": _int(row.get("prominence_m")),
+                "node_num": node_num_of(row.get("node_id")),
+                "method": str(row.get("method") or ""),
+                "state": str(row.get("state") or ""),
+                "screen_score": _int(row.get("screen_score")) or 0,
+                "screen_unknown": _int(row.get("screen_unknown")) or 0,
+                "newly_usable": _int(row.get("newly_usable")),
+                "newly_usable_nodes": _nums(row.get("newly_usable_nodes")),
+                "already_usable": _int(row.get("already_usable")) or 0,
+                "baseline_unknown": _int(row.get("baseline_unknown")) or 0,
+                "run_stamp": row.get("run_stamp")
+                if isinstance(row.get("run_stamp"), str)
+                else None,
+                "reason": str(row.get("reason") or ""),
+            }
         )
+    if candidate_rows:
+        await session.execute(insert(GapsSitingCandidate), candidate_rows)
     await session.commit()
     return True
 
 
+def _list(value: object) -> list[Any]:
+    return list(value) if isinstance(value, list | tuple) else []
+
+
 async def clear(session: AsyncSession) -> None:
     """Delete every assessment and siting answer. For a test, and a reset."""
-    for table in (
-        GapsTraceAnswer,
-        GapsNode,
-        GapsRun,
-        GapsSitingCandidate,
-        GapsSiting,
-        GapsIndex,
-    ):
+    for table in (GapsRun, GapsSiting, GapsIndex):
         await session.execute(delete(table))
     await session.commit()
 
@@ -421,17 +552,62 @@ def _named(statement: Select[Any]) -> Select[Any]:
     )
 
 
-def _assessment_row(
-    preset: str, row: GapsNode, long_name: str | None, short_name: str | None, role: Any
-) -> dict[str, object]:
-    found: dict[str, object] = {
-        "node_id": format_node_id(row.node_num),
-        "display_name": display_name(row.node_num, long_name, short_name),
-        "role": role_name(role),
-        "preset": preset,
-    }
-    for column in ROW_COLUMNS:
-        found[column] = getattr(row, column)
+def _run_where(preset: str, scope: str, asked: int) -> list[Any]:
+    return [GapsNode.preset == preset, GapsNode.scope == scope, GapsNode.asked_hours == asked]
+
+
+async def _signals(
+    session: AsyncSession, preset: str, scope: str, asked: int, nums: list[int]
+) -> dict[int, dict[str, object]]:
+    """Return the signals of these nodes in one run, by node, in the job's order."""
+    if not nums:
+        return {}
+    rows = await session.scalars(
+        select(GapsSignal)
+        .where(
+            GapsSignal.preset == preset,
+            GapsSignal.scope == scope,
+            GapsSignal.asked_hours == asked,
+            GapsSignal.node_num.in_(nums),
+        )
+        .order_by(GapsSignal.node_num, GapsSignal.position)
+    )
+    found: dict[int, dict[str, object]] = defaultdict(dict)
+    for signal in rows.all():
+        found[signal.node_num][signal.signal] = {
+            "state": signal.state,
+            "reason": signal.reason,
+            "sentence": sentence_for(signal.reason, signal.value, signal.evidence),
+            "value": signal.value,
+            "unit": signal.unit,
+            "evidence": dict(signal.evidence),
+        }
+    return found
+
+
+async def _assessment_rows(
+    session: AsyncSession, preset: str, rows: list[Any]
+) -> list[dict[str, object]]:
+    """Turn joined `gaps_node` rows into the rows the old file held."""
+    signals = await _signals(
+        session,
+        preset,
+        GAPS_SCOPE_ASSESSMENT,
+        ASSESSMENT_HOURS,
+        [row[0].node_num for row in rows],
+    )
+    found: list[dict[str, object]] = []
+    for node, long_name, short_name, role in rows:
+        item: dict[str, object] = {
+            "node_id": format_node_id(node.node_num),
+            "display_name": display_name(node.node_num, long_name, short_name),
+            "role": role_name(role),
+            "preset": preset,
+        }
+        for column in ROW_COLUMNS:
+            item[column] = getattr(node, column)
+        item["signals"] = signals.get(node.node_num, {})
+        found.append(item)
     return found
 
 
@@ -443,14 +619,6 @@ def _board_row(row: GapsNode, long_name: str | None, short_name: str | None) -> 
     for column in EVIDENCE_KEYS:
         found[column] = getattr(row, column)
     return found
-
-
-def _run_rows(preset: str, scope: str, asked: int) -> Select[Any]:
-    return _named(
-        select(GapsNode).where(
-            GapsNode.preset == preset, GapsNode.scope == scope, GapsNode.asked_hours == asked
-        )
-    )
 
 
 async def _answers(
@@ -491,7 +659,9 @@ async def read_preset(session: AsyncSession, preset: str) -> dict[str, object] |
         return None
     rows = (
         await session.execute(
-            _run_rows(preset, GAPS_SCOPE_ASSESSMENT, ASSESSMENT_HOURS).order_by(GapsNode.rank)
+            _named(
+                select(GapsNode).where(*_run_where(preset, GAPS_SCOPE_ASSESSMENT, ASSESSMENT_HOURS))
+            ).order_by(GapsNode.rank)
         )
     ).all()
     document = _served(summary)
@@ -499,7 +669,7 @@ async def read_preset(session: AsyncSession, preset: str) -> dict[str, object] |
         document[TRACE_ANSWERS] = await _answers(
             session, preset, GAPS_SCOPE_ASSESSMENT, ASSESSMENT_HOURS
         )
-    document["nodes"] = [_assessment_row(preset, *row) for row in rows]
+    document["nodes"] = await _assessment_rows(session, preset, list(rows))
     return document
 
 
@@ -511,7 +681,11 @@ async def read_boards(session: AsyncSession, preset: str, hours: int) -> dict[st
     if summary is None:
         return None
     rows = (
-        await session.execute(_run_rows(preset, GAPS_SCOPE_BOARD, hours).order_by(GapsNode.rank))
+        await session.execute(
+            _named(select(GapsNode).where(*_run_where(preset, GAPS_SCOPE_BOARD, hours))).order_by(
+                GapsNode.rank
+            )
+        )
     ).all()
     document = _served(summary)
     if not summary.get(NO_TRACE_ANSWERS):
@@ -530,12 +704,17 @@ def _signal_filter(signal: str | None, state: str | None) -> Any:
     **any** of its signals holds that state, which is how "show me the
     unknowns" is asked for.
     """
-    if signal is not None and state is not None:
-        return GapsNode.signals[signal]["state"].astext == state
+    where = [
+        GapsSignal.preset == GapsNode.preset,
+        GapsSignal.scope == GapsNode.scope,
+        GapsSignal.asked_hours == GapsNode.asked_hours,
+        GapsSignal.node_num == GapsNode.node_num,
+    ]
     if signal is not None:
-        return GapsNode.signals.has_key(signal)
-    each = func.jsonb_each(GapsNode.signals).table_valued("key", "value").alias("each")
-    return exists(select(literal(1)).select_from(each).where(each.c.value["state"].astext == state))
+        where.append(GapsSignal.signal == signal)
+    if state is not None:
+        where.append(GapsSignal.state == state)
+    return exists(select(GapsSignal.node_num).where(*where))
 
 
 async def node_rows(
@@ -544,38 +723,45 @@ async def node_rows(
     signal: str | None,
     state: str | None,
     limit: int,
-) -> tuple[int, list[dict[str, object]]]:
-    """Return how many rows match, and the first `limit` of them, worst first.
+    after: int | None = None,
+) -> tuple[int, list[dict[str, object]], int | None]:
+    """Return how many rows match, one page of them worst first, and where the next starts.
 
-    The order is the job's `rank`. The filters select; they never
-    recompute a signal.
+    The order is the job's `rank`. `after` is the rank of the last row
+    of the page before, and the third value is the `after` of the next
+    page, or None when this is the last one. The filters select; they
+    never recompute a signal.
     """
-    where = [
-        GapsNode.preset == preset,
-        GapsNode.scope == GAPS_SCOPE_ASSESSMENT,
-        GapsNode.asked_hours == ASSESSMENT_HOURS,
-    ]
+    where = _run_where(preset, GAPS_SCOPE_ASSESSMENT, ASSESSMENT_HOURS)
     if signal is not None or state is not None:
         where.append(_signal_filter(signal, state))
     matched = await session.scalar(select(func.count()).select_from(GapsNode).where(*where)) or 0
-    rows = (
-        await session.execute(
-            _named(select(GapsNode).where(*where)).order_by(GapsNode.rank).limit(limit)
-        )
-    ).all()
-    return matched, [_assessment_row(preset, *row) for row in rows]
+    paged = [*where, GapsNode.rank > after] if after is not None else where
+    rows = list(
+        (
+            await session.execute(
+                _named(select(GapsNode).where(*paged)).order_by(GapsNode.rank).limit(limit + 1)
+            )
+        ).all()
+    )
+    following = rows[limit - 1][0].rank if len(rows) > limit else None
+    return matched, await _assessment_rows(session, preset, rows[:limit]), following
 
 
 async def node_row(session: AsyncSession, preset: str, node_num: int) -> dict[str, object] | None:
     """Return one node's assessment row on one preset, or None."""
-    found = (
+    rows = (
         await session.execute(
-            _run_rows(preset, GAPS_SCOPE_ASSESSMENT, ASSESSMENT_HOURS).where(
-                GapsNode.node_num == node_num
+            _named(
+                select(GapsNode).where(
+                    *_run_where(preset, GAPS_SCOPE_ASSESSMENT, ASSESSMENT_HOURS),
+                    GapsNode.node_num == node_num,
+                )
             )
         )
-    ).first()
-    return None if found is None else _assessment_row(preset, *found)
+    ).all()
+    found = await _assessment_rows(session, preset, list(rows))
+    return found[0] if found else None
 
 
 async def node_nums(session: AsyncSession, preset: str, state: str) -> set[int] | None:
@@ -588,9 +774,7 @@ async def node_nums(session: AsyncSession, preset: str, state: str) -> set[int] 
         return None
     rows = await session.scalars(
         select(GapsNode.node_num).where(
-            GapsNode.preset == preset,
-            GapsNode.scope == GAPS_SCOPE_ASSESSMENT,
-            GapsNode.asked_hours == ASSESSMENT_HOURS,
+            *_run_where(preset, GAPS_SCOPE_ASSESSMENT, ASSESSMENT_HOURS),
             GapsNode.worst_state == state,
         )
     )
@@ -599,18 +783,19 @@ async def node_nums(session: AsyncSession, preset: str, state: str) -> set[int] 
 
 async def assessed_nodes(session: AsyncSession, node_num: int) -> dict[str, dict[str, object]]:
     """Return one node's assessment row on every preset that assessed it, by preset."""
-    rows = (
-        await session.execute(
-            _named(
-                select(GapsNode).where(
-                    GapsNode.scope == GAPS_SCOPE_ASSESSMENT,
-                    GapsNode.asked_hours == ASSESSMENT_HOURS,
-                    GapsNode.node_num == node_num,
-                )
-            )
+    presets = await session.scalars(
+        select(GapsNode.preset).where(
+            GapsNode.scope == GAPS_SCOPE_ASSESSMENT,
+            GapsNode.asked_hours == ASSESSMENT_HOURS,
+            GapsNode.node_num == node_num,
         )
-    ).all()
-    return {row[0].preset: _assessment_row(row[0].preset, *row) for row in rows}
+    )
+    found: dict[str, dict[str, object]] = {}
+    for preset in presets.all():
+        row = await node_row(session, preset, node_num)
+        if row is not None:
+            found[preset] = row
+    return found
 
 
 async def top_direct(
@@ -626,7 +811,7 @@ async def top_direct(
     )
     rows = (
         await session.execute(
-            _run_rows(preset, scope, asked)
+            _named(select(GapsNode).where(*_run_where(preset, scope, asked)))
             .where(GapsNode.direct_gateways > 0)
             .order_by(GapsNode.direct_gateways.desc(), GapsNode.node_num)
             .limit(limit)
@@ -657,7 +842,7 @@ async def trace_answers(
 
 
 async def read_siting(session: AsyncSession, preset: str) -> dict[str, object] | None:
-    """Return one preset's siting answer without its candidates, or None.
+    """Return one preset's siting answer with its areas and without its candidates.
 
     None is a working state. The siting half runs inside the coverage
     cycle, so a box that has never finished a coverage run has no answer
@@ -666,13 +851,102 @@ async def read_siting(session: AsyncSession, preset: str) -> dict[str, object] |
     if not _valid(preset):
         return None
     summary = await session.scalar(select(GapsSiting.summary).where(GapsSiting.preset == preset))
-    return summary if isinstance(summary, dict) else None
+    if not isinstance(summary, dict):
+        return None
+    areas = (
+        await session.scalars(
+            select(GapsSitingArea)
+            .where(GapsSitingArea.preset == preset)
+            .order_by(GapsSitingArea.area)
+        )
+    ).all()
+    points = (
+        await session.scalars(
+            select(GapsSitingPoint)
+            .where(GapsSitingPoint.preset == preset)
+            .order_by(GapsSitingPoint.area, GapsSitingPoint.position)
+        )
+    ).all()
+    by_area: dict[int, list[dict[str, object]]] = defaultdict(list)
+    for point in points:
+        by_area[point.area].append(
+            {
+                "latitude": point.latitude,
+                "longitude": point.longitude,
+                "node_count": point.node_count,
+                "node_ids": [format_node_id(num) for num in point.node_nums],
+                "names": list(point.names),
+            }
+        )
+    return summary | {
+        "areas": [
+            {
+                "area": area.area,
+                "point_count": area.point_count,
+                "node_count": area.node_count,
+                "node_ids": [format_node_id(num) for num in area.node_nums],
+                "centroid": [area.centroid_lat, area.centroid_lon],
+                "bounds": [area.south, area.west, area.north, area.east],
+                "width_km": area.width_km,
+                "points": by_area.get(area.area, []),
+            }
+            for area in areas
+        ]
+    }
+
+
+def _candidate(
+    row: GapsSitingCandidate, long_name: str | None, short_name: str | None
+) -> dict[str, object]:
+    """One candidate in the shape `Candidate.as_dict` gives."""
+    sentence = candidate_sentence(
+        Candidate(
+            kind=row.kind,
+            cluster=row.area,
+            latitude=row.latitude,
+            longitude=row.longitude,
+            screen_score=row.screen_score,
+            newly_usable=row.newly_usable,
+            reason=row.reason,
+        )
+    )
+    return {
+        "kind": row.kind,
+        "area": row.area,
+        "latitude": row.latitude,
+        "longitude": row.longitude,
+        "elevation_m": row.elevation_m,
+        "prominence_m": row.prominence_m,
+        "node_id": None if row.node_num is None else format_node_id(row.node_num),
+        "display_name": (
+            None if row.node_num is None else display_name(row.node_num, long_name, short_name)
+        ),
+        "method": row.method,
+        "state": row.state,
+        "screen_score": row.screen_score,
+        "screen_unknown": row.screen_unknown,
+        "newly_usable": row.newly_usable,
+        "newly_usable_nodes": [format_node_id(num) for num in row.newly_usable_nodes],
+        "already_usable": row.already_usable,
+        "baseline_unknown": row.baseline_unknown,
+        "run_stamp": row.run_stamp,
+        "reason": row.reason,
+        "sentence": sentence,
+    }
 
 
 async def read_candidates(
-    session: AsyncSession, preset: str, area: int | None, limit: int
-) -> tuple[int, list[dict[str, object]]]:
-    """Return how many candidates match, and the first `limit` of them, best first."""
+    session: AsyncSession,
+    preset: str,
+    area: int | None,
+    limit: int,
+    after: int | None = None,
+) -> tuple[int, list[dict[str, object]], int | None]:
+    """Return how many candidates match, one page of them best first, and where the next starts.
+
+    `after` is the position of the last candidate of the page before,
+    and the third value is the `after` of the next page, or None.
+    """
     where = [GapsSitingCandidate.preset == preset]
     if area is not None:
         where.append(GapsSitingCandidate.area == area)
@@ -680,18 +954,35 @@ async def read_candidates(
         await session.scalar(select(func.count()).select_from(GapsSitingCandidate).where(*where))
         or 0
     )
-    rows = await session.scalars(
-        select(GapsSitingCandidate.candidate)
-        .where(*where)
-        .order_by(GapsSitingCandidate.position)
-        .limit(limit)
+    paged = [*where, GapsSitingCandidate.position > after] if after is not None else where
+    rows = list(
+        (
+            await session.execute(
+                select(GapsSitingCandidate, Node.long_name, Node.short_name)
+                .outerjoin(Node, Node.node_num == GapsSitingCandidate.node_num)
+                .where(*paged)
+                .order_by(GapsSitingCandidate.position)
+                .limit(limit + 1)
+            )
+        ).all()
     )
-    return matched, [row for row in rows.all() if isinstance(row, dict)]
+    following = rows[limit - 1][0].position if len(rows) > limit else None
+    return matched, [_candidate(*row) for row in rows[:limit]], following
 
 
-async def is_empty(session: AsyncSession) -> bool:
-    """Return true when no gaps run and no siting answer is held."""
-    held = await session.scalar(
-        select(exists(select(GapsRun.preset)) | exists(select(GapsSiting.preset)))
+async def run_stamp(session: AsyncSession, preset: str) -> str | None:
+    """Return when one preset's assessment was made, for a page cursor."""
+    found = await session.scalar(
+        select(GapsRun.generated_at).where(
+            GapsRun.preset == preset,
+            GapsRun.scope == GAPS_SCOPE_ASSESSMENT,
+            GapsRun.asked_hours == ASSESSMENT_HOURS,
+        )
     )
-    return not held
+    return None if found is None else found.isoformat()
+
+
+async def siting_stamp(session: AsyncSession, preset: str) -> str | None:
+    """Return when one preset's siting answer was made, for a page cursor."""
+    found = await session.scalar(select(GapsSiting.generated_at).where(GapsSiting.preset == preset))
+    return None if found is None else found.isoformat()

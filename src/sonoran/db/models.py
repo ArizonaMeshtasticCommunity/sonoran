@@ -28,6 +28,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Double,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
@@ -880,11 +881,59 @@ class GapsNode(Base):
     worst_state: Mapped[str | None] = mapped_column(Text)
     bad_count: Mapped[int | None] = mapped_column(Integer)
     unknown_count: Mapped[int | None] = mapped_column(Integer)
-    signals: Mapped[dict | None] = mapped_column(JSONB)
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "scope", "asked_hours"],
+            ["gaps_run.preset", "gaps_run.scope", "gaps_run.asked_hours"],
+            ondelete="CASCADE",
+        ),
+        # The job leaves out a row whose node has no record yet, so this
+        # key can never fail a run. See `gaps/store.py`.
+        ForeignKeyConstraint(["node_num"], ["node.node_num"]),
         Index("ix_gaps_node_rank", "preset", "scope", "asked_hours", "rank"),
         Index("ix_gaps_node_worst", "preset", "scope", "asked_hours", "worst_state"),
+    )
+
+
+class GapsSignal(Base):
+    """One signal of one node in one gaps assessment (`gaps/signals.py`).
+
+    `evidence` stays `jsonb`: its shape is the signal's own, and the page
+    reads it whole. Everything a reader filters on is a column. The
+    sentence is not stored; it is made from the reason when it is read,
+    so a change of wording reaches every run at once.
+    """
+
+    __tablename__ = "gaps_signal"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, primary_key=True)
+    asked_hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    signal: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(SmallInteger)
+    state: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    value: Mapped[float | None] = mapped_column(Double)
+    unit: Mapped[str | None] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSONB)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "scope", "asked_hours", "node_num"],
+            ["gaps_node.preset", "gaps_node.scope", "gaps_node.asked_hours", "gaps_node.node_num"],
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_gaps_signal_state",
+            "preset",
+            "scope",
+            "asked_hours",
+            "signal",
+            "state",
+            "node_num",
+        ),
     )
 
 
@@ -901,12 +950,20 @@ class GapsTraceAnswer(Base):
     answered: Mapped[int] = mapped_column(Integer)
     senders: Mapped[int] = mapped_column(Integer)
 
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "scope", "asked_hours"],
+            ["gaps_run.preset", "gaps_run.scope", "gaps_run.asked_hours"],
+            ondelete="CASCADE",
+        ),
+    )
+
 
 class GapsSiting(Base):
-    """One preset's siting answer, without its candidates.
+    """One preset's siting answer, without its areas and candidates.
 
-    `summary` holds the areas, the cost, the thresholds and the caveats,
-    as the old JSON document did.
+    `summary` holds the cost, the thresholds, the coverage it used and
+    the caveats, as the old JSON document did.
     """
 
     __tablename__ = "gaps_siting"
@@ -916,17 +973,84 @@ class GapsSiting(Base):
     summary: Mapped[dict] = mapped_column(JSONB)
 
 
+class GapsSitingArea(Base):
+    """One neighbourhood of struggling nodes (`gaps/siting.py`)."""
+
+    __tablename__ = "gaps_siting_area"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    area: Mapped[int] = mapped_column(Integer, primary_key=True)
+    point_count: Mapped[int] = mapped_column(Integer)
+    node_count: Mapped[int] = mapped_column(Integer)
+    node_nums: Mapped[list[int]] = mapped_column(ARRAY(BigInteger))
+    centroid_lat: Mapped[float] = mapped_column(Double)
+    centroid_lon: Mapped[float] = mapped_column(Double)
+    south: Mapped[float] = mapped_column(Double)
+    west: Mapped[float] = mapped_column(Double)
+    north: Mapped[float] = mapped_column(Double)
+    east: Mapped[float] = mapped_column(Double)
+    width_km: Mapped[float] = mapped_column(Double)
+
+    __table_args__ = (ForeignKeyConstraint(["preset"], ["gaps_siting.preset"], ondelete="CASCADE"),)
+
+
+class GapsSitingPoint(Base):
+    """One demand point of an area: the place a group of nodes stands."""
+
+    __tablename__ = "gaps_siting_point"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    area: Mapped[int] = mapped_column(Integer, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    latitude: Mapped[float] = mapped_column(Double)
+    longitude: Mapped[float] = mapped_column(Double)
+    node_count: Mapped[int] = mapped_column(Integer)
+    node_nums: Mapped[list[int]] = mapped_column(ARRAY(BigInteger))
+    names: Mapped[list[str]] = mapped_column(ARRAY(Text))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "area"],
+            ["gaps_siting_area.preset", "gaps_siting_area.area"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
 class GapsSitingCandidate(Base):
-    """One place a node could go, in the order the siting job ranked it."""
+    """One place a node could go, in the order the siting job ranked it.
+
+    The fields are those of `gaps.siting.Candidate`. The sentence is made
+    from the reason when it is read, and the name of an existing node is
+    joined live from `node`.
+    """
 
     __tablename__ = "gaps_siting_candidate"
 
     preset: Mapped[str] = mapped_column(Text, primary_key=True)
     position: Mapped[int] = mapped_column(Integer, primary_key=True)
-    area: Mapped[int | None] = mapped_column(Integer)
-    candidate: Mapped[dict] = mapped_column(JSONB)
+    kind: Mapped[str] = mapped_column(Text)
+    area: Mapped[int] = mapped_column(Integer)
+    latitude: Mapped[float] = mapped_column(Double)
+    longitude: Mapped[float] = mapped_column(Double)
+    elevation_m: Mapped[int | None] = mapped_column(Integer)
+    prominence_m: Mapped[int | None] = mapped_column(Integer)
+    node_num: Mapped[int | None] = mapped_column(BigInteger)
+    method: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(Text)
+    screen_score: Mapped[int] = mapped_column(Integer)
+    screen_unknown: Mapped[int] = mapped_column(Integer)
+    newly_usable: Mapped[int | None] = mapped_column(Integer)
+    newly_usable_nodes: Mapped[list[int]] = mapped_column(ARRAY(BigInteger))
+    already_usable: Mapped[int] = mapped_column(Integer)
+    baseline_unknown: Mapped[int] = mapped_column(Integer)
+    run_stamp: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
 
-    __table_args__ = (Index("ix_gaps_siting_candidate_area", "preset", "area", "position"),)
+    __table_args__ = (
+        ForeignKeyConstraint(["preset"], ["gaps_siting.preset"], ondelete="CASCADE"),
+        Index("ix_gaps_siting_candidate_area", "preset", "area", "position"),
+    )
 
 
 class CoverageCalibration(Base):

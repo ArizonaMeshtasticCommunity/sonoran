@@ -48,6 +48,10 @@ def clean(migrated_engine) -> Iterator[None]:  # type: ignore[no-untyped-def]
             connection.execute(text("DELETE FROM node WHERE node_num = ANY(:n)"), {"n": [A, B, C]})
 
     wipe()
+    # A node row of a gaps run names a real node (`gaps_node` references
+    # `node`), so the three nodes these runs name exist.
+    for node_num, name in ((A, "Node A"), (B, "Node B"), (C, "Node C")):
+        _add_node(migrated_engine, node_num, name)
     yield
     wipe()
 
@@ -57,7 +61,7 @@ def _add_node(engine: Any, node_num: int, long_name: str, role: str | None = "RO
         connection.execute(
             text(
                 "INSERT INTO node (node_num, long_name, short_name, role, first_seen, updated_at)"
-                " VALUES (:n, :l, :s, :r, now(), now())"
+                " VALUES (:n, :l, :s, :r, now(), now()) ON CONFLICT (node_num) DO NOTHING"
             ),
             {"n": node_num, "l": long_name, "s": long_name[:4], "r": role},
         )
@@ -135,6 +139,11 @@ def test_a_run_reads_back_as_it_was_written(
     for written, read in zip(ROWS, held["nodes"], strict=True):
         for key in store.ROW_COLUMNS:
             assert read[key] == written[key], key
+        # The signals come back from `gaps_signal`, in the job's order.
+        assert list(read["signals"]) == list(written["signals"])
+        for name, signal in written["signals"].items():
+            assert read["signals"][name]["state"] == signal["state"]
+            assert isinstance(read["signals"][name]["sentence"], str)
     assert held["trace_answers"][0]["answered"] == 9
     assert held["window_hours"] == 168
     assert held["generated_at"] == NOW
@@ -150,7 +159,6 @@ def test_a_name_is_read_live_not_frozen_at_run_time(
 ) -> None:
     """The issue's second point: a renamed node reads with its new name."""
     settings = _settings(timescale_url, tmp_path)
-    _add_node(migrated_engine, A, "Old Name")
     _write(settings)
     with migrated_engine.begin() as connection:
         connection.execute(
@@ -213,11 +221,50 @@ def test_the_filters_select_in_sql(
 ) -> None:
     settings = _settings(timescale_url, tmp_path)
     _write(settings)
-    matched, rows = run_store(settings, store.node_rows, "LongFast", signal, state, 100)
+    matched, rows, following = run_store(settings, store.node_rows, "LongFast", signal, state, 100)
     assert matched == len(expected)
     assert [row["node_id"] for row in rows] == [_id(n) for n in expected]
-    _, first = run_store(settings, store.node_rows, "LongFast", signal, state, 1)
+    assert following is None
+    _, first, _ = run_store(settings, store.node_rows, "LongFast", signal, state, 1)
     assert [row["node_id"] for row in first] == [_id(n) for n in expected[:1]]
+
+
+def test_the_pages_join_up_with_no_row_twice_and_none_missed(
+    timescale_url: str, migrated_engine: Any, tmp_path: Path, clean: None
+) -> None:
+    settings = _settings(timescale_url, tmp_path)
+    _write(settings)
+    seen: list[str] = []
+    after = None
+    for _ in range(5):
+        _, rows, after = run_store(settings, store.node_rows, "LongFast", None, None, 1, after)
+        seen += [row["node_id"] for row in rows]
+        if after is None:
+            break
+    assert seen == [_id(A), _id(B), _id(C)]
+
+
+def test_a_row_whose_node_has_no_record_is_left_out_not_fatal(
+    timescale_url: str, migrated_engine: Any, tmp_path: Path, clean: None
+) -> None:
+    """`gaps_node` references `node`. One unknown node must not fail the run."""
+    settings = _settings(timescale_url, tmp_path)
+    stranger = _row(0x0DB0_00FF, "bad", {"radio_isolated": "bad"})
+    _write(settings, [*ROWS, stranger])
+    held = run_store(settings, store.read_preset, "LongFast")
+    assert [row["node_id"] for row in held["nodes"]] == [_id(A), _id(B), _id(C)]
+
+
+def test_deleting_a_run_deletes_everything_under_it(
+    timescale_url: str, migrated_engine: Any, tmp_path: Path, clean: None
+) -> None:
+    settings = _settings(timescale_url, tmp_path)
+    _write(settings)
+    with migrated_engine.begin() as connection:
+        connection.execute(text("DELETE FROM gaps_run"))
+        for table in ("gaps_node", "gaps_signal", "gaps_trace_answer"):
+            left = connection.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()
+            assert left == 0, table
 
 
 def test_the_direct_board_is_one_order_by(
@@ -236,6 +283,92 @@ def test_the_gaps_state_filter_of_the_node_list(
     assert run_store(settings, store.node_nums, "LongFast", "bad") is None, "no run is not empty"
     _write(settings)
     assert run_store(settings, store.node_nums, "LongFast", "bad") == {A}
+
+
+# --- the siting answer --------------------------------------------------
+
+
+def _candidate(position: int, area: int, node_num: int | None = None) -> dict[str, Any]:
+    return {
+        "kind": "existing" if node_num else "ground",
+        "area": area,
+        "latitude": 33.4 + position / 100,
+        "longitude": -112.1,
+        "elevation_m": 400,
+        "prominence_m": 30,
+        "node_id": None if node_num is None else _id(node_num),
+        "display_name": None,
+        "method": "terrain_screen",
+        "state": "ok",
+        "screen_score": 5 - position,
+        "screen_unknown": 0,
+        "newly_usable": None,
+        "newly_usable_nodes": [_id(A)],
+        "already_usable": 1,
+        "baseline_unknown": 0,
+        "run_stamp": "20261012T000000Z",
+        "reason": "screened",
+    }
+
+
+SITING = {
+    "available": True,
+    "preset": "LongFast",
+    "generated_at": NOW,
+    "areas": [
+        {
+            "area": 0,
+            "point_count": 2,
+            "node_count": 3,
+            "node_ids": [_id(A), _id(B), _id(C)],
+            "centroid": [33.41, -112.11],
+            "bounds": [33.4, -112.12, 33.42, -112.1],
+            "width_km": 2.5,
+            "points": [
+                {
+                    "latitude": 33.4,
+                    "longitude": -112.12,
+                    "node_count": 2,
+                    "node_ids": [_id(A), _id(B)],
+                    "names": ["Node A", "Node B"],
+                },
+                {
+                    "latitude": 33.42,
+                    "longitude": -112.1,
+                    "node_count": 1,
+                    "node_ids": [_id(C)],
+                    "names": ["Node C"],
+                },
+            ],
+        }
+    ],
+    "candidates": [_candidate(0, 0, B), _candidate(1, 0), _candidate(2, 0)],
+    "caveats": [{"key": "k", "text": "t"}],
+}
+
+
+def test_a_siting_answer_reads_back_as_it_was_written(
+    timescale_url: str, migrated_engine: Any, tmp_path: Path, clean: None
+) -> None:
+    settings = _settings(timescale_url, tmp_path)
+    assert run_store(settings, store.write_siting, "LongFast", SITING)
+    held = run_store(settings, store.read_siting, "LongFast")
+    assert held is not None
+    assert held["areas"] == SITING["areas"]
+    assert held["caveats"] == SITING["caveats"]
+    assert "candidates" not in held
+
+    matched, rows, following = run_store(settings, store.read_candidates, "LongFast", 0, 2)
+    assert matched == 3
+    assert following is not None
+    # The name of an existing node is joined live; a sentence is made from the reason.
+    assert rows[0]["display_name"] == "Node B"
+    assert isinstance(rows[0]["sentence"], str)
+    for key in ("latitude", "screen_score", "newly_usable_nodes", "run_stamp", "reason"):
+        assert rows[1][key] == SITING["candidates"][1][key], key
+    _, rest, last = run_store(settings, store.read_candidates, "LongFast", 0, 2, following)
+    assert [row["latitude"] for row in rest] == [SITING["candidates"][2]["latitude"]]
+    assert last is None
 
 
 # --- who may do what ----------------------------------------------------
@@ -278,9 +411,7 @@ def _write_old_files(root: Path) -> None:
     (gaps_dir / "boards-LongFast-24.json").write_text(
         json.dumps({"preset": "LongFast", "window_hours": 24, "generated_at": NOW, "nodes": []})
     )
-    (gaps_dir / "siting-LongFast.json").write_text(
-        json.dumps({"generated_at": NOW, "areas": [], "candidates": [{"area": 0}]})
-    )
+    (gaps_dir / "siting-LongFast.json").write_text(json.dumps(SITING))
     (root / "calibration.json").write_text(
         json.dumps(
             {
@@ -322,7 +453,7 @@ def test_the_old_files_are_imported_once(
     assert [row["node_id"] for row in run_store(settings, store.read_preset, "LongFast")["nodes"]]
     # The board file came from before #293 and held no traceroute counts.
     assert run_store(settings, store.trace_answers, "LongFast", 24) is None
-    assert run_store(settings, store.read_candidates, "LongFast", None, 10)[0] == 1
+    assert run_store(settings, store.read_candidates, "LongFast", None, 10)[0] == 3
     assert run_store(settings, coverage_store.calibration_offsets) == {_id(A): -2.0}
 
     # The second start imports nothing, and never overwrites a newer run.

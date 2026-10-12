@@ -920,3 +920,53 @@ def test_the_caveats_name_what_cannot_be_answered_at_all() -> None:
     assert "one_preset_only" in keys
     for _, text in signals.CAVEATS:
         assert text.endswith(".")
+
+
+# ------------------------------------------------------------ paging (#351)
+
+
+def _paged_run(outputs: JobOutputs, stamp: str) -> None:
+    outputs.write_index({"presets": [{"preset": "LongFast", "node_count": 3}]})
+    outputs.write_preset(
+        "LongFast",
+        {
+            "preset": "LongFast",
+            "generated_at": stamp,
+            "signal_order": ["radio_isolated"],
+            "nodes": [
+                {"node_id": f"!0000000{n}", "signals": {"radio_isolated": {"state": "bad"}}}
+                for n in (1, 2, 3)
+            ],
+        },
+    )
+
+
+def test_the_node_list_pages_by_cursor_and_never_mixes_two_runs(
+    tmp_path: Path, job_outputs: JobOutputs
+) -> None:
+    _paged_run(job_outputs, "2026-10-12T12:00:00+00:00")
+    with _client(str(tmp_path)) as client:
+        first = client.get("/api/gaps/nodes?channel=LongFast&limit=2").json()
+        assert [row["node_id"] for row in first["nodes"]] == ["!00000001", "!00000002"]
+        assert first["matched_count"] == 3
+        cursor = first["next_cursor"]
+        assert cursor
+
+        second = client.get(f"/api/gaps/nodes?channel=LongFast&limit=2&cursor={cursor}").json()
+        assert [row["node_id"] for row in second["nodes"]] == ["!00000003"]
+        assert second["next_cursor"] is None, "the last page names no next one"
+
+        # The job writes a new run. The old cursor no longer names a place in it.
+        _paged_run(job_outputs, "2026-10-12T12:30:00+00:00")
+        stale = client.get(f"/api/gaps/nodes?channel=LongFast&limit=2&cursor={cursor}")
+        assert stale.status_code == 409
+
+        assert client.get("/api/gaps/nodes?channel=LongFast&cursor=nonsense").status_code == 422
+
+
+def test_a_cursor_reads_back_the_place_it_names() -> None:
+    from sonoran.api.routes.gaps import page_cursor, read_cursor
+
+    stamp = "2026-10-12T12:00:00+00:00"
+    assert read_cursor(page_cursor(stamp, 41), stamp) == 41
+    assert read_cursor(None, stamp) is None

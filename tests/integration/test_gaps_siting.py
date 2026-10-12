@@ -124,7 +124,7 @@ def _siting(settings: Settings, preset: str = "LongFast") -> dict:
     """Return the stored answer with its candidates, as the old file held it."""
     document = run_store(settings, store.read_siting, preset)
     assert document is not None, "the siting job wrote nothing"
-    _, candidates = run_store(settings, store.read_candidates, preset, None, 10_000)
+    _, candidates, _ = run_store(settings, store.read_candidates, preset, None, 10_000)
     return document | {"candidates": candidates}
 
 
@@ -479,19 +479,36 @@ def test_a_new_answer_replaces_the_old_one_whole(
 ):  # type: ignore[no-untyped-def]
     """A run is replaced, never merged: no candidate of the old run survives (#351)."""
     settings = _settings(timescale_url, tmp_path)
+
+    def area(index: int) -> dict:
+        return {
+            "area": index,
+            "point_count": 0,
+            "node_count": 0,
+            "node_ids": [],
+            "centroid": [33.4, -112.1],
+            "bounds": [33.4, -112.1, 33.4, -112.1],
+            "width_km": 0.0,
+            "points": [],
+        }
+
+    def candidate(index: int, latitude: float) -> dict:
+        return {"kind": "ground", "area": index, "latitude": latitude, "longitude": -112.1}
+
     first = {
         "available": True,
         "preset": "LongFast",
         "generated_at": "2026-10-12T00:00:00+00:00",
-        "areas": [{"area": 0}, {"area": 1}],
-        "candidates": [{"area": 0, "n": 1}, {"area": 1, "n": 2}, {"area": 1, "n": 3}],
+        "areas": [area(0), area(1)],
+        "candidates": [candidate(0, 33.1), candidate(1, 33.2), candidate(1, 33.3)],
     }
-    second = first | {"areas": [{"area": 0}], "candidates": [{"area": 0, "n": 9}]}
+    second = first | {"areas": [area(0)], "candidates": [candidate(0, 33.9)]}
     assert run_store(settings, store.write_siting, "LongFast", first)
     assert run_store(settings, store.write_siting, "LongFast", second)
 
-    matched, rows = run_store(settings, store.read_candidates, "LongFast", None, 100)
-    assert (matched, rows) == (1, [{"area": 0, "n": 9}])
+    matched, rows, _ = run_store(settings, store.read_candidates, "LongFast", None, 100)
+    assert matched == 1
+    assert [row["latitude"] for row in rows] == [33.9]
     held = run_store(settings, store.read_siting, "LongFast")
-    assert held["areas"] == [{"area": 0}]
+    assert [item["area"] for item in held["areas"]] == [0]
     assert "candidates" not in held

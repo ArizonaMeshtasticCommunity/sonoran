@@ -833,12 +833,22 @@ know. It is not a score.
 | `signal` | One signal name. An unknown name returns `available: false` with `reason: "not_a_signal"`. |
 | `state` | `bad`, `ok` or `unknown`. With no `signal`, a row matches when any signal holds that state. |
 | `limit` | 1 to 500, default 100. |
+| `cursor` | The `next_cursor` of the page before, with the same filters (#351). |
+
+**Paging is by cursor.** An answer with more rows after it carries
+`next_cursor`, an opaque string, and the last page carries `null`. A
+cursor names the run it came from. Once the job has written a new run,
+which it does every `GAPS_INTERVAL_MINUTES`, the cursor is refused with
+409 and the reader starts again from the first page: a page that mixed
+two runs could list a node twice or not at all. A cursor that is not
+one is refused with 422.
 
 ```json
 {
   "available": true,
   "preset": "LongFast",
   "matched_count": 63,
+  "next_cursor": "eyJydW4iOiIyMDI2LTEwLTEyVDEyOjAwOjAwKzAwOjAwIiwiYWZ0ZXIiOjk5fQ",
   "nodes": [
     {
       "node_id": "!a1b2c3d4",
@@ -944,7 +954,9 @@ that is a node, not an area, and `/api/gaps/nodes` already holds it.
 ```
 
 `GET /api/gaps/candidates` returns the places, best first inside each
-area:
+area. It pages by `cursor` and `next_cursor` exactly as
+`/api/gaps/nodes` does, and a cursor names the siting answer it came
+from.
 
 ```json
 {
@@ -952,6 +964,7 @@ area:
   "preset": "LongFast",
   "area": 0,
   "matched_count": 34,
+  "next_cursor": null,
   "candidates": [
     {"kind": "ground", "area": 0, "latitude": 33.5758, "longitude": -112.5792,
      "elevation_m": 1230, "prominence_m": 127, "node_id": null,

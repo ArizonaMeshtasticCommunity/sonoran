@@ -393,12 +393,27 @@ nodes x windows x presets.
 |---|---|---|---|
 | `gaps_index` | `id` (always 1) | When the gaps job last ran, and its window | `jobs/gaps.py` |
 | `gaps_run` | `preset`, `scope`, `asked_hours` | One assessment (`scope` `assessment`, `asked_hours` 0), or one Statistics window of leaderboard counts (`scope` `board`, `asked_hours` 24 or 720). `summary` (`jsonb`) holds the top-level fields | `jobs/gaps.py` |
-| `gaps_node` | run key, `node_num` | One node of one run: the evidence counts as columns, the signals as `jsonb`, and `rank`, the order the job set (worst first) | `jobs/gaps.py` |
+| `gaps_node` | run key, `node_num` | One node of one run: the evidence counts as columns, and `rank`, the order the job set (worst first). `node_num` references `node` | `jobs/gaps.py` |
+| `gaps_signal` | run key, `node_num`, `signal` | One signal of one node: `state`, `reason`, `value` and `unit` as columns, `position` (the job's order), and `evidence` as `jsonb`, because its shape is the signal's own | `jobs/gaps.py` |
 | `gaps_trace_answer` | run key, `node_num` | The traceroute counts of the reachable board (#293) | `jobs/gaps.py` |
-| `gaps_siting` | `preset` | One preset's siting answer without its candidates. `summary` holds the areas, the cost and the caveats | `jobs/gaps_siting.py` |
-| `gaps_siting_candidate` | `preset`, `position` | One candidate place, in the order the job ranked it, with its `area` | `jobs/gaps_siting.py` |
+| `gaps_siting` | `preset` | One preset's siting answer. `summary` holds the cost, the thresholds, the coverage it used and the caveats | `jobs/gaps_siting.py` |
+| `gaps_siting_area` | `preset`, `area` | One neighbourhood of struggling nodes: counts, node numbers, centroid, bounds and width | `jobs/gaps_siting.py` |
+| `gaps_siting_point` | `preset`, `area`, `position` | One demand point of an area: its place, its node numbers and their names | `jobs/gaps_siting.py` |
+| `gaps_siting_candidate` | `preset`, `position` | One candidate place, in the order the job ranked it: every field of `gaps.siting.Candidate` as a column | `jobs/gaps_siting.py` |
 | `coverage_calibration` | `id` (always 1) | The fit as a whole: bias, scatter, rounds, summary | `jobs/calibrate.py` |
 | `coverage_calibration_node` | `node_num` | What the measurements say about one node | `jobs/calibrate.py` |
+
+**Foreign keys.** Every child row belongs to its run or answer and is
+deleted with it (`ON DELETE CASCADE`), so deleting a run is one
+statement. `gaps_node.node_num` references `node`: the job leaves out,
+and logs, a row whose node has no record yet, so that key never fails a
+run. `gaps_trace_answer` does not reference `node`, because a node can
+be traced and never send anything.
+
+**What stays `jsonb`.** A run's `summary` (its window, thresholds,
+labels, caveats and counts) and a signal's `evidence`. Both are read
+whole and never filtered on. Everything a page filters, sorts or pages
+by is a column.
 
 **Names are read live.** `gaps_node` stores no name, short name or role.
 A reader joins `node`, so a node renamed after a run reads with its new

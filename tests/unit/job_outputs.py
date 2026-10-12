@@ -7,7 +7,8 @@ holds the documents in memory and answers every one of those functions
 with the same shapes, so a route test can set a state and read a page.
 
 The SQL itself is tested against a real database in
-`tests/integration/test_job_outputs.py`. This file must stay a plain
+`tests/integration/test_job_outputs.py`. A page here is cut by the
+row's place in the document, which is its `rank` or `position`. This file must stay a plain
 copy of the documented behaviour, with no rule of its own.
 
 Use the `job_outputs` fixture:
@@ -103,12 +104,20 @@ class JobOutputs:
         return [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
 
     async def node_rows(
-        self, _session: Any, preset: str, signal: str | None, state: str | None, limit: int
-    ) -> tuple[int, list[dict[str, object]]]:
-        rows = self._rows((preset, store.ASSESSMENT_HOURS))
+        self,
+        _session: Any,
+        preset: str,
+        signal: str | None,
+        state: str | None,
+        limit: int,
+        after: int | None = None,
+    ) -> tuple[int, list[dict[str, object]], int | None]:
+        ranked = list(enumerate(self._rows((preset, store.ASSESSMENT_HOURS))))
         if signal is not None or state is not None:
-            rows = [row for row in rows if _matches(row, signal, state)]
-        return len(rows), rows[:limit]
+            ranked = [(rank, row) for rank, row in ranked if _matches(row, signal, state)]
+        page = [(rank, row) for rank, row in ranked if after is None or rank > after]
+        following = page[limit - 1][0] if len(page) > limit else None
+        return len(ranked), [row for _, row in page[:limit]], following
 
     async def node_row(self, _session: Any, preset: str, node_num: int) -> dict[str, object] | None:
         for row in self._rows((preset, store.ASSESSMENT_HOURS)):
@@ -163,13 +172,26 @@ class JobOutputs:
         return {k: v for k, v in document.items() if k != "candidates"}
 
     async def read_candidates(
-        self, _session: Any, preset: str, area: int | None, limit: int
-    ) -> tuple[int, list[dict[str, object]]]:
+        self, _session: Any, preset: str, area: int | None, limit: int, after: int | None = None
+    ) -> tuple[int, list[dict[str, object]], int | None]:
         listed = (self.siting.get(preset) or {}).get("candidates")
         rows = [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
+        placed = list(enumerate(rows))
         if area is not None:
-            rows = [row for row in rows if row.get("area") == area]
-        return len(rows), rows[:limit]
+            placed = [(position, row) for position, row in placed if row.get("area") == area]
+        page = [(position, row) for position, row in placed if after is None or position > after]
+        following = page[limit - 1][0] if len(page) > limit else None
+        return len(placed), [row for _, row in page[:limit]], following
+
+    async def run_stamp(self, _session: Any, preset: str) -> str | None:
+        document = self.runs.get((preset, store.ASSESSMENT_HOURS))
+        stamp = document.get("generated_at") if document else None
+        return stamp if isinstance(stamp, str) else ("unstamped" if document else None)
+
+    async def siting_stamp(self, _session: Any, preset: str) -> str | None:
+        document = self.siting.get(preset)
+        stamp = document.get("generated_at") if document else None
+        return stamp if isinstance(stamp, str) else ("unstamped" if document else None)
 
     async def read_calibration(self, _session: Any) -> dict[str, object] | None:
         return None if self.calibration is None else dict(self.calibration)
@@ -210,6 +232,8 @@ GAPS_READS = (
     "trace_answers",
     "read_siting",
     "read_candidates",
+    "run_stamp",
+    "siting_stamp",
 )
 
 

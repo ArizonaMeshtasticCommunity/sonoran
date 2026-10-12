@@ -18,7 +18,11 @@ There is no route under `/api/embed` for any of this, and
 router to keep it that way.
 """
 
-from fastapi import APIRouter, Depends, Query, Request
+import base64
+import binascii
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session
@@ -32,6 +36,42 @@ router = APIRouter(prefix="/api/gaps", tags=["gaps"])
 
 # The filter values a request may ask for.
 STATES = (BAD, OK, UNKNOWN)
+
+
+def page_cursor(stamp: str, after: int) -> str:
+    """Return the opaque cursor of the next page of one run.
+
+    It names the run (`stamp`, when the job made it) and the place in
+    it (`after`: the rank of a node, or the position of a candidate).
+    """
+    raw = json.dumps({"run": stamp, "after": after}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def read_cursor(cursor: str | None, stamp: str | None) -> int | None:
+    """Return the place a cursor names, or None for the first page.
+
+    A cursor that is not one is a bad request (422). A cursor from an
+    older run is refused (409): the job rewrites the run every half
+    hour, and a page that mixed two runs would list a node twice or
+    not at all, with nothing to show it.
+    """
+    if cursor is None:
+        return None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        held = json.loads(base64.urlsafe_b64decode(padded.encode()))
+        run, after = held["run"], held["after"]
+    except (binascii.Error, ValueError, KeyError, TypeError) as error:
+        raise HTTPException(status_code=422, detail="not a cursor") from error
+    if not isinstance(run, str) or not isinstance(after, int) or isinstance(after, bool):
+        raise HTTPException(status_code=422, detail="not a cursor")
+    if run != stamp:
+        raise HTTPException(
+            status_code=409,
+            detail="the run was rewritten since the first page; start again without a cursor",
+        )
+    return after
 
 
 async def _presets(session: AsyncSession, settings: Settings) -> list[dict[str, object]]:
@@ -131,9 +171,10 @@ async def gaps_nodes(
     signal: str | None = None,
     state: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None, max_length=256),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    """Return the assessed nodes of one preset, worst first.
+    """Return the assessed nodes of one preset, worst first, a page at a time.
 
     The order is set by the job, once, and stored as each row's `rank`,
     so that every reader gets the same one and no page holds a copy of
@@ -143,6 +184,11 @@ async def gaps_nodes(
 
     `signal` and `state` filter the stored rows, in SQL. They select;
     they never recompute.
+
+    **Paging is by cursor.** An answer with more rows after it carries
+    `next_cursor`; pass it back as `cursor`, with the same filters, for
+    the next page. A cursor names its run and is refused (409) once the
+    job has written a new one.
     """
     settings: Settings = request.app.state.settings
     preset, reason = await _resolve(session, channel, settings)
@@ -172,7 +218,9 @@ async def gaps_nodes(
             "nodes": [],
         }
 
-    matched, rows = await store.node_rows(session, preset, signal, state, limit)
+    stamp = await store.run_stamp(session, preset)
+    after = read_cursor(cursor, stamp)
+    matched, rows, following = await store.node_rows(session, preset, signal, state, limit, after)
     return {
         "available": True,
         "preset": preset,
@@ -184,6 +232,9 @@ async def gaps_nodes(
         "matched_count": matched,
         "limit": limit,
         "nodes": rows,
+        "next_cursor": (
+            page_cursor(stamp, following) if stamp is not None and following is not None else None
+        ),
     }
 
 
@@ -223,9 +274,10 @@ async def gaps_candidates(
     channel: str | None = None,
     area: int | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None, max_length=256),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    """Return the places a node could go, best first inside each area.
+    """Return the places a node could go, best first inside each area, a page at a time.
 
     Every row carries `method`. `terrain_screen` is a cheap ranking and
     **not a prediction**; `splat` is the engine, and only those rows
@@ -237,6 +289,8 @@ async def gaps_candidates(
     state is `unknown`. A candidate standing on ground we hold no
     terrain for has not been judged, and "no benefit" is a different
     answer.
+
+    Paging is by cursor, as for `/api/gaps/nodes`.
     """
     settings: Settings = request.app.state.settings
     preset, reason = await _resolve(session, channel, settings)
@@ -246,7 +300,9 @@ async def gaps_candidates(
     if summary is None:
         return await _no_siting(session, "no_siting_run", settings)
 
-    matched, rows = await store.read_candidates(session, preset, area, limit)
+    stamp = await store.siting_stamp(session, preset)
+    after = read_cursor(cursor, stamp)
+    matched, rows, following = await store.read_candidates(session, preset, area, limit, after)
     return {
         "available": True,
         "preset": preset,
@@ -258,6 +314,9 @@ async def gaps_candidates(
         "matched_count": matched,
         "limit": limit,
         "candidates": rows,
+        "next_cursor": (
+            page_cursor(stamp, following) if stamp is not None and following is not None else None
+        ),
     }
 
 

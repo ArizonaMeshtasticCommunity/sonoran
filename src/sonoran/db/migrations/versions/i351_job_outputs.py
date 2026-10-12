@@ -4,15 +4,23 @@ The gaps job, the siting half of the gaps feature and the calibration
 fit wrote JSON files beside the coverage tiles, and the API read them.
 These tables replace those files. The coverage tiles stay on disk.
 
-- `gaps_index`, `gaps_run`, `gaps_node` and `gaps_trace_answer`: the
-  per node assessment of each preset, and the leaderboard counts of the
-  other Statistics windows.
-- `gaps_siting` and `gaps_siting_candidate`: the siting answer.
+- `gaps_index`, `gaps_run`, `gaps_node`, `gaps_signal` and
+  `gaps_trace_answer`: the per node assessment of each preset, and the
+  leaderboard counts of the other Statistics windows.
+- `gaps_siting`, `gaps_siting_area`, `gaps_siting_point` and
+  `gaps_siting_candidate`: the siting answer.
 - `coverage_calibration` and `coverage_calibration_node`: the fit.
 
 **Each table holds the latest run only.** The job deletes a run's rows
 and inserts the new ones in one transaction, so a reader never sees
 half of a run, and nothing grows with time. None is a hypertable.
+
+**Foreign keys.** Every child row belongs to its run and is deleted
+with it (`ON DELETE CASCADE`). A node row of a gaps run names a real
+node (`gaps_node.node_num` references `node`); the job leaves out a row
+whose node has no record yet, so that key can never fail a run. A
+traceroute count does not reference `node`: a node can be traced and
+never send anything, and then it has no record.
 
 **Grants.** `azmsh_jobs` gets SELECT, INSERT and DELETE on these tables
 and nothing else new. It reads them back: the siting half reads the
@@ -34,7 +42,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 revision: str = "i351"
 down_revision: str | None = "i313"
@@ -47,12 +55,17 @@ TABLES = (
     "gaps_index",
     "gaps_run",
     "gaps_node",
+    "gaps_signal",
     "gaps_trace_answer",
     "gaps_siting",
+    "gaps_siting_area",
+    "gaps_siting_point",
     "gaps_siting_candidate",
     "coverage_calibration",
     "coverage_calibration_node",
 )
+
+RUN_KEY = ["preset", "scope", "asked_hours"]
 
 
 def _run_key() -> list[sa.Column]:
@@ -103,12 +116,34 @@ def upgrade() -> None:
         sa.Column("worst_state", sa.Text(), nullable=True),
         sa.Column("bad_count", sa.Integer(), nullable=True),
         sa.Column("unknown_count", sa.Integer(), nullable=True),
-        sa.Column("signals", JSONB(), nullable=True),
         sa.PrimaryKeyConstraint("preset", "scope", "asked_hours", "node_num"),
+        sa.ForeignKeyConstraint(RUN_KEY, [f"gaps_run.{c}" for c in RUN_KEY], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["node_num"], ["node.node_num"]),
     )
     op.create_index("ix_gaps_node_rank", "gaps_node", ["preset", "scope", "asked_hours", "rank"])
     op.create_index(
         "ix_gaps_node_worst", "gaps_node", ["preset", "scope", "asked_hours", "worst_state"]
+    )
+    op.create_table(
+        "gaps_signal",
+        *_run_key(),
+        sa.Column("node_num", sa.BigInteger(), nullable=False),
+        sa.Column("signal", sa.Text(), nullable=False),
+        sa.Column("position", sa.SmallInteger(), nullable=False),
+        sa.Column("state", sa.Text(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=False),
+        sa.Column("value", sa.Double(), nullable=True),
+        sa.Column("unit", sa.Text(), nullable=True),
+        sa.Column("evidence", JSONB(), nullable=False),
+        sa.PrimaryKeyConstraint("preset", "scope", "asked_hours", "node_num", "signal"),
+        sa.ForeignKeyConstraint(
+            [*RUN_KEY, "node_num"],
+            [f"gaps_node.{c}" for c in (*RUN_KEY, "node_num")],
+            ondelete="CASCADE",
+        ),
+    )
+    op.create_index(
+        "ix_gaps_signal_state", "gaps_signal", [*RUN_KEY, "signal", "state", "node_num"]
     )
     op.create_table(
         "gaps_trace_answer",
@@ -118,6 +153,7 @@ def upgrade() -> None:
         sa.Column("answered", sa.Integer(), nullable=False),
         sa.Column("senders", sa.Integer(), nullable=False),
         sa.PrimaryKeyConstraint("preset", "scope", "asked_hours", "node_num"),
+        sa.ForeignKeyConstraint(RUN_KEY, [f"gaps_run.{c}" for c in RUN_KEY], ondelete="CASCADE"),
     )
     op.create_table(
         "gaps_siting",
@@ -127,12 +163,62 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("preset"),
     )
     op.create_table(
+        "gaps_siting_area",
+        sa.Column("preset", sa.Text(), nullable=False),
+        sa.Column("area", sa.Integer(), nullable=False),
+        sa.Column("point_count", sa.Integer(), nullable=False),
+        sa.Column("node_count", sa.Integer(), nullable=False),
+        sa.Column("node_nums", ARRAY(sa.BigInteger()), nullable=False),
+        sa.Column("centroid_lat", sa.Double(), nullable=False),
+        sa.Column("centroid_lon", sa.Double(), nullable=False),
+        sa.Column("south", sa.Double(), nullable=False),
+        sa.Column("west", sa.Double(), nullable=False),
+        sa.Column("north", sa.Double(), nullable=False),
+        sa.Column("east", sa.Double(), nullable=False),
+        sa.Column("width_km", sa.Double(), nullable=False),
+        sa.PrimaryKeyConstraint("preset", "area"),
+        sa.ForeignKeyConstraint(["preset"], ["gaps_siting.preset"], ondelete="CASCADE"),
+    )
+    op.create_table(
+        "gaps_siting_point",
+        sa.Column("preset", sa.Text(), nullable=False),
+        sa.Column("area", sa.Integer(), nullable=False),
+        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column("latitude", sa.Double(), nullable=False),
+        sa.Column("longitude", sa.Double(), nullable=False),
+        sa.Column("node_count", sa.Integer(), nullable=False),
+        sa.Column("node_nums", ARRAY(sa.BigInteger()), nullable=False),
+        sa.Column("names", ARRAY(sa.Text()), nullable=False),
+        sa.PrimaryKeyConstraint("preset", "area", "position"),
+        sa.ForeignKeyConstraint(
+            ["preset", "area"],
+            ["gaps_siting_area.preset", "gaps_siting_area.area"],
+            ondelete="CASCADE",
+        ),
+    )
+    op.create_table(
         "gaps_siting_candidate",
         sa.Column("preset", sa.Text(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
-        sa.Column("area", sa.Integer(), nullable=True),
-        sa.Column("candidate", JSONB(), nullable=False),
+        sa.Column("kind", sa.Text(), nullable=False),
+        sa.Column("area", sa.Integer(), nullable=False),
+        sa.Column("latitude", sa.Double(), nullable=False),
+        sa.Column("longitude", sa.Double(), nullable=False),
+        sa.Column("elevation_m", sa.Integer(), nullable=True),
+        sa.Column("prominence_m", sa.Integer(), nullable=True),
+        sa.Column("node_num", sa.BigInteger(), nullable=True),
+        sa.Column("method", sa.Text(), nullable=False),
+        sa.Column("state", sa.Text(), nullable=False),
+        sa.Column("screen_score", sa.Integer(), nullable=False),
+        sa.Column("screen_unknown", sa.Integer(), nullable=False),
+        sa.Column("newly_usable", sa.Integer(), nullable=True),
+        sa.Column("newly_usable_nodes", ARRAY(sa.BigInteger()), nullable=False),
+        sa.Column("already_usable", sa.Integer(), nullable=False),
+        sa.Column("baseline_unknown", sa.Integer(), nullable=False),
+        sa.Column("run_stamp", sa.Text(), nullable=True),
+        sa.Column("reason", sa.Text(), nullable=False),
         sa.PrimaryKeyConstraint("preset", "position"),
+        sa.ForeignKeyConstraint(["preset"], ["gaps_siting.preset"], ondelete="CASCADE"),
     )
     op.create_index(
         "ix_gaps_siting_candidate_area", "gaps_siting_candidate", ["preset", "area", "position"]
