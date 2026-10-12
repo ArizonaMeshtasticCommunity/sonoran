@@ -2575,7 +2575,8 @@ async function main() {
     // The settings travel whether or not there is terrain to predict over.
     must(back.site_name === 'Shaw Butte' && back.lat === '33.5905', `the site came back as ${back.lat}`);
     must(back.tx_height === '20' && back.preset === 'LONG_FAST', 'the settings did not come back');
-    must(back.sensitivity === '-139', `the sensitivity came back as ${back.sensitivity}`);
+    // Long fast's sensitivity from the docs' link budget at 22 dBm (#362).
+    must(back.sensitivity === '-131', `the sensitivity came back as ${back.sensitivity}`);
     must(back.tx_power === '30', `an unshared field did not take its default: ${back.tx_power}`);
     if (!run.ran) return `${link.length} characters, settings restored; no prediction here (${run.why})`;
 

@@ -183,7 +183,7 @@ prediction is ever sent to the server.
 | Modem preset | choice | Medium fast | Sets the sensitivity and the slot width. |
 | Frequency slot | choice | 18 | `lora.channel_num` on the radio. Counts from 1. |
 | Frequency | MHz | 906.375 | Slot 18 at 250 kHz. Follows the slot. |
-| Sensitivity | dBm | -134 | Edit it down in town. See 4.1. |
+| Sensitivity | dBm | -126 | Edit it down in town. See 4.1. |
 | Height | ft or m | 1 m (3.28 ft) | A handheld radio. |
 | Antenna gain | dBi | 2.15 | |
 | Cable loss | dB | 2 | Applied at both ends. |
@@ -204,20 +204,39 @@ prediction is ever sent to the server.
 
 ### 4.1 Sensitivity by preset
 
-| Preset | Spreading factor | Bandwidth | Sensitivity |
-|---|---|---|---|
-| Short turbo | SF7 | 500 kHz | -126 dBm |
-| Short fast | SF7 | 250 kHz | -129 dBm |
-| Short slow | SF8 | 250 kHz | -131.5 dBm |
-| Medium fast | SF9 | 250 kHz | -134 dBm |
-| Medium slow | SF10 | 250 kHz | -136.5 dBm |
-| Long fast | SF11 | 250 kHz | -139 dBm |
-| Long moderate | SF11 | 125 kHz | -142 dBm |
-| Long slow | SF12 | 125 kHz | -144.5 dBm |
-| Very long slow | SF12 | 62.5 kHz | -147.5 dBm |
+| Preset | Spreading factor | Bandwidth | Docs link budget | Sensitivity |
+|---|---|---|---|---|
+| Short turbo | SF7 | 500 kHz | 140 dB | -118 dBm |
+| Short fast | SF7 | 250 kHz | 143 dB | -121 dBm |
+| Medium turbo | SF9 | 500 kHz | 145 dB | -123 dBm |
+| Short slow | SF8 | 250 kHz | 145.5 dB | -123.5 dBm |
+| Medium fast | SF9 | 250 kHz | 148 dB | -126 dBm |
+| Narrow fast | SF7 | 62.5 kHz | 149 dB | -127 dBm |
+| Long turbo | SF11 | 500 kHz | 150 dB | -128 dBm |
+| Medium slow | SF10 | 250 kHz | 150.5 dB | -128.5 dBm |
+| Lite fast | SF9 | 125 kHz | 151 dB | -129 dBm |
+| Narrow slow | SF8 | 62.5 kHz | 151.5 dB | -129.5 dBm |
+| Long fast | SF11 | 250 kHz | 153 dB | -131 dBm |
+| Lite slow | SF10 | 125 kHz | 153.5 dB | -131.5 dBm |
+| Tiny fast | SF7 | 15.6 kHz | 155 dB | -133 dBm |
+| Long moderate | SF11 | 125 kHz | 156 dB | -134 dBm |
+| Tiny slow | SF8 | 15.6 kHz | 157.5 dB | -135.5 dBm |
 
-These are the figures from the SX1262 data sheet, which is the best a
-radio can do. Where the band is shared and noisy, take several dB off.
+**Where these come from.** The link budgets are the Meshtastic docs'
+own (https://meshtastic.org/docs/overview/radio-settings/). The docs say
+the budgets come from the Semtech LoRa calculator, and assume a 22 dBm
+transmitter and a 0 dB antenna. So each sensitivity is 22 dBm minus the
+budget. Spreading factor and bandwidth agree with firmware
+(`modemPresetToParams`, firmware v2.8.1). This is the best a radio can
+do. Where the band is shared and noisy, take several dB off.
+
+**This changed in #362.** Before, every figure was 8 dB better: it was
+14 dBm minus the same budgets, and it was labelled "SX1262 data sheet".
+A prediction made before #362 reaches further than this one.
+
+Long slow and Very long slow are not offered. The docs give no budget
+for them, and firmware 2.8.1 no longer has Very long slow. Sonoran
+still recognises their traffic.
 
 A preset is also a radio configuration, not only a sensitivity. A node
 on Long fast cannot hear a node on Medium fast at all. See `AGENTS.md`

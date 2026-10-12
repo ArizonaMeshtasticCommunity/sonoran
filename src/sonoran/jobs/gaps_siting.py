@@ -74,7 +74,7 @@ from sonoran.jobs import coverage as coverage_job
 from sonoran.landcover.classes import is_diffracting
 from sonoran.landcover.store import class_at, clutter_at
 from sonoran.logging import configure_logging, get_logger
-from sonoran.radio.presets import ModemPreset, preset_for_channel
+from sonoran.radio.presets import ModemPreset, modelled, preset_for_channel, sensitivity_of
 from sonoran.radio.resolve import RadioProfile, Source
 from sonoran.roles import SITE_SET_INFRASTRUCTURE
 from sonoran.terrain.store import read_cached_page
@@ -277,7 +277,7 @@ def score_prediction(
         # charges it over the whole region and this is the same number
         # at one point.
         dbm = to_dbm(level) - receiver_loss_db(settings, point.latitude, point.longitude)
-        if dbm >= preset.sensitivity_dbm:
+        if dbm >= sensitivity_of(preset):
             served.append(index)
     return served, outside
 
@@ -602,7 +602,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> list[str]:
         # firmware uses, and not `preset.key`. `preset_for_channel` is
         # the one reader of that spelling. `preset_by_key` takes
         # `LONG_FAST` and would find nothing at all here.
-        preset = preset_for_channel(name)
+        preset = modelled(preset_for_channel(name))
         document = await store.read_preset(session, name)
         if preset is None or document is None:
             continue

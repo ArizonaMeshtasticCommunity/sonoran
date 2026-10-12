@@ -791,8 +791,13 @@ def test_the_coverage_run_writes_the_level_at_each_node(
     # `threshold_level` travels with it, so a reader needs no preset
     # table to decide what counts as usable.
     from sonoran.coverage.grid import to_level
+    from sonoran.radio.presets import preset_by_key, sensitivity_of
 
-    assert for_preset["threshold_level"] == to_level(-139.0)
+    # Long fast's own threshold, read from the table rather than written
+    # here, so a change of the table (#362) does not need this test edited.
+    long_fast = preset_by_key("LONG_FAST")
+    assert long_fast is not None
+    assert for_preset["threshold_level"] == to_level(sensitivity_of(long_fast))
 
     assert str(near) in levels, "a node inside the region must be sampled"
     assert set(levels[str(near)]) == {"usable", "downlink", "uplink"}

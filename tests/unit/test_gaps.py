@@ -69,27 +69,31 @@ def test_required_snr_is_derived_from_the_one_preset_table() -> None:
 
 
 def test_long_fast_demodulates_well_below_the_noise() -> None:
-    """Long fast needs about -25 dB, which is why -20 dB is a real link.
+    """Long fast needs about -17 dB, so -12 dB is a real link.
 
     This is the number the whole margin rests on. A reader who does not
-    know it reads a reported SNR of -20 dB as a broken radio, when in
+    know it reads a reported SNR of -12 dB as a broken radio, when in
     fact it has about 5 dB to spare.
+
+    Before #362 this said -25 dB, from a sensitivity table 8 dB too
+    good. -17 dB agrees with the SNR limit Semtech gives for SF11, about
+    -17.5 dB, which is a check on the docs' link budget it comes from.
     """
-    assert -25.5 < required_snr_db(LONG_FAST) < -24.5
+    assert -17.5 < required_snr_db(LONG_FAST) < -16.5
 
 
 def test_a_weak_margin_is_measured_against_the_preset_not_the_raw_snr() -> None:
     """The same SNR is a different answer on two presets."""
     settings = _settings()
     weak = signals.weak_best_link(
-        NodeEvidence(node_num=1, best_neighbour_snr=-20.0), settings, LONG_FAST
+        NodeEvidence(node_num=1, best_neighbour_snr=-12.5), settings, LONG_FAST
     )
     assert weak.state == BAD
     # It works, and it has little room. Both halves are true.
     assert weak.value is not None and 4.0 < weak.value < 5.0
 
     strong = signals.weak_best_link(
-        NodeEvidence(node_num=1, best_neighbour_snr=-5.0), settings, LONG_FAST
+        NodeEvidence(node_num=1, best_neighbour_snr=0.0), settings, LONG_FAST
     )
     assert strong.state == OK
 

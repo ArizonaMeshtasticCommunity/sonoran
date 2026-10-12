@@ -2398,7 +2398,7 @@ function wirePlanner() {
     if (match) {
       defaults.preset = match.key;
       // The two move together. A form opening on Medium fast with Long
-      // fast's -139 dBm would predict a reach nobody has, which is the
+      // fast's -131 dBm would predict a reach nobody has, which is the
       // reason DEFAULTS carries both.
       defaults.sensitivity = match.sensitivity;
     }

@@ -126,9 +126,13 @@ function describeClimate(answer) {
 /*
  * Receiver sensitivity by modem preset, in dBm.
  *
- * These are the theoretical figures for the SX1262. Real air is worse.
- * In a town it is realistic to allow several dB of noise on top, which
- * is why the form lets the number be edited after a preset is chosen.
+ * Each is 22 dBm minus the link budget the Meshtastic docs publish for
+ * the preset (https://meshtastic.org/docs/overview/radio-settings/),
+ * which they say assumes a 22 dBm transmitter and a 0 dB antenna (#362).
+ * Real air is worse. In a town it is realistic to allow several dB of
+ * noise on top, which is why the form lets the number be edited after a
+ * preset is chosen. Presets the docs give no budget for (Long slow,
+ * Very long slow) are not offered here.
  *
  * A preset is also a different radio configuration: a node on LongFast
  * cannot hear a node on MediumFast at all. See AGENTS.md 9.7.
@@ -141,15 +145,21 @@ function describeClimate(answer) {
  * together so a preset cannot be edited in one and not the other.
  */
 const PRESETS = [
-  { key: 'SHORT_TURBO', label: 'Short turbo', sensitivity: -126, bandwidthHz: 500000 },
-  { key: 'SHORT_FAST', label: 'Short fast', sensitivity: -129, bandwidthHz: 250000 },
-  { key: 'SHORT_SLOW', label: 'Short slow', sensitivity: -131.5, bandwidthHz: 250000 },
-  { key: 'MEDIUM_FAST', label: 'Medium fast', sensitivity: -134, bandwidthHz: 250000 },
-  { key: 'MEDIUM_SLOW', label: 'Medium slow', sensitivity: -136.5, bandwidthHz: 250000 },
-  { key: 'LONG_FAST', label: 'Long fast', sensitivity: -139, bandwidthHz: 250000 },
-  { key: 'LONG_MODERATE', label: 'Long moderate', sensitivity: -142, bandwidthHz: 125000 },
-  { key: 'LONG_SLOW', label: 'Long slow', sensitivity: -144.5, bandwidthHz: 125000 },
-  { key: 'VERY_LONG_SLOW', label: 'Very long slow', sensitivity: -147.5, bandwidthHz: 62500 },
+  { key: 'SHORT_TURBO', label: 'Short turbo', sensitivity: -118, bandwidthHz: 500000 },
+  { key: 'SHORT_FAST', label: 'Short fast', sensitivity: -121, bandwidthHz: 250000 },
+  { key: 'MEDIUM_TURBO', label: 'Medium turbo', sensitivity: -123, bandwidthHz: 500000 },
+  { key: 'SHORT_SLOW', label: 'Short slow', sensitivity: -123.5, bandwidthHz: 250000 },
+  { key: 'MEDIUM_FAST', label: 'Medium fast', sensitivity: -126, bandwidthHz: 250000 },
+  { key: 'NARROW_FAST', label: 'Narrow fast', sensitivity: -127, bandwidthHz: 62500 },
+  { key: 'LONG_TURBO', label: 'Long turbo', sensitivity: -128, bandwidthHz: 500000 },
+  { key: 'MEDIUM_SLOW', label: 'Medium slow', sensitivity: -128.5, bandwidthHz: 250000 },
+  { key: 'LITE_FAST', label: 'Lite fast', sensitivity: -129, bandwidthHz: 125000 },
+  { key: 'NARROW_SLOW', label: 'Narrow slow', sensitivity: -129.5, bandwidthHz: 62500 },
+  { key: 'LONG_FAST', label: 'Long fast', sensitivity: -131, bandwidthHz: 250000 },
+  { key: 'LITE_SLOW', label: 'Lite slow', sensitivity: -131.5, bandwidthHz: 125000 },
+  { key: 'TINY_FAST', label: 'Tiny fast', sensitivity: -133, bandwidthHz: 15600 },
+  { key: 'LONG_MODERATE', label: 'Long moderate', sensitivity: -134, bandwidthHz: 125000 },
+  { key: 'TINY_SLOW', label: 'Tiny slow', sensitivity: -135.5, bandwidthHz: 15600 },
 ];
 
 /* ---------------------------------------------------------------- */
@@ -315,10 +325,10 @@ const DEFAULTS = {
   tx_beamwidth: null,
   // Medium fast, because that is what this mesh actually runs (#105).
   // The sensitivity has to move with it -- the two are one choice, and
-  // a form that opens on Medium fast with Long fast's -139 dBm would
+  // a form that opens on Medium fast with Long fast's -131 dBm would
   // predict a reach nobody has. The change handler already keeps them
   // together after the first load; this keeps them together before it.
-  sensitivity: -134,
+  sensitivity: -126,
   // Spelled out rather than `DEFAULT_PRESET_KEY`, because
   // `test_page_defaults.py` reads this literal to check that the
   // sensitivity beside it is the one this preset implies. A node case
@@ -669,7 +679,7 @@ function fromShareQuery(search) {
   /*
    * A link that names a preset and no sensitivity means the preset's
    * own figure, which is what the writer left out. Without this, a link
-   * to Long fast would open on Long fast with Medium fast's -134 dBm
+   * to Long fast would open on Long fast with Medium fast's -126 dBm
    * and predict a reach that preset does not have. See AGENTS.md 9.7.
    */
   if (values.preset && values.sensitivity == null) {
