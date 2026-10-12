@@ -1131,13 +1131,16 @@ See `AGENTS.md` 9.5 and 9.5.1 for why each rule is there.
 
 Tapbacks are grouped under the message they react to. The page draws
 each emoji once with its count, folds all but the four most sent into
-"+N more", and draws MeshMonitor's Auto Acknowledge tapbacks apart as
-"possibly auto-acked". MeshMonitor sends a keycap that says how the
-message arrived: `*` direct, `1` to `7` hops (`7` is seven or more), `#`
-via MQTT, and older builds `0` or a direct hit for direct (its
-`hopEmoji`, in `docs/features/automation-engine.md` of
-Yeraze/meshmonitor). The page writes each one out in words. A person can
-send those too, and nothing in the packet tells the two apart.
+"+N more", and draws the digit tapbacks apart as "Hop-count tapbacks"
+(#312). A digit says how the message arrived at whoever sent it: `*`
+direct, `1` to `7` hops (`7` is seven or more). MeshMonitor's Auto
+Acknowledge sends these (its `hopEmoji`, in
+`docs/features/automation-engine.md` of Yeraze/meshmonitor), and a
+person can send them too. Nothing in the packet tells the two apart, so
+the label names what the digit means and not who sent it. They are drawn
+apart only on MediumFast, LongFast and azmsh; on any other channel, such
+as Trivia, a digit is a person's answer and stays a reaction. The page
+writes each one out in words beside its sender.
 
 ### 5.2 `GET /api/chat/channels`
 
@@ -1729,11 +1732,21 @@ Query parameters: `channel` — the preset. Without it, the assessed
 preset with the most nodes. A window (8.00) moves `longest_link` to it.
 Without one, that board reads its own 72 hours.
 
-`reachable` and `direct_gateways` do not follow the window. They are
-read from the gaps assessment, which the gaps job writes for one window,
-`GAPS_WINDOW_HOURS`. Each board's `window_hours` says which window it
-holds, and `longest_link` carries `follows_window`, so the page can say
-which boards follow its range.
+`reachable` and `direct_gateways` follow a quick range: `hours` of 24,
+168 or 720 (#294). The gaps job writes their counts for each of those
+windows (`docs/GAPS.md` 6.1). They do not follow:
+
+- a fixed window (`since`, `until`), which no job can write in advance;
+- any other `hours`;
+- a quick range whose file the job has not written yet.
+
+They then hold the gaps assessment's own window, `GAPS_WINDOW_HOURS`.
+A 720 hour window is cut to `RETENTION_DAYS_PACKET` and does not follow
+when that is shorter.
+
+Every board carries `window_hours`, the window it holds, and
+`follows_window`, true only when that is the window asked for. The page
+reads `follows_window` and says "not the page range" where it is false.
 
 Response: `available`, `preset`, `presets`, `assessed`, `boards`.
 
@@ -1746,10 +1759,10 @@ not convert. The page writes `value` and `unit` through
 setting (#291).
 
 - `reachable` — the share of the hours a node was awake in which
-  something on the air heard it. At least 24 hours awake. Read from the
-  gaps assessment.
+  something on the air heard it. At least 24 hours awake, or half the
+  window when that is less: 12 hours at 24 h. Read from the gaps job.
 - `direct_gateways` — distinct gateways that heard the node with no hop
-  used, never its own upload. Read from the gaps assessment.
+  used, never its own upload. Read from the gaps job.
 - `longest_link` — the longest links graded `two_way` by
   `GET /api/graph`, with an SNR at least `GAPS_MARGIN_BAD_DB` above what
   the preset needs, and an exact position at both ends. It reads 72

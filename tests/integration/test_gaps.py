@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from sonoran.api.app import create_app
+from sonoran.api.routes import leaderboards
 from sonoran.config import Settings
 from sonoran.coverage import store as coverage_store
 from sonoran.db.session import make_engine, make_session_factory
@@ -918,3 +919,126 @@ def test_the_job_is_safe_to_run_twice(
     second = _rows(settings)
     assert set(first) == set(second)
     assert len(second) == len(first)
+
+
+# --- the leaderboards follow the Statistics range (#294) ---------------
+
+
+def _ranked(rows: list[dict], window: int, keep: set[str]) -> list[str]:
+    """Rank our own nodes with the route's own function.
+
+    Filtered first: the database is shared, and another file's nodes
+    could fill the top ten of a board this test reads.
+    """
+    mine = [row for row in rows if row["node_id"] in keep]
+    return [row["node_id"] for row in leaderboards._reachable_board(mine, window)["rows"]]
+
+
+def _boards(client: TestClient, hours: int) -> dict[str, dict]:
+    body = client.get(f"/api/stats/leaderboards?channel=LongFast&hours={hours}").json()
+    assert body["available"] is True, body
+    return {board["key"]: board for board in body["boards"]}
+
+
+def test_a_24_hour_board_differs_from_a_7_day_board_when_the_data_does(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """Will chose option A: the gaps boards follow the page range.
+
+    A was heard on the air every hour of the last day and in none of the
+    two days before it. B is the other way round: silent for the last
+    day, heard for the three days before. Over 24 hours A leads; over
+    seven days B does. A board that ignored the range would rank both
+    windows the same.
+    """
+    a, b, gateway = BASE + 201, BASE + 202, BASE + 209
+    settings = _settings(timescale_url, tmp_path)
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, a, role="ROUTER")
+        _add_node(connection, b, role="ROUTER")
+        _add_node(connection, gateway, role="ROUTER")
+        for hour in range(72):
+            heard = hour < 24
+            _packet(
+                connection,
+                a,
+                20000 + hour,
+                [(gateway, 2, 4.0)] if heard else [(a, 3, 6.0)],
+                seen_at=now - timedelta(hours=hour, minutes=5),
+            )
+        for hour in range(96):
+            heard = hour >= 24
+            _packet(
+                connection,
+                b,
+                21000 + hour,
+                [(gateway, 3, 5.0)] if heard else [(b, 3, 6.0)],
+                seen_at=now - timedelta(hours=hour, minutes=5),
+            )
+
+    _run(settings, gaps.run_once)
+
+    # The job wrote the two extra windows; the assessment is the 7 d one.
+    day_file = store.read_boards(settings, "LongFast", 24)
+    month_file = store.read_boards(settings, "LongFast", 720)
+    assert day_file is not None and month_file is not None
+    assert day_file["window_hours"] == 24
+    assert month_file["window_hours"] == 720
+    assert store.read_boards(settings, "LongFast", 168) is None
+
+    ours = {_ident(a), _ident(b)}
+    week_rows = list(_rows(settings).values())
+    assert _ranked(day_file["nodes"], 24, ours) == [_ident(a), _ident(b)]
+    assert _ranked(week_rows, 168, ours) == [_ident(b), _ident(a)]
+    # B was heard directly only before the last day.
+    day_direct = {row["node_id"]: row["direct_gateways"] for row in day_file["nodes"]}
+    week_direct = {row["node_id"]: row["direct_gateways"] for row in week_rows}
+    assert day_direct[_ident(b)] == 0
+    assert week_direct[_ident(b)] == 1
+
+    # The API serves each window and says that it follows the range.
+    with TestClient(create_app(settings)) as client:
+        for hours in (24, 168, 720):
+            for key in ("reachable", "direct_gateways"):
+                board = _boards(client, hours)[key]
+                assert board["follows_window"] is True, (hours, key)
+                assert board["window_hours"] == hours, (hours, key)
+        # A custom range has no file. It gets the assessment, labelled.
+        since = (now - timedelta(days=2)).date().isoformat()
+        body = client.get(f"/api/stats/leaderboards?channel=LongFast&since={since}").json()
+        for board in body["boards"]:
+            if board["key"] != "longest_link":
+                assert board["follows_window"] is False, board["key"]
+                assert board["window_hours"] == 168, board["key"]
+
+
+def test_the_month_board_is_not_rebuilt_on_every_run(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The 30 d read is the expensive one, and its answer barely moves.
+
+    Both files are made to look one run old, which is 30 minutes. The
+    24 h file is then rebuilt and the 30 d file is kept: it waits for
+    six hours.
+    """
+    node, gateway = BASE + 211, BASE + 219
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, node, role="CLIENT")
+        _add_node(connection, gateway, role="ROUTER")
+        _busy(connection, node, 22000, lambda hour: [(gateway, 2, 4.0)])
+
+    _run(settings, gaps.run_once)
+    one_run_ago = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
+    for hours in (24, 720):
+        held = store.read_boards(settings, "LongFast", hours)
+        assert held is not None, hours
+        store.write_boards(settings, "LongFast", hours, held | {"generated_at": one_run_ago})
+
+    _run(settings, gaps.run_once)
+    day = store.read_boards(settings, "LongFast", 24)
+    month = store.read_boards(settings, "LongFast", 720)
+    assert day is not None and month is not None
+    assert day["generated_at"] != one_run_ago, "the 24 h board was not rebuilt"
+    assert month["generated_at"] == one_run_ago, "the 30 d board was rebuilt on every run"

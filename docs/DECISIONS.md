@@ -1326,3 +1326,25 @@ This was proved by making the page re-render every 150 ms: the old read failed 2
 ### Environment
 - **Docker VM:** the Colima VM (2 CPUs, 1 GiB) ran six agents' Postgres containers. Postgres was OOM-killed more than once, and leftover test containers plus dangling images filled its 60 GB disk to 100%.
 - **Before fanning out:** check `df` inside the VM, and remove what you start.
+
+## 2026-10-08 — the gaps leaderboards follow the page range (#294)
+
+Will chose option A: the two gaps leaderboards follow the Statistics
+range. Four choices were made to build it. `docs/GAPS.md` 6.1 has the
+detail.
+
+- **A small file for each extra window, not a full assessment.** A board
+  needs four counts. The signals, the siting, and the neighbour,
+  traceroute and position reads are most of what an assessment costs,
+  and no board shows them. The assessment file keeps its shape, so the
+  gaps page and the node page are not touched.
+- **A custom range is never matched to a near window.** It holds the
+  job's own window and says "not the page range". A near window shown
+  as the range would be a claim about a period nobody measured.
+- **A long window is rebuilt less often.** A file is rebuilt once it is
+  older than 1/120 of its window, so 30 d is rebuilt every 6 hours. Its
+  read is about 4.3 times the 7 d one and its answer barely moves in
+  half an hour. The job logs each file's time, so the cost can be read
+  on the live box.
+- **The awake floor scales.** 24 awake hours in a 24 hour window would
+  rank almost nobody, so the floor is half the window when that is less.

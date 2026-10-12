@@ -371,6 +371,11 @@ the 30 day button counts less than 30 days and each widget says so. If it
 is raised, the 720 hour cap in `sonoran/api/window.py` and the page's
 `STATS_RANGES` stay where they are until they are changed with it.
 
+The gaps job's leaderboard windows (`docs/GAPS.md` 6.1) are cut to
+`RETENTION_DAYS_PACKET` the same way. Their files say the hours they
+hold, and the board says "not the page range" when that is less than
+the range.
+
 ## 7. Indexes
 
 Keep indexes minimal. Each index slows inserts.
