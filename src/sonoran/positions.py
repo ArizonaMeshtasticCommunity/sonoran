@@ -123,3 +123,58 @@ def is_precise_enough(bits: int | None, minimum: int = MIN_SITE_PRECISION_BITS) 
     if bits is None or bits <= 0:
         return True
     return bits >= minimum
+
+
+# The two site-selection rules for position precision (#315).
+#
+# `precise` is what every published coverage map predicts from. A
+# position must be `MIN_SITE_PRECISION_BITS` or better, or an operator
+# must give one. This is the decision Logan and Tyler asked for and Will
+# made on 2026-10-08: a footprint drawn from a rounded point can sit in
+# the wrong valley, and the compute it costs is wasted.
+#
+# `approximate` also takes positions rounded down to
+# `APPROXIMATE_SITE_PRECISION_BITS`. A host may publish such a map as a
+# separate site set, beside the precise one and never instead of it. The
+# public embed never reads it. See `docs/COVERAGE.md` 9.1.2.
+SITE_PRECISION_PRECISE = "precise"
+SITE_PRECISION_APPROXIMATE = "approximate"
+SITE_PRECISIONS = (SITE_PRECISION_PRECISE, SITE_PRECISION_APPROXIMATE)
+
+# The coarsest position the approximate rule takes, by default.
+#
+# 13 bits is 2.9 km. It is what most of the Arizona backbone shares
+# through the public broker, and it is the value s.azmsh.dev ran with
+# after #318. Below it the broker's own coarsest settings begin.
+APPROXIMATE_SITE_PRECISION_BITS = 13
+
+
+def precise_minimum_bits(configured: int) -> int:
+    """Return the precision the precise rule asks for, in bits.
+
+    `configured` is `COVERAGE_MIN_PRECISION_BITS`. It may raise the
+    floor, and zero still turns the test off for a deployment that reads
+    its own broker. It may not lower the floor below
+    `MIN_SITE_PRECISION_BITS`: a value from 1 to 15 asked for rounded
+    positions on the main map, and that is what #315 stopped. Such a
+    host gets 16, and the coverage job says so in its log.
+    """
+    if configured <= 0:
+        return 0
+    return max(configured, MIN_SITE_PRECISION_BITS)
+
+
+def site_minimum_bits(precision: str, configured_precise: int, configured_approximate: int) -> int:
+    """Return the precision one site-selection rule asks for, in bits.
+
+    The approximate rule is never stricter than the precise one. It is
+    the precise map and more, so every precise site is also on it.
+    """
+    precise = precise_minimum_bits(configured_precise)
+    if precision == SITE_PRECISION_PRECISE:
+        return precise
+    if precision == SITE_PRECISION_APPROXIMATE:
+        if precise == 0:
+            return 0
+        return min(precise, max(configured_approximate, 0))
+    raise ValueError(f"not a site precision: {precision!r}")

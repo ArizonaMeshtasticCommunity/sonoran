@@ -591,17 +591,105 @@ different languages and nothing else connects them.
 `COVERAGE_MIN_PRECISION_BITS` may be set to zero by a deployment that
 reads its own broker, where every position arrives at full precision.
 
-**Or lowered on purpose, to draw the backbone that shares only a
-rounded position.** s.azmsh.dev sets 13 (2026-09-29): 31 routers were
-left out at 16, among them Towers 2 near Wickenburg, and the map drew
-nothing west of it. 13 keeps every position of 2.9 km or better and
-still refuses the broker's coarsest. Such a site is predicted from its
-rounded point, so its footprint can sit on the wrong side of a ridge,
-which is the cost above. It is not hidden: each site in
-`presets[].nodes` carries `position_deviation_m`, set only for a
-rounded position, and the page can say the footprint is approximate.
-An operator position in `config/nodes.yaml` is still the fix, and a
-site given one carries no deviation.
+### 9.1.2.1 Precise positions only, and the operator position (#315)
+
+**Every published map predicts from precise positions only.** That is
+16 bits or better, or a position an operator gave.
+
+This reverses part of #318. That change let a host lower
+`COVERAGE_MIN_PRECISION_BITS`, and s.azmsh.dev set 13 on 2026-09-29 to
+draw Towers 2 near Wickenburg. Logan and Tyler then asked for it to
+stop:
+
+- Logan: "computing for something offset to a mountain does not make
+  sense when its on a house just so its seen."
+- Tyler showed Tower Mountain predicted from its rounded point, "deep
+  in a valley", and wrote: "We should only report either fully precise
+  locations or override the map."
+
+Will decided on 2026-10-08 to follow them. See `docs/DECISIONS.md`.
+
+So the rule is a named one, in `sonoran/positions.py`:
+
+| Site precision | Takes | Used by |
+|---|---|---|
+| `precise` | 16 bits or better, or an operator position | Every published map, the public embed, and the calibration fit |
+| `approximate` | Also positions down to `COVERAGE_APPROXIMATE_MIN_BITS` (13) | The extra maps of `COVERAGE_INCLUDE_APPROXIMATE` only |
+
+`COVERAGE_MIN_PRECISION_BITS` may raise the precise floor, or be zero
+for a deployment that reads its own broker. **It may not lower it.** A
+value from 1 to 15 is read as 16, and the job logs a warning that names
+the setting and what to set instead. The value 13 is still in the
+`.env` of the host that followed the #318 deploy notes, and a setting
+that silently kept the old map would keep the decision from taking
+effect.
+
+The calibration fit uses the same floor (`jobs/calibrate.py::read_peers`).
+A fuzzed peer turns a silent link into false evidence, which is the
+failure in `AGENTS.md` 9.21. With 13 on the host it took rounded peers
+too.
+
+**The fix for a known router is an operator position.** Write its
+latitude and longitude in the overrides file, and its antenna height if
+it is known:
+
+```yaml
+nodes:
+  # An example. Use the real ID and the position the owner gives.
+  "!0a51b007":
+    latitude: 33.4484
+    longitude: -112.0740
+    antenna_height_m: 20.0
+    note: "Ridge router. Position from the owner, 2026-10."
+```
+
+The node is then a precise site at that position. The rules for it:
+
+- It places a node and does nothing else. The role test runs first, so
+  a client given a position is still not infrastructure, and is still
+  not on the public map.
+- It is used by the coverage job and the calibration fit only. The map
+  page, the node page and the public node markers still show the
+  position the node reported. The node page shows the antenna height,
+  because that is a radio fact and not a position.
+- The manifest says `position_source: "operator"` for the site. It does
+  not carry the position.
+- Each entry is checked when the file is read. Half a position, a pair
+  that is not a place (such as 0, 0), a value out of range, and an ID
+  that is not `!` and eight hexadecimal digits are refused, each with a
+  log line that names the node. Quote the ID: YAML reads a bare `!` as
+  a tag.
+
+**An operator position is a precise location, and the public tiles show
+it.** The public node markers stay snapped (`embed/sanitise.py`), but a
+footprint has a centre. That is already true for every router that
+shares its full position. Add a position only for a node whose owner
+agrees, and keep a person's house out of the file. `docs/DEPLOY.md` 8
+says how to keep the file on the host, out of the repository.
+
+### 9.1.2.1.1 The approximate map
+
+`COVERAGE_INCLUDE_APPROXIMATE=true` makes a run also predict an
+approximate map of each site set, from the precise sites and the rounded
+ones down to `COVERAGE_APPROXIMATE_MIN_BITS`. Off by default.
+
+- It is its own site set: `infrastructure_approximate`, and
+  `extended_approximate` when `COVERAGE_INCLUDE_CLIENTS` is on. It has
+  its own tiles, and `Manifest.site_sets` marks it `approximate: true`.
+- Each rounded site carries `position_deviation_m`, so a page can say
+  the footprint is approximate, and by how much.
+- The public embed never reads it. The public tile route reads
+  `infrastructure` off the path and nothing else, and the name of an
+  approximate set is never `infrastructure`.
+  `test_the_public_tiles_never_serve_the_approximate_map` pins it.
+- **It costs one more full prediction of each site set.** The
+  approximate map predicts every site again, the precise ones too,
+  because the job keeps no result for one site after it has been added
+  to the map (`_predict`). With the setting off, the cost is what it was.
+
+The dashboard's site-set picker lists it like any other set. A later
+change adds a settings panel to the coverage page, whose first toggle
+is this one.
 
 ### 9.1.2.2 Predicting from the nodes that repeat
 

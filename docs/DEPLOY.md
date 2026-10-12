@@ -133,3 +133,71 @@ Never use `pkill -f sonoran-api` or a pattern like it. It stops every
 server that matches, the ones of other people included, and it can
 also match the shell that runs it. Stop one server by its process ID,
 found from its port.
+
+## 8. Give a coverage site its real position
+
+The coverage map predicts from precise positions only (#315). A router
+that shares a rounded position is left out, and the coverage page lists
+it under "rounded positions". To bring it back, write the position that
+its owner gives you in the overrides file. Do not guess a position from
+the rounded one: a guess puts the footprint in the wrong valley, which
+is the problem this rule removes. See `docs/COVERAGE.md` 9.1.2.1.
+
+The overrides file is `RADIO_OVERRIDES_PATH`. The default is
+`config/nodes.yaml` in the repository, which is copied into the image.
+A position is a precise location of somebody's equipment, so keep it on
+the host and out of the repository unless the owner agrees to publish
+it.
+
+1. On the host, as the service account, write the file outside the
+   clone, for example `<deployment>/../sonoran-local/nodes.yaml`. Quote
+   each node ID:
+
+   ```yaml
+   nodes:
+     "!0a51b007":
+       latitude: 33.4484
+       longitude: -112.0740
+       antenna_height_m: 20.0
+       note: "Position from the owner, 2026-10."
+   ```
+
+   Copy the radio facts of any entry in `config/nodes.yaml` into this
+   file as well. The setting names one file, and this one replaces it.
+
+2. Mount it read-only into `jobs` and `api` in
+   `docker-compose.override.yml`, and point the setting at it:
+
+   ```yaml
+   services:
+     jobs:
+       volumes:
+         - ../sonoran-local/nodes.yaml:/etc/sonoran/nodes.yaml:ro
+       environment:
+         RADIO_OVERRIDES_PATH: /etc/sonoran/nodes.yaml
+     api:
+       volumes:
+         - ../sonoran-local/nodes.yaml:/etc/sonoran/nodes.yaml:ro
+       environment:
+         RADIO_OVERRIDES_PATH: /etc/sonoran/nodes.yaml
+   ```
+
+   The coverage job and the calibration read the position. The API
+   reads only the radio facts, for the node page. No page shows the
+   position from this file.
+
+3. Recreate the two services: `docker compose up -d --no-deps jobs api`.
+   Read the `jobs` log. It says `read radio overrides for N nodes`, and
+   it names every entry that it refused, with the reason.
+
+4. The change shows from the next coverage run. To run one now, remove
+   `coverage/attempts/coverage.txt` in the coverage cache. On the
+   coverage page, the site is in the sites list and is no longer under
+   "rounded positions".
+
+**`COVERAGE_MIN_PRECISION_BITS` below 16 has no effect now.** The #318
+deploy notes told s.azmsh.dev to set 13. Remove that line from `.env`.
+The `jobs` log warns while it is there. To also draw the rounded
+positions on a separate, dashboard-only map, set
+`COVERAGE_INCLUDE_APPROXIMATE=true`. That costs one more prediction of
+each map, so it roughly doubles the run.

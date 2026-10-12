@@ -57,6 +57,11 @@ from sonoran.radio.resolve import RadioProfile
 # somebody walking around actually has.
 HANDHELD_TX_POWER_DBM = 22.0
 
+# Where a site's position came from. The manifest carries it on each
+# site, so the dashboard can say "position set by the operator" (#315).
+POSITION_REPORTED = "reported"
+POSITION_OPERATOR = "operator"
+
 
 @dataclass(frozen=True)
 class Site:
@@ -83,6 +88,9 @@ class Site:
     # a rounded position is drawn around the rounded point, so the page
     # needs this to say the footprint is approximate.
     position_deviation_m: float | None = None
+    # `POSITION_OPERATOR` when the position came from the overrides
+    # file, `POSITION_REPORTED` when the node sent it.
+    position_source: str = POSITION_REPORTED
 
     @property
     def sort_key(self) -> float:
@@ -110,6 +118,7 @@ def make_site(
     profile: RadioProfile,
     preset: ModemPreset,
     position_deviation_m: float | None = None,
+    position_source: str = POSITION_REPORTED,
 ) -> Site:
     """Return a site, with the clutter around it worked out."""
     around = clutter_at(settings, latitude, longitude)
@@ -128,6 +137,7 @@ def make_site(
         clutter_diffracting=diffracting,
         clutter_loss_db=terminal_loss_db(around, height, DEFAULT_FREQUENCY_MHZ, diffracting),
         position_deviation_m=position_deviation_m,
+        position_source=position_source,
     )
 
 
