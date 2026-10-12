@@ -1800,10 +1800,37 @@ async function main() {
     const fetched = [];
     page.on('request', (request) => fetched.push(new URL(request.url()).pathname));
     const heavy = /echarts\.min\.js|protobuf\.min\.js|js-yaml\.min\.js|config-check\.js/;
+    /*
+     * Leave a page only when its own render has ended (#354).
+     *
+     * A navigation aborts every request still in flight, and the
+     * collector counts each abort as an error. This waited for
+     * `networkidle`, which is the wrong signal: Playwright fires it once
+     * for each document and then answers at once. The node page asks for
+     * its signal and its packets only after it has drawn the history
+     * charts. A long history can take more than 500 ms to draw, with no
+     * request open, and that is all `networkidle` needs. So the event
+     * fired early, the wait returned at once, and the two requests were
+     * aborted: the exact lines of the issue. The `.catch` also hid a
+     * timeout.
+     *
+     * `loading` is true until a render has awaited every request it
+     * made, and `timelinePaging.busy` covers the one request the packet
+     * timeline makes outside a render. A page that does not settle fails
+     * here and says so.
+     *
+     * The wait is longer than the page's own `REQUEST_TIMEOUT_MS` (60 s).
+     * A request that hangs is then ended by the page itself, and its
+     * abort is reported with its address, which is the true fault. Do not
+     * filter `ERR_ABORTED` to quiet this journey: that hides that abort.
+     */
+    const settle = async (name) => must(await waitFor(page, () => !loading && !timelinePaging.busy, 90000),
+      `#${name} was still loading after 90 s`);
     await open(page, 'nodes', 3000);
     const early = fetched.filter((path) => heavy.test(path));
     must(early.length === 0, `the nodes page fetched ${early.join(', ')}`);
     must(!(await page.evaluate(() => Boolean(window.echarts))), 'echarts is defined on the nodes page');
+    await settle('nodes');
 
     const drew = [];
     for (const name of ['dashboard', 'stats', 'graph']) {
@@ -1818,9 +1845,7 @@ async function main() {
       }
       must(ok, `a cold load of #${name} drew no chart`);
       drew.push(name);
-      // Let the page's other requests land before leaving it, or the
-      // navigation aborts them and each one is counted as an error.
-      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await settle(name);
     }
     // The node page draws its charts once its panels arrive.
     const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
@@ -1830,7 +1855,7 @@ async function main() {
     must(await waitFor(page, () => [...document.querySelectorAll('[data-page="node"] canvas')]
       .some((canvas) => canvas.width > 0), 30000), `a cold load of node ${nodes[0].node_id} drew no chart`);
     drew.push('node');
-    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await settle('node');
 
     await page.goto('about:blank');
     await open(page, 'config', 500);
@@ -2214,17 +2239,16 @@ async function main() {
     must((await chips()).every((text) => text.startsWith('last 7 d')), 'a chip still names another range');
 
     /*
-     * The gaps-backed boards cannot follow the range, and say so. The link
-     * board does follow it.
+     * Every board follows a quick range (#294, option A): the gaps job
+     * writes the two gaps boards for 24 h, 7 d and 30 d. At 7 d they are the
+     * assessment itself, so this holds from the first run of the job.
      */
-    const boards = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+    const boardChips = () => page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
       .map((h) => [h.dataset.label, (h.querySelector('span.muted') || {}).textContent || '']));
+    const boards = await boardChips();
     if (boards.length) {
-      const link = boards.find(([title]) => /Longest reliable link/.test(title));
-      must(link && link[1] === 'last 7 d', `the link board chip reads ${link && link[1]}`);
-      const fixed = boards.filter(([title]) => !/Longest reliable link/.test(title));
-      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
-        `a gaps board does not say it keeps its own window: ${JSON.stringify(fixed)}`);
+      must(boards.every(([, chip]) => chip === 'last 7 d'),
+        `a board does not follow 7 d: ${JSON.stringify(boards)}`);
     }
 
     // A reload keeps it.
@@ -2251,6 +2275,16 @@ async function main() {
     await settled();
     missing = everyWidgetAsked(`since=${day(40)}`);
     must(!missing.length, `these widgets did not follow the dates: ${missing.join(', ')}`);
+    /*
+     * A custom range has no precomputed file. The two gaps boards hold the
+     * job's own window and say so; the link board reads the dates.
+     */
+    const customBoards = await boardChips();
+    if (customBoards.length) {
+      const fixed = customBoards.filter(([title]) => !/Longest reliable link/.test(title));
+      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
+        `a gaps board passes another window off as the dates: ${JSON.stringify(fixed)}`);
+    }
     const capped = await chips();
     must(capped.every((text) => /counted from/.test(text)),
       `a widget does not say retention cuts the range short: ${capped.join(' | ')}`);
@@ -3737,18 +3771,34 @@ async function main() {
      * without writing to a shared database. `render('firehose')` is the
      * call the Live timer makes; Live is switched off so no timer poll
      * lands in the middle.
+     *
+     * The real rows are read ONCE, from the first answer, and every poll
+     * is built from that copy (#354). The stub used to build its packets
+     * from `rows[0]` of each answer. When the newest real row changed
+     * between polls -- a tie on `first_seen_at`, or a packet the seed
+     * added -- the "same" made packets took a new node in their keys,
+     * and every one of them counted as new: "9 new" where 4 was right.
+     * A real packet that arrived between polls counted as new as well.
+     * Now the count depends on `extra` alone.
      */
     let extra = 0;
+    let base = null;
     await page.route(/\/api\/packets\?/, async (route) => {
       const response = await route.fetch();
       const rows = await response.json();
-      if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+      if (!base) {
+        if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+        base = { rows, node: rows[0].packet_key.split(':')[0], at: Date.now() };
+      }
       const made = [];
       for (let n = extra; n > 0; n -= 1) {
-        const [node] = rows[0].packet_key.split(':');
-        made.push({ ...rows[0], packet_key: `${node}:${990000000 + n}`, first_seen_at: new Date().toISOString() });
+        made.push({
+          ...base.rows[0],
+          packet_key: `${base.node}:${990000000 + n}`,
+          first_seen_at: new Date(base.at + n * 1000).toISOString(),
+        });
       }
-      return route.fulfill({ response, json: [...made, ...rows].slice(0, rows.length) });
+      return route.fulfill({ response, json: [...made, ...base.rows].slice(0, base.rows.length) });
     });
     await open(page, 'firehose', 1000);
     must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
@@ -4162,6 +4212,28 @@ async function main() {
   });
 
   /*
+   * The other half of #283: a mouse keeps 15 px at a phone's width. The
+   * rule is keyed on the pointer, and a narrow desktop window is not a
+   * phone. Without this, a rule keyed on the width would pass the touch
+   * journey below as well.
+   */
+  await journey(context, 'a mouse keeps 15 px body text at any width (#283)', async (page) => {
+    const sizes = [];
+    for (const width of [390, 1500]) {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page, 'nodes', 2000);
+      const got = await page.evaluate(() => ({
+        coarse: matchMedia('(pointer: coarse)').matches,
+        body: getComputedStyle(document.body).fontSize,
+      }));
+      must(!got.coarse, 'this context reports a coarse pointer, so it cannot stand for a mouse');
+      must(got.body === '15px', `at ${width} px with a mouse the body is ${got.body}`);
+      sizes.push(`${width}:${got.body}`);
+    }
+    return sizes.join(' ');
+  });
+
+  /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
    * 400 percent zoom the criterion is derived from.
@@ -4329,6 +4401,70 @@ async function main() {
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
     return 'all 14 pages, no sideways document scroll';
+  });
+
+  /*
+   * #283. On a touch screen the body is 16 px and no text is under
+   * .78 rem (12.48 px). Keyed on the pointer, so this context is a touch
+   * one at every width, the iPad's 834 included.
+   *
+   * The pages are the ones with the widest tables, so a larger font that
+   * pushes the document sideways shows here first. Letters are 0.05em
+   * wider, as in the Who hears it journey, because CI's Linux fonts are
+   * wider than a Mac's. The sticky bar (#271) must still be at the top
+   * after a scroll, and `--bar-h` must still be its height, or the
+   * things that stick under it (#280, #286) hide behind it.
+   */
+  await journey(narrow, 'body text is 16 px on a touch screen, and nothing scrolls sideways (#283)', async (page) => {
+    const bad = [];
+    const facts = [];
+    for (const width of [320, 390, 834]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const name of ['dashboard', 'nodes', 'firehose', 'stats', 'gaps', 'chat']) {
+        await open(page, name, 2500);
+        await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+        await page.waitForTimeout(200);
+        await page.evaluate(() => window.scrollTo(0, 1200));
+        await page.waitForTimeout(200);
+        const got = await page.evaluate(() => {
+          let smallest = 99;
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const parent = node.parentElement;
+            if (!node.textContent.trim() || !parent || !parent.getClientRects().length) continue;
+            // A chart's SVG labels are sized by the chart, not by this rule.
+            if (parent.closest('svg')) continue;
+            smallest = Math.min(smallest, parseFloat(getComputedStyle(parent).fontSize));
+          }
+          const fields = [...document.querySelectorAll('.page.active input, .page.active select, .page.active textarea')]
+            .filter((field) => field.getClientRects().length && field.type !== 'checkbox' && field.type !== 'radio')
+            .map((field) => parseFloat(getComputedStyle(field).fontSize));
+          const bar = document.querySelector('.sidebar').getBoundingClientRect();
+          return {
+            body: getComputedStyle(document.body).fontSize,
+            smallest,
+            field: fields.length ? Math.min(...fields) : null,
+            scroll: document.documentElement.scrollWidth,
+            client: document.documentElement.clientWidth,
+            barTop: bar.top,
+            barHeight: Math.ceil(bar.height),
+            barVar: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')),
+            scrolled: window.scrollY,
+          };
+        });
+        const at = `${name} at ${width} px`;
+        if (got.body !== '16px') bad.push(`${at}: the body is ${got.body}`);
+        if (got.smallest < 12.4) bad.push(`${at}: text at ${got.smallest} px`);
+        if (got.field !== null && got.field < 16) bad.push(`${at}: a form field at ${got.field} px`);
+        if (got.scroll > got.client + 1) bad.push(`${at}: the page scrolls sideways, ${got.scroll}/${got.client}`);
+        if (got.scrolled > 0 && Math.abs(got.barTop) > 1) bad.push(`${at}: the bar scrolled away (top ${got.barTop})`);
+        if (Math.abs(got.barVar - got.barHeight) > 1) bad.push(`${at}: --bar-h is ${got.barVar}, the bar is ${got.barHeight}`);
+        if (width === 320) facts.push(`${name} ${got.scroll}/${got.client}`);
+      }
+    }
+    await page.setViewportSize({ width: 320, height: 640 });
+    must(bad.length === 0, bad.join('; '));
+    return `16 px body, no text under 12.5 px, at 320/390/834; at 320: ${facts.join(', ')}`;
   });
   await journey(narrow, 'the firehose reads as cards on a phone (#273)', async (page) => {
     /*

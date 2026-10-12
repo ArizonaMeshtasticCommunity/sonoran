@@ -933,6 +933,10 @@ map-first and full-screen.
 - **Effort:** M. **Risk:** medium. Every page gets longer, and every table
   gets wider (which makes items 7–9 more pressing).
 - **Needs Will:** this is a look-and-feel change.
+- **Decided (Will, 2026-10-08):** build it. Built in #283. The body is
+  16 px and the smallest text is .78 rem (12.48 px) under
+  `(pointer: coarse)`. Tables keep their width, because a rem size follows
+  the root and the root stays 16 px. The measurements are in the PR.
 
 **19. Reduced motion for charts and map zoom**
 

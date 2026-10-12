@@ -12,9 +12,13 @@ something that makes the mesh work better for other people:
   healthy signal margin. Measured, never claimed.
 
 The first two read the rows the gaps job already wrote, so they cost no
-database work at all and cannot disagree with the gaps page. The third
-reads the same link evidence as the graph page, through the same
-functions, and is held for a while because it is the expensive one.
+database work at all and cannot disagree with the gaps page. They follow
+the Statistics range (#294): the job writes their counts for 24 h, 7 d
+and 30 d, and `_gaps_rows` picks the one the page asked for. A custom
+range has no file, and those boards then say they hold another window.
+
+The third reads the same link evidence as the graph page, through the
+same functions, and is held for a while because it is the expensive one.
 
 Every board states its window, what it measures, and what it cannot
 know. A board that does not say what it cannot see is an argument, not
@@ -29,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.api.cache import KeyedCache
 from sonoran.api.dependencies import get_session
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.api.routes.gaps import read_assessment
+from sonoran.api.routes.gaps import read_assessment, read_board_window
 from sonoran.api.routes.graph import (
     TWO_WAY,
     Edge,
@@ -40,6 +44,7 @@ from sonoran.api.routes.graph import (
 from sonoran.api.routes.node_page import exact_positions
 from sonoran.api.window import Window, optional_window
 from sonoran.config import Settings
+from sonoran.gaps import boards as gaps_boards
 from sonoran.gaps import store as gaps_store
 from sonoran.gaps.siting import distance_km
 from sonoran.radio.presets import preset_for_channel, required_snr_db
@@ -67,6 +72,10 @@ LINK_CACHE_SECONDS = 900.0
 # The fewest hours awake before the reachable board ranks a node. The
 # gaps job has its own floor for the signal; this one keeps a node that
 # was awake for one lucky hour off the top of the board.
+#
+# A window shorter than twice this uses half the window instead (#294).
+# A 24 hour board that asked for 24 awake hours would rank only a node
+# heard in every single hour, and the board would be almost empty.
 MIN_AWAKE_HOURS = 24
 
 #: One link board for each preset and window. Keyed and capped: the
@@ -90,9 +99,10 @@ async def leaderboards(
     first preset the gaps job assessed is used.
 
     A window (`hours`, or `since` and `until`) moves the link board to
-    it (#294). The two boards read from the gaps assessment keep the
-    gaps job's own window, and each board states its window, so the
-    page can say which boards follow its range and which do not.
+    it (#294). The two boards read from the gaps job follow it when the
+    job wrote that window, which it does for the page's quick ranges.
+    Every board states its window and `follows_window`, so the page can
+    say which boards follow its range and which do not.
     """
     settings: Settings = request.app.state.settings
     presets = _assessed_presets(settings)
@@ -116,12 +126,11 @@ async def leaderboards(
     # the expensive read that hold exists for.
     preset = modem.name
     document = read_assessment(settings, preset)
-    rows = _rows(document)
-    window = document.get("window_hours") if document else None
+    rows, window, follows = _gaps_rows(settings, preset, document, span)
 
     boards: list[dict[str, object]] = [
-        _reachable_board(rows, window),
-        _direct_board(rows, window),
+        _reachable_board(rows, window, follows),
+        _direct_board(rows, window, follows),
     ]
     boards.append(
         await _link_caches.get(
@@ -149,6 +158,57 @@ def _assessed_presets(settings: Settings) -> list[str]:
     return [str(item["preset"]) for item in gaps_store.assessed_presets(settings)]
 
 
+def _gaps_rows(
+    settings: Settings,
+    preset: str,
+    document: dict[str, object] | None,
+    span: Window | None,
+) -> tuple[list[dict[str, object]], object, bool]:
+    """Return the rows the two gaps boards rank, their window, and whether it is the range.
+
+    In order:
+
+    1. No assessment: nothing, as before. A board file never stands in
+       for a preset the job did not assess.
+    2. A quick range the assessment holds: the assessment. That is 7 d
+       by default.
+    3. A quick range with a board file: that file.
+    4. Anything else -- a custom range, an `hours` that is not a quick
+       range, a file the job has not written yet: the assessment, and
+       `follows` is false so the page says "not the page range".
+
+    `follows` is true only when the window held is the window asked
+    for. A 30 d file that retention cut to 14 days does not follow.
+    """
+    own = document.get("window_hours") if document else None
+    if document is None:
+        return [], own, False
+    asked = _quick_range(span)
+    if asked is None:
+        return _rows(document), own, False
+    if own == gaps_boards.window_hours(settings, asked):
+        return _rows(document), own, own == asked
+    held = read_board_window(settings, preset, asked)
+    if held is None:
+        return _rows(document), own, False
+    window = held.get("window_hours")
+    return _rows(held), window, window == asked
+
+
+def _quick_range(span: Window | None) -> int | None:
+    """Return the page's quick range a window is, or None.
+
+    Only a rolling window ends now, so only `hours` can match. The key is
+    the request's own words, `h168` for `hours=168`.
+    """
+    if span is None:
+        return None
+    for hours in gaps_boards.BOARD_WINDOW_HOURS:
+        if span.key == f"h{hours}":
+            return hours
+    return None
+
+
 def _rows(document: dict[str, object] | None) -> list[dict[str, object]]:
     listed = document.get("nodes") if document else None
     return [row for row in listed if isinstance(row, dict)] if isinstance(listed, list) else []
@@ -163,12 +223,26 @@ def _node(row: dict[str, object]) -> dict[str, object]:
     return {"node_id": row.get("node_id"), "display_name": row.get("display_name")}
 
 
-def _reachable_board(rows: list[dict[str, object]], window: object) -> dict[str, object]:
-    """Heard over the air in the most of the hours it was awake."""
+def _awake_floor(window: object) -> float:
+    """The fewest awake hours the reachable board ranks, for one window."""
+    if isinstance(window, int | float) and window > 0:
+        return min(MIN_AWAKE_HOURS, window / 2)
+    return MIN_AWAKE_HOURS
+
+
+def _reachable_board(
+    rows: list[dict[str, object]], window: object, follows: bool = False
+) -> dict[str, object]:
+    """Heard over the air in the most of the hours it was awake.
+
+    The whole of this board's measure lives here, for every window. #293
+    will change what "reachable" means, and it changes this function.
+    """
+    floor = _awake_floor(window)
     ranked = []
     for row in rows:
         awake = _count(row, "active_hours")
-        if awake < MIN_AWAKE_HOURS:
+        if awake < floor:
             continue
         heard = _count(row, "rf_hours")
         ranked.append((heard / awake, awake, row))
@@ -178,9 +252,10 @@ def _reachable_board(rows: list[dict[str, object]], window: object) -> dict[str,
         "title": "Most consistently reachable",
         "measure": "The share of the hours it was awake in which something on the air heard it.",
         "window_hours": window,
+        "follows_window": follows,
         "cannot_know": (
             "Only gateways report, so an hour in which only other nodes heard it counts as "
-            f"not heard. A node awake for fewer than {MIN_AWAKE_HOURS} hours is not ranked."
+            f"not heard. A node awake for fewer than {floor:g} hours is not ranked."
         ),
         "rows": [
             _node(row)
@@ -194,7 +269,9 @@ def _reachable_board(rows: list[dict[str, object]], window: object) -> dict[str,
     }
 
 
-def _direct_board(rows: list[dict[str, object]], window: object) -> dict[str, object]:
+def _direct_board(
+    rows: list[dict[str, object]], window: object, follows: bool = False
+) -> dict[str, object]:
     """Heard directly by the most gateways."""
     ranked = [row for row in rows if _count(row, "direct_gateways") > 0]
     ranked.sort(key=lambda row: (-_count(row, "direct_gateways"), str(row.get("node_id"))))
@@ -205,6 +282,7 @@ def _direct_board(rows: list[dict[str, object]], window: object) -> dict[str, ob
             "Distinct gateways that heard it with no hop used, never counting its own upload."
         ),
         "window_hours": window,
+        "follows_window": follows,
         "cannot_know": (
             "Only gateways are counted. A node that many ordinary nodes hear, and few "
             "gateways, does real work that this board cannot see."

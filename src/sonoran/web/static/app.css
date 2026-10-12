@@ -162,7 +162,10 @@
   --role-TRACKER: #f4a259;
   --role-SENSOR: #46b3e6;
   --role-LOST_AND_FOUND: #ef6f5c;
-  --font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* 16 px and 12.5 px on a touch screen (#283). See the end of this file. */
+  --font-size: 15px;
+  --text-floor: 0px;
+  --font: var(--font-size)/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
 }
 
@@ -190,6 +193,42 @@
      (#282), home indicator included. Zero wherever the bar is not
      drawn; the phone block near the end of this file sets it. */
   --tabbar-h: 0px;
+}
+
+/*
+ * Text size on a touch screen (#283).
+ *
+ * The body is 15 px. The mobile review measured 96 to 100 percent of the
+ * text on every page under 16 px, and tags at 11.5 px (section 2.6 of
+ * docs/design/2026-09-27-mobile-review.md). On a touch screen the body
+ * is 16 px, and no text is under .78 rem (12.48 px).
+ *
+ * `(pointer: coarse)` and not a width, for the reason #267 gives: an
+ * iPad in landscape is desktop-wide and held at a phone's distance, and
+ * a narrow desktop window is not.
+ *
+ * Two values change, and nothing else:
+ *
+ * - `--font-size` is the body size. Text that inherits it follows: the
+ *   body, the controls (`font: inherit`) and the Leaflet popups. A size in
+ *   rem does not, because rem is the root size and the root stays 16 px.
+ *   Tables (.88 rem) therefore keep their width.
+ * - `--text-floor` is the smallest size. Every size under .78 rem in this
+ *   file is written `max(<size>, var(--text-floor))`. The floor is 0 with
+ *   a mouse, so a desktop keeps every size it had.
+ *
+ * `test_no_small_text_escapes_the_touch_floor` reads every declaration,
+ * so a new small size that does not take the floor fails it.
+ *
+ * Form controls stay at 16 px or more through the form rule
+ * (`@media (hover: none)`, further down). iOS needs that, or it zooms
+ * a focused field.
+ */
+@media (pointer: coarse) {
+  :root {
+    --font-size: 16px;
+    --text-floor: .78rem;
+  }
 }
 
 html {
@@ -271,7 +310,7 @@ body {
   color: inherit; text-decoration: none; border-radius: .35rem;
 }
 .brand-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.brand-text span { color: var(--muted); font-size: .75rem; }
+.brand-text span { color: var(--muted); font-size: max(.75rem, var(--text-floor)); }
 /* The script reveals the mark only after the file loads. */
 .brand-mark { display: none; width: 100%; max-width: 11rem; height: auto; }
 
@@ -445,13 +484,14 @@ button .icon + span { margin-left: .4rem; }
  * A focused control must not be smaller than 16 px on a touch screen.
  *
  * Safari on iOS zooms the whole page in when a form control under 16 px
- * takes focus, and it does not zoom back out. The base font here is
+ * takes focus, and it does not zoom back out. The base font here was
  * 15 px and `font: inherit` carries that into every control, so every
  * select and every search box on the dashboard did it; the planner form
  * inherits a 0.76 rem label and its twenty-one fields were 12.16 px,
  * which is the worst case on the site. A viewer who taps "Latitude"
  * ends up on a page two and a half times too wide with the rest of the
- * form off the side.
+ * form off the side. The body is now 16 px on a touch screen (#283),
+ * but a control with a smaller size of its own still needs this rule.
  *
  * The only conformant fix is the font size. Pinning the viewport with
  * `maximum-scale=1` or `user-scalable=no` also stops it and fails W3C
@@ -1045,7 +1085,7 @@ th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--
    rule with overflow:hidden took that scroll away and made the
    dashboard's role column read "Cli". */
 td.wrap { max-width: 28rem; }
-th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+th { color: var(--muted); font-weight: 600; font-size: max(.75rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .05em; }
 /*
  * What one column or one figure means (#99).
  *
@@ -1068,7 +1108,7 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
   width: 1rem; height: 1rem;
   border: 1px solid currentColor; border-radius: 50%;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: .7rem; font-style: italic; font-weight: 700;
+  font-size: max(.7rem, var(--text-floor)); font-style: italic; font-weight: 700;
   line-height: 1; text-transform: none; letter-spacing: 0;
 }
 
@@ -1117,7 +1157,7 @@ th { color: var(--muted); font-weight: 600; font-size: .75rem; text-transform: u
 .hint-pop p:last-child { margin-bottom: 0; }
 .hint-pop .hint-name {
   color: var(--text); font-weight: 650;
-  font-size: .75rem; text-transform: uppercase; letter-spacing: .05em;
+  font-size: max(.75rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .05em;
 }
 /* The exact protocol values this column holds. `overflow-wrap` because
    a long enum has no space in it to break at, and one of those must
@@ -1191,7 +1231,7 @@ dl.kv.fields { align-items: baseline; }
 .bar > span { display: block; height: 100%; background: var(--accent); }
 
 .tag {
-  display: inline-block; font-size: .72rem; padding: .1rem .4rem;
+  display: inline-block; font-size: max(.72rem, var(--text-floor)); padding: .1rem .4rem;
   border: 1px solid var(--line); border-radius: .25rem; color: var(--muted);
 }
 .tag.gateway { border-color: var(--accent); color: var(--accent); }
@@ -1221,7 +1261,7 @@ dl.kv.fields { align-items: baseline; }
   display: flex; flex-direction: column; gap: .4rem;
   backdrop-filter: blur(6px);
 }
-.map-overlay h4 { margin: 0; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.map-overlay h4 { margin: 0; font-size: max(.75rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .map-overlay .feed { font-size: .8rem; }
 .leaflet-container { background: var(--panel-2); font: var(--font); }
 /*
@@ -1441,7 +1481,7 @@ body.watch-mode { overflow: hidden; }
 .watch-tab {
   background: none; border: none; border-bottom: 2px solid transparent;
   border-radius: 0; padding: .2rem .45rem .3rem; color: var(--muted);
-  font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+  font-size: max(.74rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .07em;
   display: flex; align-items: center; gap: .35rem;
 }
 .watch-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
@@ -1449,7 +1489,7 @@ body.watch-mode { overflow: hidden; }
    screen: it pulls the eye exactly when something lands. */
 .watch-badge {
   background: var(--accent); color: var(--bg); border-radius: .6rem;
-  padding: 0 .3rem; font-size: .68rem; font-weight: 700;
+  padding: 0 .3rem; font-size: max(.68rem, var(--text-floor)); font-weight: 700;
   font-variant-numeric: tabular-nums; min-width: 1.05rem; text-align: center;
 }
 /* Drag to resize, and it snaps: free drag is fiddly with a mouse and
@@ -1492,7 +1532,7 @@ body.watch-mode { overflow: hidden; }
   background: none; border: none; padding: 0; height: 100%;
   display: flex; flex-direction: column; min-height: 0;
 }
-.watch-pane .panel > h3 { margin: 0 0 .35rem; font-size: .7rem; }
+.watch-pane .panel > h3 { margin: 0 0 .35rem; font-size: max(.7rem, var(--text-floor)); }
 .watch-pane .feed { max-height: none; flex: 1; min-height: 0; }
 /* The wide table belongs to the expanded height alone, and the list to
    the other two. Only one is ever on screen — and only in the traffic
@@ -1501,7 +1541,7 @@ body.watch-mode { overflow: hidden; }
 .watch-table { display: none; }
 .watch-panel[data-height="expanded"] [data-watch-pane="traffic"] .feed { display: none; }
 .watch-panel[data-height="expanded"] .watch-table { display: block; overflow: auto; flex: 1; min-height: 0; }
-.watch-table table { font-size: .74rem; }
+.watch-table table { font-size: max(.74rem, var(--text-floor)); }
 .watch-table th, .watch-table td { padding: .28rem .4rem; white-space: nowrap; }
 .map-shell:not(.watch) .watch-table, .map-shell:not(.watch) .watch-panel { display: none; }
 
@@ -1517,7 +1557,7 @@ body.watch-mode { overflow: hidden; }
   display: block; flex: none; padding-top: .35rem; border-top: 1px solid var(--line);
 }
 .watch-spark canvas { display: block; width: 100%; height: 34px; }
-.watch-spark p { margin: .25rem 0 0; font-size: .68rem; }
+.watch-spark p { margin: .25rem 0 0; font-size: max(.68rem, var(--text-floor)); }
 .map-shell:not(.watch) .watch-spark { display: none; }
 
 /*
@@ -1531,7 +1571,7 @@ body.watch-mode { overflow: hidden; }
  */
 .feed > li { transition: background-color .4s ease; }
 .feed > li.feed-new { background: color-mix(in srgb, var(--accent) 18%, transparent); }
-.feed .repeats { color: var(--muted); font-size: .72rem; margin-left: .35rem; font-variant-numeric: tabular-nums; }
+.feed .repeats { color: var(--muted); font-size: max(.72rem, var(--text-floor)); margin-left: .35rem; font-variant-numeric: tabular-nums; }
 .feed .repeats:empty { display: none; }
 
 .watch-ticker { display: none; }
@@ -1549,10 +1589,10 @@ body.watch-mode { overflow: hidden; }
   backdrop-filter: blur(6px);
 }
 .watch-legend h4 {
-  margin: 0; font-size: .75rem; text-transform: uppercase;
+  margin: 0; font-size: max(.75rem, var(--text-floor)); text-transform: uppercase;
   letter-spacing: .07em; color: var(--muted);
 }
-.watch-legend p { margin: 0; font-size: .74rem; }
+.watch-legend p { margin: 0; font-size: max(.74rem, var(--text-floor)); }
 
 /*
  * Tablet: the panel becomes a bottom sheet across the width. The
@@ -1583,7 +1623,7 @@ body.watch-mode { overflow: hidden; }
   .map-shell.watch .watch-panel[data-height="peek"] { height: auto; }
   .map-shell.watch .watch-panel[data-height="peek"] .watch-panes { display: none; }
   .map-shell.watch .watch-panel[data-height="peek"] .watch-ticker {
-    display: block; margin: 0; font-size: .76rem; color: var(--text);
+    display: block; margin: 0; font-size: max(.76rem, var(--text-floor)); color: var(--text);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   /* No table on a phone. Nine columns on a 390 px screen is worse than
@@ -1624,7 +1664,7 @@ body.watch-mode { overflow: hidden; }
    * https://dequeuniversity.com/rules/axe/4.10/scrollable-region-focusable
    */
   .map-shell.watch .watch-bar .controls > * { flex: none; }
-  .map-shell.watch .watch-status { font-size: .72rem; gap: .1rem .6rem; }
+  .map-shell.watch .watch-status { font-size: max(.72rem, var(--text-floor)); gap: .1rem .6rem; }
   /* The OpenStreetMap attribution is a condition of the tiles and must
      stay readable, so the panel stops above it. See AGENTS.md 9.9.1. */
   .map-shell.watch .watch-panel { bottom: calc(1.5rem + var(--safe-bottom)); }
@@ -1780,7 +1820,7 @@ body.watch-mode { overflow: hidden; }
   /* WCAG 2.2 SC 2.5.8 Target Size (Minimum) asks for 24x24 CSS px, and
      the text alone is 17 px tall. */
   padding: .3rem .55rem; min-height: 1.75rem;
-  font-size: .75rem; text-transform: uppercase; letter-spacing: .06em;
+  font-size: max(.75rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); background: none;
   border: 1px solid var(--line); border-radius: .4rem; cursor: pointer;
 }
@@ -1872,7 +1912,7 @@ body.chart-staged { overflow: hidden; }
   color: var(--text); font: inherit; font-weight: 600;
 }
 .messages .who .name:hover, .messages .who .name:focus-visible { text-decoration: underline; }
-.messages .who .channel-label { color: var(--muted); font-size: .75rem; }
+.messages .who .channel-label { color: var(--muted); font-size: max(.75rem, var(--text-floor)); }
 /* The time still opens the packet. It just stops looking like the
  * point of the line: muted, right, and underlined only on purpose. */
 .messages .who .when {
@@ -1928,14 +1968,14 @@ body.chart-staged { overflow: hidden; }
 }
 .reaction > summary::-webkit-details-marker { display: none; }
 .reaction > summary:hover, .reaction[open] > summary { border-color: var(--accent); }
-.reaction .count { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.reaction .count { font-size: max(.75rem, var(--text-floor)); color: var(--muted); font-variant-numeric: tabular-nums; }
 .reaction[open] { flex-basis: 100%; }
 .reaction-senders {
   list-style: none; margin: .25rem 0 0; padding: 0 0 0 .5rem;
   display: flex; flex-wrap: wrap; gap: .15rem .6rem; font-size: .78rem;
 }
 .reaction-senders li { display: inline-flex; gap: .2rem; align-items: baseline; min-width: 0; overflow-wrap: anywhere; }
-.reaction-senders .packet { font-size: .7rem; opacity: .7; }
+.reaction-senders .packet { font-size: max(.7rem, var(--text-floor)); opacity: .7; }
 .reaction-senders .packet:hover { opacity: 1; }
 /* A delivery signal, not an opinion, so it reads quieter than a reaction. */
 .reaction.auto-ack > summary { border-style: dashed; color: var(--muted); font-size: .78rem; }
@@ -2055,7 +2095,7 @@ body.chart-staged { overflow: hidden; }
 /* The range a widget counts, beside its title. */
 .range-chip {
   margin-left: .35rem;
-  font-size: .72rem;
+  font-size: max(.72rem, var(--text-floor));
   font-weight: 500;
   color: var(--muted);
 }
@@ -2122,7 +2162,7 @@ body.chart-staged { overflow: hidden; }
 }
 .msg-metrics {
   display: grid; grid-template-columns: auto 1fr; gap: .05rem .5rem; margin: 0;
-  font-size: .75rem; color: var(--muted); align-content: start;
+  font-size: max(.75rem, var(--text-floor)); color: var(--muted); align-content: start;
 }
 .msg-metrics dt { font-weight: 600; }
 .msg-metrics dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; }
@@ -2164,7 +2204,7 @@ a.more { text-decoration: none; display: inline-block; }
 .week > summary .range { font-weight: 650; }
 .week > summary .count { color: var(--muted); font-size: .85rem; }
 .week > summary .in-progress {
-  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+  font-size: max(.72rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .04em;
   color: var(--accent); border: 1px solid var(--accent); border-radius: .8rem;
   padding: 0 .4rem; flex: 0 0 auto;
 }
@@ -2214,7 +2254,7 @@ a.more { text-decoration: none; display: inline-block; }
 .streak-pill {
   --tier: var(--muted);
   display: inline-flex; align-items: center; gap: .25rem; flex: none;
-  white-space: nowrap; font-size: .72rem; font-weight: 600; line-height: 1.35;
+  white-space: nowrap; font-size: max(.72rem, var(--text-floor)); font-weight: 600; line-height: 1.35;
   padding: 0 .5rem 0 .4rem; border-radius: 999px;
   border: 1px solid var(--tier);
   background: color-mix(in srgb, var(--tier) 16%, var(--panel));
@@ -2395,14 +2435,14 @@ a.more { text-decoration: none; display: inline-block; }
   .grid[data-summary] .stat .value { grid-area: 1 / 1; font-size: 1.25rem; }
   .grid[data-summary] .stat .delta {
     grid-area: 1 / 2;
-    font-size: .7rem;
+    font-size: max(.7rem, var(--text-floor));
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .grid[data-summary] .stat .label {
     grid-area: 2 / 1 / 3 / 3;
-    font-size: .66rem;
+    font-size: max(.66rem, var(--text-floor));
     letter-spacing: .03em;
     line-height: 1.25;
   }
@@ -2558,7 +2598,7 @@ a.more { text-decoration: none; display: inline-block; }
     flex: 1 1 0;
     min-width: 0;
     margin: 0;
-    font-size: .75rem;
+    font-size: max(.75rem, var(--text-floor));
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }
@@ -2908,7 +2948,7 @@ td .summary { color: var(--text); }
 .planner-form h3:first-child { margin-top: 0; }
 .planner-form label {
   display: block; margin-bottom: .5rem;
-  color: var(--muted); font-size: .76rem;
+  color: var(--muted); font-size: max(.76rem, var(--text-floor));
 }
 .planner-form input,
 .planner-form select { display: block; width: 100%; margin-top: .2rem; }
@@ -3024,7 +3064,7 @@ div.check { cursor: default; }
 /* The verdict of one check. */
 .pill {
   flex: 0 0 auto;
-  font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  font-size: max(.68rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .06em;
   padding: .1rem .4rem; border-radius: .25rem; border: 1px solid var(--line);
 }
 .pill.pass { color: var(--good); border-color: var(--good); }
@@ -3107,7 +3147,7 @@ div.check { cursor: default; }
   align-items: center;
   gap: .55rem;
   margin: -.35rem 0 .8rem;
-  font-size: .76rem;
+  font-size: max(.76rem, var(--text-floor));
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--muted);
@@ -3131,7 +3171,7 @@ div.check { cursor: default; }
 .coverage-view-controls::before {
   content: "Show";
   color: var(--muted);
-  font-size: .76rem;
+  font-size: max(.76rem, var(--text-floor));
   text-transform: uppercase;
   letter-spacing: .06em;
   margin-right: .15rem;
@@ -3179,7 +3219,7 @@ div.check { cursor: default; }
 }
 .coverage-legend-title {
   display: block;
-  font-size: .72rem;
+  font-size: max(.72rem, var(--text-floor));
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--muted);
@@ -3202,8 +3242,8 @@ div.check { cursor: default; }
 }
 .coverage-scale > span { display: flex; flex-direction: column; gap: .05rem; }
 .coverage-scale > span:last-child { align-items: flex-end; }
-.coverage-scale strong { color: var(--text); font-size: .68rem; font-weight: 650; }
-.coverage-scale small { font: var(--mono); font-size: .64rem; color: var(--muted); }
+.coverage-scale strong { color: var(--text); font-size: max(.68rem, var(--text-floor)); font-weight: 650; }
+.coverage-scale small { font: var(--mono); font-size: max(.64rem, var(--text-floor)); color: var(--muted); }
 
 .coverage-assumes p { margin: 0 0 .5rem; color: var(--muted); font-size: .87rem; line-height: 1.55; }
 .coverage-assumes p:last-child { margin-bottom: 0; }
@@ -3213,7 +3253,7 @@ div.check { cursor: default; }
   display: inline-flex;
   align-items: center;
   gap: .35rem;
-  font-size: .75rem;
+  font-size: max(.75rem, var(--text-floor));
   border-radius: 999px;
   padding: .12rem .5rem;
   border: 1px solid var(--line);
@@ -3271,7 +3311,9 @@ th.num.sortable { padding-right: 0; padding-left: .35rem; }
  * without competing with the one in force, which is the only one that
  * goes orange.
  */
-.sort-arrow { font-size: .8em; opacity: .7; }
+/* In a header it is .8 of 12.48 px on a touch screen, so it takes the
+   floor as well (#283). */
+.sort-arrow { font-size: max(.8em, var(--text-floor)); opacity: .7; }
 th.sortable:hover .sort-arrow { opacity: 1; }
 th.sorted { color: var(--text); }
 th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
@@ -3348,7 +3390,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .filter-group { border: 0; margin: 0; padding: 0; min-width: 0; }
 .filter-group > legend {
   padding: 0 0 .4rem; color: var(--muted);
-  font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
+  font-size: max(.75rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
 }
 .filter-options { display: flex; flex-wrap: wrap; gap: .35rem; }
 .filter-option {
@@ -3566,7 +3608,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .issue { border-left: 3px solid var(--state); padding: .35rem .7rem; background: var(--panel-2); border-radius: .35rem; }
 .issue p { margin: .3rem 0; }
 .issue-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
-.issue-head .health-glyph { width: 1.2rem; height: 1.2rem; font-size: .7rem; }
+.issue-head .health-glyph { width: 1.2rem; height: 1.2rem; font-size: max(.7rem, var(--text-floor)); }
 .issue-state { margin-left: auto; font-size: .8rem; color: var(--state); font-weight: 600; }
 .issue.state-unknown .issue-state { color: var(--muted); }
 .issue details summary { cursor: pointer; font-size: .8rem; color: var(--muted); }
@@ -3577,7 +3619,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
 }
 .route-tile { display: flex; flex-direction: column; gap: .2rem; background: var(--panel-2); border-radius: .45rem; padding: .7rem .8rem; }
-.route-tile .label { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+.route-tile .label { color: var(--muted); font-size: max(.75rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .05em; }
 .route-tile .value { font-size: 1.5rem; font-weight: 650; }
 .route-tile .muted { font-size: .8rem; }
 
@@ -3633,7 +3675,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .map-key {
   background: color-mix(in srgb, var(--panel) 95%, transparent);
   border: 1px solid var(--line); border-radius: .5rem;
-  max-width: min(18rem, calc(100vw - 5rem)); font-size: .76rem;
+  max-width: min(18rem, calc(100vw - 5rem)); font-size: max(.76rem, var(--text-floor));
   backdrop-filter: blur(6px);
 }
 .map-key summary { cursor: pointer; padding: .35rem .7rem; font-weight: 600; color: var(--text); }
@@ -3641,7 +3683,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   display: flex; flex-direction: column; gap: .45rem;
   padding: 0 .7rem .6rem; max-height: min(42svh, 20rem); overflow: auto;
 }
-.map-key h3 { margin: .2rem 0 0; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.map-key h3 { margin: .2rem 0 0; font-size: max(.72rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .map-key p { margin: 0; }
 .map-key .legend { margin: 0; }
 .map-shell.watch .map-key { display: none; }
@@ -3802,7 +3844,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-band { margin-top: 1rem; }
 .rf-band .controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .4rem 0; }
 .rf-band h4 { margin: 1rem 0 .2rem; }
-.rf-axis { position: relative; height: 3.3rem; font-size: .7rem; color: var(--muted); }
+.rf-axis { position: relative; height: 3.3rem; font-size: max(.7rem, var(--text-floor)); color: var(--muted); }
 .rf-tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .rf-tick.channel { color: var(--text); font-weight: 600; }
 /* `fitChannels` in rf.js sets each name's row and the axis height from
@@ -3819,7 +3861,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   position: absolute; top: 0; bottom: 0; min-width: 2px;
   border-left: 1px dashed rgb(255 255 255 / .75); border-right: 1px dashed rgb(255 255 255 / .75);
 }
-.rf-scale { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .75rem; margin-top: .35rem; }
+.rf-scale { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: max(.75rem, var(--text-floor)); margin-top: .35rem; }
 .rf-ramp { display: inline-block; width: 8rem; height: .6rem; border-radius: 999px; }
 .rf-where { margin: .4rem 0; padding: .45rem .7rem; border-left: 3px solid var(--accent-2); background: var(--panel-2); border-radius: .3rem; }
 .rf-where.unknown { border-left-color: var(--warn); }
@@ -3839,10 +3881,10 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 }
 .rf-sweeps-bar.reported-only { background: transparent; border: 1px dashed var(--accent); }
 .rf-sweeps-bar:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
-.rf-sweeps-axis { position: relative; height: 1.2rem; color: var(--muted); font-size: .7rem; }
+.rf-sweeps-axis { position: relative; height: 1.2rem; color: var(--muted); font-size: max(.7rem, var(--text-floor)); }
 .rf-sweeps-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .rf-sweeps-detail { margin-top: .5rem; font-size: .8rem; min-height: 1.2rem; }
-.rf-sweeps-detail code, .rf-tip code.rf-command { white-space: pre-wrap; word-break: break-all; font-size: .75rem; }
+.rf-sweeps-detail code, .rf-tip code.rf-command { white-space: pre-wrap; word-break: break-all; font-size: max(.75rem, var(--text-floor)); }
 @media (max-width: 600px) {
   .rf-sweeps-chart { grid-template-columns: 1fr; }
 }
@@ -3936,7 +3978,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  * switch; Will asked for the sentence to go, so the rule went with it. */
 .menu-field { display: flex; flex-direction: column; gap: .35rem; }
 .menu-field-label {
-  font-size: .68rem;
+  font-size: max(.68rem, var(--text-floor));
   text-transform: uppercase;
   letter-spacing: .07em;
   color: var(--muted);
@@ -4025,7 +4067,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
  */
 .preset-scope {
   margin: .35rem 0 0;
-  font-size: .72rem;
+  font-size: max(.72rem, var(--text-floor));
   color: var(--muted);
   text-align: center;
 }
@@ -4391,7 +4433,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
      palette tests already hold at 4.5 in both themes (#120). */
   background: var(--accent); color: var(--on-accent);
   border-radius: 999px;
-  font-size: .7rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  font-size: max(.7rem, var(--text-floor)); font-weight: 700; font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 /* Scoped with it: `display: inline-flex` above beats the user agent's
@@ -4403,7 +4445,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 
 /* The filter presets, now the first row inside the panel. */
 .filter-preset-label {
-  font-size: .68rem; text-transform: uppercase; letter-spacing: .07em;
+  font-size: max(.68rem, var(--text-floor)); text-transform: uppercase; letter-spacing: .07em;
   color: var(--muted); margin-right: .2rem;
 }
 .filter-panel .node-starts { margin: 0 0 .9rem; }
