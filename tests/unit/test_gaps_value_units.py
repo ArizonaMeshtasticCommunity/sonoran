@@ -82,8 +82,6 @@ def test_each_signal_names_the_unit_of_its_own_number() -> None:
     )
     assert (rf.value, rf.unit) == (0.25, signals.FRACTION)
 
-
-
     preset = preset_for_channel("MediumFast")
     assert preset is not None
     margin = signals.weak_best_link(

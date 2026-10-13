@@ -730,7 +730,7 @@ async def read_reach_evidence(
             ambiguous_packets=_as_int(row.ambiguous_packets),
             active_hours=_as_int(row.active_hours),
             rf_hours=_as_int(row.rf_hours),
-            direct_gateways=direct.get(row.from_node_num, (0, None, 0))[0],
+            direct_gateways=direct.get(row.from_node_num, 0),
             best_direct_snr=_as_float(row.best_direct_snr),
         )
         for row in counted
@@ -1242,10 +1242,6 @@ def rf_intermittent(evidence: NodeEvidence, settings: Settings) -> Signal:
 
 
 # --------------------------------------------------------------- 4.4
-
-
-
-
 
 
 # --------------------------------------------------------------- 4.5

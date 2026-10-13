@@ -421,12 +421,6 @@ class Settings(BaseSettings):
     # as mobile, in kilometres. A mobile node is still listed, because a
     # handheld that cannot get out is a real problem for its owner.
     gaps_mobile_spread_km: float = 1.0
-    # A sole gateway that receives a node at least this strongly, in
-    # dBm, is close to it, and `sole_observer` stops calling that a
-    # fault. At 915 MHz a path loss of 90 dB is about 0.8 km in free
-    # space, so -60 dBm from the 30 dBm the US band allows bounds the
-    # distance to about a kilometre with plain antennas, and to a few
-
     # The siting half. It answers "where would one new node help the
     # most people", and it is the only part of this feature that runs
     # the coverage engine.

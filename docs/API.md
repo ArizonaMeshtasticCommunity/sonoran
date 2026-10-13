@@ -750,7 +750,6 @@ tell".
 | `radio_isolated` | It is an MQTT gateway and no gateway heard any of its traffic over the air, by any path. Its packets reach us through its own internet link. |
 | `rf_intermittent` | In fewer than `GAPS_RF_RATIO_BAD` of the hours it was awake, anything on the air heard it. |
 | `weak_best_link` | Its best **measured** link has under `GAPS_MARGIN_BAD_DB` of margin above what the preset needs to demodulate. |
-| `sole_observer` | Exactly one gateway has heard it directly. This is a fact about where our gateways are as much as about the mesh. It is not a single point of failure and must not be drawn as one. When that one gateway receives the node at `GAPS_SOLE_GATEWAY_CLOSE_RSSI_DBM` or stronger (median over at least `GAPS_SOLE_GATEWAY_MIN_READINGS` packets), the signal is `ok` with reason `one_gateway_hears_it_close`, and `evidence` carries `direct_rssi_dbm` and `direct_rssi_readings`. |
 | `outside_predicted_usable` | The published coverage run predicts no usable coverage where it stands. This is the one signal here that reads a prediction and not a measurement. |
 
 A signal's `evidence` object holds the counts the claim rests on, and
@@ -884,7 +883,8 @@ signal measured a number, and a value always carries a `unit`: the job
 cannot build a signal with a value and no unit. The units are
 `fraction` (0 to 1, `rf_intermittent`: the share of awake hours in which
 something on the air heard the node), `db` (a signed margin,
-`weak_best_link`), `gateways` (a whole count, `sole_observer`), `dbm`
+`weak_best_link`), `gateways` (a whole count; no signal sends it since #327, and it stays
+so that a run written before that still reads), `dbm`
 (the predicted level, `outside_predicted_usable`) and `m` (the position
 error, only on the `unknown` state `position_too_coarse`). The
 `fraction` is not rounded: a share just short of 1 stays short of 1, so a

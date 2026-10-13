@@ -309,8 +309,6 @@ def test_a_relayed_observation_is_evidence_and_carries_no_signal_reading(
     assert "11.5" not in json.dumps(row)
 
 
-
-
 def test_a_self_upload_is_never_a_direct_observation(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
