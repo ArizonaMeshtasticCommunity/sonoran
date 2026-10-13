@@ -421,19 +421,6 @@ class Settings(BaseSettings):
     # as mobile, in kilometres. A mobile node is still listed, because a
     # handheld that cannot get out is a real problem for its owner.
     gaps_mobile_spread_km: float = 1.0
-    # A sole gateway that receives a node at least this strongly, in
-    # dBm, is close to it, and `sole_observer` stops calling that a
-    # fault. At 915 MHz a path loss of 90 dB is about 0.8 km in free
-    # space, so -60 dBm from the 30 dBm the US band allows bounds the
-    # distance to about a kilometre with plain antennas, and to a few
-    # kilometres with high gain ones. Measured on the live mesh, pairs
-    # that share a site read -1 to -58 dBm, and single links that
-    # really are marginal read -90 to -128. See `docs/GAPS.md` 4.4.
-    gaps_sole_gateway_close_rssi_dbm: float = -60.0
-    # How many direct readings that median needs. One loud packet is
-    # not a site.
-    gaps_sole_gateway_min_readings: int = 5
-
     # The siting half. It answers "where would one new node help the
     # most people", and it is the only part of this feature that runs
     # the coverage engine.
@@ -458,7 +445,6 @@ class Settings(BaseSettings):
     # How far around a cluster to look for ground, in kilometres.
     gaps_search_radius_km: float = 15.0
     # How far a candidate must stand above the median of the kilometre
-    # around it, in metres. The highest cell of a plain is not a site.
     gaps_min_prominence_m: float = 40.0
     # The closest two candidates may stand, in kilometres. Without it
     # one ridge fills every slot with sixty cells of itself.

@@ -143,47 +143,29 @@ would otherwise decide the answer. It is a ratio within the node and
 never a rate across nodes, because two nodes with different broadcast
 intervals are not comparable on an hour count.
 
-### 4.4 `sole_observer` — one gateway hears it directly
+### 4.4 `sole_observer` — removed (#327)
 
-`bad` when exactly one gateway has heard it with no hop used.
+This signal was `bad` when exactly one gateway heard the node with no
+hop used. #63 and #65 added an exception: one gateway that hears the
+node at a median of -60 dBm or stronger, over 5 or more packets, was
+`ok`, because that is a repeater on a roof beside its own client.
 
-**This is not a single point of failure.** The observer set is gateways,
-so it says "one gateway can hear it", which is a statement about our
-instrumentation as much as about the mesh. Zero direct gateways is
-`unknown`, not `bad`: a well connected node three hops deep is heard
-directly by nobody, and that is normal.
+It is removed because it measured **where our gateways are**, not the
+node:
 
-**One gateway that is close to the node is `ok`.** The common false
-positive was a repeater on a roof and a client inside the house. The
-repeater is the one gateway that hears the client, and that is the setup
-working as intended.
+- Two gateways in one house pass it, and the node can still fail to
+  reach the mesh.
+- Zero direct gateways was `unknown`, not `bad`, because a node several
+  hops deep is heard directly by nobody. So one gateway was flagged and
+  zero was not.
 
-The test is the median RSSI of the direct observations:
-
-```
-ok when direct_gateways == 1
-    and direct_rssi_readings >= GAPS_SOLE_GATEWAY_MIN_READINGS   (5)
-    and direct_rssi_dbm      >= GAPS_SOLE_GATEWAY_CLOSE_RSSI_DBM (-60)
-```
-
-It is RSSI because a strong signal bounds the distance. At 915 MHz, a
-path loss of 90 dB is about 0.8 km in free space. So -60 dBm from the
-30 dBm the US band allows means about a kilometre with plain antennas,
-and a few kilometres with high gain ones. SNR cannot do this: it tops
-out near +11 dB on any strong link. Positions cannot do it either:
-most nodes round theirs to 13 bits, about 2.9 km, so two nodes on one
-roof often read "0 m" and a pair heard at -48 dBm read 49.5 km apart.
-
-Measured on the live mesh (2026-09-21, 7 day window, 152 flagged nodes):
-
-| | median RSSI | SNR |
-|---|---|---|
-| pairs with precise positions under 1 km | -1 to -58 dBm | +6 to +13 dB, spread under 1 dB |
-| single links that really are marginal | -90 to -128 dBm | mostly below 0 dB |
-
-The line sits in the gap between the two groups. It reads no names and
-makes no guess about who owns what. The sentence states the reading and
-says what it means.
+The count stays. `direct_gateways` is still read for every node: the
+node page shows it under "Heard over the air", and the "heard directly
+by the most gateways" leaderboard ranks it. The settings
+`GAPS_SOLE_GATEWAY_CLOSE_RSSI_DBM` and `GAPS_SOLE_GATEWAY_MIN_READINGS`
+are gone; a host that still sets them is not affected, because unknown
+settings are ignored. A run written before this change still holds the
+signal until the gaps job runs again.
 
 ### 4.5 `weak_best_link` — the best measured link has little margin
 
