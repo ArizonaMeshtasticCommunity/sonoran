@@ -235,24 +235,19 @@ def _health_cards_source() -> str:
     return source[start : start + 9000]
 
 
-def test_nothing_heard_is_not_coloured_as_health() -> None:
-    """#87. A node no gateway heard read Good, in green, on live data.
+def test_heard_over_the_air_reads_radio_isolated_alone() -> None:
+    """#327. The card no longer counts gateways in direct range.
 
-    `sole_observer` is `bad` at exactly one direct gateway and
-    `unknown` at zero, so downgrading only on `bad` let the zero case
-    through as `ok`. The severity came out backwards with it: nothing
-    heard read Good, one gateway read Needs help. 218 of 774 assessed
-    nodes were in that state.
-
-    Fails against a downgrade that tests only for `bad`.
+    It used to read `sole_observer` and mark one direct gateway as a
+    fault. That signal is gone. The card's colour is `radio_isolated`,
+    which is `ok` only when something heard the node over the air, so a
+    node nothing heard still never reads as health (#87).
     """
     body = _health_cards_source()
-    start = body.index("let heardState")
-    window = body[start : start + 400]
-    assert "'unknown'" in window, (
-        "the heard-over-the-air card does not handle sole_observer being "
-        "unknown, so a node nothing heard directly is coloured as healthy"
-    )
+    start = body.index("const heardState")
+    window = body[start - 200 : start + 200]
+    assert "signal('radio_isolated')" in window
+    assert "signal('sole_observer')" not in body
 
 
 def test_a_rounded_position_is_not_a_fault() -> None:
