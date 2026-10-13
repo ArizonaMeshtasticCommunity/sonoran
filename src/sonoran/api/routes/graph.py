@@ -36,6 +36,7 @@ from sonoran.api.traces import (
     is_reply,
     return_path,
 )
+from sonoran.api.window import cache_seconds
 from sonoran.db.models import NeighborMetrics, Node, Packet, PacketSeen, Traceroute
 from sonoran.positions import clean
 
@@ -781,7 +782,7 @@ async def mesh_graph(
     key = graph_cache_key(hours=hours, limit=limit, channel=channel)
     body = await _graph_cache.get(
         key,
-        request.app.state.settings.stats_cache_seconds,
+        cache_seconds(request.app.state.settings, hours),
         lambda: _mesh_graph(session, hours, limit, channel),
     )
     # Said in the body rather than only in a comment, so a caller that

@@ -111,6 +111,14 @@ class Settings(BaseSettings):
     # what a deployment with a small database or a spare core can
     # afford.
     stats_cache_seconds: float = 30.0
+    # The longest any Statistics or graph answer is held (#371). The hold
+    # grows with the window: a share of 1/720 of it, so a day is held 2
+    # minutes and 3 days or more 5 minutes. A rolling window then misses
+    # at most 1/720 of what it covers at its newest edge, and says where
+    # it ends (`window_end`). A fixed range that ended in the past cannot
+    # change, and is held this long. `stats_cache_seconds` stays the
+    # shortest hold, and 0 still turns every hold off.
+    stats_cache_max_seconds: float = 300.0
 
     # How long one node's links and routes are held (#304).
     #

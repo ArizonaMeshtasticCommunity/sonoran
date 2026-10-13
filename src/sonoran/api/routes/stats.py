@@ -15,7 +15,13 @@ from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.preset_scope import preset_filter, require_preset
-from sonoran.api.window import Window, optional_window, retained_from, window_query
+from sonoran.api.window import (
+    Window,
+    cache_seconds,
+    optional_window,
+    retained_from,
+    window_query,
+)
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
 from sonoran.decode.portnums import traffic_label
@@ -139,11 +145,11 @@ async def stats(
     settings: Settings = request.app.state.settings
     if window is None:
         return dict(
-            await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+            await _summary_cache.get(cache_seconds(settings, None), lambda: _read_summary(session))
         )
     return await _window_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_window_summary(session, settings, window),
     )
 
@@ -247,11 +253,11 @@ async def hardware(
     settings: Settings = request.app.state.settings
     if window is None:
         return await _hardware_cache.get(
-            settings.stats_cache_seconds, lambda: _read_hardware(session)
+            cache_seconds(settings, None), lambda: _read_hardware(session)
         )
     return await _hardware_window_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_hardware(session, window),
     )
 
@@ -304,7 +310,7 @@ async def portnums(
     key = f"{hours or 0}:{channel or ''}:{wanted or ''}"
     return await _portnums_cache.get(
         key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, hours),
         lambda: _read_portnums(session, hours, channel, wanted),
     )
 
@@ -390,7 +396,7 @@ async def top_talkers(
     settings: Settings = request.app.state.settings
     return await _top_cache.get(
         f"{window.key}:{limit}",
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_top(session, window, limit),
     )
 
@@ -602,7 +608,7 @@ async def daily(
     settings: Settings = request.app.state.settings
     return await _daily_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_daily(session, settings, window),
     )
 
@@ -665,7 +671,7 @@ async def activity(
     settings: Settings = request.app.state.settings
     return await _activity_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_activity(session, settings, window),
     )
 
@@ -809,7 +815,7 @@ async def broadcast_rates(
     settings: Settings = request.app.state.settings
     return await _broadcast_cache.get(
         f"{window.key}:{limit}",
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_broadcast(session, settings, window, limit),
     )
 
