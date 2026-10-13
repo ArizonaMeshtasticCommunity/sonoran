@@ -203,10 +203,11 @@ attribution beside it. See `docs/PLANNER.md` section 6.
 ### Change the database schema
 
 1. Edit the models in `src/sonoran/db/models.py`.
-2. Create a migration. To prevent revision ID collisions between branches, use the issue or PR number as the revision ID: `alembic revision --autogenerate -m "description" --rev-id "pr123"` (or use a short commit hash). Never use sequential numbers like `0018`.
-3. Review the generated migration by hand.
-4. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
-5. Update `docs/DATABASE.md`.
+2. Create a migration. Name the revision after its issue: `i` and the issue number, for example `alembic revision --autogenerate -m "description" --rev-id i366`. Do not use sequential numbers like `0018`: two branches pick the same next number. Use the pull request number (`pr344`) when there is no issue.
+3. Rebase on `main` before you push. Set `down_revision` to the current head (`alembic heads`). `tests/unit/test_migrations_head.py` fails when the migrations have two heads.
+4. Review the generated migration by hand.
+5. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
+6. Update `docs/DATABASE.md`.
 
 ## 9. Traps in this project
 
