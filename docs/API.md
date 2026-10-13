@@ -100,6 +100,34 @@ The map, graph, coverage, gaps and leaderboard endpoints do not take
 `preset` yet. They still take `channel`, and the page sends the preset's
 own channel name there.
 
+### 1.3 Stored long-window answers (#371)
+
+Some answers are built by the jobs service every few minutes and read
+from its tables: `/api/graph` for 6, 24, 72 and 168 hours, the longest-link
+board of `/api/stats/leaderboards` for its default window and `hours=24`,
+`168` and `720`, `/api/stats/broadcast` for `hours=24`, `168` and `720`,
+and `/api/map/nodes?channel=...&hours=168`. Any other window is computed
+when asked, as before.
+
+- **The same answer.** A stored answer equals the live one, apart from
+  when it was measured. Names, roles and positions are read when the
+  request is answered.
+- **`built_at`.** The graph, the board and the broadcast rates say when
+  their links or rates were measured. A stored answer is up to a few
+  minutes old; a live one is as new as the request.
+- **Never stale for long.** A build older than three build intervals
+  (30 minutes, 90 for 30 days, by default) is not used.
+- **How long an answer is held.** The Statistics answers and the graph
+  are held in the API for 1/720 of their window: 30 s for a few hours,
+  2 minutes for a day, `STATS_CACHE_MAX_SECONDS` (5 minutes) for 3 days
+  or more and for a range that is over, 2 minutes with no window. Each
+  answer states its `window_end`. `STATS_CACHE_SECONDS=0` turns every
+  hold off.
+- **`ETag`.** Answers under `/api/graph`, `/api/stats` and
+  `/api/map/nodes` carry a weak `ETag` and `Cache-Control: private,
+  no-cache`. A request with a matching `If-None-Match` gets `304 Not
+  Modified` and no body.
+
 ## 2. System endpoints
 
 ### 2.1 `GET /health`

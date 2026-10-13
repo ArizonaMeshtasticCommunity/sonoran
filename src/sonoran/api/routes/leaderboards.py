@@ -34,12 +34,14 @@ from math import sqrt
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran import read_models
 from sonoran.api.cache import KeyedCache
 from sonoran.api.dependencies import get_session
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.routes.graph import (
     TWO_WAY,
     Edge,
+    _key,
     _merge,
     _neighbor_edges,
     _traceroute_edges,
@@ -51,6 +53,7 @@ from sonoran.gaps import boards as gaps_boards
 from sonoran.gaps import store as gaps_store
 from sonoran.gaps.siting import distance_km
 from sonoran.radio.presets import modelled, preset_for_channel, required_snr_db
+from sonoran.read_models import read_links
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -364,10 +367,22 @@ async def _link_board(
         window_hours: float = LINK_WINDOW_HOURS
     else:
         since, until, window_hours = window.start, window.end, round(window.hours, 2)
-    edges = await _traceroute_edges(session, since, preset, until)
-    neighbours = await _neighbor_edges(session, since, preset, until)
-    for edge in neighbours.values():
-        _merge(edges, edge)
+
+    # The jobs service's build when one is fresh for this window (#371).
+    # Reading 30 days of link evidence here took 11.6 s. Positions,
+    # distances and names below are read now either way.
+    rolling = LINK_WINDOW_HOURS if window is None else _rolling_hours(window)
+    stored = None
+    if rolling in read_models.BOARD_HOURS:
+        stored = await read_links(session, preset, rolling)
+    built_at = datetime.now(UTC) if stored is None else stored.built_at
+    if stored is not None:
+        edges = {_key(edge.source, edge.target): edge for edge in stored.edges}
+    else:
+        edges = await _traceroute_edges(session, since, preset, until)
+        neighbours = await _neighbor_edges(session, since, preset, until)
+        for edge in neighbours.values():
+            _merge(edges, edge)
 
     strong: list[Edge] = [
         edge
@@ -400,6 +415,8 @@ async def _link_board(
         "window_hours": window_hours,
         # Says that this board follows the range the page asked for.
         "follows_window": window is not None,
+        # When the links were measured: a stored build is a few minutes old.
+        "built_at": built_at,
         "cannot_know": (
             "Both ends need an exact position, and a link needs reports in both directions, "
             "so a real long link that only one side reports is missing."
@@ -417,3 +434,11 @@ async def _link_board(
             for distance, edge in top
         ],
     }
+
+
+def _rolling_hours(window: Window) -> int | None:
+    """The hours of a rolling window (`hours=N`), or None for a fixed range."""
+    key = window.key
+    if key.startswith("h") and key[1:].isdigit():
+        return int(key[1:])
+    return None

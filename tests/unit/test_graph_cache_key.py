@@ -164,7 +164,11 @@ def test_a_clamped_request_does_not_poison_the_cache() -> None:
         return {"window_hours": hours, "links": []}
 
     request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(stats_cache_seconds=60)))
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(stats_cache_seconds=60, stats_cache_max_seconds=300)
+            )
+        )
     )
 
     async def run() -> None:

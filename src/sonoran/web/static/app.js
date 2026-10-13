@@ -4316,6 +4316,19 @@ PAGES.config = async (page) => {
   await window.SonoranConfigCheck.show(page);
 };
 
+/*
+ * " - as of 14:05" when the links were measured more than a minute ago.
+ *
+ * The jobs service builds the graph every few minutes (#371), so the
+ * links can be a few minutes older than the page. A graph computed for
+ * this request says nothing: it is as new as the page.
+ */
+function graphAsOf(builtAt) {
+  if (!builtAt) return '';
+  const age = Date.now() - new Date(builtAt).getTime();
+  return age > 60000 ? ` - as of ${clock(builtAt)}` : '';
+}
+
 PAGES.graph = async (page) => {
   const hours = $('[data-graph-hours]', page).value || '24';
   graphHours = hours;
@@ -4461,7 +4474,8 @@ PAGES.graph = async (page) => {
       ? showWeak
         ? `, ${count(unjudged)} unjudged`
         : `, ${count(unjudged)} unjudged hidden`
-      : '');
+      : '')
+    + graphAsOf(data.built_at);
   // Links stored before channel tracking mix every preset together, so
   // this one graph does show links that cannot exist. Say so plainly.
   const dotted = $('[data-legend-unconfirmed]', page);

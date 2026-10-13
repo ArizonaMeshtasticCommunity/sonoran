@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # Web server.
     web_host: str = "0.0.0.0"
     web_port: int = 8000
+    # API worker processes (#371). One process has one event loop, and a
+    # view computed while somebody waits holds up every other request in
+    # it. With the long views read from the jobs' tables, requests are
+    # reads, and a bigger box can run several workers. Each worker holds
+    # its own short caches and its own request budget (`API_RATE_*` is
+    # per worker), so the real limit grows with the count. Keep 1 on a
+    # small box.
+    web_workers: int = 1
     web_base_path: str = ""
     web_api_base_url: str = ""
 
@@ -103,6 +111,14 @@ class Settings(BaseSettings):
     # what a deployment with a small database or a spare core can
     # afford.
     stats_cache_seconds: float = 30.0
+    # The longest any Statistics or graph answer is held (#371). The hold
+    # grows with the window: a share of 1/720 of it, so a day is held 2
+    # minutes and 3 days or more 5 minutes. A rolling window then misses
+    # at most 1/720 of what it covers at its newest edge, and says where
+    # it ends (`window_end`). A fixed range that ended in the past cannot
+    # change, and is held this long. `stats_cache_seconds` stays the
+    # shortest hold, and 0 still turns every hold off.
+    stats_cache_max_seconds: float = 300.0
 
     # How long one node's links and routes are held (#304).
     #
@@ -394,6 +410,28 @@ class Settings(BaseSettings):
     # Every threshold below is a starting point, not a measurement.
     # `docs/design/coverage-gaps.md` 11.1 names the six figures to take
     # off live data before any of them is trusted.
+    # Read models (#371): the jobs service builds the views that cover
+    # hours or days (graph, longest-link board, broadcast rates, the
+    # coverage page's node list) and the API reads the stored answer. A
+    # stored answer older than three of its build intervals is not used:
+    # the API computes the view live, as it did before.
+    read_models_enabled: bool = True
+    read_models_interval_minutes: int = 10
+    # 30-day windows are built on every this many runs, not on each one.
+    read_models_long_every: int = 3
+
+    # The jobs supervisor (#371, `sonoran/jobs/supervisor.py`). Each run
+    # is its own process with its own memory ceiling, and runs overlap
+    # when they fit in the container's memory. False runs every job inside
+    # the jobs process, as before, with no ceilings.
+    jobs_isolate: bool = True
+    # Ceilings in MB, `name=MB` separated by commas, over the defaults
+    # (coverage 800, calibration 400, gaps 400, read-models 400,
+    # rf-rollup 250, snapshot 250). A job over its ceiling is stopped.
+    jobs_memory_limits: str = ""
+    # The memory the jobs may use together, in MB. 0 reads the
+    # container's own limit and keeps the supervisor's share out of it.
+    jobs_memory_budget_mb: float = 0.0
     gaps_enabled: bool = True
     # How often the per node assessment is rebuilt. The signals are
     # only SQL, so freshness is cheap. The job runs on its own clock

@@ -143,3 +143,40 @@ def window_query(default_hours: int) -> Callable[..., Window]:
         return window
 
     return dependency
+
+
+#: A rolling window is held for this share of its length (#371): 1/720,
+#: so a day is held 2 minutes and 30 days hit the ceiling.
+CACHE_WINDOW_SHARE = 720
+
+#: An answer with no window (all-time totals) is held this long: its
+#: numbers move by a few packets a minute out of hundreds of thousands.
+UNWINDOWED_CACHE_SECONDS = 120.0
+
+
+def cache_seconds(settings: Settings, window: "Window | float | None") -> float:
+    """How long to hold an answer about `window`, in seconds.
+
+    `window` is a `Window`, a length in hours, or None for no window.
+
+    - Rolling: 1/`CACHE_WINDOW_SHARE` of its length, between
+      `STATS_CACHE_SECONDS` and `STATS_CACHE_MAX_SECONDS`. New packets
+      enter at the newest edge; a longer window is moved less by them.
+    - Fixed and over: `STATS_CACHE_MAX_SECONDS`. Nothing new can enter.
+    - No window: `UNWINDOWED_CACHE_SECONDS`, within the same bounds.
+
+    `STATS_CACHE_SECONDS=0` turns every hold off, as it always did.
+    """
+    shortest = settings.stats_cache_seconds
+    if shortest <= 0:
+        return 0.0
+    longest = max(shortest, settings.stats_cache_max_seconds)
+    if window is None:
+        return min(max(shortest, UNWINDOWED_CACHE_SECONDS), longest)
+    if isinstance(window, Window):
+        if window.end < datetime.now(UTC) - timedelta(seconds=longest):
+            return longest
+        hours = window.hours
+    else:
+        hours = float(window)
+    return min(max(shortest, hours * 3600 / CACHE_WINDOW_SHARE), longest)

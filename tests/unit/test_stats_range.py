@@ -11,6 +11,7 @@ address in both directions. And no quick range offers more than the
 packets the database keeps.
 """
 
+import inspect
 import json
 import re
 import shutil
@@ -22,6 +23,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from sonoran.api import hourly
 from sonoran.api import window as window_module
 from sonoran.api.app import create_app
 from sonoran.api.cache import KeyedCache
@@ -124,11 +126,17 @@ def test_the_windowed_answers_are_held_in_bounded_caches() -> None:
 
 
 def test_the_top_senders_ignore_future_rows() -> None:
-    """`/top` had a lower bound only (#294's minor finding)."""
+    """`/top` had a lower bound only (#294's minor finding).
+
+    It counts through the hourly totals now (#371). The window's end is
+    passed down, and every raw part of the count is bounded by it.
+    """
     source = Path(stats.__file__).read_text(encoding="utf-8")
     body = source[source.index("async def _read_top(") :]
     body = body[: body.index("\n\n\n")]
-    assert "Packet.first_seen_at < now" in body
+    assert "hourly.top_senders(session, start, now, limit)" in body
+    counted = inspect.getsource(hourly._raw_by_sender)
+    assert "Packet.first_seen_at < end" in counted
 
 
 def test_the_window_module_is_the_only_reader_of_since() -> None:

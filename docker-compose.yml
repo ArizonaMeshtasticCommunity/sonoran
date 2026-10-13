@@ -205,6 +205,10 @@ services:
     restart: unless-stopped
     logging: *logging
     command: ["sonoran-jobs"]
+    # A small init as PID 1 (#371). The jobs supervisor stops a job over
+    # its memory ceiling by killing its process tree; the processes below
+    # the job are then re-parented to PID 1, and only an init reaps them.
+    init: true
     env_file: .env
     # Contain the coverage job's memory to the container that uses it.
     #

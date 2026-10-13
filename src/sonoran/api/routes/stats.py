@@ -2,19 +2,26 @@
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran import read_models
 from sonoran.api import hourly
 from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
 from sonoran.api.preset_scope import preset_filter, require_preset
-from sonoran.api.window import Window, optional_window, retained_from, window_query
+from sonoran.api.window import (
+    Window,
+    cache_seconds,
+    optional_window,
+    retained_from,
+    window_query,
+)
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
 from sonoran.decode.portnums import traffic_label
@@ -138,11 +145,11 @@ async def stats(
     settings: Settings = request.app.state.settings
     if window is None:
         return dict(
-            await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+            await _summary_cache.get(cache_seconds(settings, None), lambda: _read_summary(session))
         )
     return await _window_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_window_summary(session, settings, window),
     )
 
@@ -246,11 +253,11 @@ async def hardware(
     settings: Settings = request.app.state.settings
     if window is None:
         return await _hardware_cache.get(
-            settings.stats_cache_seconds, lambda: _read_hardware(session)
+            cache_seconds(settings, None), lambda: _read_hardware(session)
         )
     return await _hardware_window_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_hardware(session, window),
     )
 
@@ -265,12 +272,11 @@ async def _read_hardware(
         .order_by(func.count().desc())
     )
     if window is not None:
-        heard = (
-            select(Packet.from_node_num)
-            .where(Packet.first_seen_at >= window.start, Packet.first_seen_at < window.end)
-            .distinct()
+        # The senders of the window from the hourly totals (#371). It read
+        # every raw packet of the window for them: 1.5 s over 30 days.
+        statement = statement.where(
+            Node.node_num.in_(hourly.senders_heard(window.start, window.end))
         )
-        statement = statement.where(Node.node_num.in_(heard))
     return [
         {"hw_model": model, "count": count}
         for model, count in (await session.execute(statement)).all()
@@ -304,7 +310,7 @@ async def portnums(
     key = f"{hours or 0}:{channel or ''}:{wanted or ''}"
     return await _portnums_cache.get(
         key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, hours),
         lambda: _read_portnums(session, hours, channel, wanted),
     )
 
@@ -390,7 +396,7 @@ async def top_talkers(
     settings: Settings = request.app.state.settings
     return await _top_cache.get(
         f"{window.key}:{limit}",
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_top(session, window, limit),
     )
 
@@ -399,19 +405,13 @@ async def _read_top(session: AsyncSession, window: Window, limit: int) -> list[d
     """Count each sender's packets in the window, busiest first."""
     now = window.end
     start = window.start
-    rows = (
-        await session.execute(
-            select(Packet.from_node_num, func.count().label("total"))
-            # Bounded at both ends, like `/activity` and `/broadcast`. It
-            # had a lower bound only, so a packet row dated in the future
-            # counted in every window. See AGENTS.md 9.4.
-            .where(Packet.first_seen_at >= start, Packet.first_seen_at < now)
-            .group_by(Packet.from_node_num)
-            .order_by(func.count().desc())
-            .limit(limit)
-        )
-    ).all()
-    senders = [row.from_node_num for row in rows]
+    # From the hourly totals per sender (#371), with the partial hour at
+    # each end from the raw rows. It counted every raw packet of the
+    # window: 4.7 s over 30 days. Bounded at both ends, like `/activity`
+    # and `/broadcast`: a packet row dated in the future must not count
+    # in every window. See AGENTS.md 9.4.
+    rows = await hourly.top_senders(session, start, now, limit)
+    senders = [node for node, _ in rows]
     air: dict[int, float | None] = {
         node: value
         for node, value in (
@@ -445,12 +445,12 @@ async def _read_top(session: AsyncSession, window: Window, limit: int) -> list[d
     names = await resolve_names(session, senders)
     return [
         {
-            "node_id": format_node_id(row.from_node_num),
-            "display_name": name_of(names, row.from_node_num),
-            "packet_count": row.total,
-            "air_util_tx": _rounded_or_none(air.get(row.from_node_num)),
+            "node_id": format_node_id(node),
+            "display_name": name_of(names, node),
+            "packet_count": total,
+            "air_util_tx": _rounded_or_none(air.get(node)),
         }
-        for row in rows
+        for node, total in rows
     ]
 
 
@@ -608,7 +608,7 @@ async def daily(
     settings: Settings = request.app.state.settings
     return await _daily_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_daily(session, settings, window),
     )
 
@@ -671,7 +671,7 @@ async def activity(
     settings: Settings = request.app.state.settings
     return await _activity_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_activity(session, settings, window),
     )
 
@@ -815,7 +815,7 @@ async def broadcast_rates(
     settings: Settings = request.app.state.settings
     return await _broadcast_cache.get(
         f"{window.key}:{limit}",
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_broadcast(session, settings, window, limit),
     )
 
@@ -823,33 +823,60 @@ async def broadcast_rates(
 async def _read_broadcast(
     session: AsyncSession, settings: Settings, window: Window, limit: int
 ) -> dict[str, object]:
-    """Measure each node's broadcast rates over the window."""
-    now = window.end
-    start = window.start
-    window_seconds = round((now - start).total_seconds())
+    """Measure each node's broadcast rates over the window.
+
+    A rolling window the jobs service builds (#371) is read from its
+    tables while the build is fresh, and states the window it measured.
+    """
+    hours = int(window.key[1:]) if window.key[1:].isdigit() and window.key[0] == "h" else None
+    stored = None
+    if hours in read_models.BROADCAST_HOURS:
+        stored = await read_models.read_broadcast(session, hours)
+    if stored is not None:
+        measured = Window(stored.window_start, stored.window_end, key=window.key)
+        body = await _present_broadcast(session, measured.describe(settings), stored.ranking, limit)
+        return body | {"built_at": stored.built_at}
+    ranking = await broadcast_ranking(session, window.start, window.end)
+    body = await _present_broadcast(session, window.describe(settings), ranking, limit)
+    return body | {"built_at": datetime.now(UTC)}
+
+
+#: One ranked node: number, packets, notable families, families faster
+#: than the default, each family's rate, and the health reading.
+RankedNode = tuple[int, int, list[str], list[str], dict[str, dict[str, object]], dict | None]
+
+
+@dataclass
+class BroadcastRanking:
+    """Every node's broadcast rates over one window, ranked, with no names.
+
+    What the jobs service stores (#371) and what the endpoint presents.
+    """
+
+    nodes: list[RankedNode]
+    notable_count: int
+    power_loop_count: int
+
+
+async def broadcast_ranking(
+    session: AsyncSession, start: datetime, end: datetime
+) -> BroadcastRanking:
+    """Count each node's broadcasts in `[start, end)` and rank the nodes.
+
+    The counts come from the hourly totals per sender and port (#371),
+    with the partial hour at each end from the raw rows. It grouped every
+    raw packet of the window: 1.7 s over 30 days.
+    """
+    window_seconds = round((end - start).total_seconds())
     wanted = {name: portnums_pb2.PortNum.Value(name) for name in BROADCAST_INTERVALS}  # type: ignore[attr-defined]
     by_number = {number: name for name, number in wanted.items()}
 
-    rows = (
-        await session.execute(
-            select(Packet.from_node_num, Packet.portnum, func.count().label("total"))
-            # The upper bound keeps future-dated rows out of the count,
-            # which would otherwise make a node look busier than it is.
-            # See docs/ISSUES.md 1.5.
-            .where(
-                Packet.first_seen_at >= start,
-                Packet.first_seen_at < now,
-                Packet.portnum.in_(wanted.values()),
-            )
-            .group_by(Packet.from_node_num, Packet.portnum)
-        )
-    ).all()
+    rows = await hourly.sender_port_counts(session, start, end, list(wanted.values()))
 
     families: dict[int, dict[str, FamilyRate]] = {}
     for node_num, portnum, total in rows:
         name = by_number[portnum]
         default = BROADCAST_INTERVALS[name]
-        # The average gap between one packet of this family and the next.
         interval = window_seconds / total
         ratio = default / interval
         families.setdefault(node_num, {})[name] = FamilyRate(
@@ -861,46 +888,68 @@ async def _read_broadcast(
             notable=ratio >= NOTABLE_RATIO,
         )
 
-    names = await resolve_names(session, families)
-    health = await _node_health(session, list(families), start, window_seconds, now)
-    report = [
-        _broadcast_report(node_num, name_of(names, node_num), rates)
-        for node_num, rates in families.items()
-    ]
-
-    # A node in a power loop first: that one needs a hand, not a telling
-    # off. Then the ones worth asking about, then the merely keen, then
-    # by how much traffic they make.
+    health = await _node_health(session, list(families), start, window_seconds, end)
+    report = [_broadcast_report(node_num, "", rates) for node_num, rates in families.items()]
     report.sort(
         key=lambda item: (
             not health.get(_node_num_of(item), EMPTY_HEALTH)["likely_power_loop"],
             -len(item["notable"]),
             -len(item["faster_than_default"]),
             -item["packet_count"],
+            # Equal on everything above: the node number decides, so a
+            # stored ranking and a live one list the same nodes in the
+            # same order.
+            _node_num_of(item),
         )
     )
-    return {
-        **window.describe(settings),
-        "intervals": BROADCAST_INTERVALS,
-        "notable_ratio": NOTABLE_RATIO,
-        "brownout_band": [BROWNOUT_LOW, BROWNOUT_HIGH],
-        "node_count": len(report),
-        "notable_count": sum(1 for item in report if item["notable"]),
-        "power_loop_count": sum(
+    return BroadcastRanking(
+        nodes=[
+            (
+                _node_num_of(item),
+                item["packet_count"],
+                item["notable"],
+                item["faster_than_default"],
+                {name: vars(rate) for name, rate in item["families"].items()},
+                cast("dict | None", health.get(_node_num_of(item))),
+            )
+            for item in report
+        ],
+        notable_count=sum(1 for item in report if item["notable"]),
+        power_loop_count=sum(
             1
             for item in report
             if health.get(_node_num_of(item), EMPTY_HEALTH)["likely_power_loop"]
         ),
+    )
+
+
+async def _present_broadcast(
+    session: AsyncSession,
+    described: dict[str, object],
+    ranking: BroadcastRanking,
+    limit: int,
+) -> dict[str, object]:
+    """The endpoint's answer from a ranking: names joined now, `limit` applied."""
+    shown = ranking.nodes[:limit]
+    names = await resolve_names(session, [node for node, *_ in shown])
+    return {
+        **described,
+        "intervals": BROADCAST_INTERVALS,
+        "notable_ratio": NOTABLE_RATIO,
+        "brownout_band": [BROWNOUT_LOW, BROWNOUT_HIGH],
+        "node_count": len(ranking.nodes),
+        "notable_count": ranking.notable_count,
+        "power_loop_count": ranking.power_loop_count,
         "nodes": [
             {
-                "node_id": item["node_id"],
-                "display_name": item["display_name"],
-                "packet_count": item["packet_count"],
-                "notable": item["notable"],
-                "faster_than_default": item["faster_than_default"],
-                "families": {name: vars(rate) for name, rate in item["families"].items()},
-                "health": health.get(_node_num_of(item)),
+                "node_id": format_node_id(node),
+                "display_name": name_of(names, node),
+                "packet_count": packets,
+                "notable": notable,
+                "faster_than_default": faster,
+                "families": families,
+                "health": health,
             }
-            for item in report[:limit]
+            for node, packets, notable, faster, families, health in shown
         ],
     }

@@ -115,6 +115,12 @@ def test_the_link_board_never_reads_a_missing_sensitivity_as_zero(
     monkeypatch.setattr(leaderboards, "_neighbor_edges", nothing)
     monkeypatch.setattr(leaderboards, "exact_positions", positions)
     monkeypatch.setattr(leaderboards, "resolve_names", names)
+
+    async def nothing_stored(*_: object) -> None:
+        return None
+
+    # No database here: the board computes its links (#371).
+    monkeypatch.setattr(leaderboards, "read_links", nothing_stored)
     board = asyncio.run(leaderboards._link_board(None, "LongSlow", 5.0))  # type: ignore[arg-type]
     assert board["rows"] == [], "an unmodelled preset gave a link a margin"
     # The control: on a modelled preset the same link is ranked.

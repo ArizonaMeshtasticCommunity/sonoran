@@ -1,8 +1,9 @@
-"""Count packets and uploads from the hourly totals, exactly (#366, #368).
+"""Count packets and uploads from the hourly totals, exactly (#366, #368, #371).
 
-`packet_hourly` and `packet_seen_hourly` (revision i366) and
-`packet_family_hourly` (revision i368) are TimescaleDB continuous
-aggregates. A count over a window is:
+`packet_hourly` and `packet_seen_hourly` (revision i366),
+`packet_family_hourly` (revision i368) and `packet_sender_port_hourly`
+(revision i371) are TimescaleDB continuous aggregates. A count over a
+window is:
 
 - the whole hours inside it, summed from the aggregate, and
 - the partial hour at each end, counted from the raw rows.
@@ -17,6 +18,7 @@ A window shorter than one whole hour is counted from the raw rows alone.
 `docs/DATABASE.md` 8 describes the aggregates.
 """
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -30,6 +32,13 @@ HOUR = timedelta(hours=1)
 
 PACKET_HOURLY = table("packet_hourly", column("bucket"), column("from_node_num"), column("packets"))
 PACKET_SEEN_HOURLY = table("packet_seen_hourly", column("bucket"), column("uploads"))
+PACKET_SENDER_PORT_HOURLY = table(
+    "packet_sender_port_hourly",
+    column("bucket"),
+    column("from_node_num"),
+    column("portnum"),
+    column("packets"),
+)
 PACKET_FAMILY_HOURLY = table(
     "packet_family_hourly",
     column("bucket"),
@@ -219,22 +228,7 @@ async def counts_by_sender(session: AsyncSession, start: datetime, end: datetime
     The graph gives each node its packet count from this. Whole hours
     come from `packet_hourly`, which is already per sender.
     """
-    hours = split(start, end)
-    if hours is None:
-        parts = [_raw_by_sender(start, end)]
-    else:
-        low, high = hours
-        parts = [
-            _raw_by_sender(start, low),
-            select(
-                PACKET_HOURLY.c.from_node_num.label("node"),
-                func.sum(PACKET_HOURLY.c.packets).label("packets"),
-            )
-            .where(PACKET_HOURLY.c.bucket >= low, PACKET_HOURLY.c.bucket < high)
-            .group_by(PACKET_HOURLY.c.from_node_num),
-            _raw_by_sender(high, end),
-        ]
-    joined = union_all(*parts).subquery()
+    joined = union_all(*_sender_parts(start, end)).subquery()
     rows = await session.execute(
         select(joined.c.node, func.sum(joined.c.packets)).group_by(joined.c.node)
     )
@@ -310,3 +304,137 @@ async def family_counts(
         (bucket, portnum, payload_state, int(packets))
         for bucket, portnum, payload_state, packets in rows.all()
     ]
+
+
+def _sender_parts(start: datetime, end: datetime) -> list[Select[Any]]:
+    """The packets per sender of `[start, end)`, as parts to add up."""
+    hours = split(start, end)
+    if hours is None:
+        return [_raw_by_sender(start, end)]
+    low, high = hours
+    return [
+        _raw_by_sender(start, low),
+        select(
+            PACKET_HOURLY.c.from_node_num.label("node"),
+            func.sum(PACKET_HOURLY.c.packets).label("packets"),
+        )
+        .where(PACKET_HOURLY.c.bucket >= low, PACKET_HOURLY.c.bucket < high)
+        .group_by(PACKET_HOURLY.c.from_node_num),
+        _raw_by_sender(high, end),
+    ]
+
+
+async def top_senders(
+    session: AsyncSession, start: datetime, end: datetime, limit: int
+) -> list[tuple[int, int]]:
+    """Return the `limit` busiest senders of `[start, end)` and their packets.
+
+    Busiest first. The database sorts and limits, so the reader never
+    holds every sender (#351). Equal counts keep the lower node number
+    first, so the order is the same on every read.
+    """
+    joined = union_all(*_sender_parts(start, end)).subquery()
+    total = func.sum(joined.c.packets)
+    rows = await session.execute(
+        select(joined.c.node, total.label("packets"))
+        .group_by(joined.c.node)
+        .order_by(total.desc(), joined.c.node)
+        .limit(limit)
+    )
+    return [(int(node), int(packets)) for node, packets in rows.all()]
+
+
+def senders_heard(start: datetime, end: datetime) -> Select[Any]:
+    """A query for every node that sent a packet in `[start, end)`.
+
+    For an `IN (...)`: the hardware mix of a window counts these nodes.
+    """
+    joined = union_all(*_sender_parts(start, end)).subquery()
+    return select(joined.c.node).distinct()
+
+
+def _raw_families(start: datetime, end: datetime) -> Select[Any]:
+    return (
+        select(
+            Packet.portnum.label("portnum"),
+            Packet.payload_state.label("payload_state"),
+            func.count().label("packets"),
+        )
+        .where(Packet.first_seen_at >= start, Packet.first_seen_at < end)
+        .group_by(Packet.portnum, Packet.payload_state)
+    )
+
+
+async def family_totals(
+    session: AsyncSession, start: datetime, end: datetime
+) -> list[tuple[int, str | None, int]]:
+    """Return (portnum, payload_state, packets) over `[start, end)`, no buckets."""
+    hours = split(start, end)
+    if hours is None:
+        parts = [_raw_families(start, end)]
+    else:
+        low, high = hours
+        parts = [
+            _raw_families(start, low),
+            select(
+                PACKET_FAMILY_HOURLY.c.portnum.label("portnum"),
+                PACKET_FAMILY_HOURLY.c.payload_state.label("payload_state"),
+                func.sum(PACKET_FAMILY_HOURLY.c.packets).label("packets"),
+            )
+            .where(PACKET_FAMILY_HOURLY.c.bucket >= low, PACKET_FAMILY_HOURLY.c.bucket < high)
+            .group_by(PACKET_FAMILY_HOURLY.c.portnum, PACKET_FAMILY_HOURLY.c.payload_state),
+            _raw_families(high, end),
+        ]
+    joined = union_all(*parts).subquery()
+    rows = await session.execute(
+        select(joined.c.portnum, joined.c.payload_state, func.sum(joined.c.packets)).group_by(
+            joined.c.portnum, joined.c.payload_state
+        )
+    )
+    return [(portnum, state, int(packets)) for portnum, state, packets in rows.all()]
+
+
+def _raw_sender_ports(start: datetime, end: datetime, ports: Sequence[int]) -> Select[Any]:
+    return (
+        select(
+            Packet.from_node_num.label("node"),
+            Packet.portnum.label("portnum"),
+            func.count().label("packets"),
+        )
+        .where(
+            Packet.first_seen_at >= start,
+            Packet.first_seen_at < end,
+            Packet.portnum.in_(ports),
+        )
+        .group_by(Packet.from_node_num, Packet.portnum)
+    )
+
+
+async def sender_port_counts(
+    session: AsyncSession, start: datetime, end: datetime, ports: Sequence[int]
+) -> list[tuple[int, int, int]]:
+    """Return (sender, portnum, packets) over `[start, end)` for the given ports."""
+    hours = split(start, end)
+    if hours is None:
+        parts = [_raw_sender_ports(start, end, ports)]
+    else:
+        low, high = hours
+        view = PACKET_SENDER_PORT_HOURLY
+        parts = [
+            _raw_sender_ports(start, low, ports),
+            select(
+                view.c.from_node_num.label("node"),
+                view.c.portnum.label("portnum"),
+                func.sum(view.c.packets).label("packets"),
+            )
+            .where(view.c.bucket >= low, view.c.bucket < high, view.c.portnum.in_(ports))
+            .group_by(view.c.from_node_num, view.c.portnum),
+            _raw_sender_ports(high, end, ports),
+        ]
+    joined = union_all(*parts).subquery()
+    rows = await session.execute(
+        select(joined.c.node, joined.c.portnum, func.sum(joined.c.packets)).group_by(
+            joined.c.node, joined.c.portnum
+        )
+    )
+    return [(int(node), int(portnum), int(packets)) for node, portnum, packets in rows.all()]
