@@ -9,6 +9,7 @@ prove nothing: the thresholds are starting points that
 import inspect
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import create_app
@@ -16,6 +17,7 @@ from sonoran.config import Settings
 from sonoran.gaps import signals
 from sonoran.gaps.signals import BAD, OK, UNKNOWN, CoverageLevels, NodeEvidence
 from sonoran.radio.presets import PRESETS, noise_floor_dbm, preset_by_key, required_snr_db
+from tests.unit.job_outputs import JobOutputs
 
 LONG_FAST = preset_by_key("LONG_FAST")
 assert LONG_FAST is not None
@@ -67,27 +69,31 @@ def test_required_snr_is_derived_from_the_one_preset_table() -> None:
 
 
 def test_long_fast_demodulates_well_below_the_noise() -> None:
-    """Long fast needs about -25 dB, which is why -20 dB is a real link.
+    """Long fast needs about -17 dB, so -12 dB is a real link.
 
     This is the number the whole margin rests on. A reader who does not
-    know it reads a reported SNR of -20 dB as a broken radio, when in
+    know it reads a reported SNR of -12 dB as a broken radio, when in
     fact it has about 5 dB to spare.
+
+    Before #362 this said -25 dB, from a sensitivity table 8 dB too
+    good. -17 dB agrees with the SNR limit Semtech gives for SF11, about
+    -17.5 dB, which is a check on the docs' link budget it comes from.
     """
-    assert -25.5 < required_snr_db(LONG_FAST) < -24.5
+    assert -17.5 < required_snr_db(LONG_FAST) < -16.5
 
 
 def test_a_weak_margin_is_measured_against_the_preset_not_the_raw_snr() -> None:
     """The same SNR is a different answer on two presets."""
     settings = _settings()
     weak = signals.weak_best_link(
-        NodeEvidence(node_num=1, best_neighbour_snr=-20.0), settings, LONG_FAST
+        NodeEvidence(node_num=1, best_neighbour_snr=-12.5), settings, LONG_FAST
     )
     assert weak.state == BAD
     # It works, and it has little room. Both halves are true.
     assert weak.value is not None and 4.0 < weak.value < 5.0
 
     strong = signals.weak_best_link(
-        NodeEvidence(node_num=1, best_neighbour_snr=-5.0), settings, LONG_FAST
+        NodeEvidence(node_num=1, best_neighbour_snr=0.0), settings, LONG_FAST
     )
     assert strong.state == OK
 
@@ -346,24 +352,6 @@ def test_a_node_with_no_hours_at_all_is_unknown() -> None:
 # --------------------------------------------------------------- 4.4
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --------------------------------------------------------------- 4.6
 
 
@@ -579,6 +567,11 @@ def test_the_unknown_state_is_never_drawn_as_a_warning() -> None:
 # ------------------------------------------------------------ the API
 
 
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    """Every route test here reads the job outputs from memory (#351)."""
+
+
 def _client(cache: str) -> TestClient:
     return TestClient(create_app(Settings(_env_file=None, coverage_cache_dir=cache)))
 
@@ -617,27 +610,28 @@ def test_the_gaps_routes_are_get_only(tmp_path: Path) -> None:
         # it can be served.
         "/api/gaps/areas",
         "/api/gaps/candidates",
-        # The node page reads one node's rows from the same artefact
-        # (#56). It opens no database session either.
+        # The node page reads one node's rows from the same tables
+        # (#56).
         "/api/nodes/{node_id}/gaps",
     }
     for path, methods in found:
         assert methods <= {"GET"}, path
 
 
-def test_the_gaps_route_opens_no_database_session() -> None:
-    """The endpoint reads the written artefact and computes nothing.
+def test_the_gaps_route_computes_nothing() -> None:
+    """The endpoint reads the rows the job wrote and computes nothing.
 
     `docs/ISSUES.md` 2.9 is an open warning about a public endpoint doing
     per-row work while the map refreshes it every 15 seconds, and the gap
-    queries are heavier than the one that warning is about.
+    queries are heavier than the one that warning is about. Since #351
+    the routes read stored rows through `gaps.store`, and they never
+    reach the evidence the job reads.
     """
     from sonoran.api.routes import gaps as route
 
     source = inspect.getsource(route)
-    assert "get_session" not in source
-    assert "AsyncSession" not in source
-    assert "select(" not in source
+    for computed in ("read_evidence", "read_gateways", "assess(", "select("):
+        assert computed not in source, computed
 
 
 # ------------------------------------------------------------ the leak
@@ -813,17 +807,75 @@ def test_the_caveats_name_what_cannot_be_answered_at_all() -> None:
     for _, text in signals.CAVEATS:
         assert text.endswith(".")
 
+
+# ------------------------------------------------------------ paging (#351)
+
+
+def _paged_run(outputs: JobOutputs, stamp: str) -> None:
+    outputs.write_index({"presets": [{"preset": "LongFast", "node_count": 3}]})
+    outputs.write_preset(
+        "LongFast",
+        {
+            "preset": "LongFast",
+            "generated_at": stamp,
+            "signal_order": ["radio_isolated"],
+            "nodes": [
+                {"node_id": f"!0000000{n}", "signals": {"radio_isolated": {"state": "bad"}}}
+                for n in (1, 2, 3)
+            ],
+        },
+    )
+
+
+def test_the_node_list_pages_by_cursor_and_never_mixes_two_runs(
+    tmp_path: Path, job_outputs: JobOutputs
+) -> None:
+    _paged_run(job_outputs, "2026-10-12T12:00:00+00:00")
+    with _client(str(tmp_path)) as client:
+        first = client.get("/api/gaps/nodes?channel=LongFast&limit=2").json()
+        assert [row["node_id"] for row in first["nodes"]] == ["!00000001", "!00000002"]
+        assert first["matched_count"] == 3
+        cursor = first["next_cursor"]
+        assert cursor
+
+        second = client.get(f"/api/gaps/nodes?channel=LongFast&limit=2&cursor={cursor}").json()
+        assert [row["node_id"] for row in second["nodes"]] == ["!00000003"]
+        assert second["next_cursor"] is None, "the last page names no next one"
+
+        # The job writes a new run. The old cursor no longer names a place in it.
+        _paged_run(job_outputs, "2026-10-12T12:30:00+00:00")
+        stale = client.get(f"/api/gaps/nodes?channel=LongFast&limit=2&cursor={cursor}")
+        assert stale.status_code == 409
+
+        assert client.get("/api/gaps/nodes?channel=LongFast&cursor=nonsense").status_code == 422
+
+
+def test_a_cursor_reads_back_the_place_it_names() -> None:
+    from sonoran.api.routes.gaps import page_cursor, read_cursor
+
+    stamp = "2026-10-12T12:00:00+00:00"
+    assert read_cursor(page_cursor(stamp, 41), stamp) == 41
+    assert read_cursor(None, stamp) is None
+
+
 def test_direct_gateways_count_does_not_produce_bad_state() -> None:
-    for count in [0, 1, 2]:
-        evidence = signals.NodeEvidence(
-            node_num=1,
-            direct_gateways=count,
-            rf_packets=5,
-            packets=5,
-            active_hours=2,
-            rf_hours=2,
+    assert "sole_observer" not in signals.SIGNAL_ORDER
+    for direct in (0, 1, 2):
+        found = signals.assess(
+            NodeEvidence(
+                node_num=1,
+                packets=400,
+                rf_packets=400,
+                active_hours=100,
+                rf_hours=100,
+                direct_gateways=direct,
+            ),
+            _settings(),
+            LONG_FAST,
+            10,
+            CoverageLevels(),
+            "exact",
+            0.0,
         )
-        settings = Settings()
-        coverage = signals.CoverageLevels(available=True, is_diagnostic=False, threshold_level=100, levels={'1': {'usable': 105}})
-        found = signals.assess(evidence, settings, Preset.LONG_FAST, 10, coverage, "exact", None)
-        assert not any(signal.state == signals.BAD for signal in found.values())
+        assert "sole_observer" not in found
+        assert BAD not in {signal.state for signal in found.values()}, direct

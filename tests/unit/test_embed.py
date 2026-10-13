@@ -509,6 +509,47 @@ def test_the_public_tiles_cannot_be_asked_for_the_client_map(tmp_path: Path) -> 
     assert dashboard.content == EXTENDED_PNG
 
 
+APPROXIMATE_PNG = b"\x89PNG\r\n\x1a\napproximate"
+
+
+def test_the_public_tiles_never_serve_the_approximate_map(tmp_path: Path) -> None:
+    """`COVERAGE_INCLUDE_APPROXIMATE` adds a map from rounded positions.
+
+    It is for the dashboard (#315). The public page draws the precise
+    infrastructure map whatever the run published beside it, and no
+    path under the public prefix answers with the approximate one.
+    """
+    approximate = "infrastructure_approximate"
+    _write_run(
+        tmp_path,
+        is_diagnostic=False,
+        site_sets={"infrastructure": INFRASTRUCTURE_PNG, approximate: APPROXIMATE_PNG},
+    )
+    client = _client(embed_enabled=True, coverage_cache_dir=str(tmp_path))
+
+    allowed = client.get(_embed_tile_url())
+    assert allowed.status_code == 200
+    assert allowed.content == INFRASTRUCTURE_PNG
+
+    zoom, x, y = TILE_COORDS
+    prefix = _public_tile_prefix()
+    for candidate in (
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/{approximate}/usable/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/{approximate}/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/usable/{approximate}/{zoom}/{x}/{y}.png",
+    ):
+        response = client.get(candidate)
+        assert response.status_code >= 400, candidate
+        assert response.content != APPROXIMATE_PNG, candidate
+
+    # The dashboard reads it by name, from its own route.
+    dashboard = client.get(
+        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/{approximate}/usable/{zoom}/{x}/{y}.png"
+    )
+    assert dashboard.status_code == 200
+    assert dashboard.content == APPROXIMATE_PNG
+
+
 def test_a_diagnostic_run_is_not_reachable_through_the_public_tiles(tmp_path: Path) -> None:
     """The finding, path B, and the worse one.
 

@@ -5,15 +5,17 @@ the parts that need no database: the gaps rows the node page reads from
 the artefact, the request rules, and the ranking of the boards.
 """
 
+import asyncio
 import inspect
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import create_app
 from sonoran.api.routes import leaderboards, node_page
 from sonoran.config import Settings
-from sonoran.gaps import store
+from tests.unit.job_outputs import JobOutputs
 
 NODE = "!0000abcd"
 
@@ -35,10 +37,18 @@ def _row(node_id: str, packets: int, **extra: object) -> dict[str, object]:
     } | extra
 
 
+# The job outputs of the test in progress. See `tests/unit/job_outputs.py`.
+_memory: JobOutputs
+
+
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    global _memory
+    _memory = job_outputs
+
+
 def _write(cache: Path, presets: dict[str, list[dict[str, object]]]) -> None:
-    settings = _settings(cache)
-    store.write_index(
-        settings,
+    _memory.write_index(
         {
             "presets": [
                 {"preset": name, "label": name, "node_count": len(rows)}
@@ -47,8 +57,7 @@ def _write(cache: Path, presets: dict[str, list[dict[str, object]]]) -> None:
         },
     )
     for name, rows in presets.items():
-        store.write_preset(
-            settings,
+        _memory.write_preset(
             name,
             {
                 "preset": name,
@@ -96,11 +105,12 @@ def test_a_node_gets_its_own_row_from_each_preset(tmp_path: Path) -> None:
     assert body["not_listed"] == ["ShortFast"]
 
 
-def test_the_node_gaps_route_opens_no_database_session() -> None:
-    """It reads the artefact, as `/api/gaps` does, and computes nothing."""
-    parameters = inspect.signature(node_page.node_gaps).parameters
-    assert "session" not in parameters
-    assert "select(" not in inspect.getsource(node_page.node_gaps)
+def test_the_node_gaps_route_reads_one_row_and_computes_nothing() -> None:
+    """It reads the node's rows by key (#351), never a whole assessment."""
+    body = inspect.getsource(node_page.node_gaps)
+    assert "assessed_nodes(" in body
+    assert "read_preset(" not in body
+    assert "select(" not in body
 
 
 # ------------------------------------------------------------- history
@@ -169,17 +179,21 @@ def test_the_packet_direction_is_sent_or_heard(tmp_path: Path) -> None:
 # -------------------------------------------------------- leaderboards
 
 
-def test_the_reachable_board_ranks_by_share_of_awake_hours() -> None:
+def test_the_reachable_board_ranks_by_answered_traceroutes() -> None:
+    """#293: the share of traceroutes answered, not the share of hours heard.
+
+    The full set of cases is in `test_trace_answers.py`.
+    """
     rows = [
-        _row("!00000001", 100, active_hours=100, rf_hours=50),
-        _row("!00000002", 100, active_hours=48, rf_hours=48),
-        # One lucky hour is not a record.
-        _row("!00000003", 5, active_hours=2, rf_hours=2),
-        _row("!00000004", 100, active_hours=200, rf_hours=200),
+        {"node_id": "!00000001", "requests": 20, "answered": 10, "senders": 3},
+        {"node_id": "!00000002", "requests": 40, "answered": 38, "senders": 4},
+        # Too few traceroutes to rank.
+        {"node_id": "!00000003", "requests": 4, "answered": 4, "senders": 2},
     ]
     board = leaderboards._reachable_board(rows, 168)
-    assert [row["node_id"] for row in board["rows"]] == ["!00000004", "!00000002", "!00000001"]
-    assert board["rows"][2]["value"] == 50.0
+    assert [row["node_id"] for row in board["rows"]] == ["!00000002", "!00000001"]
+    assert board["rows"][1]["value"] == 50.0
+    assert board["not_ranked"] == 1
     assert board["cannot_know"]
 
 
@@ -203,7 +217,8 @@ def test_no_board_counts_packets() -> None:
 
 def test_leaderboards_default_to_the_busiest_preset(tmp_path: Path) -> None:
     _write(tmp_path, {"LongFast": [_row(NODE, 1)], "MediumFast": [_row(NODE, 1), _row("!1", 1)]})
-    assert leaderboards._assessed_presets(_settings(tmp_path)) == ["MediumFast", "LongFast"]
+    held = asyncio.run(leaderboards._assessed_presets(None, _settings(tmp_path)))  # type: ignore[arg-type]
+    assert held == ["MediumFast", "LongFast"]
 
 
 def _health_cards_source() -> str:
@@ -220,24 +235,19 @@ def _health_cards_source() -> str:
     return source[start : start + 9000]
 
 
-def test_nothing_heard_is_not_coloured_as_health() -> None:
-    """#87. A node no gateway heard read Good, in green, on live data.
+def test_heard_over_the_air_reads_radio_isolated_alone() -> None:
+    """#327. The card no longer counts gateways in direct range.
 
-    `sole_observer` is `bad` at exactly one direct gateway and
-    `unknown` at zero, so downgrading only on `bad` let the zero case
-    through as `ok`. The severity came out backwards with it: nothing
-    heard read Good, one gateway read Needs help. 218 of 774 assessed
-    nodes were in that state.
-
-    Fails against a downgrade that tests only for `bad`.
+    It used to read `sole_observer` and mark one direct gateway as a
+    fault. That signal is gone. The card's colour is `radio_isolated`,
+    which is `ok` only when something heard the node over the air, so a
+    node nothing heard still never reads as health (#87).
     """
     body = _health_cards_source()
-    start = body.index("let heardState")
-    window = body[start : start + 400]
-    assert "'unknown'" in window, (
-        "the heard-over-the-air card does not handle sole_observer being "
-        "unknown, so a node nothing heard directly is coloured as healthy"
-    )
+    start = body.index("const heardState")
+    window = body[start - 200 : start + 200]
+    assert "signal('radio_isolated')" in window
+    assert "signal('sole_observer')" not in body
 
 
 def test_a_rounded_position_is_not_a_fault() -> None:

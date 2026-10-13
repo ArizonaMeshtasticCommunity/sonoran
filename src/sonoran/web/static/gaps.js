@@ -370,7 +370,7 @@
        * shortcut that duplicates a real control is an enhancement,
        * not the only way in.
        */
-      tr.title = 'View node details';
+      tr.title = 'Open the evidence';
       const opener = tr.querySelector('.gap-open');
       const toggle = () => {
         const open = tr.classList.contains('open');
@@ -757,7 +757,8 @@
      * is to move the whole site with it and let the menu say so.
      */
     if (named && window.SonoranPreset) SonoranPreset.set(named);
-    const global = window.SonoranPreset ? SonoranPreset.current() : null;
+    // One preset even under "All presets": gaps are assessed per preset.
+    const global = window.SonoranPreset ? SonoranPreset.single() : null;
     state.preset = named || global || state.preset;
     try {
       summary = await fetchJson(

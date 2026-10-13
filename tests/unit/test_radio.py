@@ -84,7 +84,7 @@ def test_the_python_and_javascript_preset_tables_agree() -> None:
 
 def test_preset_lookup_by_key() -> None:
     assert preset_by_key("LONG_FAST") is not None
-    assert preset_by_key("LONG_FAST").sensitivity_dbm == -139.0  # type: ignore[union-attr]
+    assert preset_by_key("LONG_FAST").sensitivity_dbm == -131.0  # type: ignore[union-attr]
     assert preset_by_key("NOT_A_PRESET") is None
 
 
@@ -465,3 +465,53 @@ def test_a_position_outside_the_earth_is_refused() -> None:
 
     text = 'nodes:\n  "!a":\n    latitude: 999.0\n    longitude: -112.0\n'
     assert parse_overrides(text).position_of("!a") is None
+
+
+# --- a position is checked when the file is read (#315) -----------------
+#
+# A position in this file makes a node a coverage site. A mistake in one
+# must be refused where it is read, with a line that names the node, and
+# never half applied.
+
+
+def test_half_a_position_is_refused_when_the_file_is_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    text = 'nodes:\n  "!0000abcd":\n    latitude: 33.4\n    antenna_height_m: 12.0\n'
+    overrides = parse_overrides(text)
+    assert overrides.for_node("!0000abcd").latitude is None
+    # The rest of the entry is still a radio fact, and is kept.
+    assert overrides.for_node("!0000abcd").antenna_height_m == 12.0
+    assert "!0000abcd" in caplog.text
+    assert "longitude" in caplog.text
+
+
+def test_a_position_that_is_not_a_place_is_refused(caplog: pytest.LogCaptureFixture) -> None:
+    """Null Island is what an unset position reads as."""
+    text = 'nodes:\n  "!0000abcd":\n    latitude: 0.0\n    longitude: 0.0\n'
+    assert parse_overrides(text).position_of("!0000abcd") is None
+    assert "!0000abcd" in caplog.text
+
+
+def test_a_half_position_left_by_a_bad_value_is_refused_too() -> None:
+    """A longitude out of range is dropped, and the latitude goes with it."""
+    text = 'nodes:\n  "!0000abcd":\n    latitude: 33.4\n    longitude: -912.0\n'
+    override = parse_overrides(text).for_node("!0000abcd")
+    assert override.latitude is None
+    assert override.longitude is None
+
+
+@pytest.mark.parametrize("node_id", ["9d0f9a75", "!9d0f9a7", "!xyz", "Towers 2"])
+def test_a_node_id_that_cannot_match_a_node_is_refused(
+    node_id: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An entry under a name no node has would be silently never used."""
+    text = f'nodes:\n  "{node_id}":\n    latitude: 33.4\n    longitude: -112.0\n'
+    assert parse_overrides(text).nodes == {}
+    assert node_id in caplog.text
+
+
+def test_a_node_id_in_capitals_is_read() -> None:
+    """The node page prints lower case, and a person may not."""
+    text = 'nodes:\n  "!9D0F9A75":\n    latitude: 34.0\n    longitude: -112.7\n'
+    assert parse_overrides(text).position_of("!9d0f9a75") == (34.0, -112.7)

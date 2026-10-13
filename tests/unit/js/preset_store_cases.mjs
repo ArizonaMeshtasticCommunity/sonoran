@@ -125,37 +125,5 @@ eq('a saved rubbish value is ignored',
   eq('a throwing subscriber does not stop the rest', seen, ['LongFast']);
 }
 
-// --- the chat rule Will asked for -----------------------------------
-// The live payload shape, verbatim from /api/chat/overview.
-const SECTIONS = [
-  { channel: 'MediumFast', group: 'Presets', preset: 'MediumFast' },
-  { channel: 'LongFast', group: 'Presets', preset: 'LongFast' },
-  { channel: 'Weather', group: 'Weather', preset: '' },
-  { channel: 'Traffic', group: 'Traffic', preset: '' },
-  { channel: 'azmsh', group: 'Testing', preset: '' },
-  { channel: 'Trivia', group: 'Games', preset: '' },
-];
-const names = (list) => list.map((item) => item.channel);
-{
-  const { P } = load();
-  eq('on Medium Fast: the preset and the topic channels',
-    names(P.channelsFor(SECTIONS)),
-    ['MediumFast', 'Weather', 'Traffic', 'azmsh', 'Trivia']);
-  P.set('LongFast');
-  eq('on Long Fast: only Long Fast', names(P.channelsFor(SECTIONS)), ['LongFast']);
-  // Named explicitly because Will named them.
-  const hidden = ['Weather', 'Traffic', 'azmsh', 'MediumFast'];
-  eq('Weather, Traffic, azmsh and MediumFast are all hidden',
-    hidden.some((name) => names(P.channelsFor(SECTIONS)).includes(name)), false);
-}
-{
-  // A deployment whose default is LongFast gets the same behaviour
-  // without editing the rule: the topic channels ride on ITS default.
-  const { P } = load({ configured: 'LongFast' });
-  eq('the topic channels follow the deployment default, not the literal MediumFast',
-    names(P.channelsFor(SECTIONS)), ['LongFast', 'Weather', 'Traffic', 'azmsh', 'Trivia']);
-}
-eq('no sections is not a crash', load().P.channelsFor(null), []);
-
 if (failed) { console.log(`\n${failed} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');

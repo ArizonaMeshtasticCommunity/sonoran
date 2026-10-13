@@ -17,9 +17,11 @@ why they are served as immutable, and why the map opens fast the second
 time somebody looks at it.
 """
 
-from fastapi import APIRouter, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
+from sonoran.api.dependencies import get_session
 from sonoran.coverage import store
 from sonoran.coverage.render import TILE_SIZE
 from sonoran.coverage.store import LAYER_LABELS, LAYERS
@@ -61,7 +63,7 @@ async def coverage_summary(request: Request) -> dict[str, object]:
 
 
 @router.get("/calibration")
-async def coverage_calibration(request: Request) -> dict[str, object]:
+async def coverage_calibration(session: AsyncSession = Depends(get_session)) -> dict[str, object]:
     """Return what the mesh measured against what the model predicted.
 
     This is where a node that is not what its nameplate says becomes
@@ -72,11 +74,10 @@ async def coverage_calibration(request: Request) -> dict[str, object]:
     measurements still disagree widely describes nothing, and the map
     keeps its nameplate figures instead of moving on noise.
     """
-    settings = request.app.state.settings
-    document = store.read_calibration(settings)
+    document = await store.read_calibration(session)
     if document is None:
         return {"available": False, "nodes": []}
-    applied = store.calibration_offsets(settings)
+    applied = store.offsets_of(document)
     nodes = document.get("nodes")
     reported_nodes: list[dict[object, object]] = []
     for item in nodes if isinstance(nodes, list) else []:

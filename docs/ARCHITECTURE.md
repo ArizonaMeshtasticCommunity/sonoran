@@ -181,6 +181,9 @@ Key settings:
   The dashboard uses browser-relative URLs and local assets only.
   It does not require CDN, tile, canvas, or gateway rewrite support.
 - `STORE_TEXT_MESSAGES` — boolean. Default false until the privacy decision is final.
+- `GATEWAY_PRESET_CONFLICT_MINUTES` — default 60. A gateway that uploads
+  on two different preset-named topics within this many minutes is
+  ambiguous, and its other uploads get no modem preset (#313).
 - `RETENTION_DAYS_*` — retention policy overrides. Run the migration service
   after a value changes.
 - `LOG_LEVEL`.
@@ -245,9 +248,23 @@ def decode_payload(portnum: int, data: bytes) -> DecodedPayload
   2. Parse the envelope.
   3. Decrypt the payload.
   4. Decode the payload.
-  5. Call `dedup.store_packet`.
-  6. Call the matching handler.
-  7. Handle errors per packet. Log, count, continue.
+  5. Ask `presets.PresetTracker.observe` for the modem preset of this
+     upload (#313).
+  6. Call `dedup.store_packet`. The preset goes on the `packet_seen` row,
+     and on the `packet` row when the packet is new.
+  7. Call `preset_writes.store_vote`. It counts the upload's vote and
+     updates `packet.modem_preset` and `node.last_preset` when the
+     majority changes.
+  8. Call the matching handler.
+  9. Handle errors per packet. Log, count, continue.
+- `presets.py` decides the modem preset of each upload and packet. It
+  holds each gateway's current preset and a short tally of each recent
+  packet's votes, in memory, and touches no database. One tracker lives
+  for the life of the process. At start, `preset_writes.load_gateway_presets`
+  seeds it from `node.uplink_preset`. See `docs/DATABASE.md` 3.4.1.
+- `preset_writes.py` stores what `presets.py` decides, with plain
+  `UPDATE ... WHERE key = ...` statements. It never reads a `packet`
+  row and never uses `ON CONFLICT DO UPDATE` (AGENTS.md 9.1, 9.2).
 - `dedup.py` implements the deduplication contract:
   - Insert into `packet_key` with `ON CONFLICT DO NOTHING`.
     The affected row count says whether the packet is new.
@@ -343,11 +360,12 @@ channel, Data message metadata, and receive time.
 - `signals.py` is the only place that decides what a per node signal
   means. `siting.py` is the only place that decides what a demand
   point, an area, a candidate and the terrain screen mean.
-- `store.py` is where an answer is written and read. Two files for each
-  preset, beside the coverage runs: `{preset}.json` from the per node
-  job and `siting-{preset}.json` from the siting job. They are written
-  by different jobs on different clocks, so one file holding both would
-  always be half stale.
+- `store.py` is where an answer is written and read: the job output
+  tables in `docs/DATABASE.md` 5B (#351). The per node job writes
+  `gaps_run`, `gaps_node` and `gaps_trace_answer`; the siting job writes
+  `gaps_siting` and `gaps_siting_candidate`. They are written by
+  different jobs on different clocks, so each replaces only its own
+  rows. A route reads by key, with its filters and its limit in SQL.
 - Every signal and every candidate has **three** states, and the third
   is `unknown`. It is never served as a zero and never as a pass.
 - `siting.py` reads terrain out of the cache through
@@ -415,6 +433,28 @@ at all.
 The region is a bounding box in configuration. A tile outside it is
 never fetched and never served, so the endpoint cannot be used as a
 general proxy for the tile source.
+
+### 3.8.1 `climate`
+
+- Job: say which ITM radio climate a place is in (#239).
+- This module must never touch the database.
+- `store.py` reads `koppen_1991_2020.u8.gz`, a 960 x 960 byte crop of
+  the Beck et al. (2023) Köppen-Geiger map. It ships inside the package,
+  so it needs no download, no cache and no setting. Row 0 is north and
+  column 0 is west, which is **not** the order of a terrain page.
+- `koppen.py` holds the Köppen to ITM table, one row for each of the 30
+  classes, with a reason for each. It is the only copy: the planner
+  reads it from `/api/climate/classes`.
+- `climate_at` answers a place. Outside the crop, or where the map has
+  no class, it answers `desert` and marks the answer as not known. It
+  never guesses a class.
+- `PROVENANCE.md` beside the data holds the licence (CC BY 4.0), the
+  attribution and the changes made. `tools/make_climate_crop.py` makes
+  the file again from the published source.
+
+Readers: the planner page (through `api/routes/climate.py`), the
+coverage job (`coverage/sites.py::engine_params`) and the calibration
+(`jobs/calibrate.py::_params`). See `docs/PLANNER.md` 4.3.
 
 ### 3.9 `jobs`
 
@@ -635,8 +675,8 @@ What each kind shows under "What it said":
 | `TELEMETRY_APP` | Named readings with units: device, environment, air quality or power. | the four telemetry tables |
 | `NEIGHBORINFO_APP` | A table of the neighbors it reported, each by name, with the SNR it heard it at. | `neighbor_metrics`, named through `node` |
 | `TRACEROUTE_APP` | The path, hop by hop, and the mesh-graph drawing. | `traceroute` |
-| `NODEINFO_APP` | A sentence saying it is not stored, and a link to the node page. | not stored per packet |
-| `ROUTING_APP` | A sentence saying it is not stored. | not stored |
+| `NODEINFO_APP` | The names, hardware, role and key the node sent. A packet stored before 2026-09-22 shows a sentence saying it is not stored, and a link to the node page. | `packet.payload_json` |
+| `ROUTING_APP` | The result: an acknowledgement or the error reason. A packet stored before 2026-09-22 shows a sentence saying it is not stored. The ID of the packet it acknowledges is not stored, so an ACK cannot be matched to its message (#293). | `packet.payload_json` |
 | any other | "No decoded value is stored for this packet." | none |
 
 The envelope says which key sealed the packet: the recipient's public
@@ -714,7 +754,9 @@ MQTT broker
   -> decode.envelope (ParsedEnvelope with MeshPacket)
   -> crypto.decrypt (plaintext Data bytes)
   -> decode.payloads (typed payload object)
+  -> ingest.presets (the modem preset of this upload, from memory)
   -> ingest.dedup (packet row, packet_seen row, is_new flag)
+  -> ingest.preset_writes (packet.modem_preset, node.last_preset on a new majority)
   -> ingest.handlers.<family> (node update, metric rows)
 ```
 

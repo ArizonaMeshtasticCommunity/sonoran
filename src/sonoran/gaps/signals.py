@@ -75,7 +75,7 @@ from datetime import UTC, datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
-from sqlalchemy import Select, and_, func, select
+from sqlalchemy import BigInteger, Select, Subquery, and_, cast, func, null, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api import traces
@@ -305,12 +305,6 @@ REASON_SENTENCES: dict[str, str] = {
         "Only one gateway has heard this node directly. That is a statement about where "
         "our gateways are as much as about the mesh."
     ),
-    "one_gateway_hears_it_close": (
-        "Only one gateway has heard this node directly, and it receives it very "
-        "strongly: a median of {direct_rssi_dbm} dBm over {direct_rssi_readings} "
-        "packets. A signal that strong comes from a gateway close to the node. One "
-        "gateway here says where our gateways are, not that this node has a problem."
-    ),
     "several_gateways_hear_it": "{direct_gateways} gateways have heard this node directly.",
     "no_direct_observation": (
         "No gateway has heard it directly. A well connected node several hops deep is "
@@ -478,11 +472,6 @@ class NodeEvidence:
     # record that belongs to a real link.
     direct_gateways: int = 0
     best_direct_snr: float | None = None
-    # The median RSSI of those direct observations, in dBm, and how many
-    # carried one. A gateway that does not report RSSI stores NULL,
-    # never 0, so a missing reading is never the loudest one.
-    direct_rssi_dbm: float | None = None
-    direct_rssi_readings: int = 0
     # Whether the node ever uploaded anything itself. Only a gateway can
     # be `radio_isolated`.
     is_mqtt_gateway: bool = False
@@ -629,19 +618,12 @@ async def read_gateways(
     return set(rows.all())
 
 
-async def read_evidence(
-    session: AsyncSession,
-    settings: Settings,
-    channels: Sequence[str],
-    since: datetime,
-    until: datetime,
-) -> dict[int, NodeEvidence]:
-    """Return the evidence for every node that sent traffic on this preset.
+def _packet_summary(channels: Sequence[str], since: datetime, until: datetime) -> Subquery:
+    """Return one row for each sender: its packets and its awake and heard hours.
 
-    One preset, always. A node on Long fast cannot hear a node on
-    Medium fast, so a merged assessment would invite a reader to fix a
-    gap between two radios that have no way to reach each other. See
-    `AGENTS.md` 9.7.
+    The assessment and the leaderboard windows both read this, so the
+    rule that says when a packet was heard on the air is written once.
+    See `sonoran/gaps/boards.py`.
     """
     keys = _keys_cte(channels, since, until).cte("gap_keys")
 
@@ -718,6 +700,58 @@ async def read_evidence(
         .group_by(evidence.c.from_node_num)
         .subquery()
     )
+    return summary
+
+
+async def read_reach_evidence(
+    session: AsyncSession,
+    channels: Sequence[str],
+    since: datetime,
+    until: datetime,
+) -> dict[int, NodeEvidence]:
+    """Return only the evidence the leaderboards rank by, for one window.
+
+    The packets, the awake and heard hours, and the direct gateways. Every
+    other field keeps its default, so a signal must never be judged from
+    this. It is for the extra Statistics windows (#294), where a full
+    assessment would repeat the neighbour, traceroute and position reads
+    for a page that shows none of them.
+
+    The two reads are the ones `read_evidence` makes, not copies of them.
+    """
+    summary = _packet_summary(channels, since, until)
+    counted = (await session.execute(select(summary))).all()
+    direct = await _read_direct_gateways(session, channels, since, until)
+    return {
+        int(row.from_node_num): NodeEvidence(
+            node_num=int(row.from_node_num),
+            packets=_as_int(row.packets),
+            rf_packets=_as_int(row.rf_packets),
+            ambiguous_packets=_as_int(row.ambiguous_packets),
+            active_hours=_as_int(row.active_hours),
+            rf_hours=_as_int(row.rf_hours),
+            direct_gateways=direct.get(row.from_node_num, 0),
+            best_direct_snr=_as_float(row.best_direct_snr),
+        )
+        for row in counted
+    }
+
+
+async def read_evidence(
+    session: AsyncSession,
+    settings: Settings,
+    channels: Sequence[str],
+    since: datetime,
+    until: datetime,
+) -> dict[int, NodeEvidence]:
+    """Return the evidence for every node that sent traffic on this preset.
+
+    One preset, always. A node on Long fast cannot hear a node on
+    Medium fast, so a merged assessment would invite a reader to fix a
+    gap between two radios that have no way to reach each other. See
+    `AGENTS.md` 9.7.
+    """
+    summary = _packet_summary(channels, since, until)
 
     counted = (await session.execute(select(summary))).all()
     wanted = {int(row.from_node_num) for row in counted}
@@ -740,7 +774,7 @@ async def read_evidence(
         named, their_snr = named_as.get(node_num, (0, None))
         neighbour_snr = _best_of(own_snr, their_snr)
         hops, trace_snr = trace.get(node_num, (0, None))
-        direct_gateways, direct_rssi, rssi_readings = direct.get(node_num, (0, None, 0))
+        direct_gateways = direct.get(node_num, 0)
         found[node_num] = NodeEvidence(
             node_num=node_num,
             packets=_as_int(row.packets),
@@ -749,8 +783,6 @@ async def read_evidence(
             active_hours=_as_int(row.active_hours),
             rf_hours=_as_int(row.rf_hours),
             direct_gateways=direct_gateways,
-            direct_rssi_dbm=direct_rssi,
-            direct_rssi_readings=rssi_readings,
             best_direct_snr=_as_float(row.best_direct_snr),
             is_mqtt_gateway=node_num in gateways,
             neighbour_reports=reports,
@@ -788,12 +820,8 @@ def _as_float(value: float | None) -> float | None:
 
 async def _read_direct_gateways(
     session: AsyncSession, channels: Sequence[str], since: datetime, until: datetime
-) -> dict[int, tuple[int, float | None, int]]:
+) -> dict[int, int]:
     """Return how many gateways heard each node with no hop used.
-
-    Also returns the median RSSI of those observations and how many
-    carried one. `sole_observer` reads it to tell a gateway beside the
-    node from a marginal link.
 
     Gateways, not rows. One live packet had 22 uploads from 15
     gateways, and 15 is the number that means something. See
@@ -808,8 +836,6 @@ async def _read_direct_gateways(
         select(
             keys.c.from_node_num,
             func.count(func.distinct(PacketSeen.gateway_node_num)).label("gateways"),
-            func.percentile_cont(0.5).within_group(PacketSeen.rx_rssi).label("rssi"),
-            func.count(PacketSeen.rx_rssi).label("rssi_readings"),
         )
         .select_from(keys)
         .join(
@@ -826,14 +852,7 @@ async def _read_direct_gateways(
         .group_by(keys.c.from_node_num)
     )
     rows = (await session.execute(statement)).all()
-    return {
-        row.from_node_num: (
-            int(row.gateways or 0),
-            _as_float(row.rssi),
-            int(row.rssi_readings or 0),
-        )
-        for row in rows
-    }
+    return {row.from_node_num: int(row.gateways or 0) for row in rows}
 
 
 async def _read_neighbour_evidence(
@@ -941,6 +960,85 @@ async def read_trace_evidence(
                 record(source, snr)
                 record(target, snr)
     return found
+
+
+# How long a traceroute request waits for its answer before it is counted
+# (#293). A request sent in the last few minutes of a window may still
+# have its answer on the way, and counting it now would call it
+# unanswered. Live answers come back in seconds to a minute or two.
+ANSWER_GRACE = timedelta(minutes=15)
+
+
+async def read_trace_answers(
+    session: AsyncSession, channels: Sequence[str], since: datetime, until: datetime
+) -> dict[int, traces.Answers]:
+    """Return, for each node traced on this preset, its traceroutes and answers.
+
+    The requests are those seen inside the window on this preset, less
+    the last `ANSWER_GRACE`. The replies are only those that answer one
+    of them, read through the request ID index, so a reply to a request
+    outside the window is never read. `traces.answer_counts` does the
+    matching, so the rule lives in one place (AGENTS.md 9.18).
+
+    The window is bounded on **our** clock, `seen_at`, never a node's
+    (AGENTS.md 9.4). Rows are selected by the window and the preset and
+    never by recency (AGENTS.md 9.19).
+
+    A reply is matched to its request, so it is not filtered by channel
+    a second time. An answer is an answer whichever channel name the
+    gateway that uploaded it used.
+    """
+    asked = (
+        select(
+            Traceroute.from_node_num.label("from_node_num"),
+            Traceroute.to_node_num.label("to_node_num"),
+            Traceroute.packet_id.label("packet_id"),
+        )
+        .where(
+            _on_preset(Traceroute.channel, channels),
+            Traceroute.request_id.is_(None),
+            Traceroute.packet_id.is_not(None),
+            Traceroute.from_node_num != Traceroute.to_node_num,
+            Traceroute.seen_at >= since,
+            Traceroute.seen_at < until - ANSWER_GRACE,
+        )
+        .distinct()
+        .cte("trace_requests")
+    )
+    replies = (
+        select(
+            Traceroute.from_node_num,
+            Traceroute.to_node_num,
+            Traceroute.request_id,
+            cast(null(), BigInteger).label("packet_id"),
+        )
+        .join(
+            asked,
+            and_(
+                Traceroute.request_id == asked.c.packet_id,
+                Traceroute.from_node_num == asked.c.to_node_num,
+                Traceroute.to_node_num == asked.c.from_node_num,
+            ),
+        )
+        .where(Traceroute.seen_at >= since, Traceroute.seen_at < until)
+        .distinct()
+    )
+    requests = select(
+        asked.c.from_node_num,
+        asked.c.to_node_num,
+        cast(null(), BigInteger).label("request_id"),
+        asked.c.packet_id,
+    )
+    rows = (await session.execute(union_all(requests, replies))).all()
+    return traces.answer_counts(
+        traces.TraceKey(
+            int(row.from_node_num),
+            int(row.to_node_num),
+            None if row.request_id is None else int(row.request_id),
+            None if row.packet_id is None else int(row.packet_id),
+        )
+        for row in rows
+    )
 
 
 async def _read_position_spread(
@@ -1144,10 +1242,6 @@ def rf_intermittent(evidence: NodeEvidence, settings: Settings) -> Signal:
 
 
 # --------------------------------------------------------------- 4.4
-
-
-
-
 
 
 # --------------------------------------------------------------- 4.5

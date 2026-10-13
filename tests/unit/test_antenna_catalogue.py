@@ -38,7 +38,9 @@ from sonoran.radio.antennas import (
 
 # Anything selectable in a picker has to be one of these, because the
 # prediction engine treats them all as omnidirectional.
-KINDS = {"stub", "whip", "gooseneck", "fiberglass_omni"}
+OMNI_KINDS = {"stub", "whip", "gooseneck", "fiberglass_omni", "mobile_whip"}
+DIRECTIONAL_KINDS = {"yagi"}
+KINDS = OMNI_KINDS | DIRECTIONAL_KINDS
 
 
 def test_there_is_a_catalogue_at_all() -> None:
@@ -73,8 +75,12 @@ def test_no_gain_is_beyond_what_an_omni_can_do() -> None:
     have. Either way it should not enter the table unexamined.
     """
     for antenna in ANTENNAS:
-        assert 0.0 < antenna.gain_dbi_claimed <= 12.0, (
-            f"{antenna.key} claims {antenna.gain_dbi_claimed} dBi"
+        assert antenna.gain_dbi_claimed > 0.0, f"{antenna.key} claims no gain"
+        ceiling = 12.0 if antenna.directional else 10.0
+        assert antenna.gain_dbi_claimed <= ceiling, (
+            f"{antenna.key} claims {antenna.gain_dbi_claimed} dBi, above the {ceiling} "
+            f"expected of a {'directional' if antenna.directional else 'omnidirectional'} "
+            f"antenna in this band"
         )
 
 
@@ -95,11 +101,16 @@ def test_the_high_gain_omnis_record_their_beamwidth() -> None:
     antenna and not the half that predicts it.
     """
     for antenna in ANTENNAS:
-        if antenna.gain_dbi_claimed > 5.0:
-            assert antenna.vertical_beamwidth_deg is not None, (
-                f"{antenna.key} claims {antenna.gain_dbi_claimed} dBi and does "
-                f"not say how tall its pattern is"
-            )
+        if antenna.gain_dbi_claimed <= 5.0 or antenna.vertical_beamwidth_deg is not None:
+            continue
+        # Several real listings give a gain and no pattern at all. The
+        # rule cannot be "state it" without inviting somebody to invent
+        # a plausible number, which is worse than the gap. So the rule
+        # is that the gap is declared where the buyer will see it.
+        assert "PATTERN" in antenna.caveat.upper() or "BEAMWIDTH" in antenna.caveat.upper(), (
+            f"{antenna.key} claims {antenna.gain_dbi_claimed} dBi, states no pattern, and "
+            f"its caveat does not say so: {antenna.caveat!r}"
+        )
 
 
 def test_more_gain_means_a_narrower_pattern() -> None:
@@ -109,13 +120,22 @@ def test_more_gain_means_a_narrower_pattern() -> None:
     higher-gain omni claims a WIDER pattern, one of the two numbers was
     copied wrong.
     """
-    stated = sorted(
-        (a for a in ANTENNAS if a.vertical_beamwidth_deg is not None),
-        key=lambda a: a.gain_dbi_claimed,
-    )
-    widths = [a.vertical_beamwidth_deg for a in stated]
-    seen = [(a.key, a.gain_dbi_claimed, a.vertical_beamwidth_deg) for a in stated]
-    assert widths == sorted(widths, reverse=True), f"gain and beamwidth disagree: {seen}"
+    stated = [a for a in ANTENNAS if a.vertical_beamwidth_deg is not None and not a.directional]
+    # Compared pairwise rather than by sorting the list. Sorting made the
+    # result depend on the ORDER of the catalogue wherever two antennas
+    # claim the same gain -- two 8 dBi omnis with 15 and 25 degree
+    # patterns both exist here, and a stable sort would have passed or
+    # failed on which was typed first. Equal gain carries no claim.
+    for a in stated:
+        for b in stated:
+            if a.gain_dbi_claimed <= b.gain_dbi_claimed:
+                continue
+            assert a.vertical_beamwidth_deg <= b.vertical_beamwidth_deg, (
+                f"{a.key} claims more gain than {b.key} "
+                f"({a.gain_dbi_claimed} vs {b.gain_dbi_claimed} dBi) and a WIDER pattern "
+                f"({a.vertical_beamwidth_deg} vs {b.vertical_beamwidth_deg} deg); "
+                f"one of those four numbers was copied wrong"
+            )
 
 
 def test_every_antenna_is_explained_in_words() -> None:
@@ -124,16 +144,23 @@ def test_every_antenna_is_explained_in_words() -> None:
         assert len(antenna.good_for) > 20, f"{antenna.key} has no plain-English note"
 
 
-def test_the_kinds_are_all_omnidirectional() -> None:
-    """The engine assumes one gain and no direction.
+def test_every_kind_is_known_and_says_whether_it_must_be_aimed() -> None:
+    """The engine takes one gain and no direction of its own.
 
-    A Yagi or a panel in this table would draw a map claiming the
-    antenna is aimed at every point on it at once. Adding one needs the
-    engine to take an azimuth first — recorded in the module docstring
-    and to go in docs/PLANNER.md.
+    This test used to forbid Yagis outright, because one in this table
+    would have drawn a map claiming the antenna was aimed at every point
+    on it at once. Directional antennas are now supported, so the rule
+    became the one that keeps that safe: a kind that must be aimed has
+    to SAY so, because everything downstream -- the bearing box in the
+    planner, the pattern applied to the raster -- switches on that flag
+    and not on the kind string.
     """
     for antenna in ANTENNAS:
         assert antenna.kind in KINDS, f"{antenna.key} is a {antenna.kind}"
+        expected = antenna.kind in DIRECTIONAL_KINDS
+        assert antenna.directional is expected, (
+            f"{antenna.key} is a {antenna.kind} but directional={antenna.directional}"
+        )
 
 
 def test_the_keys_are_unique_and_usable_in_a_form() -> None:

@@ -53,6 +53,10 @@ All documentation and code comments use ASD-STE100 Simplified Technical English.
 - The API has GET endpoints only. Never add a POST, PUT, or DELETE endpoint.
 - The API database role has SELECT rights only.
 - The ingest database role has INSERT and UPDATE rights only.
+- The jobs database role replaces what it computes (the job output
+  tables, `docs/DATABASE.md` 5B) with DELETE and INSERT in one
+  transaction. It has no UPDATE on them. A job output is a table, not
+  a JSON file, except the coverage tiles and the run manifest (#351).
 - Modules talk to each other through small, documented interfaces.
 - Keep functions small. Keep modules small.
 
@@ -199,10 +203,11 @@ attribution beside it. See `docs/PLANNER.md` section 6.
 ### Change the database schema
 
 1. Edit the models in `src/sonoran/db/models.py`.
-2. Create a migration. To prevent revision ID collisions between branches, use the issue or PR number as the revision ID: `alembic revision --autogenerate -m "description" --rev-id "pr123"` (or use a short commit hash). Never use sequential numbers like `0018`.
-3. Review the generated migration by hand.
-4. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
-5. Update `docs/DATABASE.md`.
+2. Create a migration. Name the revision after its issue: `i` and the issue number, for example `alembic revision --autogenerate -m "description" --rev-id i366`. Do not use sequential numbers like `0018`: two branches pick the same next number. Use the pull request number (`pr344`) when there is no issue.
+3. Rebase on `main` before you push. Set `down_revision` to the current head (`alembic heads`). `tests/unit/test_migrations_head.py` fails when the migrations have two heads.
+4. Review the generated migration by hand.
+5. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
+6. Update `docs/DATABASE.md`.
 
 ## 9. Traps in this project
 
@@ -328,10 +333,46 @@ it sent traffic seen on it, which is a claim about what it was doing
 rather than how it is configured, so a genuine dual-preset node appears
 on both. Live data had 14 of those against 709.
 
-The picker also offers channels that are not presets, such as Weather
-and PKI. Those ride on top of a preset, so filtering the nodes by one
-of them gives the handful that talk there rather than a radio set. The
-map keeps an "Every node" toggle for that reason.
+**The preset of a packet is decided at ingest and stored (#313).**
+`packet_seen.modem_preset`, `packet.modem_preset` and `node.last_preset`
+hold it. The list pages (chat, firehose, dashboard, node list) filter
+with `preset=`, which reads the tag, with a fallback to the topic
+channel for rows written before it. Never estimate a preset at read
+time from a list of gateways: that was PR #349, and it was closed for
+it. The map, graph, coverage and gaps pages still filter by the
+preset's own channel name. Moving them to the tag is the next step.
+
+### 9.7.1 A topic channel is not a preset
+
+`azmsh`, `Weather`, `Traffic` and `PKI` are topic channels. Each rides
+on top of whatever modem preset the gateway is set to, and this mesh
+runs `azmsh` on both MediumFast and LongFast. So a filter on the topic
+channel name, `channel=LongFast`, never shows an azmsh message on any
+preset. That was the bug in #313. The chat page then made it worse: it
+put every topic channel on the default preset in the browser.
+
+What does say which preset carried a packet is the gateway. Firmware
+names an unnamed primary channel after its preset, so a gateway that
+uploads on `.../e/LongFast/!gw` is on LongFast, and its azmsh uploads
+are LongFast too. `ingest/presets.py` holds that rule, and the rules for
+a gateway seen on two presets at once (no vote) and for a packet seen by
+several gateways (majority). Read its docstring before you change it.
+
+Three things to keep:
+
+- **Never call a mesh segment a "radio".** A radio is hardware. Say
+  "modem preset" or "preset", in code, comments, the UI, docs and tests.
+- **MapReports are not stored.** `/2/map/` topics are dropped when the
+  topic is parsed, so a gateway's own statement of its preset is never
+  read. If you add them, note that `MessageToDict` omits an enum at its
+  zero value, and `LONG_FAST` is zero in `Config.LoRaConfig.ModemPreset`:
+  a LongFast report has no preset key at all. Read the field, not the dict.
+- **Ingest still cannot read `packet`.** The majority vote is counted in
+  memory and written with a plain UPDATE on the natural key and the
+  partition column. Revision i313 grants SELECT on those three columns
+  only, because PostgreSQL needs it for the WHERE clause. Do not widen
+  it. `tests/integration/test_ingest_presets.py` runs as `azmsh_ingest`
+  and checks that `modem_preset` and `raw_bytes` stay unreadable.
 
 ### 9.8 mesh-graph keys a trace on the request ID
 

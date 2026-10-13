@@ -37,12 +37,102 @@ const CLIMATE_LABELS = [
 
 const POLARIZATION_CODES = { horizontal: 0, vertical: 1 };
 
+/* ---------------------------------------------------------------- */
+/* The radio climate of the site (#239)                              */
+
+/*
+ * The climate choice that means "read it from the site".
+ *
+ * It is the default. The page turns it into one of the seven codes above
+ * before a run, from the Köppen-Geiger class of the site's own ground
+ * (`sonoran/climate/`). It never reaches the engine as itself:
+ * `toEngineParams` refuses it.
+ *
+ * Where the data has no class, the answer is `desert` and the page says
+ * "not known here, using desert". A lookup that is confidently wrong is
+ * worse than a default that is openly a default.
+ */
+const CLIMATE_AUTO = 'auto';
+const CLIMATE_FALLBACK = 'desert';
+
+/** The words for a climate code, or the code itself. */
+function climateLabel(key) {
+  const found = CLIMATE_LABELS.find(([value]) => value === key);
+  return found ? found[1] : String(key);
+}
+
+/**
+ * The square a place is in, named for its south-west corner.
+ *
+ * `Math.floor`, not truncation: 112.07 W is in the square whose west edge
+ * is 113 W, so Phoenix is N33W113 and not N33W112. AGENTS.md 9.13.1.
+ */
+function tileNameOf(latitude, longitude) {
+  const lat = Math.floor(latitude);
+  const lon = Math.floor(longitude);
+  const ns = lat >= 0 ? 'N' : 'S';
+  const ew = lon >= 0 ? 'E' : 'W';
+  return `${ns}${String(Math.abs(lat)).padStart(2, '0')}${ew}${String(Math.abs(lon)).padStart(3, '0')}`;
+}
+
+/**
+ * The Köppen-Geiger class at a place, read out of its climate page.
+ *
+ * A page is one degree square, `cellsPerDegree` cells on a side, with
+ * row 0 at the NORTH edge and column 0 at the WEST edge. That is the
+ * order of `/api/climate/page/{tile}`, and it is not the order of a
+ * terrain page (AGENTS.md 9.13.1). Null when there is no page or the
+ * cell holds no class (0).
+ */
+function climateCell(page, latitude, longitude, cellsPerDegree) {
+  if (!page || !(cellsPerDegree > 0)) return null;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (page.length !== cellsPerDegree * cellsPerDegree) return null;
+  const north = Math.floor(latitude) + 1;
+  const west = Math.floor(longitude);
+  const row = Math.min(Math.floor((north - latitude) * cellsPerDegree), cellsPerDegree - 1);
+  const column = Math.min(Math.floor((longitude - west) * cellsPerDegree), cellsPerDegree - 1);
+  const value = page[row * cellsPerDegree + column];
+  return value ? value : null;
+}
+
+/**
+ * The climate a run uses, and where it came from.
+ *
+ * `chosen` is the form's choice. `found` is the Köppen class the page
+ * looked up for the site, as `/api/climate/classes` describes it
+ * (`{ code, symbol, climate }`), or null when it found none.
+ *
+ *   source 'chosen'    somebody picked a climate, in Advanced or in a link
+ *   source 'site'      read from the site's Köppen class
+ *   source 'fallback'  no class here, so `desert`, and the page says so
+ */
+function resolveClimate(chosen, found) {
+  if (chosen && chosen !== CLIMATE_AUTO) return { climate: chosen, source: 'chosen', koppen: null };
+  if (found && CLIMATE_CODES[found.climate] !== undefined) {
+    return { climate: found.climate, source: 'site', koppen: found.symbol };
+  }
+  return { climate: CLIMATE_FALLBACK, source: 'fallback', koppen: null };
+}
+
+/** One line that says which climate a run used, and why. */
+function describeClimate(answer) {
+  const label = climateLabel(answer.climate);
+  if (answer.source === 'site') return `${label}, from the site's Köppen class ${answer.koppen}`;
+  if (answer.source === 'fallback') return `${label}: the climate is not known here, using desert`;
+  return `${label}, as chosen`;
+}
+
 /*
  * Receiver sensitivity by modem preset, in dBm.
  *
- * These are the theoretical figures for the SX1262. Real air is worse.
- * In a town it is realistic to allow several dB of noise on top, which
- * is why the form lets the number be edited after a preset is chosen.
+ * Each is 22 dBm minus the link budget the Meshtastic docs publish for
+ * the preset (https://meshtastic.org/docs/overview/radio-settings/),
+ * which they say assumes a 22 dBm transmitter and a 0 dB antenna (#362).
+ * Real air is worse. In a town it is realistic to allow several dB of
+ * noise on top, which is why the form lets the number be edited after a
+ * preset is chosen. Presets the docs give no budget for (Long slow,
+ * Very long slow) are not offered here.
  *
  * A preset is also a different radio configuration: a node on LongFast
  * cannot hear a node on MediumFast at all. See AGENTS.md 9.7.
@@ -55,15 +145,21 @@ const POLARIZATION_CODES = { horizontal: 0, vertical: 1 };
  * together so a preset cannot be edited in one and not the other.
  */
 const PRESETS = [
-  { key: 'SHORT_TURBO', label: 'Short turbo', sensitivity: -126, bandwidthHz: 500000 },
-  { key: 'SHORT_FAST', label: 'Short fast', sensitivity: -129, bandwidthHz: 250000 },
-  { key: 'SHORT_SLOW', label: 'Short slow', sensitivity: -131.5, bandwidthHz: 250000 },
-  { key: 'MEDIUM_FAST', label: 'Medium fast', sensitivity: -134, bandwidthHz: 250000 },
-  { key: 'MEDIUM_SLOW', label: 'Medium slow', sensitivity: -136.5, bandwidthHz: 250000 },
-  { key: 'LONG_FAST', label: 'Long fast', sensitivity: -139, bandwidthHz: 250000 },
-  { key: 'LONG_MODERATE', label: 'Long moderate', sensitivity: -142, bandwidthHz: 125000 },
-  { key: 'LONG_SLOW', label: 'Long slow', sensitivity: -144.5, bandwidthHz: 125000 },
-  { key: 'VERY_LONG_SLOW', label: 'Very long slow', sensitivity: -147.5, bandwidthHz: 62500 },
+  { key: 'SHORT_TURBO', label: 'Short turbo', sensitivity: -118, bandwidthHz: 500000 },
+  { key: 'SHORT_FAST', label: 'Short fast', sensitivity: -121, bandwidthHz: 250000 },
+  { key: 'MEDIUM_TURBO', label: 'Medium turbo', sensitivity: -123, bandwidthHz: 500000 },
+  { key: 'SHORT_SLOW', label: 'Short slow', sensitivity: -123.5, bandwidthHz: 250000 },
+  { key: 'MEDIUM_FAST', label: 'Medium fast', sensitivity: -126, bandwidthHz: 250000 },
+  { key: 'NARROW_FAST', label: 'Narrow fast', sensitivity: -127, bandwidthHz: 62500 },
+  { key: 'LONG_TURBO', label: 'Long turbo', sensitivity: -128, bandwidthHz: 500000 },
+  { key: 'MEDIUM_SLOW', label: 'Medium slow', sensitivity: -128.5, bandwidthHz: 250000 },
+  { key: 'LITE_FAST', label: 'Lite fast', sensitivity: -129, bandwidthHz: 125000 },
+  { key: 'NARROW_SLOW', label: 'Narrow slow', sensitivity: -129.5, bandwidthHz: 62500 },
+  { key: 'LONG_FAST', label: 'Long fast', sensitivity: -131, bandwidthHz: 250000 },
+  { key: 'LITE_SLOW', label: 'Lite slow', sensitivity: -131.5, bandwidthHz: 125000 },
+  { key: 'TINY_FAST', label: 'Tiny fast', sensitivity: -133, bandwidthHz: 15600 },
+  { key: 'LONG_MODERATE', label: 'Long moderate', sensitivity: -134, bandwidthHz: 125000 },
+  { key: 'TINY_SLOW', label: 'Tiny slow', sensitivity: -135.5, bandwidthHz: 15600 },
 ];
 
 /* ---------------------------------------------------------------- */
@@ -199,8 +295,8 @@ const DEFAULT_PRESET_KEY = 'MEDIUM_FAST';
  * Defaults for this mesh.
  *
  * 0.1 W and 2.15 dBi describe a stock device with its rubber antenna.
- * Desert is the right climate for Arizona, not the temperate default
- * the site planner ships.
+ * The climate is read from the site rather than fixed (#239). Phoenix
+ * is desert and Flagstaff is continental temperate.
  */
 const DEFAULTS = {
   lat: null,
@@ -217,12 +313,22 @@ const DEFAULTS = {
   frequency_mhz: frequencyForSlot(DEFAULT_PRESET_KEY, DEFAULT_SLOT),
   rx_height: 1,
   rx_gain: 2.15,
+  /*
+   * Aiming, for a directional antenna only.
+   *
+   * Both default to null and NOT to 0. Zero is a real bearing -- due
+   * north -- so a 0 default would silently aim every Yagi at the north
+   * pole and look like a deliberate choice. Null means "not aimed", and
+   * the raster is left omnidirectional until both are present.
+   */
+  tx_azimuth: null,
+  tx_beamwidth: null,
   // Medium fast, because that is what this mesh actually runs (#105).
   // The sensitivity has to move with it -- the two are one choice, and
-  // a form that opens on Medium fast with Long fast's -139 dBm would
+  // a form that opens on Medium fast with Long fast's -131 dBm would
   // predict a reach nobody has. The change handler already keeps them
   // together after the first load; this keeps them together before it.
-  sensitivity: -134,
+  sensitivity: -126,
   // Spelled out rather than `DEFAULT_PRESET_KEY`, because
   // `test_page_defaults.py` reads this literal to check that the
   // sensitivity beside it is the one this preset implies. A node case
@@ -232,7 +338,8 @@ const DEFAULTS = {
   ground_dielectric: 15,
   ground_conductivity: 0.005,
   atmosphere_bending: 301,
-  radio_climate: 'desert',
+  // Read from the site (#239). See `CLIMATE_AUTO`.
+  radio_climate: CLIMATE_AUTO,
   polarization: 'vertical',
   radius: 30000,
   situation_fraction: 50,
@@ -334,12 +441,20 @@ function readBox(name, typed, held, units) {
 /*
  * The version key in a share link.
  *
- * It is written into every link as `v=1`. Nothing reads it today
- * beyond warning about a number it does not know, and that is the
- * point: a link made now says which spelling of the fields it used, so
- * a later rename can read old links rather than guess at them.
+ * It is written into every link. A link made now says which spelling of
+ * the fields it used, so a later change can read old links rather than
+ * guess at them.
+ *
+ * Version 2 (#239) is the first time that mattered. A link writes only
+ * what differs from the default, and the default climate was `desert`.
+ * It is now "read it from the site". So a version 1 link with no
+ * `radio_climate` in it meant desert, and must go on meaning desert: a
+ * link made before the change predicts what it predicted then.
+ * `fromShareQuery` puts the desert back. A link with no `v` at all is
+ * read as version 1, because every link this page ever wrote has one.
  */
-const SHARE_VERSION = 1;
+const SHARE_VERSION = 2;
+const SHARE_VERSIONS_READ = ['1', '2'];
 
 /*
  * The order a link writes its settings in.
@@ -362,6 +477,8 @@ const SHARE_FIELDS = [
   'tx_height',
   'tx_power',
   'tx_gain',
+  'tx_azimuth',
+  'tx_beamwidth',
   'frequency_mhz',
   'preset',
   'sensitivity',
@@ -382,7 +499,7 @@ const SHARE_FIELDS = [
 /** The three fields that are a choice from a list, not a number. */
 const SHARE_CHOICES = {
   preset: () => PRESETS.map((item) => item.key),
-  radio_climate: () => Object.keys(CLIMATE_CODES),
+  radio_climate: () => [CLIMATE_AUTO, ...Object.keys(CLIMATE_CODES)],
   polarization: () => Object.keys(POLARIZATION_CODES),
 };
 
@@ -407,6 +524,8 @@ const SHARE_BOUNDS = {
   tx_height: [0, 3000],
   tx_power: [-30, 60],
   tx_gain: [-20, 40],
+  tx_azimuth: [0, 360],
+  tx_beamwidth: [1, 360],
   frequency_mhz: [20, 20000],
   sensitivity: [-174, 0],
   rx_height: [0, 3000],
@@ -489,13 +608,16 @@ function fromShareQuery(search) {
   const query = new URLSearchParams(search || '');
   const values = {};
   const notes = [];
+  const kept = [];
   const unknown = [];
   let ran = null;
   let used = 0;
+  // No `v` is version 1. See `SHARE_VERSION`.
+  const version = query.get('v') ?? '1';
 
   for (const [key, raw] of query.entries()) {
     if (key === 'v') {
-      if (raw !== String(SHARE_VERSION)) {
+      if (!SHARE_VERSIONS_READ.includes(raw)) {
         notes.push(`this link says it is version ${raw}, and this planner reads version ${SHARE_VERSION}`);
       }
       continue;
@@ -542,15 +664,28 @@ function fromShareQuery(search) {
 
   if (unknown.length) notes.push(`ignored: ${unknown.join(', ')}`);
   /*
+   * A version 1 link that names no climate was made on `desert`, which
+   * was the default then and so was left out. It keeps it. Without this,
+   * a Flagstaff link made before #239 would open on continental
+   * temperate and predict something its writer never saw.
+   */
+  if (version === '1' && values.radio_climate == null) {
+    values.radio_climate = CLIMATE_FALLBACK;
+    kept.push(
+      'This link was made before the planner read the climate from the site, ' +
+        'so it keeps desert, as it predicted then.',
+    );
+  }
+  /*
    * A link that names a preset and no sensitivity means the preset's
    * own figure, which is what the writer left out. Without this, a link
-   * to Long fast would open on Long fast with Medium fast's -134 dBm
+   * to Long fast would open on Long fast with Medium fast's -126 dBm
    * and predict a reach that preset does not have. See AGENTS.md 9.7.
    */
   if (values.preset && values.sensitivity == null) {
     values.sensitivity = sensitivityForPreset(values.preset);
   }
-  return { values, ran, notes, used };
+  return { values, ran, notes, kept, used };
 }
 
 /** Round to two decimal places, as the original backend wrote its files. */
@@ -595,6 +730,11 @@ function erpWatts(request) {
 
 /** Turn a filled-in form into the values the engine takes. */
 function toEngineParams(request) {
+  // `auto` is a question, not a climate. The page answers it first, with
+  // `resolveClimate`, so the engine is never handed a guess.
+  if (request.radio_climate === CLIMATE_AUTO) {
+    throw new Error('the radio climate must be read from the site before a run');
+  }
   const climate = CLIMATE_CODES[request.radio_climate];
   const polarization = POLARIZATION_CODES[request.polarization];
   if (climate === undefined) throw new Error(`unknown radio climate: ${request.radio_climate}`);
@@ -640,6 +780,13 @@ window.SonoranPlannerParams = {
   METRES_PER_FOOT,
   CLIMATE_CODES,
   CLIMATE_LABELS,
+  CLIMATE_AUTO,
+  CLIMATE_FALLBACK,
+  climateLabel,
+  tileNameOf,
+  climateCell,
+  resolveClimate,
+  describeClimate,
   POLARIZATION_CODES,
   PRESETS,
   BAND_START_HZ,

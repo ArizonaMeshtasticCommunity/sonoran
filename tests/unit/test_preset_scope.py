@@ -87,7 +87,7 @@ def test_coverage_is_on_the_right_side() -> None:
 def test_chat_and_stats_are_on_the_right_side() -> None:
     """The two the other two instruments got wrong."""
     applies = _set("PRESET_PAGES")
-    assert "chat" in applies, "chat filters its channel sections by preset (channelsFor)"
+    assert "chat" in applies, "chat asks the server for one preset (#313)"
     assert "stats" in applies, "the leaderboards are drawn per preset"
 
 

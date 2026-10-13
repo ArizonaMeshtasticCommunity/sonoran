@@ -24,9 +24,11 @@ from sqlalchemy import (
     REAL,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Double,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
@@ -39,6 +41,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+# The modem preset columns (#313) are `deferred=True`: a SELECT of a whole
+# row does not name them, so every query written before them runs the
+# same SQL as before. A reader that wants one names the column. See
+# `tests/unit/test_preset_param_legacy.py` and `ingest/presets.py`.
 
 
 class Base(DeclarativeBase):
@@ -71,6 +78,18 @@ class Node(Base):
     is_mqtt_gateway: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     last_mqtt_topic: Mapped[str | None] = mapped_column(Text)
     last_channel: Mapped[str | None] = mapped_column(Text)
+    # The modem preset of the newest packet from this node whose preset
+    # is known, and that packet's receive time. NULL until ingest has
+    # tagged one (#313). This is what keeps a quiet node on its mesh
+    # when its last packet was on a topic channel such as `azmsh`.
+    last_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
+    last_preset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), deferred=True)
+    # The modem preset this node uploads on as an MQTT gateway: the one
+    # its newest preset-named topic named. Ingest reads it back at start.
+    uplink_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
+    uplink_preset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), deferred=True
+    )
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -120,6 +139,10 @@ class Packet(Base):
     # written before this was recorded. NULL is not a fourth state --
     # see that module, and do not fold it into the commonest value.
     payload_state: Mapped[str | None] = mapped_column(Text)
+    # The modem preset that carried the packet: the majority of its
+    # observations' presets (#313). NULL on rows written before that,
+    # and on a packet no gateway with a known preset uploaded.
+    modem_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "first_seen_at"),
@@ -165,6 +188,10 @@ class PacketSeen(Base):
     # NULL on rows written before revision 0017. See `api/sightings.py`.
     hop_start: Mapped[int | None] = mapped_column(Integer)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The modem preset of this one upload (#313): the topic's own preset
+    # when the topic is preset-named, else the gateway's current preset,
+    # else NULL. See `ingest/presets.py`.
+    modem_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "seen_at"),
@@ -768,6 +795,297 @@ class RfOperatorLog(Base):
     action: Mapped[str] = mapped_column(Text)
     station_id: Mapped[str] = mapped_column(Text)
     detail: Mapped[str | None] = mapped_column(Text)
+
+
+# --- What the background jobs computed (#351) --------------------------
+#
+# The gaps job, the siting half and the calibration fit used to write
+# JSON files beside the coverage tiles. They now write these tables.
+# `azmsh_jobs` replaces a whole run in one transaction (DELETE, then
+# INSERT), so a reader never sees half of one. `azmsh_api` only reads.
+#
+# None of these is a hypertable. Each holds the latest run only, so its
+# size is about nodes x windows x presets and does not grow with time.
+#
+# A gaps run is keyed by its preset, its scope and the window the page
+# asked for. `scope` is `assessment` for the full per node assessment
+# (`asked_hours` 0, because its window is `GAPS_WINDOW_HOURS`), or
+# `board` for the leaderboard counts of one more Statistics window
+# (`asked_hours` 24 or 720, see `gaps/boards.py`).
+
+GAPS_SCOPE_ASSESSMENT = "assessment"
+GAPS_SCOPE_BOARD = "board"
+
+
+class GapsIndex(Base):
+    """When the gaps job last ran. One row, or none before the first run."""
+
+    __tablename__ = "gaps_index"
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_hours: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (CheckConstraint("id = 1", name="ck_gaps_index_one_row"),)
+
+
+class GapsRun(Base):
+    """One assessment, or one window of leaderboard counts, of one preset.
+
+    `summary` holds every top-level field of the old JSON document except
+    the node rows and the traceroute counts, which have their own tables.
+    """
+
+    __tablename__ = "gaps_run"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, primary_key=True)
+    asked_hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_hours: Mapped[int | None] = mapped_column(Integer)
+    summary: Mapped[dict] = mapped_column(JSONB)
+
+    __table_args__ = (
+        CheckConstraint("scope IN ('assessment', 'board')", name="ck_gaps_run_scope"),
+    )
+
+
+class GapsNode(Base):
+    """One node of one gaps run.
+
+    The name, the short name and the role are not stored. A reader joins
+    `node` for them, so a renamed node reads with its new name at once.
+    `rank` is the order the job set (worst first), so no reader holds a
+    copy of the ranking rule. A board row fills the counts only.
+    """
+
+    __tablename__ = "gaps_node"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, primary_key=True)
+    asked_hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    packets: Mapped[int | None] = mapped_column(Integer)
+    rf_packets: Mapped[int | None] = mapped_column(Integer)
+    ambiguous_packets: Mapped[int | None] = mapped_column(Integer)
+    active_hours: Mapped[int | None] = mapped_column(Integer)
+    rf_hours: Mapped[int | None] = mapped_column(Integer)
+    direct_gateways: Mapped[int | None] = mapped_column(Integer)
+    latitude: Mapped[float | None] = mapped_column(Double)
+    longitude: Mapped[float | None] = mapped_column(Double)
+    position_confidence: Mapped[str | None] = mapped_column(Text)
+    position_deviation_m: Mapped[float | None] = mapped_column(Double)
+    position_spread_km: Mapped[float | None] = mapped_column(Double)
+    is_mqtt_gateway: Mapped[bool | None] = mapped_column(Boolean)
+    mobile: Mapped[bool | None] = mapped_column(Boolean)
+    worst_state: Mapped[str | None] = mapped_column(Text)
+    bad_count: Mapped[int | None] = mapped_column(Integer)
+    unknown_count: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "scope", "asked_hours"],
+            ["gaps_run.preset", "gaps_run.scope", "gaps_run.asked_hours"],
+            ondelete="CASCADE",
+        ),
+        # The job leaves out a row whose node has no record yet, so this
+        # key can never fail a run. See `gaps/store.py`.
+        ForeignKeyConstraint(["node_num"], ["node.node_num"]),
+        Index("ix_gaps_node_rank", "preset", "scope", "asked_hours", "rank"),
+        Index("ix_gaps_node_worst", "preset", "scope", "asked_hours", "worst_state"),
+    )
+
+
+class GapsSignal(Base):
+    """One signal of one node in one gaps assessment (`gaps/signals.py`).
+
+    `evidence` stays `jsonb`: its shape is the signal's own, and the page
+    reads it whole. Everything a reader filters on is a column. The
+    sentence is not stored; it is made from the reason when it is read,
+    so a change of wording reaches every run at once.
+    """
+
+    __tablename__ = "gaps_signal"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, primary_key=True)
+    asked_hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    signal: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(SmallInteger)
+    state: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    value: Mapped[float | None] = mapped_column(Double)
+    unit: Mapped[str | None] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSONB)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "scope", "asked_hours", "node_num"],
+            ["gaps_node.preset", "gaps_node.scope", "gaps_node.asked_hours", "gaps_node.node_num"],
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_gaps_signal_state",
+            "preset",
+            "scope",
+            "asked_hours",
+            "signal",
+            "state",
+            "node_num",
+        ),
+    )
+
+
+class GapsTraceAnswer(Base):
+    """How often one node was traced in one gaps run, and answered (#293)."""
+
+    __tablename__ = "gaps_trace_answer"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, primary_key=True)
+    asked_hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    requests: Mapped[int] = mapped_column(Integer)
+    answered: Mapped[int] = mapped_column(Integer)
+    senders: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "scope", "asked_hours"],
+            ["gaps_run.preset", "gaps_run.scope", "gaps_run.asked_hours"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class GapsSiting(Base):
+    """One preset's siting answer, without its areas and candidates.
+
+    `summary` holds the cost, the thresholds, the coverage it used and
+    the caveats, as the old JSON document did.
+    """
+
+    __tablename__ = "gaps_siting"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    summary: Mapped[dict] = mapped_column(JSONB)
+
+
+class GapsSitingArea(Base):
+    """One neighbourhood of struggling nodes (`gaps/siting.py`)."""
+
+    __tablename__ = "gaps_siting_area"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    area: Mapped[int] = mapped_column(Integer, primary_key=True)
+    point_count: Mapped[int] = mapped_column(Integer)
+    node_count: Mapped[int] = mapped_column(Integer)
+    node_nums: Mapped[list[int]] = mapped_column(ARRAY(BigInteger))
+    centroid_lat: Mapped[float] = mapped_column(Double)
+    centroid_lon: Mapped[float] = mapped_column(Double)
+    south: Mapped[float] = mapped_column(Double)
+    west: Mapped[float] = mapped_column(Double)
+    north: Mapped[float] = mapped_column(Double)
+    east: Mapped[float] = mapped_column(Double)
+    width_km: Mapped[float] = mapped_column(Double)
+
+    __table_args__ = (ForeignKeyConstraint(["preset"], ["gaps_siting.preset"], ondelete="CASCADE"),)
+
+
+class GapsSitingPoint(Base):
+    """One demand point of an area: the place a group of nodes stands."""
+
+    __tablename__ = "gaps_siting_point"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    area: Mapped[int] = mapped_column(Integer, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    latitude: Mapped[float] = mapped_column(Double)
+    longitude: Mapped[float] = mapped_column(Double)
+    node_count: Mapped[int] = mapped_column(Integer)
+    node_nums: Mapped[list[int]] = mapped_column(ARRAY(BigInteger))
+    names: Mapped[list[str]] = mapped_column(ARRAY(Text))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["preset", "area"],
+            ["gaps_siting_area.preset", "gaps_siting_area.area"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class GapsSitingCandidate(Base):
+    """One place a node could go, in the order the siting job ranked it.
+
+    The fields are those of `gaps.siting.Candidate`. The sentence is made
+    from the reason when it is read, and the name of an existing node is
+    joined live from `node`.
+    """
+
+    __tablename__ = "gaps_siting_candidate"
+
+    preset: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text)
+    area: Mapped[int] = mapped_column(Integer)
+    latitude: Mapped[float] = mapped_column(Double)
+    longitude: Mapped[float] = mapped_column(Double)
+    elevation_m: Mapped[int | None] = mapped_column(Integer)
+    prominence_m: Mapped[int | None] = mapped_column(Integer)
+    node_num: Mapped[int | None] = mapped_column(BigInteger)
+    method: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(Text)
+    screen_score: Mapped[int] = mapped_column(Integer)
+    screen_unknown: Mapped[int] = mapped_column(Integer)
+    newly_usable: Mapped[int | None] = mapped_column(Integer)
+    newly_usable_nodes: Mapped[list[int]] = mapped_column(ARRAY(BigInteger))
+    already_usable: Mapped[int] = mapped_column(Integer)
+    baseline_unknown: Mapped[int] = mapped_column(Integer)
+    run_stamp: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["preset"], ["gaps_siting.preset"], ondelete="CASCADE"),
+        Index("ix_gaps_siting_candidate_area", "preset", "area", "position"),
+    )
+
+
+class CoverageCalibration(Base):
+    """The calibration fit as a whole. One row, or none.
+
+    No row means no fit: a new box, or a window with no neighbour
+    reports. The prediction then uses the nameplate figures.
+    """
+
+    __tablename__ = "coverage_calibration"
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    model_bias_db: Mapped[float] = mapped_column(Double)
+    residual_spread_db: Mapped[float] = mapped_column(Double)
+    rounds: Mapped[int] = mapped_column(Integer)
+    summary: Mapped[dict] = mapped_column(JSONB)
+
+    __table_args__ = (CheckConstraint("id = 1", name="ck_coverage_calibration_one_row"),)
+
+
+class CoverageCalibrationNode(Base):
+    """What the measurements say about one node. See `coverage/calibrate.py`."""
+
+    __tablename__ = "coverage_calibration_node"
+
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    offset_db: Mapped[float] = mapped_column(Double)
+    observations: Mapped[int] = mapped_column(Integer)
+    counterparties: Mapped[int] = mapped_column(Integer)
+    censored: Mapped[int] = mapped_column(Integer)
+    reported: Mapped[int] = mapped_column(Integer)
+    residual_spread_db: Mapped[float] = mapped_column(Double)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 # The ingest role has INSERT and UPDATE rights only. Disable PostgreSQL

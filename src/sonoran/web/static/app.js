@@ -674,7 +674,15 @@ function messageBody(text) {
 const REACTION_CAP = 4;
 
 /*
- * The auto-ack rule lives in `labels.js`, as `SonoranLabels.isAutoAck`.
+ * The digit tapbacks are drawn as "Hop-count tapbacks", not
+ * "Auto-acked" (#312). A digit says how many hops the message took to
+ * reach whoever sent it, and that is true whether an automation or a
+ * person sent it. Nothing in the packet says which, so the label claims
+ * only what the digit means. Tyler asked for the name rather than a
+ * rule that guesses, such as a time window.
+ *
+ * The rule for which marks count lives in `labels.js`, as
+ * `SonoranLabels.isAutoAck`.
  * It is pure -- an emoji and a channel in, a yes or no out -- so it is
  * tested directly rather than through this page, and there is one
  * definition of which marks count and where.
@@ -750,7 +758,7 @@ function reactionChips(reactions, channel) {
           senders: acks.flatMap((reaction) => (reaction.senders || []).map((sender) => ({
             ...sender, display_name: `${sender.display_name}: ${SonoranLabels.autoAckMeaning(reaction.emoji)}`,
           }))),
-        }, 'Auto-acked', 'auto-ack')
+        }, 'Hop-count tapbacks', 'auto-ack')
       : null);
 }
 
@@ -1598,7 +1606,9 @@ async function loadLeaderboards(page, { query = '', span = '' } = {}) {
    * question, and the one easiest to miss because the control was built
    * in JavaScript rather than sitting in the markup.
    */
-  const wanted = window.SonoranPreset ? SonoranPreset.current() : leaderboardPreset;
+  // One preset even under "All": a link board ranks links, and links on
+  // two presets cannot exist. The note under the boards names it.
+  const wanted = window.SonoranPreset ? SonoranPreset.single() : leaderboardPreset;
   const params = [wanted ? `channel=${encodeURIComponent(wanted)}` : '', query].filter(Boolean).join('&');
   const data = await get(`api/stats/leaderboards${params ? `?${params}` : ''}`).catch(() => null);
   if (!data) return replace(target, failure(new Error('Cannot load the leaderboards.')));
@@ -1644,10 +1654,16 @@ async function loadLeaderboards(page, { query = '', span = '' } = {}) {
   /*
    * The window chip says whether a board follows the page's range (#294).
    *
-   * The link board does. The two boards read from the gaps assessment keep
-   * the gaps job's own window, because that job writes one file for one
-   * window -- so their chip says their window and that the range does not
-   * reach them, rather than letting a reader take them for the range.
+   * Every board follows a quick range: the link board reads it, and the gaps
+   * job writes the two gaps boards for 24 h, 7 d and 30 d (Will chose this
+   * on 2026-10-08). The API says so per board with `follows_window`, and the
+   * page believes only that -- never the button it pressed.
+   *
+   * A custom range is a fixed period no job can write in advance, so there
+   * the two gaps boards hold the job's own window. Their chip then names
+   * that window and says the range does not reach it, rather than letting a
+   * reader take it for the range. The same happens for the few minutes
+   * after a deploy before the job has written the new windows.
    */
   const boardWindow = (board) => {
     if (board.follows_window && span) return span;
@@ -1717,8 +1733,8 @@ PAGES.dashboard = async (page) => {
   const [nodes, messages, portnums] = await getAll([
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
-    // messages from channels a LongFast radio never hears.
-    `api/chat?limit=${DASHBOARD_MESSAGES}${chatFeedChannel()}`,
+    // messages that no LongFast node hears. `preset=` since #313.
+    `api/chat?limit=${DASHBOARD_MESSAGES}${presetQuery()}`,
     /*
      * The same 24 hours and the same preset the chart's own heading and
      * the firehose it links into use (§7.1).
@@ -1731,7 +1747,7 @@ PAGES.dashboard = async (page) => {
      * counting 500 all-time packets would have opened a table with none
      * in it, and an empty filtered table reads as a quiet mesh.
      */
-    `api/stats/portnums?hours=${PORTNUM_CHART_HOURS}${presetChannel() ? `&channel=${encodeURIComponent(presetChannel())}` : ''}`,
+    `api/stats/portnums?hours=${PORTNUM_CHART_HOURS}${presetQuery()}`,
   ]);
 
   replace($('[data-recent-nodes]', page), nodes
@@ -1743,12 +1759,12 @@ PAGES.dashboard = async (page) => {
     : failure(new Error('Cannot load nodes.')));
 
   /*
-   * No channel on each row (#296). The request is filtered to the preset's
-   * channel, so the label said the same word five times; it is said once,
+   * No preset on each row (#296). The request is filtered to one modem
+   * preset, so the label said the same word five times; it is said once,
    * in the heading.
    */
   const feedChannel = $('[data-recent-chat-channel]', page);
-  if (feedChannel) feedChannel.textContent = presetChannel() ? SonoranLabels.presetLabel(presetChannel()) : '';
+  if (feedChannel) feedChannel.textContent = menuPreset() ? SonoranLabels.presetLabel(menuPreset()) : '';
   replace($('[data-recent-chat]', page), messages
     ? (messages.length
         ? messages.map((message) => messageItem(message))
@@ -1756,7 +1772,7 @@ PAGES.dashboard = async (page) => {
     : [failure(new Error('Cannot load messages.'))]);
 
   const portnumChart = $('[data-portnum-chart]', page);
-  const preset = presetChannel();
+  const preset = menuPreset();
   if (!portnums) {
     chartEmpty(portnumChart, 'Cannot load the packet types.');
   } else if (!portnums.length) {
@@ -2639,25 +2655,34 @@ const CHANNELS_TTL_MS = 600000;
 const channelCache = { at: 0, value: null };
 
 /*
- * The preset every page filters by, or '' when there is nothing to add.
+ * The modem preset every list page filters by, or '' when there is none.
  *
- * One helper for the three pages that gained this -- the firehose, the
- * dashboard's message feed and the node list -- so they cannot drift into
- * asking for different things. Returns a plain string because all three
+ * One helper for the list pages -- the firehose, the dashboard's feed and
+ * chart, the chat page and the node list -- so they cannot drift into
+ * asking for different things. Returns a plain string because they all
  * build a query rather than an object.
+ *
+ * It travels as `preset=`, never as `channel=` (#313). A topic channel
+ * such as azmsh runs on more than one preset, so the old `channel=LongFast`
+ * hid every azmsh message carried on LongFast. `preset=` reads the preset
+ * ingest tagged each packet with, so azmsh on LongFast is in, and azmsh
+ * on MediumFast is out. `channel=` is still free to narrow further.
  *
  * Silent by design (Will, 2026-09-26): the menu says which preset is
  * selected, and a line on each page repeating it is the wordiness he had
  * just asked to be taken out of the nav.
  */
-function presetChannel() {
-  return window.SonoranPreset ? SonoranPreset.current() : '';
+function menuPreset() {
+  // "All presets" is no filter: every request built from this leaves
+  // `preset` off, and the server answers for every preset.
+  if (!window.SonoranPreset || SonoranPreset.isAll()) return '';
+  return SonoranPreset.current();
 }
 
 /** The same, ready to append to a query that already has one parameter. */
-function chatFeedChannel() {
-  const channel = presetChannel();
-  return channel ? `&channel=${encodeURIComponent(channel)}` : '';
+function presetQuery() {
+  const preset = menuPreset();
+  return preset ? `&preset=${encodeURIComponent(preset)}` : '';
 }
 
 async function mapChannels() {
@@ -2742,6 +2767,11 @@ async function linkChannelOptions(page) {
    */
   const chosen = channels.find((item) => item.channel === linkChannel);
   mapPresetLabel = (chosen && chosen.label) || linkChannel;
+  // "All presets": every layer unfiltered, unless a link named a preset.
+  // The watch bar then reads "Every preset".
+  const everyPreset = window.SonoranPreset && SonoranPreset.isAll()
+    && !(mapFocus && mapFocus.preset && linkChannel === mapFocus.preset);
+  if (everyPreset) mapPresetLabel = '';
 
   /*
    * Tell the global control which presets this mesh actually carries.
@@ -2764,7 +2794,7 @@ async function linkChannelOptions(page) {
       .map((item) => String(item.preset));
     if (presets.length) SonoranPreset.setAvailable(presets);
   }
-  return linkChannel;
+  return everyPreset ? '' : linkChannel;
 }
 
 /* The label of the preset the map is drawn for, for the watch status
@@ -3456,9 +3486,13 @@ PAGES.map = async (page) => {
    * failure that removing the map's preset picker caused, which is why
    * this is a deliberate simplification and not a left-behind flag.
    */
+  // Without a channel ("All presets") the nodes HEARD in the same
+  // window, not every node that ever had a position.
   const nodes = await mapNodes(
     'api/map/nodes'
-    + (channel ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}` : ''),
+    + (channel
+      ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}`
+      : `?active_hours=${LINK_HOURS}`),
   );
   if (!nodes) return;
   const [traffic, edges, traces] = await getAll([
@@ -3466,8 +3500,12 @@ PAGES.map = async (page) => {
       ? `api/map/traffic?minutes=${minutes}&limit=${TRAFFIC_LIMIT}` +
         (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
-    showLinks && channel
-      ? `api/map/edges?hours=${LINK_HOURS}&limit=1500&channel=${encodeURIComponent(channel)}`
+    // "All presets" reads more rows: the newest 1500 of every preset
+    // were nearly all MediumFast and left out 7 of 33 LongFast links.
+    // 5000 is the API's ceiling; live held 4519 rows in the window.
+    showLinks
+      ? `api/map/edges?hours=${LINK_HOURS}&limit=${channel ? 1500 : 5000}`
+        + (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
     showTraces
       ? 'api/map/traceroute-paths?minutes=30&limit=60' +
@@ -3491,7 +3529,7 @@ PAGES.map = async (page) => {
    */
   mapNodeScope = channel
     ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
-    : `${count(nodes.length)} nodes, every preset`;
+    : `${count(nodes.length)} nodes heard on every preset in ${LINK_HOURS} h`;
 
   // Held so the legend filter can redraw without another request.
   mapState.lastNodes = nodes;
@@ -4212,6 +4250,9 @@ function graphTabs(page, all) {
   if (!channels.length) return;
   const wanted = SonoranLabels.preferredPreset(channels, (item) => item.channel);
   if (wanted) graphChannel = wanted.channel;
+  // "All presets": one graph of every channel. The API holds them all
+  // together without `channel`, and the heading says so.
+  if (window.SonoranPreset && SonoranPreset.isAll()) graphChannel = '';
   // Only the presets, and only those with links, so the menu never offers
   // a choice that opens an empty graph here.
   if (window.SonoranPreset) {
@@ -4290,7 +4331,8 @@ PAGES.graph = async (page) => {
   }
 
   const data = await get(
-    `api/graph?hours=${hours}&channel=${encodeURIComponent(graphChannel)}`,
+    `api/graph?hours=${hours}`
+    + (graphChannel ? `&channel=${encodeURIComponent(graphChannel)}` : ''),
   ).catch((error) => error);
   if (data instanceof Error) {
     $('[data-graph-counts]', page).textContent = 'Cannot load the graph.';
@@ -4404,7 +4446,7 @@ PAGES.graph = async (page) => {
     }
   }
   const heading = $('[data-graph-counts]', page);
-  const label = selected ? selected.label : graphChannel;
+  const label = selected ? selected.label : (graphChannel || 'Every preset');
   const focusName = graphFocus
     ? (data.nodes.find((node) => node.node_id === graphFocus) || {}).display_name
     : null;
@@ -4791,6 +4833,10 @@ let nodeOffset = 0;
 let nodeCursor = null;
 let nodeTotal = 0;
 let nodeRows = [];
+/* The query the table is drawn from, without paging. The export reads
+ * this rather than the controls, so the file holds what the table shows
+ * even while a typed search waits for its pause (#350). */
+let nodeShownQuery = null;
 /*
  * True once a request came back short, which is the only trustworthy
  * sign that the list has ended.
@@ -4903,21 +4949,21 @@ function nodeQuery(page, { offset = 0, cursor = null } = {}) {
   if (role) params.set('role', role);
   if (gateway) params.set('gateway', 'true');
   /*
-   * The menu's preset, set BEFORE the panel loop below so a channel
-   * chosen in the filter panel still overrides it -- the existing rule
-   * that the panel wins, because the panel is the one that shows what it
-   * chose.
+   * The menu's modem preset, as its own parameter (#313). It used to be
+   * sent as `channel`, so the panel's channel replaced it; now the two
+   * are different questions and both apply. The panel can narrow the
+   * preset's nodes to one topic channel, and cannot widen past the
+   * preset.
    *
-   * This is the riskiest of the three pages to filter, and worth naming:
-   * it HIDES nodes, and this is where somebody goes to find a specific
-   * one. A node quiet on the selected preset will not be in the list.
-   * The search box and the filter panel are both still there to get past
-   * it, and `nodeFacetQuery` derives from this function, so the counts
-   * beside each filter agree with the rows rather than describing a
-   * larger set.
+   * This is the riskiest page to filter, and worth naming: it HIDES
+   * nodes, and this is where somebody goes to find a specific one. The
+   * server reads `node.last_preset`, the preset of the node's newest
+   * tagged packet, so a node whose last packet was on azmsh stays on its
+   * mesh rather than vanishing. `nodeFacetQuery` derives from this
+   * function, so the counts beside each filter agree with the rows.
    */
-  const channel = presetChannel();
-  if (channel) params.set('channel', channel);
+  const preset = menuPreset();
+  if (preset) params.set('preset', preset);
   // The panel wins where both can say the same thing, because it is the
   // one that shows what it chose.
   for (const [key, chosen] of nodeFilters) params.set(key, chosen);
@@ -5393,6 +5439,7 @@ async function loadNodes(page, { reset = false } = {}) {
     nodeCursor = null;
     nodeRows = [];
     nodeExhausted = false;
+    nodeShownQuery = nodeQuery(page);
     replace(target, el('p', { class: 'loading', text: 'Loading' }));
   }
   nodeLoadingMore = true;
@@ -5505,30 +5552,37 @@ async function loadNodes(page, { reset = false } = {}) {
  * reorders rows it already holds: this list is paged, so sorting the
  * rows in hand would order the first hundred by name and present the
  * answer as the first hundred by name of the whole mesh. See `table()`.
+ *
+ * Every column also names the key the export knows it by (#350). The
+ * file takes its columns from this list, in this order, so a column
+ * added, removed or moved here is added, removed or moved in the file.
  */
 function nodeColumns(onSort) {
   const sortable = (column) => ({ ...column, sortState: nodeSort, onSort });
   return [
-    sortable({ label: 'Node', sort: 'name', cell: (row) => nodeChip(row) }),
+    sortable({ label: 'Node', sort: 'name', export: 'name', cell: (row) => nodeChip(row) }),
     sortable({
       label: 'Node ID',
       sort: 'node_id',
+      export: 'node_id',
       hint: 'The number the firmware gives the node, written in hexadecimal after a "!".',
       cell: (row) => el('code', { text: row.node_id }),
     }),
     sortable({
       label: 'Hardware',
       sort: 'hw',
+      export: 'hw',
       hint: 'The board model the node reports for itself.',
       cell: (row) => row.hw_model || '-',
     }),
-    sortable({ label: 'Role', sort: 'role', cell: (row) => roleCell(row.role) }),
+    sortable({ label: 'Role', sort: 'role', export: 'role', cell: (row) => roleCell(row.role) }),
     sortable({
       label: 'Flags',
       // Flags is not one value, so sorting it is a decision rather than
       // a rule. It sorts by how exactly the position is known, which is
       // the half of this column somebody sorts it to find.
       sort: 'position',
+      export: 'flags',
       hint: 'Gateway: the node uploads packets it hears to MQTT. Position: it has reported where it is. '
         + 'Sorting this column orders by how exactly the position is known.',
       cell: (row) => el('span', {},
@@ -5542,11 +5596,90 @@ function nodeColumns(onSort) {
     sortable({
       label: 'Last heard',
       sort: 'last_heard',
+      export: 'last_heard',
       num: true,
       hint: HEARD_HINT,
       cell: (row) => `${ago(row.last_heard)} ago`,
     }),
   ];
+}
+
+/** The export keys of the columns, in the order the table draws them. */
+function nodeExportColumns(columns) {
+  return columns.map((column) => column.export).filter(Boolean);
+}
+
+/** The address of the file that holds what the list shows (#350).
+ *
+ * Built from the list's own query, so every filter, the search and the
+ * sort go with it and none can be left behind. Only the paging comes
+ * off: the file is the whole list, and the server builds it with the
+ * same query as `/api/nodes`. Pure, so the cases in `tests/unit/js` run
+ * it.
+ */
+function nodeExportQuery(listQuery, format, columns) {
+  const params = new URLSearchParams(String(listQuery).split('?')[1] || '');
+  for (const key of ['limit', 'offset', 'cursor']) params.delete(key);
+  params.set('format', format);
+  params.set('columns', columns.join(','));
+  return `api/nodes/export?${params}`;
+}
+
+/** The file name the server gave, or a plain one. Pure. */
+function nodeExportName(disposition, format) {
+  const found = /filename="([^"]+)"/.exec(disposition || '');
+  return found ? found[1] : `sonoran-nodes.${format}`;
+}
+
+/* True while one export is in flight, so a second click asks nothing. */
+let nodeExporting = false;
+
+/** Fetch the export and hand it to the browser as a download.
+ *
+ * Fetched, not opened as a link: the server can refuse an export that
+ * is too large, and a link would then open a page of JSON in place of
+ * the dashboard. Here the refusal is shown as a sentence beside the
+ * buttons.
+ *
+ * The query is the one the table was last drawn from, not one read
+ * again from the controls. The search box waits for a pause in the
+ * typing, so the controls can hold a search the table does not show
+ * yet, and the file must hold what the reader sees.
+ */
+async function exportNodes(page, format) {
+  if (nodeExporting) return;
+  const status = $('[data-node-export-status]', page);
+  const buttons = $$('[data-node-export-format]', page);
+  const say = (words) => { if (status) status.textContent = words; };
+  nodeExporting = true;
+  for (const button of buttons) button.setAttribute('aria-disabled', 'true');
+  say(`Preparing the ${format.toUpperCase()} file`);
+  const path = nodeExportQuery(nodeShownQuery || nodeQuery(page), format,
+    nodeExportColumns(nodeColumns(() => {})));
+  try {
+    const response = await apiFetch(api(path));
+    if (!response.ok) {
+      const answer = await response.json().catch(() => null);
+      const detail = answer && typeof answer.detail === 'string' ? answer.detail : '';
+      throw detail ? new Error(detail) : requestFailed(path, response.status);
+    }
+    const blob = await response.blob();
+    const name = nodeExportName(response.headers.get('Content-Disposition'), format);
+    const url = URL.createObjectURL(blob);
+    const link = el('a', { href: url, download: name, hidden: true });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Released after the click has started the download, not during it.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const header = response.headers.get('X-Total-Count');
+    say(header == null ? `Saved ${name}` : `Saved ${count(Number(header))} nodes as ${name}`);
+  } catch (error) {
+    say(error.message || String(error));
+  } finally {
+    nodeExporting = false;
+    for (const button of buttons) button.setAttribute('aria-disabled', 'false');
+  }
 }
 
 /** The foot of the list: where we are in it, and how to read on.
@@ -6425,23 +6558,12 @@ function healthChecks(gaps, detail) {
     : 'No gap assessment has been written yet.';
 
   /*
-   * "Heard over the air", and the case that used to read Good.
+   * "Heard over the air" card.
    *
-   * `sole_observer` is `bad` at exactly one direct gateway and
-   * `unknown` at zero (gaps/signals.py). Downgrading only on `bad`
-   * therefore let the zero case through as green, and the severity came
-   * out backwards: a node nothing had heard read Good, while a node one
-   * gateway had heard read Needs help. Measured on the live mesh, 218
-   * of 774 assessed nodes were in that state, each shown a green card
-   * over the words "0 gateways heard it directly".
-   *
-   * `unknown` is not a shade of `ok` here. A node nothing heard may be
-   * three hops deep and perfectly well, or it may be off the air, and
-   * this check cannot tell those apart -- which is exactly what
-   * `unknown` is for. It must not be coloured as health.
+   * Green when a gateway other than itself hears it over the air, directly or through relays.
    */
   const isolated = signal('radio_isolated');
-  let heardState = signalState(isolated);
+  const heardState = signalState(isolated);
 
   const margin = signal('weak_best_link');
   const marginEvidence = margin ? margin.evidence || {} : {};
@@ -6513,7 +6635,7 @@ function healthChecks(gaps, detail) {
         `${count(row && row.direct_gateways)} gateways heard it directly. `
           + `${count(row && row.rf_packets)} of ${count(row && row.packets)} packets reached a gateway over the air.`,
         notAssessed),
-      green: 'Green when a gateway other than itself hears it over the air, and more than one gateway hears it directly. Grey when nothing heard it directly, which this check cannot tell apart from a node several hops deep.',
+      green: 'Green when a gateway other than itself hears it over the air, directly or through relays. Grey when nothing heard it directly, which this check cannot tell apart from a node several hops deep.',
       evidence: Boolean(row),
     }),
     ({
@@ -7977,6 +8099,9 @@ async function chatFetch(channel, { since, before, limit = CHAT_PAGE }) {
   const params = new URLSearchParams({
     channel, limit: String(limit), metrics: 'true',
   });
+  // The channel on the menu's preset only: azmsh runs on two (#313).
+  const preset = menuPreset();
+  if (preset) params.set('preset', preset);
   /*
    * A cursor may be the row's own `seen_at` string, sent as the API wrote
    * it. The column holds microseconds and a Date holds milliseconds, so a
@@ -7999,10 +8124,13 @@ async function chatFetch(channel, { since, before, limit = CHAT_PAGE }) {
  * every page the reader had scrolled in (#297). The default range is the
  * token `default` instead, which stays put.
  */
-function chatKey(channel, addressRange) {
-  if (!addressRange) return `${channel || ''}|default`;
+function chatKey(channel, addressRange, preset) {
+  // The preset is part of the conversation: azmsh on LongFast and azmsh on
+  // MediumFast are two different sets of rows (#313).
+  const scope = `${preset || ''}/${channel || ''}`;
+  if (!addressRange) return `${scope}|default`;
   return [
-    channel || '',
+    scope,
     addressRange.from ? addressRange.from.toISOString() : '',
     addressRange.to ? addressRange.to.toISOString() : '',
   ].join('|');
@@ -8371,7 +8499,7 @@ async function chatAppendNew() {
 }
 
 async function chatChannelPage(page, channel) {
-  const key = chatKey(channel, chatRangeFromAddress());
+  const key = chatKey(channel, chatRangeFromAddress(), menuPreset());
   const body = $('[data-chat-body]', page);
   chatDrawRange(page);
   if (chatTableWatch) chatTableWatch.disconnect();
@@ -8484,19 +8612,23 @@ PAGES.chat = async (page) => {
     `Messages from the last ${CHAT_OVERVIEW_WINDOW}. One section for each detected channel `
     + 'on the preset chosen in the menu, grouped by what it is for. New names land in Custom.');
   const body = $('[data-chat-body]', page);
-  const data = await get(`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}`).catch((error) => error);
+  /*
+   * The server keeps the messages carried on the menu's preset (#313).
+   * This used to fetch every channel and keep, in the browser, the topic
+   * channels on the deployment's default preset only, so azmsh was never
+   * shown on LongFast although the mesh uses it there.
+   */
+  const data = await get(`api/chat/overview?hours=${CHAT_OVERVIEW_HOURS}${presetQuery()}`)
+    .catch((error) => error);
   // A channel was opened while this loaded. Drawing the overview now
   // would put it over the channel page that is already there.
   if (currentChatChannel) return undefined;
   if (data instanceof Error) return replace(body, failure(data));
-  if (!data.sections.length) {
-    return replace(body, empty('No channels have stored messages. Text storage may be off.'));
-  }
-
-  const shown = SonoranPreset.channelsFor(data.sections);
+  const shown = data.sections;
   if (!shown.length) {
-    return replace(body, empty(
-      `No channels on ${SonoranLabels.presetLabel(SonoranPreset.current())} have stored messages.`));
+    return replace(body, empty(menuPreset()
+      ? `No channels on ${SonoranLabels.presetLabel(menuPreset())} have stored messages.`
+      : 'No channels have stored messages. Text storage may be off.'));
   }
 
   const groups = new Map();
@@ -8511,9 +8643,9 @@ PAGES.chat = async (page) => {
 };
 
 /*
- * The rule for which channels belong to the preset in force lives in
- * `preset.js`, as `SonoranPreset.channelsFor`. It is pure, so it is
- * tested directly rather than through this page.
+ * Which channels belong to the preset in force is the server's answer,
+ * from the preset ingest gave each packet (#313). It used to be a rule in
+ * `preset.js` that put every topic channel on the default preset.
  */
 
 
@@ -9037,12 +9169,13 @@ PAGES.firehose = async (page) => {
     params.set('since', since.toISOString());
   }
   /*
-   * One preset, like every other page. The firehose showed all of them,
-   * so a reader on LongFast watched MediumFast traffic scroll past that
-   * their radio cannot hear (AGENTS.md 9.7).
+   * One modem preset, like every other page. The firehose showed all of
+   * them, so a reader on LongFast watched MediumFast traffic scroll past
+   * that no LongFast node can hear (AGENTS.md 9.7). Sent as `preset`, so
+   * azmsh traffic carried on LongFast is in (#313).
    */
-  const channel = presetChannel();
-  if (channel) params.set('channel', channel);
+  const preset = menuPreset();
+  if (preset) params.set('preset', preset);
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
   if (rows instanceof Error) {
@@ -9069,8 +9202,8 @@ PAGES.firehose = async (page) => {
    * match the filter." left a reader with no way to tell a quiet mesh
    * from a type that never runs on the preset they are looking at.
    */
-  const nothing = portnum || channel || firehoseFilter.hours
-    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${channel ? ` on ${channel}` : ''}`
+  const nothing = portnum || preset || firehoseFilter.hours
+    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${preset ? ` on ${preset}` : ''}`
       + `${firehoseFilter.hours ? ` in the ${windowWord.toLowerCase()}` : ' at any time'}. `
       + 'The mesh may be quiet, or this may not be traffic that runs here.'
     : 'No packets match the filter.';
@@ -10733,9 +10866,9 @@ if (!POPOVER) {
  *   code.
  * - **Grepping each page function** for the store said `stats` ignores it.
  *   The leaderboards read it from a separate function.
- * - **Looking for which modules mention the store** says `chat` ignores it.
- *   Chat filters its channel sections client-side through `channelsFor`,
- *   so the request never names a preset.
+ * - **Looking for which modules mention the store** said `chat` ignores it.
+ *   Chat then filtered its channel sections client-side, so the request
+ *   never named a preset. It names one now (#313), as `preset=`.
  *
  * A note that says "not used here" is a CLAIM about what the reader is
  * looking at. Getting it wrong on coverage would tell somebody the switch
@@ -10762,6 +10895,13 @@ const PRESET_FREE_PAGES = new Set([
   'node', 'packet', 'link', 'traceroute',
 ]);
 
+/*
+ * Preset pages that cannot show "All presets". A coverage map, a gaps
+ * assessment and a planner prediction are each for one radio setting,
+ * so under "All" they draw the deployment's default (`single()`).
+ */
+const ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps']);
+
 /** True when the menu's preset changes what this page shows. */
 function presetAppliesTo(name) {
   return PRESET_PAGES.has(name);
@@ -10782,8 +10922,14 @@ function drawPresetScope(name) {
   const note = $('[data-preset-scope]');
   if (!note) return;
   const applies = presetAppliesTo(name);
-  note.hidden = applies;
-  note.textContent = applies ? '' : 'Not used on this page.';
+  // Under "All presets" a page that draws one preset says which one it
+  // drew, so the reader does not take one mesh for the whole state.
+  const one = applies && ONE_PRESET_PAGES.has(name)
+    && window.SonoranPreset && SonoranPreset.isAll();
+  note.hidden = applies && !one;
+  note.textContent = one
+    ? `Shows ${SonoranLabels.presetLabel(SonoranPreset.single())} only. This page draws one preset.`
+    : applies ? '' : 'Not used on this page.';
 }
 
 /*
@@ -10989,6 +11135,7 @@ async function route() {
     else link.removeAttribute('aria-current');
   }
   markNavHere(known);
+  SonoranTabBar.mark(known);
   await navigateRender(known);
   // A link straight to `#map/watch/traffic/expanded` opens in watch mode.
   if (known === 'map') SonoranWatch.restore();
@@ -11114,13 +11261,41 @@ function presetInitials(name) {
   return (words[0] || '').slice(0, 2);
 }
 
+/* How many presets the switch shows as buttons. The rest go in the
+   "More presets" select, because a switch slot is too narrow for a
+   third name. */
+const PRESET_SWITCH_SLOTS = 2;
+
+/*
+ * The presets on the switch's buttons: the deployment's default, then
+ * the two this mesh runs, then whatever else is offered, in that order.
+ *
+ * Fixed, not the first two of the list on offer. That list comes from
+ * several endpoints, and the channel list sorts by traffic: on a busy
+ * LongTurbo day LongFast would drop into the select, and the switch
+ * would change between pages.
+ */
+function presetSwitchSlots(offered) {
+  const configured = (window.SONORAN && window.SONORAN.defaultPreset) || '';
+  const wanted = [configured, ...SonoranPreset.FALLBACK, ...offered];
+  return [...new Set(wanted.filter((name) => name && offered.includes(name)))]
+    .slice(0, PRESET_SWITCH_SLOTS);
+}
+
 function wirePresetSwitch() {
   const holder = $('[data-preset-switch]');
   if (!holder || !window.SonoranPreset) return;
+  const more = $('[data-preset-more]');
 
   const draw = () => {
     const current = SonoranPreset.current();
-    const options = SonoranPreset.options();
+    const offered = SonoranPreset.options();
+    const options = presetSwitchSlots(offered);
+    const extras = offered.filter((name) => !options.includes(name));
+    // The chosen preset is in the select, so no button is chosen and
+    // the thumb hides. The first button keeps the Tab stop.
+    const pinned = options.includes(current);
+    holder.toggleAttribute('data-extra', !pinned);
     /*
      * The thumb's size and position, for the CSS (§3.5).
      *
@@ -11143,7 +11318,7 @@ function wirePresetSwitch() {
        * of buttons that each take a tab stop is the usual way this
        * control is got wrong.
        */
-      tabindex: name === current ? '0' : '-1',
+      tabindex: name === current || (!pinned && name === options[0]) ? '0' : '-1',
       onclick: () => { if (SonoranPreset.set(name)) draw(); },
       onkeydown: (event) => {
         const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -11151,7 +11326,10 @@ function wirePresetSwitch() {
         if (!step) return;
         event.preventDefault();
         const list = options;
-        const next = list[(list.indexOf(current) + step + list.length) % list.length];
+        // With the chosen preset in the select, Right goes to the first
+        // button and Left to the last, as from just outside the group.
+        const from = pinned ? list.indexOf(current) : (step > 0 ? -1 : 0);
+        const next = list[(from + step + list.length) % list.length];
         if (SonoranPreset.set(next)) draw();
         const moved = $(`[data-preset-switch] .preset-choice.active`);
         if (moved) moved.focus();
@@ -11167,7 +11345,25 @@ function wirePresetSwitch() {
      */
     el('span', { class: 'nav-label', text: SonoranLabels.presetLabel(name) }),
     el('span', { class: 'preset-short', 'aria-hidden': 'true', text: presetInitials(name) }))));
+
+    if (!more) return;
+    // Always shown: "All presets" is always a choice.
+    more.hidden = false;
+    more.classList.toggle('active', !pinned);
+    replace(more,
+      // "More", not "More presets": on a phone the select shares the
+      // switch's row. Its accessible name says the rest.
+      el('option', { value: '', text: 'More' }),
+      el('option', { value: SonoranPreset.ALL, text: 'All' }),
+      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
+    more.value = pinned ? '' : current;
   };
+
+  if (more) {
+    more.addEventListener('change', () => {
+      if (more.value && SonoranPreset.set(more.value)) draw();
+    });
+  }
 
   draw();
   // A change from anywhere -- another tab's storage, or the available
@@ -11176,6 +11372,9 @@ function wirePresetSwitch() {
     draw();
     render(currentPage);
   });
+  // The list grew or shrank with the same preset chosen: the page is
+  // still right, only the switch and the select change.
+  if (SonoranPreset.onOptionsChange) SonoranPreset.onOptionsChange(draw);
 
   /*
    * A setting changed in ANOTHER tab. `applySetting` already redraws for
@@ -11391,6 +11590,13 @@ function wire() {
     render('nodes');
   });
 
+  /* The export: the rows the list shows, as a file (#350). */
+  for (const button of $$('[data-node-export-format]')) {
+    button.addEventListener('click', () => {
+      exportNodes($('[data-page="nodes"]'), button.dataset.nodeExportFormat);
+    });
+  }
+
   /*
    * The starting points. Each one sets a whole query, because the
    * question somebody arrives with is "which routers have gone quiet",
@@ -11543,9 +11749,21 @@ function wireNav() {
   const menu = $('#site-menu') || nav;
   if (!toggle || !nav) return;
   const narrow = matchMedia('(max-width: 60rem)');
+  /*
+   * The phone's bottom bar (#282). Its More button is a second way into
+   * this same menu, so the two buttons share one state: both say
+   * whether the menu is open, and Escape goes back to the one that was
+   * used. See tab-bar.js for when the bar is drawn and why the top
+   * button stays.
+   */
+  const tabBar = SonoranTabBar.build();
+  const more = tabBar && $('[data-tab-more]', tabBar);
+  const phone = matchMedia(SonoranTabBar.QUERY);
+  let opener = toggle;
 
   const setOpen = (open) => {
     toggle.setAttribute('aria-expanded', String(open));
+    if (more) more.setAttribute('aria-expanded', String(open));
     menu.hidden = !open;
     $('use', toggle).setAttribute('href', open ? '#i-menu-close' : '#i-menu');
     // The phone bar is sticky (#271). Open, the menu is taller than a
@@ -11559,6 +11777,7 @@ function wireNav() {
     // Wide: no button, and the nav is always there. Narrow: the button
     // appears and the nav starts closed.
     toggle.hidden = !narrow.matches;
+    if (tabBar) tabBar.hidden = !phone.matches;
     setOpen(!narrow.matches);
   };
 
@@ -11582,8 +11801,30 @@ function wireNav() {
   if (sidebar && 'ResizeObserver' in window) new ResizeObserver(barHeight).observe(sidebar);
 
   toggle.addEventListener('click', () => {
+    opener = toggle;
     setOpen(toggle.getAttribute('aria-expanded') !== 'true');
   });
+  /*
+   * More opens the menu at the top of the screen, under the bar (#271),
+   * away from the button that opened it. So the focus goes into the
+   * list, to the first page, as a menu button's focus does: a keyboard
+   * or a screen reader would otherwise be left on a button at the foot
+   * of the screen with the list it opened far above it. `preventScroll`,
+   * because the menu is sticky and already in view.
+   */
+  if (more) {
+    more.addEventListener('click', () => {
+      opener = more;
+      const open = more.getAttribute('aria-expanded') !== 'true';
+      setOpen(open);
+      const first = open && $('a', nav);
+      if (first) first.focus({ preventScroll: true });
+    });
+    // A tab is a page chosen, so it closes the menu, as a link in it does.
+    tabBar.addEventListener('click', (event) => {
+      if (narrow.matches && event.target.closest('a')) setOpen(false);
+    });
+  }
   /*
    * Choosing a page is the end of the menu's job.
    *
@@ -11632,9 +11873,18 @@ function wireNav() {
     if (event.key !== 'Escape' || !narrow.matches) return;
     if (toggle.getAttribute('aria-expanded') !== 'true') return;
     setOpen(false);
-    toggle.focus();
+    opener.focus();
   });
+  // Escape on the More button itself, which is outside the sidebar.
+  if (more) {
+    tabBar.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || more.getAttribute('aria-expanded') !== 'true') return;
+      setOpen(false);
+      more.focus();
+    });
+  }
   narrow.addEventListener('change', apply);
+  phone.addEventListener('change', apply);
   apply();
 }
 

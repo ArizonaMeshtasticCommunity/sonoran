@@ -5,6 +5,148 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.12.4 — 2026-10-12
+
+1 pull request merged, 1 issue closed.
+
+#### Fixes
+
+- Activity from hourly family totals, graph from lean rows (#368) (#369) by @logans-stuff — done: #368
+
+#### Issues
+
+- Done: #368 Activity chart and graph load slowly: count families from hourly totals, read lean rows (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.3...v2026.10.12.4
+
+## v2026.10.12.3 — 2026-10-12
+
+1 pull request merged, 1 issue closed.
+
+#### Fixes
+
+- Count packets and uploads from hourly totals (#366) (#367) by @logans-stuff — done: #366
+  Statistics and the dashboard load much faster. The numbers do not change.
+
+#### Issues
+
+- Done: #366 Statistics loads slowly: count from hourly totals, not raw rows (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.2...v2026.10.12.3
+
+## v2026.10.12.2 — 2026-10-12
+
+3 pull requests merged, 2 issues closed.
+
+#### New features
+
+- Keep the background jobs' outputs in tables, not JSON files (#351) (#361) by @logans-stuff — done: #351
+  No visible change. A renamed node now shows its new name on the gaps page and the leaderboards at once.
+- Firmware 2.8.1 protobufs, every firmware preset, and docs-sourced sensitivity (#363) by @logans-stuff — done: #362
+  Ready for Meshtastic 2.8.1. Traffic on Long Turbo (the new US default), the other new presets, and Long Moderate is now recognised as its preset. New paging messages and hardware models show by name.
+
+  Coverage predictions are now about 8 dB more conservative. The old receiver sensitivities were too optimistic, and they now follow the Meshtastic docs.
+
+#### Fixes
+
+- The old-file import and the siting CLI connect as the jobs role (#351) (#364) by @logans-stuff
+
+#### Issues
+
+- Done: #351 Architecture: Migrate background job outputs from static JSON files to the Database (reported by @tylerpieper)
+- Done: #362 Preset sensitivity table is ~8 dB optimistic and wrongly sourced (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @tylerpieper, @logans-stuff
+- Code: @logans-stuff
+- Tested and helped: @tylerpieper
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12...v2026.10.12.2
+
+## v2026.10.12 — 2026-10-12
+
+12 pull requests merged, 11 issues closed.
+
+#### New features
+
+- The whole Rokland antenna catalogue, and aim a Yagi (#111) (#230)
+- The gaps leaderboards follow the page range (#294) (#335) — done: #294
+- Predict from precise positions, with operator overrides (#315) (#336) — done: #315
+- 16 px body text on touch screens (#283) (#337) — done: #283
+- A bottom navigation bar on phones (#282) (#338) — done: #282
+- Rank reachability by answered traceroutes (#293) (#352) — done: #293
+- Tag each packet with its modem preset at ingest (#313) (#353) — done: #313
+- Export the filtered node list as CSV or JSON (#350) (#355) — done: #350
+- Radio climate from the site's location (#239) (#357) — done: #239
+
+#### Fixes
+
+- Call digit tapbacks "Hop-count tapbacks", not "Auto-acked" (#312) (#339) — done: #312
+- The preset UPDATEs never read packet first (#313) (#360) by @logans-stuff
+  Fixes ingest after the modem preset change: repeats of a packet seen just before a restart were refused.
+
+#### Maintenance
+
+- Make the #280 and #277 journeys deterministic (#354) (#356) — done: #280, #354
+
+#### Issues
+
+- Done: #294 Statistics: add a date-range control with quick buttons, default last 30 days rolling (feature)
+- Done: #315 Wickenburg on the coverage map
+- Done: #283 Mobile (P3): Body text at 16 px on touch screens
+- Done: #282 Mobile (P3): Bottom navigation bar (four pages plus More)
+- Done: #312 Not all numerical tapbacks are auto-acks (reported by @tylerpieper)
+- Done: #293 Statistics: rethink "Most consistently reachable" as a real reachability measure, not uptime (feature)
+- Done: #313 Clarification of presets vs channels (reported by @tylerpieper)
+- Done: #350 Feat: export via node list (reported by @tylerpieper)
+- Done: #280 Mobile (P3): A "N new" pill on the firehose when scrolled away from the top
+- Done: #354 e2e: two journeys fail intermittently (#280 firehose pill, #277 aborted requests)
+- Done: #239 Determine the radio climate from the site's coordinate, instead of assuming desert
+- Worked on: #111 Planner hardware templates: antenna catalogue (the range Rokland and similar stores sell)
+- Worked on: #277 Mobile (P2): Load ECharts only on pages that draw a chart
+
+#### Thank you
+
+- Reported: @tylerpieper
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.07.5...v2026.10.12
+
+## v2026.10.07.5 — 2026-10-07
+
+1 pull request merged, 6 issues closed.
+
+#### Fixes
+
+- Rancur's open issues that need no decision (#304, #307, #308, #310, #311, #314) (#332) by @logans-stuff — done: #304, #307, #308, #310, #311, #314
+  The node page measures how far apart two nodes were when they heard each other, not where they are now. The planner's Simple mode asks you to choose a radio, antennas and cable before it runs.
+
+#### Issues
+
+- Done: #304 Node page: health panel and Links wait up to 29 s on /routes (packet_seen joins), measured on production
+- Done: #307 Record batch 3 in docs/DECISIONS.md and regenerate CHANGELOG.md (text ready inside)
+- Done: #308 Move deploy steps, the CI working agreement and test traps from the handoff issue into AGENTS.md and docs/DEPLOY.md
+- Done: #310 FURTHEST NODE THAT HEARD IT and FURTHEST NODE IT HEARD needs to be a snapshot in time
+- Done: #311 Node detail under links and routes
+- Done: #314 Planner app drop downs
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.07.4...v2026.10.07.5
+
 ## v2026.10.07.4 — 2026-10-07
 
 1 pull request merged.
