@@ -125,9 +125,11 @@ def timescale_url() -> Iterator[str]:
     # `ALTER TABLE packet ALTER COLUMN want_ack DROP DEFAULT`. A setting
     # read at server start cannot be undone by the schema under test.
     container.with_command("postgres -c timescaledb.max_background_workers=0")
-    # `with_kwargs` replaces earlier kwargs in testcontainers 4.x; nothing
-    # sets any before this.
-    container.with_kwargs(tmpfs=TIMESCALE_TMPFS)
+    # Into `tmpfs`, which `start()` passes to Docker as `tmpfs=`. Not
+    # `with_kwargs(tmpfs=...)`: testcontainers 4.15 then sends `tmpfs`
+    # twice, and every database test failed with "got multiple values
+    # for keyword argument 'tmpfs'".
+    container.tmpfs.update(TIMESCALE_TMPFS)
     _disable_ryuk()
     try:
         container.start()

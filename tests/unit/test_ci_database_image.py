@@ -49,5 +49,5 @@ def test_every_ci_database_keeps_its_files_in_ram() -> None:
     for name, service in _services().items():
         assert PGDATA_TMPFS in service["options"], f"the {name} database is on the runner's disk"
     source = CONFTEST.read_text(encoding="utf-8")
-    assert "with_kwargs(tmpfs=TIMESCALE_TMPFS)" in source
+    assert "container.tmpfs.update(TIMESCALE_TMPFS)" in source
     assert '"/home/postgres/pgdata/data": "rw,uid=1000,gid=1000,mode=0700' in source
