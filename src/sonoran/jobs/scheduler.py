@@ -40,6 +40,7 @@ from sonoran.jobs import (
     read_models,
     rf_rollup,
     snapshots,
+    supervisor,
 )
 from sonoran.logging import configure_logging, get_logger
 
@@ -54,11 +55,6 @@ RETRY_SECONDS = 300.0
 
 # How often finished hours of the 900 MHz band are rolled up.
 RF_ROLLUP_SECONDS = 600.0
-
-# The tasks running now, by name. The read model task reads it to stay
-# out of a coverage run's way (#371): both hold a lot of memory, and the
-# container's limit is shared.
-RUNNING: set[str] = set()
 
 
 @dataclass
@@ -194,6 +190,13 @@ async def _run_forever(task: Task, settings: Settings) -> None:
             await task.run()
         except asyncio.CancelledError:
             raise
+        except supervisor.OverLimit as stopped:
+            # Not the short retry: a job that cannot fit would be tried
+            # again and again, the livelock of 2026-09-21. It waits its
+            # normal interval, and its ceiling can be raised meanwhile.
+            logger.error("%s; next try in %.0fs", stopped, task.next_delay())
+            await asyncio.sleep(task.next_delay())
+            continue
         except Exception:
             logger.exception("the %s job failed", task.name)
             await asyncio.sleep(RETRY_SECONDS)
@@ -204,142 +207,143 @@ async def _run_forever(task: Task, settings: Settings) -> None:
         await asyncio.sleep(delay)
 
 
-def build_tasks(settings: Settings) -> list[Task]:
-    """Return the tasks this deployment runs."""
-    tasks = [
-        Task(
-            name="snapshot",
-            run=snapshots.main,
-            next_delay=_delay_to_next_utc_day,
-        )
-    ]
+# --- the jobs, one body each ------------------------------------------
+#
+# Each body runs one job once. The supervisor runs it in a child process
+# (`sonoran/jobs/run_task.py`), so nothing here may keep state in memory
+# between runs: what must last goes in the attempt files or the database.
+
+
+def _calibration_due(settings: Settings) -> bool:
+    """True when the calibration should run before this coverage run."""
+    if not settings.calibration_enabled:
+        return False
+    last = _read_last_attempt(settings, "calibration")
+    interval = max(settings.calibration_interval_hours, 1) * 3600.0
+    return last is None or datetime.now(UTC).timestamp() - last >= interval
+
+
+async def _job_snapshot(settings: Settings) -> None:
+    await snapshots.main()
+
+
+async def _job_coverage(settings: Settings) -> None:
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            calibration_due = _calibration_due(settings)
+            if calibration_due:
+                _record_attempt(settings, "calibration")
+            await _coverage_cycle(session, settings, calibration_due)
+    finally:
+        await engine.dispose()
+
+
+async def _job_calibration(settings: Settings) -> None:
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            await calibrate.run_once(session, settings)
+    finally:
+        await engine.dispose()
+
+
+async def _job_gaps(settings: Settings) -> None:
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            await gaps.run_once(session, settings)
+    finally:
+        await engine.dispose()
+
+
+async def _job_rf_rollup(settings: Settings) -> None:
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            await rf_rollup.run_once(session)
+    finally:
+        await engine.dispose()
+
+
+async def _job_read_models(settings: Settings) -> None:
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            await read_models.run_once(session, settings)
+    finally:
+        await engine.dispose()
+
+
+#: Every job by name: what `run_task` and the in-process runner call.
+JOB_BODIES: dict[str, Callable[[Settings], Awaitable[None]]] = {
+    "snapshot": _job_snapshot,
+    "coverage": _job_coverage,
+    "calibration": _job_calibration,
+    "gaps": _job_gaps,
+    "rf-rollup": _job_rf_rollup,
+    "read-models": _job_read_models,
+}
+
+
+async def run_body(name: str, settings: Settings) -> None:
+    """Run one job once, in this process."""
+    await JOB_BODIES[name](settings)
+
+
+def _runner(
+    name: str, settings: Settings, budget: supervisor.Budget | None
+) -> Callable[[], Awaitable[None]]:
+    """What a task calls to run once: in a child process, or in this one."""
+    if budget is None:
+        return lambda: run_body(name, settings)
+    return lambda: supervisor.run_job(name, settings, budget)
+
+
+def build_tasks(settings: Settings, budget: supervisor.Budget | None = None) -> list[Task]:
+    """Return the tasks this deployment runs.
+
+    With a `budget`, each run is a child process inside it (the
+    supervisor, #371); without one, each runs in this process.
+    """
+
+    def task(name: str, next_delay: Callable[[], float]) -> Task:
+        return Task(name=name, run=_runner(name, settings, budget), next_delay=next_delay)
+
+    tasks = [task("snapshot", _delay_to_next_utc_day)]
 
     if settings.coverage_enabled:
-        last_calibration: float | None = None
-
-        async def coverage_run() -> None:
-            nonlocal last_calibration
-            engine = make_engine(settings.database_url_jobs)
-            factory = make_session_factory(engine)
-            # A read model build in progress finishes first: it takes
-            # seconds, and the two must not hold memory together.
-            # A plain poll, not an Event: `RUNNING` is module state, and an
-            # Event made at import binds to whichever loop first waits.
-            while "read-models" in RUNNING:  # noqa: ASYNC110
-                await asyncio.sleep(5)
-            RUNNING.add("coverage")
-            try:
-                async with factory() as session:
-                    now = asyncio.get_running_loop().time()
-                    interval = max(settings.calibration_interval_hours, 1) * 3600.0
-                    calibration_due = settings.calibration_enabled and (
-                        last_calibration is None or now - last_calibration >= interval
-                    )
-                    await _coverage_cycle(session, settings, calibration_due)
-                    if calibration_due:
-                        last_calibration = asyncio.get_running_loop().time()
-            finally:
-                RUNNING.discard("coverage")
-                await engine.dispose()
-
-        tasks.append(
-            Task(
-                name="coverage",
-                run=coverage_run,
-                next_delay=lambda: max(settings.coverage_interval_hours, 1) * 3600.0,
-            )
-        )
+        # Calibration, coverage and the siting half share one clock and
+        # one child: `_coverage_cycle`. They all run the engine.
+        tasks.append(task("coverage", lambda: max(settings.coverage_interval_hours, 1) * 3600.0))
     else:
         logger.info("the coverage job is turned off")
         if settings.calibration_enabled:
-
-            async def calibration_run() -> None:
-                engine = make_engine(settings.database_url_jobs)
-                factory = make_session_factory(engine)
-                try:
-                    async with factory() as session:
-                        await calibrate.run_once(session, settings)
-                finally:
-                    await engine.dispose()
-
             tasks.append(
-                Task(
-                    name="calibration",
-                    run=calibration_run,
-                    next_delay=lambda: max(settings.calibration_interval_hours, 1) * 3600.0,
-                )
+                task("calibration", lambda: max(settings.calibration_interval_hours, 1) * 3600.0)
             )
 
     if settings.gaps_enabled:
-        # Its own clock, on purpose. This job runs no engine: it is SQL
-        # and a few thousand dictionary operations, so it cannot take a
-        # core away from a coverage build. It also wants to run every
-        # half hour rather than every six hours.
-        #
-        # The engine work of the siting half is the opposite case and
-        # must join `_coverage_cycle` instead of standing beside it. A
-        # task registered here is free to run during a coverage build,
-        # and on a three core box that is the last core.
-        async def gaps_run() -> None:
-            engine = make_engine(settings.database_url_jobs)
-            factory = make_session_factory(engine)
-            try:
-                async with factory() as session:
-                    await gaps.run_once(session, settings)
-            finally:
-                await engine.dispose()
-
-        tasks.append(
-            Task(
-                name="gaps",
-                run=gaps_run,
-                next_delay=lambda: max(settings.gaps_interval_minutes, 1) * 60.0,
-            )
-        )
+        # Its own clock: SQL and dictionaries, no engine, and it wants to
+        # be fresher than a coverage run. The engine work of the siting
+        # half joins `_coverage_cycle` instead.
+        tasks.append(task("gaps", lambda: max(settings.gaps_interval_minutes, 1) * 60.0))
     else:
         logger.info("the coverage gaps job is turned off")
 
-    # Its own clock: plain SQL over a few hours a run, no engine, so it
-    # may run beside a coverage build.
-    async def rf_rollup_run() -> None:
-        engine = make_engine(settings.database_url_jobs)
-        factory = make_session_factory(engine)
-        try:
-            async with factory() as session:
-                await rf_rollup.run_once(session)
-        finally:
-            await engine.dispose()
-
-    tasks.append(Task(name="rf-rollup", run=rf_rollup_run, next_delay=lambda: RF_ROLLUP_SECONDS))
+    # Plain SQL over a few hours a run, no engine.
+    tasks.append(task("rf-rollup", lambda: RF_ROLLUP_SECONDS))
 
     if settings.read_models_enabled:
-        # Its own clock: SQL and Python, no engine. It still steps aside
-        # while a coverage run holds the container's memory, and the API
-        # computes the views live meanwhile.
-        runs = 0
-
-        async def read_models_run() -> None:
-            nonlocal runs
-            if "coverage" in RUNNING:
-                logger.info("the read models wait: a coverage run is going")
-                return
-            engine = make_engine(settings.database_url_jobs)
-            factory = make_session_factory(engine)
-            RUNNING.add("read-models")
-            try:
-                async with factory() as session:
-                    await read_models.run_once(session, settings, runs)
-                runs += 1
-            finally:
-                RUNNING.discard("read-models")
-                await engine.dispose()
-
+        # SQL and Python, no engine. Beside coverage when the memory
+        # allows it; the supervisor decides.
         tasks.append(
-            Task(
-                name="read-models",
-                run=read_models_run,
-                next_delay=lambda: max(settings.read_models_interval_minutes, 1) * 60.0,
-            )
+            task("read-models", lambda: max(settings.read_models_interval_minutes, 1) * 60.0)
         )
     else:
         logger.info("the read models are turned off")
@@ -375,8 +379,16 @@ async def service() -> None:
     """Run every task until the process is stopped."""
     settings = get_settings()
     await _import_old_files(settings)
-    tasks = build_tasks(settings)
+    budget = supervisor.budget_for(settings) if settings.jobs_isolate else None
+    tasks = build_tasks(settings, budget)
     logger.info("jobs running: %s", ", ".join(task.name for task in tasks))
+    if budget is not None:
+        limits = supervisor.limits_for(settings)
+        logger.info(
+            "each job runs in its own process; memory for all: %s; ceilings: %s",
+            "no limit" if budget.total_mb is None else f"{budget.total_mb:.0f} MB",
+            ", ".join(f"{task.name} {limits.get(task.name, 0):.0f} MB" for task in tasks),
+        )
     await asyncio.gather(*(_run_forever(task, settings) for task in tasks))
 
 

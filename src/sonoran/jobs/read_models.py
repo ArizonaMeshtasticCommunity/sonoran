@@ -11,16 +11,14 @@ Each run builds, one after another:
 - **The nodes heard on each preset channel** in the last 7 days, for the
   coverage page.
 
-Windows of `read_models.LONG_HOURS` or more are built on every
-`READ_MODELS_LONG_EVERY`-th run only, and on the first run when none is
+Windows of `read_models.LONG_HOURS` or more are built when their stored
+build is older than `READ_MODELS_LONG_EVERY` runs, or when none is
 stored. Each build is its own transaction, so a reader sees a whole
 build or the one before it, never half of one.
 
-No engine, so this may run beside a coverage build. It does not: it
-holds tens of thousands of rows for a 30 day window, and the jobs
-container's memory is shared with the coverage run. The scheduler skips
-a run while coverage is going. The API computes the views live meanwhile,
-which is what it did before.
+No engine. Each run is its own process under the jobs supervisor
+(`jobs/supervisor.py`), with its own memory ceiling, and runs beside a
+coverage build when both fit in the container's memory.
 """
 
 from __future__ import annotations
@@ -63,11 +61,27 @@ async def _preset_channels(session: AsyncSession, now: datetime) -> list[str]:
     return sorted(name for name in counts if name and preset_for_channel(name) is not None)
 
 
-async def _stored(session: AsyncSession, model: Any, **key: object) -> bool:
-    """True when a build is stored for this key, fresh or not."""
+async def _due(
+    session: AsyncSession, settings: Settings, model: Any, window_hours: int, **key: object
+) -> bool:
+    """True when a window should be built on this run.
+
+    A short window: every run. A long one (`read_models.LONG_HOURS`):
+    when nothing is stored, or when the stored build is older than its
+    interval, less half a run so the clock does not drift a run late. The
+    age is in the database, so it lasts across runs, which are separate
+    processes.
+    """
+    if window_hours < read_models.LONG_HOURS:
+        return True
     conditions = [getattr(model, name) == value for name, value in key.items()]
-    found = await session.scalar(select(model.built_at).where(*conditions))
-    return found is not None
+    built_at = await session.scalar(select(model.built_at).where(*conditions))
+    if built_at is None:
+        return True
+    slack = timedelta(minutes=max(settings.read_models_interval_minutes, 1) / 2)
+    return (
+        datetime.now(UTC) - built_at >= read_models.build_interval(window_hours, settings) - slack
+    )
 
 
 def plan_links(link_channels: list[str], presets: list[str]) -> list[tuple[str, int]]:
@@ -85,21 +99,17 @@ def plan_links(link_channels: list[str], presets: list[str]) -> list[tuple[str, 
     return list(dict.fromkeys(planned))
 
 
-async def run_once(session: AsyncSession, settings: Settings, run_number: int) -> None:
+async def run_once(session: AsyncSession, settings: Settings) -> None:
     """Build every read model that is due, one transaction each."""
     started = time.monotonic()
     now = datetime.now(UTC)
-    long_every = max(settings.read_models_long_every, 1)
-    long_due = run_number % long_every == 0
 
     link_channels = await _link_channels(session, now)
     presets = [str(item["preset"]) for item in await gaps_store.assessed_presets(session, settings)]
     built = 0
     for channel, hours in plan_links(link_channels, presets):
-        if hours >= read_models.LONG_HOURS and not long_due:
-            # Due only every few runs, unless nothing is stored at all.
-            if await _stored(session, LinkEvidenceRun, channel=channel, hours=hours):
-                continue
+        if not await _due(session, settings, LinkEvidenceRun, hours, channel=channel, hours=hours):
+            continue
         end = datetime.now(UTC)
         since = end - timedelta(hours=hours)
         edges = await graph.link_evidence(session, since, channel or None)
@@ -109,9 +119,8 @@ async def run_once(session: AsyncSession, settings: Settings, run_number: int) -
         del edges, counts
 
     for hours in read_models.BROADCAST_HOURS:
-        if hours >= read_models.LONG_HOURS and not long_due:
-            if await _stored(session, BroadcastRun, hours=hours):
-                continue
+        if not await _due(session, settings, BroadcastRun, hours, hours=hours):
+            continue
         end = datetime.now(UTC)
         since = end - timedelta(hours=hours)
         ranking = await broadcast_ranking(session, since, end)
@@ -134,10 +143,9 @@ async def run_once(session: AsyncSession, settings: Settings, run_number: int) -
             built += 1
 
     logger.info(
-        "built %d read models in %.1fs (link channels %s, presets %s, 30 day windows %s)",
+        "built %d read models in %.1fs (link channels %s, presets %s)",
         built,
         time.monotonic() - started,
         link_channels,
         presets,
-        "due" if long_due else "kept",
     )

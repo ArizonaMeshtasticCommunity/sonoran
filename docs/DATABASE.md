@@ -566,8 +566,9 @@ other request: the longest-link board took 11.6 s over 30 days.
 - **Fresh or live.** A build older than three of its build intervals is
   not used, and the API computes the view live. A stopped jobs service
   costs speed, never correctness.
-- **Coverage first.** The task skips its run while a coverage run holds
-  the jobs container's memory.
+- **Memory.** Each run is its own process with its own ceiling, under
+  the jobs supervisor (`docs/ARCHITECTURE.md` 3.9), and runs beside a
+  coverage build when both fit.
 - **Not the live views.** The map's live layers, the firehose, chat and
   the RF waterfall always read the raw rows. So do the node pages: their
   routes count distinct packets per pair, which hourly sums cannot give.

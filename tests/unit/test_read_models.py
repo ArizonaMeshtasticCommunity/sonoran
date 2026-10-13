@@ -4,11 +4,8 @@
 the live one through the API.
 """
 
-import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
-
-import pytest
 
 from sonoran import read_models
 from sonoran.api.routes import graph, leaderboards, stats
@@ -72,20 +69,6 @@ def test_the_scheduler_runs_the_read_models_on_their_own_clock() -> None:
     assert tasks["read-models"].next_delay() == 600.0
     off = {task.name for task in scheduler.build_tasks(_settings(read_models_enabled=False))}
     assert "read-models" not in off
-
-
-def test_the_read_models_step_aside_for_a_coverage_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    task = next(t for t in scheduler.build_tasks(_settings()) if t.name == "read-models")
-
-    def no_engine(*_: object) -> None:
-        raise AssertionError("it opened the database during a coverage run")
-
-    monkeypatch.setattr(scheduler, "make_engine", no_engine)
-    scheduler.RUNNING.add("coverage")
-    try:
-        asyncio.run(task.run())
-    finally:
-        scheduler.RUNNING.discard("coverage")
 
 
 def test_each_long_view_reads_the_stored_build_first() -> None:

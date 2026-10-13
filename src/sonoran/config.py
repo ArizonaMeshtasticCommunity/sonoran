@@ -419,6 +419,19 @@ class Settings(BaseSettings):
     read_models_interval_minutes: int = 10
     # 30-day windows are built on every this many runs, not on each one.
     read_models_long_every: int = 3
+
+    # The jobs supervisor (#371, `sonoran/jobs/supervisor.py`). Each run
+    # is its own process with its own memory ceiling, and runs overlap
+    # when they fit in the container's memory. False runs every job inside
+    # the jobs process, as before, with no ceilings.
+    jobs_isolate: bool = True
+    # Ceilings in MB, `name=MB` separated by commas, over the defaults
+    # (coverage 800, calibration 400, gaps 400, read-models 400,
+    # rf-rollup 250, snapshot 250). A job over its ceiling is stopped.
+    jobs_memory_limits: str = ""
+    # The memory the jobs may use together, in MB. 0 reads the
+    # container's own limit and keeps the supervisor's share out of it.
+    jobs_memory_budget_mb: float = 0.0
     gaps_enabled: bool = True
     # How often the per node assessment is rebuilt. The signals are
     # only SQL, so freshness is cheap. The job runs on its own clock

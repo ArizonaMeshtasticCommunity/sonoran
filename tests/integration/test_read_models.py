@@ -158,7 +158,7 @@ def _build(timescale_url: str) -> None:
         engine = make_engine(role_url(timescale_url, "azmsh_jobs"))
         try:
             async with make_session_factory(engine)() as session:
-                await job.run_once(session, Settings(_env_file=None), 0)
+                await job.run_once(session, Settings(_env_file=None))
         finally:
             await engine.dispose()
 

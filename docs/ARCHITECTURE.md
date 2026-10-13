@@ -473,8 +473,15 @@ coverage job (`coverage/sites.py::engine_params`) and the calibration
 - `read_models.py` builds the long-window views the API reads (#371):
   link evidence for the graph and the longest-link board, broadcast
   rates, and the coverage page's node lists. SQL and Python, no engine,
-  on its own clock. It skips a run while coverage is going, because both
-  hold a lot of memory. See `docs/DATABASE.md` 8.1.
+  on its own clock. See `docs/DATABASE.md` 8.1.
+- `supervisor.py` runs each job run as its own process
+  (`python -m sonoran.jobs.run_task <name>`), each with a memory ceiling
+  (`JOBS_MEMORY_LIMITS`). A watchdog stops a job that passes its ceiling,
+  alone; runs overlap when they fit in the container's memory, and wait
+  their turn otherwise; each run's peak is kept and plans the next. A
+  child raises its own OOM score, so the kernel takes a job, never the
+  supervisor. `JOBS_ISOLATE=false` runs every job in one process, as
+  before.
 - `scheduler.py` runs a due calibration, then coverage, then the siting
   half, on one clock. The snapshot and the per node gap assessment
   remain independent, because neither uses the engine.
