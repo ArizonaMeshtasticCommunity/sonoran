@@ -37,6 +37,7 @@ from sonoran.jobs import (
     gaps,
     gaps_siting,
     legacy_import,
+    read_models,
     rf_rollup,
     snapshots,
 )
@@ -53,6 +54,11 @@ RETRY_SECONDS = 300.0
 
 # How often finished hours of the 900 MHz band are rolled up.
 RF_ROLLUP_SECONDS = 600.0
+
+# The tasks running now, by name. The read model task reads it to stay
+# out of a coverage run's way (#371): both hold a lot of memory, and the
+# container's limit is shared.
+RUNNING: set[str] = set()
 
 
 @dataclass
@@ -215,6 +221,13 @@ def build_tasks(settings: Settings) -> list[Task]:
             nonlocal last_calibration
             engine = make_engine(settings.database_url_jobs)
             factory = make_session_factory(engine)
+            # A read model build in progress finishes first: it takes
+            # seconds, and the two must not hold memory together.
+            # A plain poll, not an Event: `RUNNING` is module state, and an
+            # Event made at import binds to whichever loop first waits.
+            while "read-models" in RUNNING:  # noqa: ASYNC110
+                await asyncio.sleep(5)
+            RUNNING.add("coverage")
             try:
                 async with factory() as session:
                     now = asyncio.get_running_loop().time()
@@ -226,6 +239,7 @@ def build_tasks(settings: Settings) -> list[Task]:
                     if calibration_due:
                         last_calibration = asyncio.get_running_loop().time()
             finally:
+                RUNNING.discard("coverage")
                 await engine.dispose()
 
         tasks.append(
@@ -297,6 +311,38 @@ def build_tasks(settings: Settings) -> list[Task]:
             await engine.dispose()
 
     tasks.append(Task(name="rf-rollup", run=rf_rollup_run, next_delay=lambda: RF_ROLLUP_SECONDS))
+
+    if settings.read_models_enabled:
+        # Its own clock: SQL and Python, no engine. It still steps aside
+        # while a coverage run holds the container's memory, and the API
+        # computes the views live meanwhile.
+        runs = 0
+
+        async def read_models_run() -> None:
+            nonlocal runs
+            if "coverage" in RUNNING:
+                logger.info("the read models wait: a coverage run is going")
+                return
+            engine = make_engine(settings.database_url_jobs)
+            factory = make_session_factory(engine)
+            RUNNING.add("read-models")
+            try:
+                async with factory() as session:
+                    await read_models.run_once(session, settings, runs)
+                runs += 1
+            finally:
+                RUNNING.discard("read-models")
+                await engine.dispose()
+
+        tasks.append(
+            Task(
+                name="read-models",
+                run=read_models_run,
+                next_delay=lambda: max(settings.read_models_interval_minutes, 1) * 60.0,
+            )
+        )
+    else:
+        logger.info("the read models are turned off")
 
     return tasks
 

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran import read_models
 from sonoran.api.channels import channel_filter
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
@@ -82,14 +83,23 @@ async def map_nodes(
             Node.last_heard >= datetime.now(UTC) - timedelta(hours=active_hours)
         )
     if channel is not None:
-        on_channel = (
-            select(PacketSeen.from_node_num)
-            .where(
-                PacketSeen.seen_at >= datetime.now(UTC) - timedelta(hours=hours),
-                channel_filter(PacketSeen.channel, channel),
+        # The coverage page's 7 day list is built by the jobs service
+        # (#371): reading every upload of the week for it took 2.5 s. The
+        # node rows themselves -- position, name, last heard -- are read
+        # now either way.
+        if hours in read_models.CHANNEL_NODE_HOURS and await read_models.has_channel_nodes(
+            session, channel, hours
+        ):
+            on_channel = read_models.channel_nodes(channel, hours)
+        else:
+            on_channel = (
+                select(PacketSeen.from_node_num)
+                .where(
+                    PacketSeen.seen_at >= datetime.now(UTC) - timedelta(hours=hours),
+                    channel_filter(PacketSeen.channel, channel),
+                )
+                .distinct()
             )
-            .distinct()
-        )
         statement = statement.where(Node.node_num.in_(on_channel))
     nodes = [
         node

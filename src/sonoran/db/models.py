@@ -1087,6 +1087,149 @@ class CoverageCalibrationNode(Base):
     locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
+# --- Read models (#371) ----------------------------------------------
+#
+# Views that cover hours or days, built by the jobs service and read by
+# the API (revision i371). Each table holds the latest build only: the job
+# deletes a run and inserts the new one in one transaction, and the child
+# rows go with the run (`ON DELETE CASCADE`). Like the #351 tables, they
+# hold node numbers and numbers, never names or positions: a reader joins
+# `node` for those, so a renamed or moved node reads correctly at once.
+
+
+class LinkEvidenceRun(Base):
+    """One build of the link evidence of one channel over one window.
+
+    `channel` is the empty string for every channel together (the "All
+    presets" graph). The graph and the longest-link board both read it.
+    """
+
+    __tablename__ = "link_evidence_run"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LinkEvidenceLink(Base):
+    """One link of a build: the two nodes and what was measured across it.
+
+    The fields are `graph.Edge` after every report was counted: `snr` is
+    the median of the samples, `forward` and `backward` count reports
+    from the point of view of `source`.
+    """
+
+    __tablename__ = "link_evidence_link"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    target: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text)
+    kinds: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    snr: Mapped[float | None] = mapped_column(Double)
+    count: Mapped[int] = mapped_column(Integer)
+    confirmed: Mapped[bool] = mapped_column(Boolean)
+    forward: Mapped[int] = mapped_column(Integer)
+    backward: Mapped[int] = mapped_column(Integer)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel", "hours"],
+            ["link_evidence_run.channel", "link_evidence_run.hours"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class LinkEvidenceNode(Base):
+    """The packets one node sent in the window of a build (every channel)."""
+
+    __tablename__ = "link_evidence_node"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    packet_count: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel", "hours"],
+            ["link_evidence_run.channel", "link_evidence_run.hours"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class BroadcastRun(Base):
+    """One build of the broadcast rates over one rolling window."""
+
+    __tablename__ = "broadcast_run"
+
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    notable_count: Mapped[int] = mapped_column(Integer)
+    power_loop_count: Mapped[int] = mapped_column(Integer)
+
+
+class BroadcastNode(Base):
+    """One node of a broadcast build, in the order the report ranks it.
+
+    `families` holds each family's rate (count, interval, default, ratio,
+    flags) and `health` the node's battery and uptime reading, as the
+    endpoint has always shaped them. Neither holds a name.
+    """
+
+    __tablename__ = "broadcast_node"
+
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    packet_count: Mapped[int] = mapped_column(Integer)
+    notable: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    faster_than_default: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    families: Mapped[dict] = mapped_column(JSONB)
+    health: Mapped[dict | None] = mapped_column(JSONB)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["hours"], ["broadcast_run.hours"], ondelete="CASCADE"),
+        Index("ix_broadcast_node_rank", "hours", "rank"),
+    )
+
+
+class ChannelNodesRun(Base):
+    """One build of the nodes heard on one channel over one window."""
+
+    __tablename__ = "channel_nodes_run"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ChannelNode(Base):
+    """One node that sent traffic seen on the channel inside the window."""
+
+    __tablename__ = "channel_node"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel", "hours"],
+            ["channel_nodes_run.channel", "channel_nodes_run.hours"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
 # The ingest role has INSERT and UPDATE rights only. Disable PostgreSQL
 # implicit RETURNING so ORM inserts do not require SELECT rights.
 for _table in Base.metadata.tables.values():

@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # Web server.
     web_host: str = "0.0.0.0"
     web_port: int = 8000
+    # API worker processes (#371). One process has one event loop, and a
+    # view computed while somebody waits holds up every other request in
+    # it. With the long views read from the jobs' tables, requests are
+    # reads, and a bigger box can run several workers. Each worker holds
+    # its own short caches and its own request budget (`API_RATE_*` is
+    # per worker), so the real limit grows with the count. Keep 1 on a
+    # small box.
+    web_workers: int = 1
     web_base_path: str = ""
     web_api_base_url: str = ""
 
@@ -394,6 +402,15 @@ class Settings(BaseSettings):
     # Every threshold below is a starting point, not a measurement.
     # `docs/design/coverage-gaps.md` 11.1 names the six figures to take
     # off live data before any of them is trusted.
+    # Read models (#371): the jobs service builds the views that cover
+    # hours or days (graph, longest-link board, broadcast rates, the
+    # coverage page's node list) and the API reads the stored answer. A
+    # stored answer older than three of its build intervals is not used:
+    # the API computes the view live, as it did before.
+    read_models_enabled: bool = True
+    read_models_interval_minutes: int = 10
+    # 30-day windows are built on every this many runs, not on each one.
+    read_models_long_every: int = 3
     gaps_enabled: bool = True
     # How often the per node assessment is rebuilt. The signals are
     # only SQL, so freshness is cheap. The job runs on its own clock

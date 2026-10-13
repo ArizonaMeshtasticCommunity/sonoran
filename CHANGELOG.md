@@ -5,6 +5,47 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.13 — 2026-10-13
+
+3 pull requests merged, 1 issue closed.
+
+#### Fixes
+
+- Remove sole_observer gaps signal (#347) by @tylerpieper — done: #327
+
+#### Documentation
+
+- Instruct agents to use PR or commit hash for alembic revision IDs (#348) by @tylerpieper
+
+#### Maintenance
+
+- CI and test databases on tmpfs, with a pinned TimescaleDB image (#372) by @logans-stuff
+
+#### Issues
+
+- Done: #327 Gaps - nodes where only one gateway hears directly (reported by @tylerpieper)
+
+#### Thank you
+
+- Reported: @tylerpieper
+- Code: @tylerpieper, @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.5...v2026.10.13
+
+## v2026.10.12.5 — 2026-10-12
+
+1 pull request merged.
+
+#### New features
+
+- Preset switch with More presets and All presets (#370) by @logans-stuff
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.4...v2026.10.12.5
+
 ## v2026.10.12.4 — 2026-10-12
 
 1 pull request merged, 1 issue closed.

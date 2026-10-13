@@ -104,6 +104,22 @@ Do not stop at the diff. Check what runs:
 6. **After a deploy that changes a heavy endpoint, time it on the live
    data.** Seeded data hides slowness. #304 was found this way.
 
+### 4.1 Many viewers (#371)
+
+The views that cover hours or days are built by the jobs service and
+read from its tables (`docs/DATABASE.md` 8.1), so most requests are
+reads. On a box with spare cores, run several API workers with
+`WEB_WORKERS`. Keep 1 on a small box.
+
+Before a deployment that many people will watch goes live, load it on
+**that** box, never on a small one that also runs production:
+
+    python tools/load_test.py http://127.0.0.1:8000 --viewers 100 --tabs 2 \
+        --minutes 5 --i-am-not-on-production
+
+It prints each request's 50th, 95th and 99th percentile time, its
+failures and its share of 304 answers, and exits 1 when anything failed.
+
 ## 5. Roll back
 
 ```bash

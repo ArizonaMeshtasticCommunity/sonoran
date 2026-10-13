@@ -470,6 +470,11 @@ coverage job (`coverage/sites.py::engine_params`) and the calibration
   is only SQL, so it keeps its own clock.
 - `gaps_siting.py` answers "where would one new node help". It runs the
   engine, so it runs **inside** the coverage cycle and never beside it.
+- `read_models.py` builds the long-window views the API reads (#371):
+  link evidence for the graph and the longest-link board, broadcast
+  rates, and the coverage page's node lists. SQL and Python, no engine,
+  on its own clock. It skips a run while coverage is going, because both
+  hold a lot of memory. See `docs/DATABASE.md` 8.1.
 - `scheduler.py` runs a due calibration, then coverage, then the siting
   half, on one clock. The snapshot and the per node gap assessment
   remain independent, because neither uses the engine.
@@ -795,6 +800,12 @@ web/static -> api (over HTTP only)
 
 Reverse imports are forbidden.
 CI checks the import rules with `import-linter` or an equivalent tool.
+
+One deliberate exception: `jobs` may call the view functions of `api`
+(`jobs/gaps.py` reads `api/traces.py`; `jobs/read_models.py` calls
+`graph.link_evidence` and `stats.broadcast_ranking`). A stored view must
+be computed by the same code as the live one, or the two would drift
+apart. It never goes the other way: `api` does not import `jobs`.
 
 ## 7. Error handling policy
 
