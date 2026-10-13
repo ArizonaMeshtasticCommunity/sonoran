@@ -78,9 +78,17 @@ function read(page, values, boxes) {
   return out;
 }
 
-/** The form's values, as the engine takes them. `readForm` scales the range. */
+/**
+ * The form's values, as the engine takes them. `readForm` scales the range.
+ *
+ * The page answers a climate of `auto` from the site before the engine
+ * sees it (#239). These scenarios are about units and use one site, so
+ * the answer is the same for all of them and `resolveClimate` with no
+ * class found stands in for it.
+ */
 function engine(page, values) {
-  return page.P.toEngineParams({ ...values, radius: values.radius * 1000 });
+  const climate = page.P.resolveClimate(values.radio_climate, null).climate;
+  return page.P.toEngineParams({ ...values, radio_climate: climate, radius: values.radius * 1000 });
 }
 
 /** Open a share link, as `applyShareLink` does, and read the form back. */
@@ -116,7 +124,7 @@ for (const [name, text] of Object.entries(typedMetres)) {
 scenarios.typed_in_metres = engine(metric, metricWriter);
 
 // --- a metric link, opened by each kind of reader -------------------
-const metresLink = 'v=1&lat=34&lon=-111.5&tx_height=6&rx_height=1.5&radius=10';
+const metresLink = 'v=2&lat=34&lon=-111.5&tx_height=6&rx_height=1.5&radius=10';
 const inMetric = open(load('metric'), metresLink);
 const inImperial = open(load('imperial'), metresLink);
 scenarios.metres_link_opened_in_metric = engine(metric, inMetric.read);

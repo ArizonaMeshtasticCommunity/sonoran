@@ -32,6 +32,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.climate import climate_at
 from sonoran.config import Settings, get_settings
 from sonoran.coverage import store
 from sonoran.coverage.calibrate import (
@@ -49,9 +50,15 @@ from sonoran.jobs.coverage import ensure_terrain, read_page, tiles_around
 from sonoran.landcover.classes import is_diffracting
 from sonoran.landcover.store import class_at, clutter_at
 from sonoran.logging import get_logger
-from sonoran.positions import is_precise_enough, is_usable
+from sonoran.positions import is_precise_enough, is_usable, precise_minimum_bits
 from sonoran.radio.overrides import Overrides, load_overrides
-from sonoran.radio.presets import ModemPreset, noise_floor_dbm, preset_for_channel
+from sonoran.radio.presets import (
+    ModemPreset,
+    modelled,
+    noise_floor_dbm,
+    preset_for_channel,
+    sensitivity_of,
+)
 from sonoran.radio.resolve import RadioProfile, resolve_profile
 from sonoran.terrain.store import coordinates_in_region
 
@@ -116,6 +123,10 @@ async def read_peers(
     calibration window are silent, so a handful of fuzzed positions
     move the whole fit.
 
+    The floor is the precise one the map uses, and a
+    `COVERAGE_MIN_PRECISION_BITS` below 16 is raised to 16 here as well
+    (#315). A peer an operator placed in the overrides file passes.
+
     Roles are **not** filtered here. Calibration needs both ends of a
     link and most links have a client at one end. A client is poor
     evidence of where the mesh reaches and good evidence of what a
@@ -127,7 +138,8 @@ async def read_peers(
     )
     peers: dict[int, Peer] = {}
     for node in rows.all():
-        preset = preset_for_channel(node.last_channel)
+        # No modelled sensitivity (#362), no threshold to fit against.
+        preset = modelled(preset_for_channel(node.last_channel))
         if preset is None:
             continue
         identifier = f"!{node.node_num:08x}"
@@ -139,7 +151,8 @@ async def read_peers(
         if not coordinates_in_region(settings, latitude, longitude):
             continue
         if given is None and not is_precise_enough(
-            node.last_position_precision_bits, settings.coverage_min_precision_bits
+            node.last_position_precision_bits,
+            precise_minimum_bits(settings.coverage_min_precision_bits),
         ):
             continue
         profile = resolve_profile(identifier, node.hw_model, overrides, role=node.role)
@@ -183,7 +196,7 @@ def _matches_current_preset(row: NeighborMetrics, peers: dict[int, Peer]) -> boo
     identify an old measurement. Unknown channel names ride on top of a
     preset and cannot be used without a guess.
     """
-    reported = preset_for_channel(row.channel)
+    reported = modelled(preset_for_channel(row.channel))
     listener = peers.get(row.node_num)
     neighbour = peers.get(row.neighbor_node_num)
     return bool(
@@ -234,6 +247,9 @@ def _params(settings: Settings, listener: Peer) -> EngineParams:
         rx_height_m=settings.coverage_rx_height_m,
         erp_watts=erp_watts(profile.tx_power_dbm, profile.antenna_gain_dbi, profile.cable_loss_db),
         radius_m=CANDIDATE_RANGE_KM * 1000.0,
+        # The same climate the map predicts with, so the fit measures the
+        # model the map draws (#239).
+        radio_climate=climate_at(listener.latitude, listener.longitude).climate,
     )
 
 
@@ -291,7 +307,7 @@ def _fill(
             continue
 
         floor = noise_floor_dbm(listener.preset)
-        threshold = listener.preset.sensitivity_dbm
+        threshold = sensitivity_of(listener.preset)
         # The power the run was set up with, so a path loss can be
         # recovered from the field the engine reports.
         listener_eirp = listener.profile.effective_eirp_dbm
@@ -363,7 +379,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
     reports = await read_reports(session, settings, peers)
     if not reports:
         logger.info("no neighbour reports in the window, so no calibration")
-        store.clear_calibration(settings)
+        await store.clear_calibration(session)
         return None
 
     wanted: set[str] = set()
@@ -383,7 +399,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
         summary["mean_db"],
     )
     if not observations:
-        store.clear_calibration(settings)
+        await store.clear_calibration(session)
         return None
 
     # A node an operator pinned is held at zero inside the fit, not
@@ -394,7 +410,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> Calibration | N
     if locked:
         logger.info("%s node(s) are pinned by lock_calibration and held at zero", len(locked))
     calibration = fit_offsets(observations, locked=locked)
-    store.write_calibration(settings, calibration, summary)
+    await store.write_calibration(session, calibration, summary)
     return calibration
 
 

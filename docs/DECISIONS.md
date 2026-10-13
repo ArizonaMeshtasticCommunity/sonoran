@@ -101,6 +101,53 @@ share of packets. **Tripwire:**
 
 ---
 
+### The coverage map predicts from precise positions only (#315)
+
+**Decided by Will, 2026-10-08, following Tyler and Logan.** Every
+published coverage map predicts from a position of 16 bits or better,
+or from a position an operator gave in the overrides file. This
+reverses the part of #318 that let a host lower
+`COVERAGE_MIN_PRECISION_BITS` to 13, which s.azmsh.dev did.
+
+The evidence, from the #315 thread:
+
+- Will first asked for rounded positions: "The coverage map will always
+  be an estimate right?"
+- Logan: "computing for something offset to a mountain does not make
+  sense when its on a house just so its seen. ... its pointless for us
+  to spend compute on something we cant compute."
+- Tyler (the authority on direction) showed Tower Mountain predicted
+  from its reduced position, "deep in a valley", and wrote: "We should
+  only report either fully precise locations or override the map."
+
+A rounded point is 2.9 km out at 13 bits, over terrain 90 m across.
+The footprint is then a confident answer about the wrong hill, and it
+costs a full prediction.
+
+**What was built.** The existing operator position in the overrides
+file (`RADIO_OVERRIDES_PATH`) was reused, not duplicated: it
+already applied to the coverage job and the calibration fit only, and
+no page reads it. It now refuses a bad entry when the file is read, and
+the manifest says `position_source: "operator"` for such a site.
+A setting below 16 is read as 16 with a warning, because the stale 13
+is still in a host `.env`. Will also asked (#334) for an optional
+approximate map, off by default, as its own site set that the public
+embed never reads. It is there for a later settings panel on the
+coverage page.
+
+**Rejected:** a second override file just for positions. It would be a
+second place to look for one fact. A host that wants the positions out
+of the repository points `RADIO_OVERRIDES_PATH` at a file on the host
+(`docs/DEPLOY.md` 8).
+
+**What would change it:** a terrain-aware way to bound where a rounded
+node can be, or coverage built from measured performance rather than
+prediction, which Tyler also named.
+
+Pinned by `test_precise_is_sixteen_bits_and_cannot_be_lowered`,
+`test_an_operator_position_never_makes_a_client_a_public_site` and
+`test_the_public_tiles_never_serve_the_approximate_map`.
+
 ## Interface
 
 ### Panels stop growing on a wide screen, via the GRID not the track (#70)
@@ -1326,3 +1373,56 @@ This was proved by making the page re-render every 150 ms: the old read failed 2
 ### Environment
 - **Docker VM:** the Colima VM (2 CPUs, 1 GiB) ran six agents' Postgres containers. Postgres was OOM-killed more than once, and leftover test containers plus dangling images filled its 60 GB disk to 100%.
 - **Before fanning out:** check `df` inside the VM, and remove what you start.
+
+## 2026-10-08 — the gaps leaderboards follow the page range (#294)
+
+Will chose option A: the two gaps leaderboards follow the Statistics
+range. Four choices were made to build it. `docs/GAPS.md` 6.1 has the
+detail.
+
+- **A small file for each extra window, not a full assessment.** A board
+  needs four counts. The signals, the siting, and the neighbour,
+  traceroute and position reads are most of what an assessment costs,
+  and no board shows them. The assessment file keeps its shape, so the
+  gaps page and the node page are not touched.
+- **A custom range is never matched to a near window.** It holds the
+  job's own window and says "not the page range". A near window shown
+  as the range would be a claim about a period nobody measured.
+- **A long window is rebuilt less often.** A file is rebuilt once it is
+  older than 1/120 of its window, so 30 d is rebuilt every 6 hours. Its
+  read is about 4.3 times the 7 d one and its answer barely moves in
+  half an hour. The job logs each file's time, so the cost can be read
+  on the live box.
+- **The awake floor scales.** 24 awake hours in a 24 hour window would
+  rank almost nobody, so the floor is half the window when that is less.
+
+## 2026-10-08 — reachability is answered traceroutes (#293)
+
+Will chose the recommended measure: "Most consistently reachable" is
+replaced by the share of traceroutes to a node that it answered. A node
+needs at least 10 traceroutes from 2 or more senders, and the board
+follows the page range. `docs/GAPS.md` 6.2 has the detail. Five choices
+were made to build it.
+
+- **Matched by (asker, target, request packet ID).** A reply carries the
+  request's packet ID, and a packet ID belongs to its sender, so the
+  asker is part of the key. The pairing reads each row through
+  `trace_endpoints`, the one reading of a reply's direction (`AGENTS.md`
+  9.18). A reply with no request seen counts in neither number.
+- **Computed in the gaps job, not the API.** The job already reads every
+  traceroute of the 7 d window, and it already writes a file for each
+  other window (#294). The route stays a file read. A bounded query in
+  the route would read up to 30 days of traceroutes for each preset and
+  window on a page load, and the 30 d answer barely moves in six hours.
+- **Ranked by the low end of the Wilson interval, shown as the share.**
+  Ten of ten would otherwise top a board that also holds 95 of 100. The
+  measure line says that more traceroutes count for more, so a lower
+  share above a higher one is explained on the page.
+- **The floor is applied by the route.** The job writes every node
+  traced. So the board can say how many it left out, and a change to the
+  floor does not wait for the job.
+- **The uptime ratio is gone from the board, and kept everywhere else.**
+  Will asked to replace it. The awake and heard hours are still in the
+  assessment, because the `rf_intermittent` signal, the gaps page and
+  the node page read them. The board files no longer carry them: nothing
+  else reads those files.

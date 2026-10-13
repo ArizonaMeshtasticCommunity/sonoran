@@ -19,12 +19,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from sonoran.api.app import create_app
+from sonoran.api.routes import leaderboards
 from sonoran.config import Settings
 from sonoran.coverage import store as coverage_store
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.gaps import store
 from sonoran.jobs import coverage, gaps
-from tests.integration.conftest import role_url
+from tests.integration.conftest import role_url, run_store, wipe_job_outputs
 
 # A node number range of this file's own, so two test files cannot
 # collide in a shared database.
@@ -68,6 +69,8 @@ def clean(migrated_engine) -> Iterator[None]:  # type: ignore[no-untyped-def]
 
 
 def _wipe(migrated_engine) -> None:  # type: ignore[no-untyped-def]
+    # First: a gaps row references its node, so the node goes after it.
+    wipe_job_outputs(migrated_engine)
     with migrated_engine.begin() as connection:
         for table, column in (
             ("packet_seen", "from_node_num"),
@@ -224,7 +227,7 @@ def _run(settings: Settings, job):  # type: ignore[no-untyped-def]
 
 def _rows(settings: Settings, preset: str = "LongFast") -> dict[str, dict]:
     """Return the written assessment, keyed by node ID."""
-    document = store.read_preset(settings, preset)
+    document = run_store(settings, store.read_preset, preset)
     assert document is not None, "the job wrote no assessment"
     listed = document["nodes"]
     assert isinstance(listed, list)
@@ -443,7 +446,7 @@ def test_a_node_that_hears_the_mesh_and_is_not_heard_back(
     assert "receiver works" in found["sentence"]
     assert "transmit side" in found["sentence"]
     # It is the top of the list, because the ranking puts it there.
-    listed = store.read_preset(settings, "LongFast")
+    listed = run_store(settings, store.read_preset, "LongFast")
     assert listed is not None
     assert listed["nodes"][0]["node_id"] == _ident(node)
 
@@ -549,7 +552,7 @@ def test_a_gateway_clock_that_is_a_day_ahead_moves_nothing(
     assert row["packets"] == 6
     assert row["active_hours"] == 6
 
-    document = store.read_preset(settings, "LongFast")
+    document = run_store(settings, store.read_preset, "LongFast")
     assert document is not None
     assert row["active_hours"] <= document["window_hours"]
 
@@ -590,8 +593,8 @@ def test_two_presets_get_two_assessments_that_borrow_nothing(
     assert bad["preset"] == "MediumSlow"
 
     # And there is no file that merges them.
-    assert store.read_preset(settings, "All") is None
-    index = store.read_index(settings)
+    assert run_store(settings, store.read_preset, "All") is None
+    index = run_store(settings, store.read_index)
     assert index is not None
     assert sorted(item["preset"] for item in index["presets"]) == ["LongFast", "MediumSlow"]
 
@@ -625,14 +628,14 @@ def test_a_channel_that_names_no_preset_is_left_out(
 # --- the artefact and the API -----------------------------------------
 
 
-def test_the_api_reads_the_artefact_and_computes_nothing(
+def test_the_api_reads_the_stored_rows_and_computes_nothing(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """Delete the file and the endpoint says so, rather than recomputing.
+    """Delete the rows and the endpoint says so, rather than recomputing.
 
-    This is the whole point of the artefact. A request that ran these
-    queries would be heavier than the endpoint `docs/ISSUES.md` 2.9 is
-    already an open warning about.
+    This is the whole point of storing the run (#351). A request that ran
+    these queries would be heavier than the endpoint `docs/ISSUES.md` 2.9
+    is already an open warning about.
     """
     node, gateway = BASE + 101, BASE + 109
     settings = _settings(timescale_url, tmp_path)
@@ -657,8 +660,8 @@ def test_the_api_reads_the_artefact_and_computes_nothing(
         assert listing["available"] is True
         assert any(row["node_id"] == _ident(node) for row in listing["nodes"])
 
-    # Now take the artefact away.
-    store.clear(settings)
+    # Now take the run away.
+    run_store(settings, store.clear)
     with TestClient(create_app(settings)) as client:
         body = client.get("/api/gaps?channel=LongFast").json()
         assert body["available"] is False
@@ -721,7 +724,7 @@ def test_the_unknown_bucket_is_counted_and_not_folded_into_healthy(
             )
 
     _run(settings, gaps.run_once)
-    document = store.read_preset(settings, "LongFast")
+    document = run_store(settings, store.read_preset, "LongFast")
     assert document is not None
     row = _rows(settings)[_ident(node)]
 
@@ -788,8 +791,13 @@ def test_the_coverage_run_writes_the_level_at_each_node(
     # `threshold_level` travels with it, so a reader needs no preset
     # table to decide what counts as usable.
     from sonoran.coverage.grid import to_level
+    from sonoran.radio.presets import preset_by_key, sensitivity_of
 
-    assert for_preset["threshold_level"] == to_level(-139.0)
+    # Long fast's own threshold, read from the table rather than written
+    # here, so a change of the table (#362) does not need this test edited.
+    long_fast = preset_by_key("LONG_FAST")
+    assert long_fast is not None
+    assert for_preset["threshold_level"] == to_level(sensitivity_of(long_fast))
 
     assert str(near) in levels, "a node inside the region must be sampled"
     assert set(levels[str(near)]) == {"usable", "downlink", "uplink"}
@@ -875,7 +883,7 @@ def test_a_deployment_with_no_traffic_of_its_own_is_a_working_state(
     settings = _settings(timescale_url, tmp_path)
     written = _run(settings, gaps.run_once)
 
-    index = store.read_index(settings)
+    index = run_store(settings, store.read_index)
     assert index is not None
     assert [item["preset"] for item in index["presets"]] == written
 
@@ -918,3 +926,304 @@ def test_the_job_is_safe_to_run_twice(
     second = _rows(settings)
     assert set(first) == set(second)
     assert len(second) == len(first)
+
+
+# --- the leaderboards follow the Statistics range (#294) ---------------
+
+
+def _ranked(rows: list[dict], window: int, keep: set[str]) -> list[str]:
+    """Rank our own nodes with the route's own function.
+
+    Filtered first: the database is shared, and another file's nodes
+    could fill the top ten of a board this test reads.
+    """
+    mine = [row for row in rows if row["node_id"] in keep]
+    return [row["node_id"] for row in leaderboards._reachable_board(mine, window)["rows"]]
+
+
+def _answers(document: dict | None) -> list[dict]:
+    assert document is not None, "the job wrote no file"
+    listed = document["trace_answers"]
+    assert isinstance(listed, list)
+    return listed
+
+
+def _boards(client: TestClient, hours: int) -> dict[str, dict]:
+    body = client.get(f"/api/stats/leaderboards?channel=LongFast&hours={hours}").json()
+    assert body["available"] is True, body
+    return {board["key"]: board for board in body["boards"]}
+
+
+def test_a_24_hour_board_differs_from_a_7_day_board_when_the_data_does(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """Will chose option A: the gaps boards follow the page range.
+
+    B was heard directly by a gateway in the three days before the last
+    day, and not in the last day. So the 24 h direct board holds nothing
+    for B and the 7 d board holds one gateway. The reachable board's own
+    window test is `test_the_reachable_board_ranks_answered_traceroutes`.
+    """
+    a, b, gateway = BASE + 201, BASE + 202, BASE + 209
+    settings = _settings(timescale_url, tmp_path)
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, a, role="ROUTER")
+        _add_node(connection, b, role="ROUTER")
+        _add_node(connection, gateway, role="ROUTER")
+        for hour in range(72):
+            heard = hour < 24
+            _packet(
+                connection,
+                a,
+                20000 + hour,
+                [(gateway, 2, 4.0)] if heard else [(a, 3, 6.0)],
+                seen_at=now - timedelta(hours=hour, minutes=5),
+            )
+        for hour in range(96):
+            heard = hour >= 24
+            _packet(
+                connection,
+                b,
+                21000 + hour,
+                [(gateway, 3, 5.0)] if heard else [(b, 3, 6.0)],
+                seen_at=now - timedelta(hours=hour, minutes=5),
+            )
+
+    _run(settings, gaps.run_once)
+
+    # The job wrote the two extra windows; the assessment is the 7 d one.
+    day_file = run_store(settings, store.read_boards, "LongFast", 24)
+    month_file = run_store(settings, store.read_boards, "LongFast", 720)
+    assert day_file is not None and month_file is not None
+    assert day_file["window_hours"] == 24
+    assert month_file["window_hours"] == 720
+    assert run_store(settings, store.read_boards, "LongFast", 168) is None
+
+    week_rows = list(_rows(settings).values())
+    # B was heard directly only before the last day.
+    day_direct = {row["node_id"]: row["direct_gateways"] for row in day_file["nodes"]}
+    week_direct = {row["node_id"]: row["direct_gateways"] for row in week_rows}
+    assert day_direct[_ident(b)] == 0
+    assert week_direct[_ident(b)] == 1
+
+    # The API serves each window and says that it follows the range.
+    with TestClient(create_app(settings)) as client:
+        for hours in (24, 168, 720):
+            for key in ("reachable", "direct_gateways"):
+                board = _boards(client, hours)[key]
+                assert board["follows_window"] is True, (hours, key)
+                assert board["window_hours"] == hours, (hours, key)
+        # A custom range has no file. It gets the assessment, labelled.
+        since = (now - timedelta(days=2)).date().isoformat()
+        body = client.get(f"/api/stats/leaderboards?channel=LongFast&since={since}").json()
+        for board in body["boards"]:
+            if board["key"] != "longest_link":
+                assert board["follows_window"] is False, board["key"]
+                assert board["window_hours"] == 168, board["key"]
+
+
+def test_the_month_board_is_not_rebuilt_on_every_run(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The 30 d read is the expensive one, and its answer barely moves.
+
+    Both files are made to look one run old, which is 30 minutes. The
+    24 h file is then rebuilt and the 30 d file is kept: it waits for
+    six hours.
+    """
+    node, gateway = BASE + 211, BASE + 219
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, node, role="CLIENT")
+        _add_node(connection, gateway, role="ROUTER")
+        _busy(connection, node, 22000, lambda hour: [(gateway, 2, 4.0)])
+
+    _run(settings, gaps.run_once)
+    one_run_ago = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
+    for hours in (24, 720):
+        held = run_store(settings, store.read_boards, "LongFast", hours)
+        assert held is not None, hours
+        run_store(
+            settings, store.write_boards, "LongFast", hours, held | {"generated_at": one_run_ago}
+        )
+
+    _run(settings, gaps.run_once)
+    day = run_store(settings, store.read_boards, "LongFast", 24)
+    month = run_store(settings, store.read_boards, "LongFast", 720)
+    assert day is not None and month is not None
+    assert day["generated_at"] != one_run_ago, "the 24 h board was not rebuilt"
+    assert month["generated_at"] == one_run_ago, "the 30 d board was rebuilt on every run"
+
+
+# --- reachable is the share of traceroutes answered (#293) -------------
+
+
+def _trace(
+    connection,  # type: ignore[no-untyped-def]
+    sender: int,
+    target: int,
+    packet_id: int,
+    *,
+    request_id: int | None = None,
+    channel: str = "LongFast",
+    seen_at: datetime,
+) -> None:
+    """Insert one traceroute row the way ingest stores it.
+
+    A request has no `request_id`. A reply carries the request's packet
+    ID, and travels back: `sender` is the node that was asked.
+    """
+    connection.execute(
+        text(
+            "INSERT INTO traceroute (packet_id, request_id, from_node_num, to_node_num, "
+            "channel, route, route_back, snr_towards, snr_back, seen_at) "
+            "VALUES (:p, :r, :f, :t, :ch, '[]', '[]', '[]', '[]', :at)"
+        ),
+        {
+            "p": packet_id,
+            "r": request_id,
+            "f": sender,
+            "t": target,
+            "ch": channel,
+            "at": seen_at,
+        },
+    )
+
+
+def _traced(
+    connection,  # type: ignore[no-untyped-def]
+    askers: list[int],
+    target: int,
+    first_id: int,
+    answered: list[bool],
+    *,
+    hours_ago: float,
+    channel: str = "LongFast",
+    reply_uploads: int = 1,
+) -> None:
+    """Send one traceroute for each entry of `answered`, round robin over askers.
+
+    An answered one gets a reply, uploaded `reply_uploads` times. Ingest
+    writes a payload row once per unique packet, but rows from before
+    revision 0009 can repeat, and the job must count one answer once.
+    """
+    now = datetime.now(UTC)
+    for index, was_answered in enumerate(answered):
+        asker = askers[index % len(askers)]
+        request = first_id + index
+        asked_at = now - timedelta(hours=hours_ago, minutes=index)
+        _trace(connection, asker, target, request, channel=channel, seen_at=asked_at)
+        if not was_answered:
+            continue
+        for _ in range(reply_uploads):
+            _trace(
+                connection,
+                target,
+                asker,
+                request + 500_000,
+                request_id=request,
+                channel=channel,
+                seen_at=asked_at + timedelta(seconds=20),
+            )
+
+
+def test_the_reachable_board_ranks_answered_traceroutes(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """Seed requests and replies, run the job, and read the board back.
+
+    - STEADY: 19 of 20 answered over the week, 4 of 4 in the last day.
+    - PATCHY: 10 of 20 answered over the week, 10 of 10 in the last day.
+    - LONELY: 12 traceroutes, all answered, all from one sender. Not ranked.
+    - FEW: 9 traceroutes from two senders. Not ranked.
+    - SELF: traces itself 12 times. Never on the board at all.
+    - OTHER: 12 of 12 answered, but on Medium fast. Not on this preset.
+
+    STEADY leads the week and PATCHY leads the day, so the board follows
+    the range. Each STEADY reply is uploaded twice and counts once.
+    """
+    asker_1, asker_2, asker_3 = BASE + 301, BASE + 302, BASE + 303
+    steady, patchy, lonely, few, alone, other = (BASE + n for n in range(311, 317))
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        for node in (asker_1, asker_2, asker_3, steady, patchy, lonely, few, alone, other):
+            _add_node(connection, node, role="CLIENT")
+        # The preset is found from packet traffic, so it needs some.
+        _busy(connection, asker_1, 30000, lambda hour: [(asker_2, 2, 4.0)])
+        _busy(connection, asker_2, 30100, lambda hour: [(asker_1, 2, 4.0)], channel="MediumFast")
+
+        askers = [asker_1, asker_2, asker_3]
+        # STEADY: 4 of 4 today, 15 of 16 earlier in the week.
+        _traced(connection, askers, steady, 40000, [True] * 4, hours_ago=2, reply_uploads=2)
+        _traced(
+            connection,
+            askers,
+            steady,
+            40100,
+            [True] * 15 + [False],
+            hours_ago=60,
+            reply_uploads=2,
+        )
+        # PATCHY: 10 of 10 today, 0 of 10 earlier in the week.
+        _traced(connection, askers, patchy, 40200, [True] * 10, hours_ago=3)
+        _traced(connection, askers, patchy, 40300, [False] * 10, hours_ago=70)
+        _traced(connection, [asker_1], lonely, 40400, [True] * 12, hours_ago=4)
+        _traced(connection, askers[:2], few, 40500, [True] * 9, hours_ago=5)
+        _traced(connection, [alone], alone, 40600, [True] * 12, hours_ago=6)
+        _traced(connection, askers, other, 40700, [True] * 12, hours_ago=7, channel="MediumFast")
+        # A reply whose request nobody saw, to a node with no other traffic.
+        _trace(
+            connection,
+            steady,
+            asker_1,
+            41000,
+            request_id=40999,
+            seen_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+
+    _run(settings, gaps.run_once)
+
+    week = {
+        row["node_id"]: row for row in _answers(run_store(settings, store.read_preset, "LongFast"))
+    }
+    day = {
+        row["node_id"]: row
+        for row in _answers(run_store(settings, store.read_boards, "LongFast", 24))
+    }
+    assert (week[_ident(steady)]["requests"], week[_ident(steady)]["answered"]) == (20, 19)
+    assert week[_ident(steady)]["senders"] == 3
+    assert (week[_ident(patchy)]["requests"], week[_ident(patchy)]["answered"]) == (20, 10)
+    assert (day[_ident(patchy)]["requests"], day[_ident(patchy)]["answered"]) == (10, 10)
+    assert (day[_ident(steady)]["requests"], day[_ident(steady)]["answered"]) == (4, 4)
+    assert week[_ident(lonely)]["senders"] == 1
+    assert week[_ident(few)]["requests"] == 9
+    assert _ident(alone) not in week, "a self-trace was counted"
+    assert _ident(other) not in week, "another preset was counted"
+    medium = {
+        row["node_id"]: row
+        for row in _answers(run_store(settings, store.read_preset, "MediumFast"))
+    }
+    assert (medium[_ident(other)]["requests"], medium[_ident(other)]["answered"]) == (12, 12)
+
+    ours = {_ident(node) for node in (steady, patchy, lonely, few, alone, other)}
+    assert _ranked(list(week.values()), 168, ours) == [_ident(steady), _ident(patchy)]
+    # Today PATCHY has 10 of 10 and STEADY only 4, which is under the floor.
+    assert _ranked(list(day.values()), 24, ours) == [_ident(patchy)]
+
+    with TestClient(create_app(settings)) as client:
+        for hours, first in ((168, steady), (24, patchy)):
+            board = _boards(client, hours)["reachable"]
+            assert board["title"] == "Most reliably answers traceroutes"
+            assert board["follows_window"] is True, hours
+            assert board["window_hours"] == hours
+            mine = [row for row in board["rows"] if row["node_id"] in ours]
+            assert mine[0]["node_id"] == _ident(first), hours
+            assert mine[0]["unit"] == "%"
+        week_board = _boards(client, 168)["reachable"]
+        shares = {row["node_id"]: row["value"] for row in week_board["rows"]}
+        assert shares[_ident(steady)] == 95.0
+        assert shares[_ident(patchy)] == 50.0
+        assert _ident(lonely) not in shares
+        assert _ident(few) not in shares
+        assert week_board["not_ranked"] >= 2

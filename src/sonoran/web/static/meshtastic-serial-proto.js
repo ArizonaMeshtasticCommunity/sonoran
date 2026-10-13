@@ -35,6 +35,14 @@ window.MeshtasticSerialProto = {
             }
           }
         },
+        "AckProofStatus": {
+          "values": {
+            "ACK_PROOF_ABSENT": 0,
+            "ACK_PROOF_INVALID": 2,
+            "ACK_PROOF_NO_KEY": 3,
+            "ACK_PROOF_VALID": 1
+          }
+        },
         "AddressMode": {
           "values": {
             "DHCP": 0,
@@ -551,8 +559,10 @@ window.MeshtasticSerialProto = {
                 "CODEC2_1600": 3,
                 "CODEC2_2400": 2,
                 "CODEC2_3200": 1,
+                "CODEC2_450": 10,
                 "CODEC2_700": 7,
                 "CODEC2_700B": 8,
+                "CODEC2_700C": 9,
                 "CODEC2_DEFAULT": 0
               }
             }
@@ -566,8 +576,10 @@ window.MeshtasticSerialProto = {
             "CODEC2_1600": 3,
             "CODEC2_2400": 2,
             "CODEC2_3200": 1,
+            "CODEC2_450": 10,
             "CODEC2_700": 7,
             "CODEC2_700B": 8,
+            "CODEC2_700C": 9,
             "CODEC2_DEFAULT": 0
           }
         },
@@ -625,6 +637,11 @@ window.MeshtasticSerialProto = {
               "rule": "optional",
               "type": "uint32"
             },
+            "frequencySlot": {
+              "id": 5,
+              "rule": "optional",
+              "type": "uint32"
+            },
             "preset": {
               "id": 1,
               "rule": "optional",
@@ -639,6 +656,11 @@ window.MeshtasticSerialProto = {
             "_channel_index": {
               "oneof": [
                 "channelIndex"
+              ]
+            },
+            "_frequency_slot": {
+              "oneof": [
+                "frequencySlot"
               ]
             },
             "_preset": {
@@ -772,6 +794,10 @@ window.MeshtasticSerialProto = {
             },
             "uplinkEnabled": {
               "id": 5,
+              "type": "bool"
+            },
+            "useAead": {
+              "id": 8,
               "type": "bool"
             }
           }
@@ -2207,6 +2233,7 @@ window.MeshtasticSerialProto = {
             "DETECTIONSENSOR_CONFIG": 2048,
             "EXCLUDED_NONE": 0,
             "EXTNOTIF_CONFIG": 4,
+            "MESHBEACON_CONFIG": 262144,
             "MQTT_CONFIG": 1,
             "NEIGHBORINFO_CONFIG": 512,
             "NETWORK_CONFIG": 16384,
@@ -2214,8 +2241,11 @@ window.MeshtasticSerialProto = {
             "RANGETEST_CONFIG": 16,
             "REMOTEHARDWARE_CONFIG": 256,
             "SERIAL_CONFIG": 2,
+            "STATUSMESSAGE_CONFIG": 32768,
             "STOREFORWARD_CONFIG": 8,
-            "TELEMETRY_CONFIG": 32
+            "TAK_CONFIG": 131072,
+            "TELEMETRY_CONFIG": 32,
+            "TRAFFICMANAGEMENT_CONFIG": 65536
           }
         },
         "ExternalNotificationConfig": {
@@ -2498,6 +2528,7 @@ window.MeshtasticSerialProto = {
         "HardwareModel": {
           "values": {
             "ANDROID_SIM": 38,
+            "AXIOMETA_GENESIS_MINI": 148,
             "BETAFPV_2400_TX": 45,
             "BETAFPV_900_NANO_TX": 46,
             "CANARYONE": 29,
@@ -2550,6 +2581,7 @@ window.MeshtasticSerialProto = {
             "M5STACK_COREBASIC": 77,
             "M5STACK_CORES3": 80,
             "M5STACK_RESERVED": 104,
+            "MAKERFABS_NOMAD_TERMINAL": 149,
             "MAKERFABS_RESERVED": 28,
             "MAKERFABS_TRACKER": 27,
             "ME25LS01_4Y10TD": 75,
@@ -2616,6 +2648,7 @@ window.MeshtasticSerialProto = {
             "THINKNODE_M7": 129,
             "THINKNODE_M8": 130,
             "THINKNODE_M9": 131,
+            "THINKNODE_MX": 150,
             "TLORA_C6": 83,
             "TLORA_T3_S3": 16,
             "TLORA_V1": 2,
@@ -2625,6 +2658,7 @@ window.MeshtasticSerialProto = {
             "TLORA_V2_1_1P8": 15,
             "TRACKER_T1000_E": 71,
             "TWC_MESH_V4": 62,
+            "T_CONNECT_PRO": 147,
             "T_DECK": 50,
             "T_DECK_PRO": 102,
             "T_ECHO": 7,
@@ -2795,6 +2829,7 @@ window.MeshtasticSerialProto = {
         },
         "Language": {
           "values": {
+            "AZERBAIJANI": 21,
             "BULGARIAN": 17,
             "CZECH": 18,
             "DANISH": 19,
@@ -2804,6 +2839,7 @@ window.MeshtasticSerialProto = {
             "FRENCH": 1,
             "GERMAN": 2,
             "GREEK": 13,
+            "HUNGARIAN": 20,
             "ITALIAN": 3,
             "NORWEGIAN": 14,
             "POLISH": 8,
@@ -3245,6 +3281,11 @@ window.MeshtasticSerialProto = {
               "id": 5,
               "type": "ChannelSettings"
             },
+            "broadcastOfferFrequencySlot": {
+              "id": 2,
+              "rule": "optional",
+              "type": "uint32"
+            },
             "broadcastOfferPreset": {
               "id": 7,
               "rule": "optional",
@@ -3272,6 +3313,11 @@ window.MeshtasticSerialProto = {
                   "rule": "optional",
                   "type": "uint32"
                 },
+                "frequencySlot": {
+                  "id": 5,
+                  "rule": "optional",
+                  "type": "uint32"
+                },
                 "preset": {
                   "id": 1,
                   "rule": "optional",
@@ -3286,6 +3332,11 @@ window.MeshtasticSerialProto = {
                 "_channel_index": {
                   "oneof": [
                     "channelIndex"
+                  ]
+                },
+                "_frequency_slot": {
+                  "oneof": [
+                    "frequencySlot"
                   ]
                 },
                 "_preset": {
@@ -3305,6 +3356,11 @@ window.MeshtasticSerialProto = {
             }
           },
           "oneofs": {
+            "_broadcast_offer_frequency_slot": {
+              "oneof": [
+                "broadcastOfferFrequencySlot"
+              ]
+            },
             "_broadcast_offer_preset": {
               "oneof": [
                 "broadcastOfferPreset"
@@ -3314,6 +3370,10 @@ window.MeshtasticSerialProto = {
         },
         "MeshPacket": {
           "fields": {
+            "ackProofStatus": {
+              "id": 23,
+              "type": "AckProofStatus"
+            },
             "channel": {
               "id": 3,
               "type": "uint32"
@@ -3382,6 +3442,10 @@ window.MeshtasticSerialProto = {
               "rule": "optional",
               "type": "fixed32"
             },
+            "slotParity": {
+              "id": 24,
+              "type": "SlotParity"
+            },
             "to": {
               "id": 2,
               "type": "fixed32"
@@ -3408,6 +3472,14 @@ window.MeshtasticSerialProto = {
             }
           },
           "nested": {
+            "AckProofStatus": {
+              "values": {
+                "ACK_PROOF_ABSENT": 0,
+                "ACK_PROOF_INVALID": 2,
+                "ACK_PROOF_NO_KEY": 3,
+                "ACK_PROOF_VALID": 1
+              }
+            },
             "Delayed": {
               "values": {
                 "DELAYED_BROADCAST": 1,
@@ -3427,6 +3499,13 @@ window.MeshtasticSerialProto = {
                 "RELIABLE": 70,
                 "RESPONSE": 80,
                 "UNSET": 0
+              }
+            },
+            "SlotParity": {
+              "values": {
+                "SLOT_PARITY_EVEN": 1,
+                "SLOT_PARITY_ODD": 2,
+                "SLOT_PARITY_UNSET": 0
               }
             },
             "TransportMechanism": {
@@ -3644,8 +3723,10 @@ window.MeshtasticSerialProto = {
                     "CODEC2_1600": 3,
                     "CODEC2_2400": 2,
                     "CODEC2_3200": 1,
+                    "CODEC2_450": 10,
                     "CODEC2_700": 7,
                     "CODEC2_700B": 8,
+                    "CODEC2_700C": 9,
                     "CODEC2_DEFAULT": 0
                   }
                 }
@@ -3903,6 +3984,11 @@ window.MeshtasticSerialProto = {
                   "id": 5,
                   "type": "ChannelSettings"
                 },
+                "broadcastOfferFrequencySlot": {
+                  "id": 2,
+                  "rule": "optional",
+                  "type": "uint32"
+                },
                 "broadcastOfferPreset": {
                   "id": 7,
                   "rule": "optional",
@@ -3930,6 +4016,11 @@ window.MeshtasticSerialProto = {
                       "rule": "optional",
                       "type": "uint32"
                     },
+                    "frequencySlot": {
+                      "id": 5,
+                      "rule": "optional",
+                      "type": "uint32"
+                    },
                     "preset": {
                       "id": 1,
                       "rule": "optional",
@@ -3944,6 +4035,11 @@ window.MeshtasticSerialProto = {
                     "_channel_index": {
                       "oneof": [
                         "channelIndex"
+                      ]
+                    },
+                    "_frequency_slot": {
+                      "oneof": [
+                        "frequencySlot"
                       ]
                     },
                     "_preset": {
@@ -3963,6 +4059,11 @@ window.MeshtasticSerialProto = {
                 }
               },
               "oneofs": {
+                "_broadcast_offer_frequency_slot": {
+                  "oneof": [
+                    "broadcastOfferFrequencySlot"
+                  ]
+                },
                 "_broadcast_offer_preset": {
                   "oneof": [
                     "broadcastOfferPreset"
@@ -4556,6 +4657,10 @@ window.MeshtasticSerialProto = {
               "id": 14,
               "type": "bool"
             },
+            "heardOnCurrentLora": {
+              "id": 15,
+              "type": "bool"
+            },
             "hopsAway": {
               "id": 9,
               "rule": "optional",
@@ -4715,6 +4820,7 @@ window.MeshtasticSerialProto = {
             "NEIGHBORINFO_APP": 71,
             "NODEINFO_APP": 4,
             "NODE_STATUS_APP": 36,
+            "PAGING_APP": 38,
             "PAXCOUNTER_APP": 34,
             "POSITION_APP": 3,
             "POWERSTRESS_APP": 74,
@@ -5679,6 +5785,13 @@ window.MeshtasticSerialProto = {
               "id": 2,
               "type": "User"
             }
+          }
+        },
+        "SlotParity": {
+          "values": {
+            "SLOT_PARITY_EVEN": 1,
+            "SLOT_PARITY_ODD": 2,
+            "SLOT_PARITY_UNSET": 0
           }
         },
         "State": {

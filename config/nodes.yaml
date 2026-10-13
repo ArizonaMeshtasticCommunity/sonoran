@@ -28,6 +28,15 @@ nodes:
   #   # said, and the node becomes a site again. Both values are
   #   # needed. The coverage page names how many nodes are waiting on
   #   # this.
+  #   #
+  #   # Use the position the owner gives. Never a guess from the rounded
+  #   # one: that puts the footprint in the wrong valley (#315). It is
+  #   # used for the coverage map and the calibration only, and it does
+  #   # not make a client into infrastructure.
+  #   #
+  #   # This file is in the repository and in the image. A position is
+  #   # the exact place of somebody's equipment. To keep it out of the
+  #   # repository, see docs/DEPLOY.md section 8.
   #   latitude: 33.4484
   #   longitude: -112.0740
   #

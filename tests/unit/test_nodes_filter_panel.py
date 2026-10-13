@@ -182,7 +182,13 @@ def test_the_facets_endpoint_reads_the_same_filters_as_the_list() -> None:
     looks fine.
     """
     api = API.read_text(encoding="utf-8")
-    listing = api[api.index("async def list_nodes(") : api.index("async def node_facets(")]
+    # The list reads its filters through `node_list_params`, which the
+    # export shares (#350). So the list's parameters are that function's.
+    handler = api[api.index("async def list_nodes(") :]
+    handler = handler[: handler.index(") -> list[NodeSummary]:")]
+    assert "Depends(node_list_params)" in handler, "the list no longer reads the shared filters"
+    listing = api[api.index("def node_list_params(") :]
+    listing = listing[: listing.index(") -> NodeListParams:")]
     facets = api[api.index("async def node_facets(") :]
     facets = facets[: facets.index('@router.get("/{node_id}"')]
     for key in ("q", "hw", "role", "gateway", "active_hours", "first_seen_hours", "quiet_hours"):

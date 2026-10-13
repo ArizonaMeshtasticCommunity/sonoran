@@ -19,8 +19,13 @@ def test_calibration_finishes_before_coverage(monkeypatch) -> None:  # type: ign
     async def covered(session: AsyncSession, settings: Settings) -> None:
         calls.append("coverage")
 
+    async def sited(session: AsyncSession, settings: Settings) -> list[str]:
+        calls.append("siting")
+        return []
+
     monkeypatch.setattr(scheduler.calibrate, "run_once", calibrated)
     monkeypatch.setattr(scheduler.coverage, "run_once", covered)
+    monkeypatch.setattr(scheduler.gaps_siting, "run_once", sited)
 
     asyncio.run(
         scheduler._coverage_cycle(
@@ -28,7 +33,7 @@ def test_calibration_finishes_before_coverage(monkeypatch) -> None:  # type: ign
         )
     )
 
-    assert calls == ["calibration", "coverage"]
+    assert calls == ["calibration", "coverage", "siting"]
 
 
 def test_coverage_does_not_get_a_competing_calibration_task() -> None:

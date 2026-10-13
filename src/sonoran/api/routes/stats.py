@@ -9,9 +9,11 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api import hourly
 from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
+from sonoran.api.preset_scope import preset_filter, require_preset
 from sonoran.api.window import Window, optional_window, retained_from, window_query
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
@@ -185,18 +187,33 @@ async def _lifetime_nodes(session: AsyncSession) -> dict[str, int]:
 
 
 async def _window_counts(session: AsyncSession, start: datetime, end: datetime) -> dict[str, int]:
-    """Count the packets first seen, and the uploads, in `[start, end)`."""
-    packets = await session.scalar(
-        select(func.count())
-        .select_from(Packet)
-        .where(Packet.first_seen_at >= start, Packet.first_seen_at < end)
-    )
-    uploads = await session.scalar(
-        select(func.count())
-        .select_from(PacketSeen)
-        .where(PacketSeen.seen_at >= start, PacketSeen.seen_at < end)
-    )
-    return {"packet_count": packets or 0, "observation_count": uploads or 0}
+    """Count the packets first seen, and the uploads, in `[start, end)`.
+
+    From the hourly totals, with the partial hour at each end from the
+    raw rows, so the count is exact (#366). It read millions of raw
+    rows, and a 30 day window took 12.7 s.
+    """
+    return {
+        "packet_count": await hourly.count_packets(session, start, end),
+        "observation_count": await hourly.count_uploads(session, start, end),
+    }
+
+
+async def _kept(session: AsyncSession, model: Any, time: Any, count: Any) -> int:
+    """Count every row a raw table still keeps, through the hourly totals.
+
+    From its oldest row to its newest, both included. The totals are
+    kept longer than the raw rows, so the oldest raw row, not the oldest
+    total, is where the count starts. The newest row may be dated in the
+    future by a gateway clock from before AGENTS.md 9.4, and this count
+    has always held every row, so it ends after the newest row.
+    """
+    oldest, newest = (
+        await session.execute(select(func.min(time), func.max(time)).select_from(model))
+    ).one()
+    if oldest is None or newest is None:
+        return 0
+    return int(await count(session, oldest, newest + timedelta(microseconds=1)))
 
 
 async def _read_summary(session: AsyncSession) -> dict[str, int]:
@@ -204,9 +221,10 @@ async def _read_summary(session: AsyncSession) -> dict[str, int]:
     lifetime = await _lifetime_nodes(session)
     return {
         "node_count": lifetime["node_count"],
-        "packet_count": (await session.scalar(select(func.count()).select_from(Packet))) or 0,
-        "observation_count": (await session.scalar(select(func.count()).select_from(PacketSeen)))
-        or 0,
+        "packet_count": await _kept(session, Packet, Packet.first_seen_at, hourly.count_packets),
+        "observation_count": await _kept(
+            session, PacketSeen, PacketSeen.seen_at, hourly.count_uploads
+        ),
         "gateway_count": lifetime["gateway_count"],
     }
 
@@ -264,6 +282,7 @@ async def portnums(
     request: Request,
     hours: int | None = Query(default=None, ge=1, le=8760),
     channel: str | None = None,
+    preset: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
     """Return packet counts grouped by port number, with readable names.
@@ -279,14 +298,19 @@ async def portnums(
     a window it was not holding.
     """
     settings: Settings = request.app.state.settings
-    key = f"{hours or 0}:{channel or ''}"
+    wanted = require_preset(preset)
+    # The preset is part of the key. Without it the dashboard on
+    # LongFast would be answered with the MediumFast counts.
+    key = f"{hours or 0}:{channel or ''}:{wanted or ''}"
     return await _portnums_cache.get(
-        key, settings.stats_cache_seconds, lambda: _read_portnums(session, hours, channel)
+        key,
+        settings.stats_cache_seconds,
+        lambda: _read_portnums(session, hours, channel, wanted),
     )
 
 
 async def _read_portnums(
-    session: AsyncSession, hours: int | None, channel: str | None
+    session: AsyncSession, hours: int | None, channel: str | None, preset: str | None = None
 ) -> list[dict[str, object]]:
     """Group packets by port number, optionally by window and channel."""
     statement = select(
@@ -302,6 +326,8 @@ async def _read_portnums(
         )
     if channel:
         statement = statement.where(Packet.channel == channel)
+    if preset is not None:
+        statement = statement.where(preset_filter(Packet.modem_preset, Packet.channel, preset))
     rows = await session.execute(statement)
     return [
         {
@@ -561,16 +587,6 @@ async def _node_health(
 HOURLY_UP_TO_HOURS = 72
 
 
-def _local_day(column: Any, zone: str) -> Any:
-    """The local midnight that starts the day `column` falls in.
-
-    The day is the mesh's own (`DISPLAY_TIMEZONE`), not UTC. In Arizona
-    a UTC day starts at 5 pm local, so a UTC bucket would put one
-    evening in two days.
-    """
-    return func.timezone(zone, func.date_trunc("day", func.timezone(zone, column)))
-
-
 @router.get("/daily")
 async def daily(
     request: Request,
@@ -602,32 +618,17 @@ async def _read_daily(
 ) -> dict[str, object]:
     """Count each local day's packets, uploads and senders."""
     zone = ZoneInfo(settings.display_timezone)
-    day = _local_day(Packet.first_seen_at, settings.display_timezone).label("day")
-    packet_rows = (
-        await session.execute(
-            select(
-                day,
-                func.count().label("packets"),
-                func.count(func.distinct(Packet.from_node_num)).label("nodes"),
-            )
-            .where(Packet.first_seen_at >= window.start, Packet.first_seen_at < window.end)
-            .group_by(day)
-        )
-    ).all()
-    seen_day = _local_day(PacketSeen.seen_at, settings.display_timezone).label("day")
-    upload_rows = (
-        await session.execute(
-            select(seen_day, func.count().label("uploads"))
-            .where(PacketSeen.seen_at >= window.start, PacketSeen.seen_at < window.end)
-            .group_by(seen_day)
-        )
-    ).all()
+    # From the hourly totals, with the partial hour at each end from the
+    # raw rows (#366). It counted every raw row of the window by day.
+    packet_days, upload_days = await hourly.daily_counts(
+        session, settings.display_timezone, window.start, window.end
+    )
 
     def local(moment: datetime) -> date:
         return moment.astimezone(zone).date()
 
-    packets = {local(row.day): (row.packets, row.nodes) for row in packet_rows}
-    uploads = {local(row.day): row.uploads for row in upload_rows}
+    packets = {local(day): counts for day, counts in packet_days.items()}
+    uploads = {local(day): count for day, count in upload_days.items()}
     first = local(max(window.start, retained_from(settings)))
     # The end is exclusive. A window that ends at a local midnight holds
     # nothing of the day that midnight starts, so that day is not listed.
@@ -679,26 +680,19 @@ async def _read_activity(
     session: AsyncSession, settings: Settings, window: Window
 ) -> dict[str, object]:
     """Group the window's packets by bucket and family."""
-    start, now = window.start, window.end
     by_day = window.hours > HOURLY_UP_TO_HOURS
-    bucket = (
-        _local_day(Packet.first_seen_at, settings.display_timezone)
-        if by_day
-        else func.date_trunc("hour", Packet.first_seen_at)
-    ).label("bucket")
-    rows = (
-        await session.execute(
-            select(bucket, Packet.portnum, Packet.payload_state, func.count().label("total"))
-            # The upper bound is not redundant. `packet.first_seen_at`
-            # holds the gateway's own clock when it sent one, and those
-            # clocks run wrong: rows dated more than a day ahead exist.
-            # Without this the chart grows hours that have not happened.
-            # See docs/ISSUES.md 1.5.
-            .where(Packet.first_seen_at >= start, Packet.first_seen_at < now)
-            .group_by(bucket, Packet.portnum, Packet.payload_state)
-            .order_by(bucket)
-        )
-    ).all()
+    # From the hourly totals by family, with the partial hour at each
+    # end from the raw rows (#368). It grouped every raw packet of the
+    # window: 525 ms of database time for 30 days.
+    #
+    # The window's upper bound still matters. `packet.first_seen_at`
+    # holds the gateway's own clock when it sent one, and those clocks
+    # run wrong: rows dated more than a day ahead exist. Without the
+    # bound the chart grows hours that have not happened. See
+    # docs/ISSUES.md 1.5.
+    rows = await hourly.family_counts(
+        session, settings.display_timezone, window.start, window.end, by_day=by_day
+    )
 
     hours_seen: list[datetime] = []
     seen: set[datetime] = set()

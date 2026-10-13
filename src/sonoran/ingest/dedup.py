@@ -36,6 +36,9 @@ class PacketInput:
     # only place that knows: it has one code path per state, so this is
     # recorded rather than inferred.
     payload_state: str | None = None
+    # The preset of the first observation, which is the first vote of
+    # the packet's majority (#313). See `ingest/presets.py`.
+    modem_preset: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,8 @@ class ObservationInput:
     # sighting without joining `packet` (#304). Last, with a default,
     # so a caller that has none still builds one.
     hop_start: int | None = None
+    # The modem preset of this upload, or None when unknown (#313).
+    modem_preset: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +127,7 @@ async def store_packet(
                         # be SQL NULL, so a query for it can use IS NULL.
                         payload_json=null() if packet.payload_json is None else packet.payload_json,
                         payload_state=packet.payload_state,
+                        modem_preset=packet.modem_preset,
                     )
                 )
         except IntegrityError:
@@ -141,6 +147,7 @@ async def store_packet(
             hop_limit=observation.hop_limit,
             hop_start=observation.hop_start,
             seen_at=observation.seen_at,
+            modem_preset=observation.modem_preset,
         )
     )
     return StoredPacket(packet_pk=None, is_new=is_new)

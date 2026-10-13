@@ -757,7 +757,8 @@
      * is to move the whole site with it and let the menu say so.
      */
     if (named && window.SonoranPreset) SonoranPreset.set(named);
-    const global = window.SonoranPreset ? SonoranPreset.current() : null;
+    // One preset even under "All presets": gaps are assessed per preset.
+    const global = window.SonoranPreset ? SonoranPreset.single() : null;
     state.preset = named || global || state.preset;
     try {
       summary = await fetchJson(

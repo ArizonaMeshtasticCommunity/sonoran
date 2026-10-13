@@ -16,15 +16,39 @@ both routes read it. A second copy of that sort is precisely how the two
 drifted apart in the first place.
 """
 
+import asyncio
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from sonoran.api.routes.gaps import _presets, _resolve
-from sonoran.api.routes.leaderboards import _assessed_presets
+from sonoran.api.routes import gaps as gaps_route
+from sonoran.api.routes import leaderboards
 from sonoran.config import Settings
 from sonoran.gaps import store
+from tests.unit.job_outputs import JobOutputs
+
+# The job outputs of the test in progress. See `tests/unit/job_outputs.py`.
+_memory: JobOutputs
+
+
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    global _memory
+    _memory = job_outputs
+
+
+def _resolve(channel: str | None, settings: Settings) -> tuple[str | None, str | None]:
+    return asyncio.run(gaps_route._resolve(None, channel, settings))  # type: ignore[arg-type]
+
+
+def _presets(settings: Settings) -> list[dict[str, Any]]:
+    return asyncio.run(gaps_route._presets(None, settings))  # type: ignore[arg-type]
+
+
+def _assessed_presets(settings: Settings) -> list[str]:
+    return asyncio.run(leaderboards._assessed_presets(None, settings))  # type: ignore[arg-type]
 
 
 def _settings(tmp: Path, preset: str = "MediumFast") -> Settings:
@@ -39,8 +63,7 @@ def _index(tmp: Path, presets: list[tuple[str, int]], preset: str = "MediumFast"
     bug was entirely about that order.
     """
     settings = _settings(tmp, preset)
-    store.write_index(
-        settings,
+    _memory.write_index(
         {
             "presets": [
                 {"preset": name, "label": name, "node_count": count}
@@ -58,7 +81,7 @@ def test_the_fixture_really_is_in_alphabetical_order(tmp_path: Path) -> None:
     pass on an ordering the job never produces.
     """
     settings = _index(tmp_path, [("MediumFast", 40), ("LongFast", 900)])
-    written = store.read_index(settings)
+    written = asyncio.run(store.read_index(None))  # type: ignore[arg-type]
     assert written is not None
     names = [item["preset"] for item in written["presets"]]
     assert names == ["LongFast", "MediumFast"], names
@@ -248,5 +271,7 @@ def test_an_inbound_link_moves_the_whole_site_not_just_this_page() -> None:
         "an inbound link no longer moves the global preset, so the menu and "
         "this page would disagree"
     )
-    # And the page still follows the menu when no link names one.
-    assert "SonoranPreset.current()" in code, "the page does not follow the menu"
+    # And the page still follows the menu when no link names one. Through
+    # `single()`: under "All presets" gaps shows the default preset,
+    # because a gaps assessment is for one preset.
+    assert "SonoranPreset.single()" in code, "the page does not follow the menu"
