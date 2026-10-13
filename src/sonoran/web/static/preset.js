@@ -3,7 +3,9 @@
  *
  * A node on LongFast cannot hear a node on MediumFast (`AGENTS.md` 9.7),
  * so every page that draws links, coverage, gaps or a chat channel has
- * to pick ONE preset. Each page used to ask separately: the map had a
+ * to pick ONE preset. Which messages and packets belong to a preset is
+ * the server's answer, from the preset ingest tagged each packet with
+ * (#313); this module only holds the reader's choice. Each page used to ask separately: the map had a
  * picker for its link layer, coverage had one, gaps had one, the graph
  * had a tab strip. A reader who had chosen MediumFast on the gaps page
  * then found the map on LongFast, and nothing on the site agreed with
@@ -33,9 +35,23 @@ window.SonoranPreset = (function build() {
    */
   const FALLBACK = ['MediumFast', 'LongFast'];
 
+  /*
+   * Every preset at once (Logan, 2026-10-12: "we are not unified quite
+   * yet", so the whole state has to be visible in one view).
+   *
+   * Not a preset name: `menuPreset()` in app.js turns it into no filter
+   * at all, and a page that can only draw one preset (coverage, gaps,
+   * the planner, the leaderboards) asks `single()` instead and says so
+   * under the switch. '*' cannot be a channel name the server sends.
+   */
+  const ALL = '*';
+
   let available = [...FALLBACK];
   let chosen = null;
   const listeners = new Set();
+  // Told when the list on offer changes, even when the chosen preset
+  // does not. The menu's switch needs it; a page does not.
+  const listListeners = new Set();
 
   /** The deployment's default, which the reader's choice overrides. */
   function fallbackPreset() {
@@ -78,12 +94,31 @@ window.SonoranPreset = (function build() {
    * no way to tell why every page was empty.
    */
   function current() {
-    if (chosen && available.includes(chosen)) return chosen;
+    if (chosen && (chosen === ALL || available.includes(chosen))) return chosen;
     const saved = stored();
-    if (saved && available.includes(saved)) {
+    if (saved && (saved === ALL || available.includes(saved))) {
       chosen = saved;
       return chosen;
     }
+    const preferred = fallbackPreset();
+    return available.includes(preferred) ? preferred : available[0];
+  }
+
+  /** True when the reader asked for every preset at once. */
+  function isAll() {
+    return current() === ALL;
+  }
+
+  /**
+   * One real preset, for a page that cannot draw them all together.
+   *
+   * The choice in force, or with "All" the deployment's default, so a
+   * coverage map or a gaps list never mixes radios that cannot hear
+   * each other (AGENTS.md 9.7).
+   */
+  function single() {
+    const name = current();
+    if (name !== ALL) return name;
     const preferred = fallbackPreset();
     return available.includes(preferred) ? preferred : available[0];
   }
@@ -104,17 +139,33 @@ window.SonoranPreset = (function build() {
     const names = [...new Set((list || []).filter((name) => typeof name === 'string' && name))];
     if (!names.length) return false;
     const before = current();
+    // Compared without order: the channel list sorts by traffic, so the
+    // same presets often come back in a new order, and a redraw then
+    // would take keyboard focus off the switch for nothing.
+    const listed = [...available].sort().join('|') !== [...names].sort().join('|');
     available = names;
     const after = current();
     // Announce only a real change: the reader's preset can move here if
     // the one they had chosen is no longer on offer.
     if (after !== before) announce(after);
+    // A longer list with the same choice redraws only the switch. Before
+    // this, a third preset showed in the menu only after some later
+    // change of preset happened to redraw it.
+    else if (listed) {
+      for (const listener of [...listListeners]) {
+        try {
+          listener(options());
+        } catch (error) {
+          if (window.console) window.console.warn('preset list listener failed', error);
+        }
+      }
+    }
     return after !== before;
   }
 
   /** Choose a preset. Returns true when it actually changed. */
   function set(name) {
-    if (typeof name !== 'string' || !available.includes(name)) return false;
+    if (typeof name !== 'string' || (name !== ALL && !available.includes(name))) return false;
     if (name === current()) return false;
     chosen = name;
     remember(name);
@@ -170,6 +221,13 @@ window.SonoranPreset = (function build() {
     return () => listeners.delete(fn);
   }
 
+  /** Run `fn` whenever the list on offer changes. Returns an unsubscribe. */
+  function onOptionsChange(fn) {
+    if (typeof fn !== 'function') return () => {};
+    listListeners.add(fn);
+    return () => listListeners.delete(fn);
+  }
+
   /**
    * True when `name` is the preset in force.
    *
@@ -178,45 +236,11 @@ window.SonoranPreset = (function build() {
    * misses reads as "hide everything".
    */
   function matches(name) {
-    return String(name ?? '') === current();
+    return isAll() || String(name ?? '') === current();
   }
 
-  /**
-   * The channels that belong to the preset in force.
-   *
-   * The rule Will asked for, and the reason it is not symmetrical:
-   *
-   * - on **MediumFast**, show MediumFast and the topic channels beside
-   *   it. Weather, Traffic, azmsh and the rest name no preset of their
-   *   own -- they ride on top of whatever the radio is set to
-   *   (`AGENTS.md` 9.7) -- and on this mesh they ride on MediumFast,
-   *   which is what the infrastructure runs. So they belong there.
-   * - on **LongFast**, show LongFast alone. A reader who has switched to
-   *   LongFast is looking at a different radio setting, and offering the
-   *   MediumFast topic channels would be offering traffic their radio
-   *   cannot hear.
-   *
-   * A channel is a preset when the SERVER says so: `api/channels.py`
-   * sets `group: "Presets"` and a non-empty `preset`, and leaves
-   * `preset` empty for the topic channels. Matching on the name would
-   * have put a second list of preset names in the browser.
-   *
-   * "Rides on the default preset" is the test for the topic channels
-   * rather than "is MediumFast", so a deployment whose `defaultPreset`
-   * is something else gets the same behaviour without editing this.
-   */
-  function channelsFor(sections) {
-    const list = [...(sections || [])];
-    const now = current();
-    const ridesOnThisPreset = now === fallbackPreset();
-    return list.filter((section) => {
-      if (!section) return false;
-      const named = String(section.preset || '');
-      const isPreset = section.group === 'Presets' || Boolean(named);
-      if (isPreset) return (named || String(section.channel || '')) === now;
-      return ridesOnThisPreset;
-    });
-  }
-
-  return { current, options, setAvailable, set, onChange, matches, channelsFor, FALLBACK };
+  return {
+    current, options, setAvailable, set, onChange, onOptionsChange, matches, isAll, single,
+    ALL, FALLBACK,
+  };
 }());

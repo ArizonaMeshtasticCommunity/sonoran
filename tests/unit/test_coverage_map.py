@@ -653,83 +653,67 @@ def test_every_layer_has_a_label() -> None:
     assert LAYERS[0] == "usable", "the honest layer must be the first one a page shows"
 
 
-def test_a_stored_calibration_is_bounded_before_it_is_used(tmp_path: Path) -> None:
+def test_a_stored_calibration_is_bounded_before_it_is_used() -> None:
     """An old report must not bypass the calibration safety bound."""
     from sonoran.coverage import store
 
-    settings = _settings(tmp_path)
-    path = store.calibration_path(settings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
+    document: dict[str, object] = {
+        "model_bias_db": 0.0,
+        "residual_spread_db": 5.0,
+        "nodes": [
             {
-                "model_bias_db": 0.0,
-                "residual_spread_db": 5.0,
-                "nodes": [
-                    {
-                        "node_id": "!low",
-                        "offset_db": -1830.35,
-                        "observations": 7,
-                        "counterparties": 7,
-                        "reported": 2,
-                    },
-                    {
-                        "node_id": "!bad",
-                        "offset_db": "not-a-number",
-                        "observations": 7,
-                        "counterparties": 7,
-                        "reported": 2,
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+                "node_id": "!low",
+                "offset_db": -1830.35,
+                "observations": 7,
+                "counterparties": 7,
+                "reported": 2,
+            },
+            {
+                "node_id": "!bad",
+                "offset_db": "not-a-number",
+                "observations": 7,
+                "counterparties": 7,
+                "reported": 2,
+            },
+        ],
+    }
 
-    assert store.calibration_offsets(settings) == {"!low": -15.0}
+    assert store.offsets_of(document) == {"!low": -15.0}
 
 
-def test_a_stored_calibration_never_applies_a_pinned_node(tmp_path: Path) -> None:
+def test_a_stored_calibration_never_applies_a_pinned_node() -> None:
     """A lock added after a fit was written must still hold.
 
-    The fit pins such a node at zero, so the offset in the file is
-    already nothing. The reader checks the flag as well, because a file
-    written before the lock existed holds a real number.
+    The fit pins such a node at zero, so the stored offset is already
+    nothing. The reader checks the flag as well, because a fit stored
+    before the lock existed holds a real number.
     """
     from sonoran.coverage import store
 
-    settings = _settings(tmp_path)
-    path = store.calibration_path(settings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
+    document: dict[str, object] = {
+        "model_bias_db": 0.0,
+        "residual_spread_db": 5.0,
+        "nodes": [
             {
-                "model_bias_db": 0.0,
-                "residual_spread_db": 5.0,
-                "nodes": [
-                    {
-                        "node_id": "!pinned",
-                        "offset_db": -7.5,
-                        "observations": 9,
-                        "counterparties": 4,
-                        "reported": 5,
-                        "locked": True,
-                    },
-                    {
-                        "node_id": "!free",
-                        "offset_db": -7.5,
-                        "observations": 9,
-                        "counterparties": 4,
-                        "reported": 5,
-                        "locked": False,
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+                "node_id": "!pinned",
+                "offset_db": -7.5,
+                "observations": 9,
+                "counterparties": 4,
+                "reported": 5,
+                "locked": True,
+            },
+            {
+                "node_id": "!free",
+                "offset_db": -7.5,
+                "observations": 9,
+                "counterparties": 4,
+                "reported": 5,
+                "locked": False,
+            },
+        ],
+    }
 
-    assert store.calibration_offsets(settings) == {"!free": -7.5}
+    assert store.offsets_of(document) == {"!free": -7.5}
 
 
 def test_a_run_stamp_that_is_not_a_stamp_is_refused(tmp_path: Path) -> None:

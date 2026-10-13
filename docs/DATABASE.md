@@ -31,9 +31,9 @@ Created in the first migration:
 
 | Role | Rights | Used by |
 |------|--------|---------|
-| `azmsh_ingest` | INSERT, UPDATE on all tables. No DELETE. SELECT on `node.node_num` only, as PostgreSQL requires it for node updates. | ingest process |
+| `azmsh_ingest` | INSERT, UPDATE on all tables. No DELETE. No table-level SELECT. SELECT on a few columns only, because PostgreSQL requires SELECT on each column an UPDATE names in its WHERE clause: `node.node_num` (0006); `node.uplink_preset`, `node.uplink_preset_at` and `node.last_preset_at` (i313); and the key of `packet`, `from_node_num`, `packet_id` and `first_seen_at` (i313). No other column of `packet` is readable. | ingest process |
 | `azmsh_api` | SELECT on all tables | api process |
-| `azmsh_jobs` | SELECT, INSERT on `daily_snapshot`. DELETE where retention fallback needs it | jobs process |
+| `azmsh_jobs` | SELECT, INSERT on `daily_snapshot`. DELETE where retention fallback needs it. SELECT, INSERT and DELETE on the job output tables (5B, i351), and no UPDATE: a run is replaced, never edited | jobs process |
 
 ### 2.1 The role passwords
 
@@ -111,6 +111,10 @@ One row per node. Latest known state.
 | `is_mqtt_gateway` | boolean | default false |
 | `last_mqtt_topic` | text | nullable |
 | `last_channel` | text | nullable |
+| `last_preset` | text | nullable. The modem preset of the newest packet from this node whose preset is known (#313). Moves forward in time only. NULL until ingest tags one; a reader then falls back to `last_channel` |
+| `last_preset_at` | timestamptz | nullable. The receive time of that packet |
+| `uplink_preset` | text | nullable. For a gateway: the preset its newest preset-named topic named. Ingest reads it back at start |
+| `uplink_preset_at` | timestamptz | nullable. When that upload arrived |
 | `first_seen` | timestamptz | not null |
 | `updated_at` | timestamptz | not null |
 
@@ -154,6 +158,7 @@ One row per unique packet. Hypertable on `first_seen_at`.
 | `first_seen_at` | timestamptz | not null. partition key |
 | `raw_bytes` | bytea | the raw MeshPacket protobuf |
 | `payload_json` | jsonb | what the packet carried, for node info, routing, traceroute, map report and pax counter only (`decode/stored.py`). NULL for every other family and for rows stored before 2026-09-22. |
+| `modem_preset` | text | nullable. The modem preset that carried the packet: the majority of its observations' `modem_preset`. A NULL observation does not vote, and a tie keeps the stored value (#313). NULL on rows written before revision i313, and when no observation had a known preset |
 
 Constraints:
 
@@ -178,6 +183,38 @@ One row per observation of a packet. Hypertable on `seen_at`.
 | `hop_limit` | integer | nullable. Hops left when the gateway heard it |
 | `hop_start` | integer | nullable. The same header's hop start, so `hop_start = hop_limit` says direct without a join (#304). NULL on rows written before revision 0017, which are not backfilled: read them through `api/sightings.py`, which joins those to `packet` |
 | `seen_at` | timestamptz | not null. partition key |
+| `modem_preset` | text | nullable. The modem preset of this upload (#313): the topic's own preset when the topic is preset-named, else the gateway's current preset, else NULL. NULL when the gateway is ambiguous: it uploaded two different preset-named topics within `GATEWAY_PRESET_CONFLICT_MINUTES` |
+
+#### 3.4.1 How ingest decides a modem preset
+
+A topic channel such as `azmsh` is not a preset. It rides on top of the
+preset the gateway is set to, and this mesh runs it on two presets.
+Firmware names an unnamed primary channel after its preset, so a gateway
+that uploads on `.../e/LongFast/...` is on LongFast.
+
+`sonoran/ingest/presets.py` holds the rules in memory and touches no
+database. `sonoran/ingest/preset_writes.py` stores the result. The
+rules are in that module's docstring. In short:
+
+1. An upload on a preset-named topic is on that preset, and it sets the
+   gateway's current preset. The newest wins, so a reconfigured gateway
+   switches at once.
+2. Any other upload is on its gateway's current preset. A gateway that
+   uploaded two different presets within the conflict window has no
+   current preset, so its uploads get NULL and cast no vote.
+3. A packet takes the majority of its uploads. Ingest has no SELECT on
+   `packet`, so it counts the votes in memory for about ten minutes and
+   runs `UPDATE packet ... WHERE from_node_num, packet_id, first_seen_at`
+   only when the majority changes. A packet's first vote is in its
+   INSERT. After a restart a packet's tally starts again at its next
+   upload.
+4. The sender's `node.last_preset` follows the packet's preset, with
+   `WHERE last_preset_at IS NULL OR last_preset_at <= :t`.
+
+There is no backfill. Old rows keep NULL, and the API reads a NULL row
+by its channel, as before (`docs/API.md` 1.2). MapReports are not
+stored, so they cannot help yet: `/2/map/` topics are dropped when the
+topic is parsed.
 
 ### 3.5 `traceroute`
 
@@ -340,6 +377,53 @@ role can read or write `rf_operator_log`; `rf_trust` and
 case, for aircraft. `rssi_db` is in the receiver's own units, so it
 compares one station with itself and never two stations.
 
+## 5B. Job output tables (#351)
+
+What the background jobs compute, and the API serves. Before #351 these
+were JSON files beside the coverage runs. The coverage tiles and the
+run manifest stay on disk.
+
+**Each table holds the latest run only.** A job replaces a whole run in
+one transaction: it deletes the run's rows, inserts the new ones, and
+commits once. A reader sees the old run or the new one, never half of
+each. None is a hypertable, and none grows with time: the size is about
+nodes x windows x presets.
+
+| Table | Key | Holds | Written by |
+|---|---|---|---|
+| `gaps_index` | `id` (always 1) | When the gaps job last ran, and its window | `jobs/gaps.py` |
+| `gaps_run` | `preset`, `scope`, `asked_hours` | One assessment (`scope` `assessment`, `asked_hours` 0), or one Statistics window of leaderboard counts (`scope` `board`, `asked_hours` 24 or 720). `summary` (`jsonb`) holds the top-level fields | `jobs/gaps.py` |
+| `gaps_node` | run key, `node_num` | One node of one run: the evidence counts as columns, and `rank`, the order the job set (worst first). `node_num` references `node` | `jobs/gaps.py` |
+| `gaps_signal` | run key, `node_num`, `signal` | One signal of one node: `state`, `reason`, `value` and `unit` as columns, `position` (the job's order), and `evidence` as `jsonb`, because its shape is the signal's own | `jobs/gaps.py` |
+| `gaps_trace_answer` | run key, `node_num` | The traceroute counts of the reachable board (#293) | `jobs/gaps.py` |
+| `gaps_siting` | `preset` | One preset's siting answer. `summary` holds the cost, the thresholds, the coverage it used and the caveats | `jobs/gaps_siting.py` |
+| `gaps_siting_area` | `preset`, `area` | One neighbourhood of struggling nodes: counts, node numbers, centroid, bounds and width | `jobs/gaps_siting.py` |
+| `gaps_siting_point` | `preset`, `area`, `position` | One demand point of an area: its place, its node numbers and their names | `jobs/gaps_siting.py` |
+| `gaps_siting_candidate` | `preset`, `position` | One candidate place, in the order the job ranked it: every field of `gaps.siting.Candidate` as a column | `jobs/gaps_siting.py` |
+| `coverage_calibration` | `id` (always 1) | The fit as a whole: bias, scatter, rounds, summary | `jobs/calibrate.py` |
+| `coverage_calibration_node` | `node_num` | What the measurements say about one node | `jobs/calibrate.py` |
+
+**Foreign keys.** Every child row belongs to its run or answer and is
+deleted with it (`ON DELETE CASCADE`), so deleting a run is one
+statement. `gaps_node.node_num` references `node`: the job leaves out,
+and logs, a row whose node has no record yet, so that key never fails a
+run. `gaps_trace_answer` does not reference `node`, because a node can
+be traced and never send anything.
+
+**What stays `jsonb`.** A run's `summary` (its window, thresholds,
+labels, caveats and counts) and a signal's `evidence`. Both are read
+whole and never filtered on. Everything a page filters, sorts or pages
+by is a column.
+
+**Names are read live.** `gaps_node` stores no name, short name or role.
+A reader joins `node`, so a node renamed after a run reads with its new
+name. The position stays as the job assessed it, because the findings
+belong to that position.
+
+**The old files are imported once.** The jobs process imports the old
+JSON files at start into any of these tables that is empty
+(`jobs/legacy_import.py`), and leaves the files in place for a rollback.
+
 ## 6. Retention policy
 
 Applied in migrations with `add_retention_policy`.
@@ -371,6 +455,11 @@ the 30 day button counts less than 30 days and each widget says so. If it
 is raised, the 720 hour cap in `sonoran/api/window.py` and the page's
 `STATS_RANGES` stay where they are until they are changed with it.
 
+The gaps job's leaderboard windows (`docs/GAPS.md` 6.1) are cut to
+`RETENTION_DAYS_PACKET` the same way. Their files say the hours they
+hold, and the board says "not the page range" when that is less than
+the range.
+
 ## 7. Indexes
 
 Keep indexes minimal. Each index slows inserts.
@@ -393,16 +482,52 @@ Keep indexes minimal. Each index slows inserts.
   Index on (`reporting_gateway_node_num`, `time` desc).
 - `neighbor_metrics`: also index on (`channel`, `time` desc).
 - `node`: index on `last_heard`. Index on `short_name`.
+- No index on `modem_preset` or `last_preset` (#313). The list pages read
+  newest first through the time index they already use and test the tag
+  on each row they reach, as they did with `channel`. An index on the tag
+  cannot serve the fallback `OR (modem_preset IS NULL AND channel = ...)`,
+  and every index on `packet_seen` costs every insert.
 
-## 8. Continuous aggregates (later phase)
+## 8. Continuous aggregates
 
-These are optional. Add them after phase 8 if query speed needs help.
+Three TimescaleDB continuous aggregates hold hourly totals (#366, revision
+i366; #368, revision i368). Statistics, the dashboard, the activity chart
+and the graph's node counts count from them.
 
-- Hourly packet counts per node.
-- Hourly channel utilization per node.
-- Daily gateway activity.
+| View | Columns | From |
+|---|---|---|
+| `packet_hourly` | `bucket` (the hour), `from_node_num`, `packets` | `packet.first_seen_at` |
+| `packet_seen_hourly` | `bucket` (the hour), `uploads` | `packet_seen.seen_at` |
+| `packet_family_hourly` | `bucket` (the hour), `portnum`, `payload_state`, `packets` | `packet.first_seen_at` |
 
-Use TimescaleDB continuous aggregates with refresh policies.
+- **Exact counts.** `sonoran/api/hourly.py` sums whole hours from these
+  views and counts the partial hour at each end of a window from the
+  raw rows. So a count equals the raw count, to the row. A 30 day count
+  reads about 720 rows instead of millions.
+- **Live.** `materialized_only = false`: TimescaleDB adds the hours
+  after the last refresh from the raw rows, so the current hour is
+  always counted.
+- **Senders per day.** `packet_hourly` is per sender, because a count
+  of distinct senders cannot be added up from plain hourly totals.
+- **Families.** `packet_family_hourly` keeps `payload_state` as well as
+  `portnum`, because port 0 is a different family in each state. The
+  activity chart reads it (`/api/stats/activity`). A payload recovery
+  (`sonoran.ingest.recover`) changes the port and state of old packets.
+  Those hours show the old family until the next refresh, at most 30
+  minutes later.
+- **Not the graph links.** A link is built in Python from traceroute
+  paths, and nearly every neighbour report is its own (hour, pair)
+  group, so an aggregate would not make the graph smaller to read.
+- **Local days.** Hourly totals add up to local days only in a zone a
+  whole number of hours from UTC. Arizona is UTC-7. For another
+  `DISPLAY_TIMEZONE`, the daily counts read the raw rows.
+- **Refresh.** A policy refreshes every 30 minutes, over every
+  invalidated hour (`start_offset` NULL). The first run after the
+  migration fills the whole history.
+- **Retention.** `RETENTION_DAYS_PACKET` plus 14 days. Raw chunks can
+  outlive the retention by a few days, and the totals must cover every
+  hour the raw rows still hold.
+- **Grants.** `azmsh_api` has SELECT. Only TimescaleDB writes them.
 
 ## 9. Backup and restore
 

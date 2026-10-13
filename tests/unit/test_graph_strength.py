@@ -219,7 +219,7 @@ def test_a_links_snr_is_the_median_and_not_the_newest_reading(**_: object) -> No
             ),
         )
     edge = only(edges)
-    assert edge.samples == [-16.0, -5.0, -12.0, -0.25, -13.0], "samples were not all kept"
+    assert edge.samples == sorted([-16.0, -5.0, -12.0, -0.25, -13.0]), "samples were not all kept"
     # Newest is -13.0 and the maximum is -0.25. Neither is the answer.
     assert edge.snr_summary == -12.0
     assert edge.as_json()["snr"] == -12.0

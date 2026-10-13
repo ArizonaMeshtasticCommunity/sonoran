@@ -56,7 +56,7 @@ from sonoran.coverage.sites import handheld_eirp_dbm
 from sonoran.landcover.classes import is_diffracting
 from sonoran.landcover.store import class_at, clutter_at
 from sonoran.radio.hardware import STOCK_ANTENNA_GAIN_DBI
-from sonoran.radio.presets import ModemPreset
+from sonoran.radio.presets import ModemPreset, sensitivity_of
 from sonoran.radio.resolve import DEFAULT_CABLE_LOSS_DB
 from sonoran.terrain.srtm import PAGE_SIZE, page_array, tile_name_of
 
@@ -802,7 +802,7 @@ def screen(
     # The weaker direction, of this one candidate, before anything is
     # combined. `AGENTS.md` 9.24.
     weaker = np.minimum(downlink_dbm, uplink_dbm)
-    margin = weaker - preset.sensitivity_dbm
+    margin = weaker - sensitivity_of(preset)
 
     judged = profile_known.all(axis=1)
     fresh = np.ones(len(demand), dtype=bool)

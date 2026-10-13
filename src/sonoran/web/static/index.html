@@ -167,6 +167,9 @@
     <symbol id="i-search" viewBox="0 0 24 24"><path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/></symbol>
     <!-- The phone nav button. Open, and closed. -->
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/></symbol>
+    <!-- More, in the phone's bottom bar (#282). Material Design Icons
+         "dots-horizontal", the same set as the rest. -->
+    <symbol id="i-more" viewBox="0 0 24 24"><path d="M16,12A2,2 0 0,1 18,10A2,2 0 0,1 20,12A2,2 0 0,1 18,14A2,2 0 0,1 16,12M10,12A2,2 0 0,1 12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12M4,12A2,2 0 0,1 6,10A2,2 0 0,1 8,12A2,2 0 0,1 6,14A2,2 0 0,1 4,12Z"/></symbol>
     <!-- The desktop sidebar's collapse button (#300). Collapse, and
          expand. Material Design Icons "chevron-double-left" and
          "chevron-double-right", the same set as the rest. -->
@@ -344,11 +347,19 @@
             could be on one preset while gaps was on another. This is
             that choice, once, for all of them.
 
-            A radio group and not a `<select>`: there are two options,
-            both are one word, and a two-option select costs a tap to
-            open before the tap that chooses. The buttons are built by
-            app.js from the presets actually on offer, so a deployment
-            running something else is not stuck with ours.
+            A radio group for two presets, the deployment's default and
+            then MediumFast and LongFast (`presetSwitchSlots` in app.js):
+            a two-option select costs a tap to open before the tap that
+            chooses. Every other preset goes in the
+            "More presets" select under it, with "All presets" first:
+            every preset in one view, because the mesh does not run on
+            one preset yet. Pages that draw one preset (coverage, gaps,
+            the planner) keep the default then and say so below. Firmware 2.8.1 made every
+            preset recognisable (#363), and a third one squeezed into the
+            switch overflowed its slot and cut the last name off. The
+            buttons and the select are built by app.js from the presets
+            actually on offer, so a deployment running something else is
+            not stuck with ours.
 
             There was a line of explanation under it -- "Every page shows
             Medium Fast only. Radios on one preset cannot hear the other."
@@ -362,6 +373,7 @@
             <span class="menu-field-label" id="preset-label">Preset</span>
             <div class="preset-switch" role="radiogroup" aria-labelledby="preset-label"
                  data-preset-switch></div>
+            <select class="preset-more" data-preset-more aria-label="More presets" hidden></select>
             <!--
               Says so when the page in view ignores the preset (#232). A note
               rather than a dimmed control: a disabled-looking switch says
@@ -1150,6 +1162,13 @@
                 <label>Longitude <input data-planner="lon" inputmode="decimal" placeholder="click the map" /></label>
               </div>
               <!--
+                The radio climate the next run will use, and where it came
+                from (#239). In both modes, because Simple predicts on it
+                too and has no climate box to read it from. "Not known
+                here, using desert" is said here rather than guessed.
+              -->
+              <p class="muted planner-climate-note" data-planner-climate-note hidden></p>
+              <!--
                 Pick the board instead of typing its transmit power
                 (#110, #113). 54 of the 117 boards the flasher offers
                 have a hand-written RF profile; the rest get a family
@@ -1197,6 +1216,28 @@
               </div>
               <p class="muted antenna-note" data-antenna-note="tx" hidden></p>
 
+              <!--
+                Aiming, shown only for an antenna that has to be aimed.
+                A bearing box on an omni would be a question with no
+                answer, so it stays hidden until a directional antenna
+                is chosen.
+
+                The beamwidth box is not decoration either: the L-Com
+                Yagi's listing states no beamwidth in either plane, so
+                the catalogue carries None and the pattern cannot be
+                drawn without a number from the person. It appears only
+                for such an antenna, pre-filled with nothing.
+              -->
+              <div class="pair antenna-aim" data-antenna-aim="tx" hidden>
+                <label>Pointing which way?
+                  <input data-planner="tx_azimuth" inputmode="numeric" placeholder="0-359" />
+                </label>
+                <label data-antenna-beamwidth="tx" hidden>Beamwidth (degrees)
+                  <input data-planner="tx_beamwidth" inputmode="numeric" placeholder="e.g. 45" />
+                </label>
+              </div>
+              <p class="muted antenna-note" data-antenna-aim-note="tx" hidden></p>
+
               <h3>Receiver</h3>
               <label>Modem preset <select data-planner="preset"></select></label>
               <!--
@@ -1232,6 +1273,7 @@
                 <label>Antenna at the far end <select data-antenna-type="rx"></select></label>
               </div>
               <p class="muted antenna-note" data-antenna-note="rx" hidden></p>
+              <p class="muted antenna-note" data-antenna-aim-note="rx" hidden></p>
               <!--
                 Work the cable loss out instead of asking for it (#112).
                 Nobody knows what to type into a dB box. They do know
@@ -1258,12 +1300,10 @@
 
               <!--
                 Ground and air is Advanced in full (§6.5). Simple predicts
-                on `desert`, vertical, no clutter and 30 km, which is what
-                Arizona and a Meshtastic node are; #239 carries the
-                question of reading the climate from the coordinate, and
-                until it is answered a beginner in Flagstaff is better
-                served by a default that is openly a default than by a
-                lookup that is confidently wrong.
+                on the climate read from the site (#239), vertical, no
+                clutter and 30 km. The climate menu opens on "From the
+                site", which names what it found; choosing another
+                climate there is kept, and goes into a share link.
 
                 The heading carries the marker too. A heading over nothing
                 reads as a section that failed to load.
@@ -1697,6 +1737,21 @@
               <button type="button" class="toggle" data-node-filter-open aria-expanded="false"
                       aria-controls="node-filters">Filters<span class="filter-count"
                       data-node-filter-count hidden></span></button>
+              <!--
+                The export (#350): the rows the list shows, every page of
+                them, with the columns the table draws, as a file. A
+                disclosure like the live map's packet kinds, so it costs
+                one control in this row. The status is in the markup, so
+                that a screen reader announces each change of it.
+              -->
+              <details class="family-filter node-export" data-node-export>
+                <summary>Export</summary>
+                <span class="family-chips" role="group" aria-label="Export the list as">
+                  <button type="button" class="chip" data-node-export-format="csv">CSV</button>
+                  <button type="button" class="chip" data-node-export-format="json">JSON</button>
+                  <span class="muted" role="status" data-node-export-status></span>
+                </span>
+              </details>
               <!--
                 The Search button is gone (Will: "What is the point of the
                 search button if it's automatically sorting, filtering and
@@ -2200,6 +2255,27 @@
         </section>
       </main>
     </div>
+    <!--
+      The bottom bar on a phone (#282). Will chose the four on 2026-10-08:
+      Map, Nodes, Chat and Dashboard, in that order, then More.
+
+      The page links are NOT written here. tab-bar.js copies them out of
+      `#site-nav` by the names in `data-tabs`, so there is one list of
+      pages and this cannot drift from it. More opens that same menu,
+      the one the top bar's button opens.
+
+      `hidden` until the script builds it and the screen is a phone
+      (narrow, and a finger). Without the script there is nothing for
+      More to open, so the bar never shows. After the page in the
+      markup, so the Tab key meets it last, where the eye does.
+    -->
+    <nav class="tab-bar" data-tab-bar data-tabs="map nodes chat dashboard"
+         aria-label="Main pages" hidden>
+      <button type="button" class="tab-more" data-tab-more
+              aria-expanded="false" aria-controls="site-menu">
+        <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg><span class="tab-label">More</span>
+      </button>
+    </nav>
 
 
     <script nonce="__SONORAN_NONCE__">window.SONORAN = __SONORAN_CONFIG__;</script>
@@ -2253,6 +2329,7 @@
       functions, which run long after both files are loaded.
     -->
     <script src="static/planner-params.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <script src="static/antenna-pattern.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/planner.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The coverage map has its own file for the same reason the
@@ -2285,6 +2362,8 @@
     -->
     <script src="static/map-live.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/map-watch.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!-- The phone's bottom bar (#282), before app.js: the router marks it. -->
+    <script src="static/tab-bar.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/app.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!-- The service worker, the update notice and the offline notice (#322). After app.js, for `clock` and `setStatus`. -->
     <script src="static/pwa.js?v=__SONORAN_ASSET_VERSION__"></script>

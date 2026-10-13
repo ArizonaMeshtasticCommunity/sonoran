@@ -1,6 +1,6 @@
 """The MQTT to database ingest pipeline."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,8 @@ from sonoran.decode.stored import stored_payload
 from sonoran.ingest.dedup import ObservationInput, PacketInput, StoredPacket, store_packet
 from sonoran.ingest.handlers import HandlerContext, store_mesh_packet_metrics, store_payload
 from sonoran.ingest.handlers.presence import store_gateway, store_heard
+from sonoran.ingest.preset_writes import load_gateway_presets, store_vote
+from sonoran.ingest.presets import PresetTracker
 from sonoran.logging import configure_logging, get_logger
 from sonoran.meshtastic import mesh_pb2
 from sonoran.mqtt.client import RawMqttMessage, message_stream
@@ -27,10 +29,19 @@ PKI_CHANNEL = "PKI"
 # The port number sits inside the encrypted part, so it is unknown.
 UNKNOWN_PORTNUM = 0
 
+# The memory of gateway presets and packet votes for a caller that
+# passes none, such as a test. `main` makes its own from the settings.
+_DEFAULT_PRESETS = PresetTracker(conflict_window=timedelta(minutes=60))
+
 
 def _node_num(node_id: str) -> int:
     """Convert a Meshtastic node ID to its node number."""
     return int(node_id.removeprefix("!"), 16)
+
+
+def _gateway_num(envelope: ParsedEnvelope, message: RawMqttMessage) -> int:
+    """Return the node number of the gateway that uploaded a message."""
+    return _node_num(envelope.gateway_id or message.topic.gateway_id or "")
 
 
 def heard_at(message: RawMqttMessage) -> datetime:
@@ -126,6 +137,7 @@ async def _store_opaque(
     envelope: ParsedEnvelope,
     from_node_num: int,
     payload_state: PayloadState,
+    presets: PresetTracker,
 ) -> StoredPacket:
     """Store a packet whose payload cannot be read.
 
@@ -141,12 +153,15 @@ async def _store_opaque(
     is the exact failure this column exists to end.
     """
     packet = envelope.packet
+    gateway = _gateway_num(envelope, message)
+    seen = presets.observe(gateway, message.topic.channel, message.received_at)
     packet_input = PacketInput(
         from_node_num=from_node_num,
         packet_id=packet.id,
         to_node_num=packet.to or None,
         portnum=UNKNOWN_PORTNUM,
         payload_state=payload_state,
+        modem_preset=seen.preset,
         channel=message.topic.channel,
         hop_start=packet.hop_start or None,
         hop_limit=packet.hop_limit or None,
@@ -157,7 +172,7 @@ async def _store_opaque(
         raw_bytes=envelope.raw_packet,
     )
     observation_input = ObservationInput(
-        gateway_node_num=_node_num(envelope.gateway_id or message.topic.gateway_id or ""),
+        gateway_node_num=gateway,
         mqtt_topic=message.topic.raw,
         channel=message.topic.channel,
         rx_rssi=packet.rx_rssi or None,
@@ -165,6 +180,7 @@ async def _store_opaque(
         hop_limit=packet.hop_limit or None,
         hop_start=packet.hop_start or None,
         seen_at=message.received_at,
+        modem_preset=seen.preset,
     )
     stored = await store_packet(session, packet_input, observation_input)
     await store_heard(session, from_node_num, observation_input.seen_at, packet_input.channel)
@@ -173,6 +189,10 @@ async def _store_opaque(
         observation_input.gateway_node_num,
         observation_input.seen_at,
         observation_input.mqtt_topic,
+        seen.uplink,
+    )
+    await store_vote(
+        session, presets, from_node_num, packet.id, seen.preset, message.received_at, stored.is_new
     )
     return stored
 
@@ -183,10 +203,16 @@ async def process_message(
     keys: list[bytes],
     store_text_messages: bool = False,
     mesh_future_slack_seconds: int = 300,
+    presets: PresetTracker | None = None,
 ) -> StoredPacket | None:
-    """Decrypt, decode, and store one encrypted MQTT message."""
+    """Decrypt, decode, and store one encrypted MQTT message.
+
+    `presets` is the memory that decides each upload's modem preset
+    (#313). Pass the one tracker for the life of the process.
+    """
     if message.topic.payload_format != "e":
         return None
+    presets = presets if presets is not None else _DEFAULT_PRESETS
     envelope = parse_envelope(message.payload)
     packet = envelope.packet
     from_node_num = getattr(packet, "from")
@@ -196,7 +222,9 @@ async def process_message(
     # the packet as traffic and stop there. Trying to decrypt it would
     # raise on every message and lose the packet.
     if _is_pki(packet, message):
-        return await _store_opaque(session, message, envelope, from_node_num, PayloadState.PKI)
+        return await _store_opaque(
+            session, message, envelope, from_node_num, PayloadState.PKI, presets
+        )
 
     if packet.encrypted:
         try:
@@ -230,7 +258,7 @@ async def process_message(
                 message.topic.channel or "an unnamed channel",
             )
             return await _store_opaque(
-                session, message, envelope, from_node_num, PayloadState.NO_KEY
+                session, message, envelope, from_node_num, PayloadState.NO_KEY, presets
             )
         data = parse_data(plaintext)
         decoded = decode_payload(data.portnum, data.payload)
@@ -238,6 +266,8 @@ async def process_message(
         data = packet.decoded
         decoded = decode_payload(data.portnum, data.payload)
 
+    gateway = _gateway_num(envelope, message)
+    seen = presets.observe(gateway, message.topic.channel, message.received_at)
     packet_input = PacketInput(
         from_node_num=from_node_num,
         packet_id=packet.id,
@@ -259,9 +289,10 @@ async def process_message(
         # The public API cannot decrypt, so what the packet carried is
         # kept here for the families that have no table of their own.
         payload_json=stored_payload(decoded),
+        modem_preset=seen.preset,
     )
     observation_input = ObservationInput(
-        gateway_node_num=_node_num(envelope.gateway_id or message.topic.gateway_id or ""),
+        gateway_node_num=gateway,
         mqtt_topic=message.topic.raw,
         channel=message.topic.channel,
         rx_rssi=packet.rx_rssi or None,
@@ -269,6 +300,7 @@ async def process_message(
         hop_limit=packet.hop_limit or None,
         hop_start=packet.hop_start or None,
         seen_at=message.received_at,
+        modem_preset=seen.preset,
     )
     stored = await store_packet(session, packet_input, observation_input)
 
@@ -280,6 +312,10 @@ async def process_message(
         observation_input.gateway_node_num,
         observation_input.seen_at,
         observation_input.mqtt_topic,
+        seen.uplink,
+    )
+    await store_vote(
+        session, presets, from_node_num, packet.id, seen.preset, message.received_at, stored.is_new
     )
 
     if stored.is_new:
@@ -317,7 +353,13 @@ async def main() -> None:
     keys = [decode_key(key) for key in settings.channel_keys]
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
+    presets = PresetTracker(
+        conflict_window=timedelta(minutes=settings.gateway_preset_conflict_minutes)
+    )
     try:
+        async with session_factory() as session:
+            seeded = await load_gateway_presets(session, presets)
+        logger.info("loaded the stored modem preset of %s gateways", seeded)
         async for message in message_stream(settings):
             async with session_factory() as session:
                 try:
@@ -327,6 +369,7 @@ async def main() -> None:
                         keys,
                         settings.store_text_messages,
                         settings.mesh_future_slack_seconds,
+                        presets,
                     )
                     await session.commit()
                     if stored is not None:

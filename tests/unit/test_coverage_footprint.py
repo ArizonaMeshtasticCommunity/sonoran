@@ -117,19 +117,26 @@ def _router(node_num: int, bits: int | None) -> Node:
     )
 
 
-def test_a_rounded_router_is_a_site_when_the_setting_allows_it(tmp_path: Path) -> None:
-    """Towers 2 shares 13 bits, and was left out of every map."""
+def test_a_rounded_router_is_a_site_only_on_the_approximate_map(tmp_path: Path) -> None:
+    """Towers 2 shares 13 bits.
+
+    #318 let `COVERAGE_MIN_PRECISION_BITS=13` put it on the main map.
+    #315 took that back: the main map is precise, and a rounded router
+    is a site only on the approximate map a host may ask for. See
+    `tests/unit/test_coverage_precision.py`.
+    """
     rounded, exact = _router(1, 13), _router(2, None)
     overrides = parse_overrides("")
 
-    strict = _settings(tmp_path)
-    groups, left_out, coarse = coverage.group_by_preset(strict, [rounded, exact], overrides)
+    lowered = _settings(tmp_path, coverage_min_precision_bits=13)
+    groups, left_out, coarse = coverage.group_by_preset(lowered, [rounded, exact], overrides)
     assert [site.node_num for site in groups["MEDIUM_FAST"]] == [2]
     assert left_out["MEDIUM_FAST"][coverage.COARSE_POSITION] == 1
     assert [item["node_id"] for item in coarse] == ["!00000001"]
 
-    allowing = _settings(tmp_path, coverage_min_precision_bits=13)
-    groups, left_out, coarse = coverage.group_by_preset(allowing, [rounded, exact], overrides)
+    groups, left_out, coarse = coverage.group_by_preset(
+        _settings(tmp_path), [rounded, exact], overrides, precision="approximate"
+    )
     by_num = {site.node_num: site for site in groups["MEDIUM_FAST"]}
     assert set(by_num) == {1, 2}
     assert coverage.COARSE_POSITION not in left_out["MEDIUM_FAST"]
