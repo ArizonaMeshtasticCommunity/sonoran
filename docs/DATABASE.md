@@ -299,7 +299,8 @@ Packet routing and network statistics.
 
 `latitude` (double precision), `longitude` (double precision),
 `altitude` (integer), `ground_speed` (integer), `ground_track` (integer),
-`precision_bits` (integer), `sats_in_view` (integer).
+`precision_bits` (integer), `sats_in_view` (integer),
+`location_source` (text, nullable, revision pr344).
 
 ### 4.8 `neighbor_metrics`
 
