@@ -31,7 +31,7 @@
    * because that is what sells telephones. Showing only the downlink
    * here would promise reach that a handheld cannot return.
    */
-  const DEFAULT_LAYER = 'uplink';
+  const DEFAULT_LAYER = 'usable';
 
   // How see-through the signal layer is drawn, 0 to 1. This is the
   // viewer's own choice, not the deployment's: it restyles the tiles
@@ -366,12 +366,18 @@
      */
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
-    const layers = [...(state.summary.layers || []), { key: 'empirical_heatmap_position', label: 'Actual Coverage (based on heard positions)' }];
+    const layers = [
+      { key: 'usable', label: 'Simulated coverage' },
+      { key: 'empirical_heatmap_position', label: 'Actual coverage (based on heard positions)' },
+    ];
     replace(
       host,
       layers.map((layer) =>
         el('option', { value: layer.key, text: layer.label })),
     );
+    if (!layers.some((l) => l.key === state.layer)) {
+      state.layer = 'usable';
+    }
     host.value = state.layer;
     if (!host.dataset.wired) {
       host.dataset.wired = 'true';

@@ -87,10 +87,16 @@ CALIBRATION_NAME = "calibration.json"
 NODE_LEVELS_NAME = "coverage-at-nodes.json"
 
 # The layers a run writes.
-LAYERS = ("uplink",)
+#
+# `usable` is the honest one and the one a page shows first. It is the
+# weaker of the two directions, so it answers "can I use the mesh from
+# here", which is what somebody looking at a coverage map wants to know.
+LAYERS = ("usable", "downlink", "uplink")
 
 LAYER_LABELS: dict[str, str] = {
-    "uplink": "Simulated Coverage",
+    "usable": "Usable both ways",
+    "downlink": "Node heard here",
+    "uplink": "Here heard by a node",
 }
 
 

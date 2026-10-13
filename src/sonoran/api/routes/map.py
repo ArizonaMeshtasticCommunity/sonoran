@@ -3,10 +3,10 @@
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-from fastapi import APIRouter, Depends, Query, Path, HTTPException, Request
-from starlette.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import Response
 
 from sonoran.api.channels import channel_filter
 from sonoran.api.dependencies import get_session, require_node_num
@@ -550,6 +550,7 @@ async def traceroute_paths(
         "traces": traces,
     }
 
+
 @router.get("/heatmap/{model}/{z}/{x}/{y}.png")
 async def heatmap_tile(
     request: Request,
@@ -560,21 +561,30 @@ async def heatmap_tile(
 ) -> Response:
     """Return one empirical activity heatmap tile."""
     from pathlib import Path as FilePath
+
     settings = request.app.state.settings
-    
+
     if model not in ("position",):
         raise HTTPException(status_code=404, detail="Unknown heatmap model")
-        
+
     layer_name = f"empirical_heatmap_{model}"
-    
+
     # Matches the path written by activity_heatmap job
-    tile_path = FilePath(settings.coverage_cache_dir) / "all" / "all" / layer_name / str(z) / str(x) / f"{y}.png"
-    
+    tile_path = (
+        FilePath(settings.coverage_cache_dir)
+        / "all"
+        / "all"
+        / layer_name
+        / str(z)
+        / str(x)
+        / f"{y}.png"
+    )
+
     try:
         png = tile_path.read_bytes()
-    except (OSError, ValueError):
-        raise HTTPException(status_code=404, detail="no heatmap data here")
-        
+    except (OSError, ValueError) as err:
+        raise HTTPException(status_code=404, detail="no heatmap data here") from err
+
     return Response(
         content=png,
         media_type="image/png",
@@ -582,4 +592,3 @@ async def heatmap_tile(
             "Cache-Control": "public, max-age=3600",
         },
     )
-

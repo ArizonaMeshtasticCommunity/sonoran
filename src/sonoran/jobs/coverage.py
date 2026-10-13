@@ -636,10 +636,10 @@ def predict_preset(
     grid: Grid,
     sites: Sequence[Site],
     workers: int,
-) -> tuple[Levels, list[dict[str, object]], set[str]]:
+) -> tuple[Levels, Levels, Levels, list[dict[str, object]], set[str]]:
     """Predict one preset from every site on it.
 
-    Returns the uplink grid, a note
+    Returns the downlink grid, the uplink grid, the usable grid, a note
     about each site, and the terrain tiles that were missing.
 
     The engine runs in worker processes. One site takes a few seconds of
@@ -674,16 +674,22 @@ def _predict(
     grid: Grid,
     sites: Sequence[Site],
     workers: int,
-) -> tuple[Levels, list[dict[str, object]], set[str]]:
+) -> tuple[Levels, Levels, Levels, list[dict[str, object]], set[str]]:
     """Predict one preset with a given number of processes.
 
     The results are put on the region grid here, in the order the sites
     were given, so the answer never depends on which worker finished
     first.
+
+    Three layers come back, and `usable` is built here rather than from
+    the other two. See the note on it below.
     """
+    downlink = grid.empty()
     uplink = grid.empty()
+    usable = grid.empty()
     notes: list[dict[str, object]] = []
     missing: set[str] = set()
+    down_offset = downlink_offset_db(settings)
 
     def take(index: int, site: Site, computed: SiteResult | None) -> None:
         if computed is None:
@@ -697,8 +703,19 @@ def _predict(
         # The clutter around the node costs the same at both ends,
         # because it is a loss on this end of every path.
         here = site.clutter_loss_db
+        down_here = _shift(levels, down_offset - here)
         up_here = _shift(levels, uplink_offset_db(settings, site) - here)
+        added_down = blit_max(downlink, grid, down_here, site_grid)
         added_up = blit_max(uplink, grid, up_here, site_grid)
+        # `usable` is the weaker direction **of one node**, and only
+        # then the best node. Taking the best of each direction first
+        # and the weaker of the two afterwards lets one node answer for
+        # the downlink and another for the uplink, and paints a place
+        # as usable both ways where no single node closes both. A tall
+        # router a handheld cannot answer, beside a solar node the
+        # handheld can reach but which cannot be heard, is exactly that
+        # place, and the mesh does not work there.
+        blit_max(usable, grid, combine_min(down_here, up_here), site_grid)
         notes.append(
             {
                 "node_id": site.node_id,
@@ -714,7 +731,8 @@ def _predict(
                 # "operator" when the overrides file placed the site.
                 # The position itself is not written here (#315).
                 "position_source": site.position_source,
-                "cells_set": added_up,
+                "cells_set": added_down,
+                "cells_set_uplink": added_up,
             }
         )
         if (index + 1) % 25 == 0:
@@ -724,7 +742,7 @@ def _predict(
         with SplatModule().instance() as instance:
             for index, site in enumerate(sites):
                 take(index, site, _to_plain(_site_levels(instance, settings, site)))
-        return uplink, notes, missing
+        return downlink, uplink, usable, notes, missing
 
     with ProcessPoolExecutor(
         max_workers=workers,
@@ -736,7 +754,7 @@ def _predict(
         for index, (site, result) in enumerate(zip(sites, computed, strict=True)):
             take(index, site, result)
 
-    return uplink, notes, missing
+    return downlink, uplink, usable, notes, missing
 
 
 def render_layer(
@@ -1035,16 +1053,20 @@ def _build_site_set(
             sum(rejected.values()),
         )
 
-        uplink, notes, missing = predict_preset(settings, grid, chosen, workers)
+        downlink, uplink, usable, notes, missing = predict_preset(settings, grid, chosen, workers)
         missing_all.update(missing)
         # The receiving end is the same wherever it stands, so taking
         # it off after the sites are combined is the same as taking it
         # off each one, and costs one pass instead of many.
+        downlink = _charge_receiver(downlink, rx_loss)
         uplink = _charge_receiver(uplink, rx_loss)
+        usable = _charge_receiver(usable, rx_loss)
         threshold = sensitivity_of(preset)
 
         tiles = 0
         for layer, levels in (
+            ("usable", usable),
+            ("downlink", downlink),
             ("uplink", uplink),
         ):
             tiles += render_layer(
@@ -1063,7 +1085,7 @@ def _build_site_set(
                 sets[site_set] = _sample_nodes(
                     points,
                     grid,
-                    {"uplink": uplink},
+                    {"usable": usable, "downlink": downlink, "uplink": uplink},
                     region,
                 )
 
@@ -1077,17 +1099,17 @@ def _build_site_set(
                 site_count=len(chosen),
                 skipped_count=len(sites) - len(chosen),
                 excluded_by_role=dict(sorted(rejected.items())),
-                usable_area_km2=round(covered_area_km2(uplink, grid, threshold), 1),
-                downlink_area_km2=0.0,
+                usable_area_km2=round(covered_area_km2(usable, grid, threshold), 1),
+                downlink_area_km2=round(covered_area_km2(downlink, grid, threshold), 1),
                 tile_count=tiles,
-                data_bounds=data_bounds(uplink, grid, threshold),
+                data_bounds=data_bounds(usable, grid, threshold),
                 nodes=notes[:MANIFEST_NODE_LIMIT],
             )
         )
         # A region grid of Arizona is 88 MB. Letting three of them stay
         # named while the next preset makes two more is most of a
         # gigabyte for nothing.
-        del uplink
+        del downlink, uplink, usable
 
     return summaries
 

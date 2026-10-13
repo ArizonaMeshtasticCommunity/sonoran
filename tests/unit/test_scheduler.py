@@ -45,7 +45,13 @@ def test_coverage_does_not_get_a_competing_calibration_task() -> None:
     # The gaps task is here as well, and it is not a competitor: it runs
     # no engine, so it cannot take a core from a coverage build. Anything
     # that DOES use the engine must join `_coverage_cycle` instead.
-    assert [task.name for task in tasks] == ["snapshot", "coverage", "gaps", "rf-rollup"]
+    assert [task.name for task in tasks] == [
+        "snapshot",
+        "activity_heatmap",
+        "coverage",
+        "gaps",
+        "rf-rollup",
+    ]
 
 
 def test_calibration_keeps_its_task_when_coverage_is_off() -> None:
@@ -53,4 +59,10 @@ def test_calibration_keeps_its_task_when_coverage_is_off() -> None:
         Settings(_env_file=None, calibration_enabled=True, coverage_enabled=False)
     )
 
-    assert [task.name for task in tasks] == ["snapshot", "calibration", "gaps", "rf-rollup"]
+    assert [task.name for task in tasks] == [
+        "snapshot",
+        "activity_heatmap",
+        "calibration",
+        "gaps",
+        "rf-rollup",
+    ]

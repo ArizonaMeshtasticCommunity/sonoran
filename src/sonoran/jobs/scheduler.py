@@ -208,7 +208,7 @@ def build_tasks(settings: Settings) -> list[Task]:
             next_delay=_delay_to_next_utc_day,
         )
     ]
-    
+
     async def heatmap_run() -> None:
         engine = make_engine(settings.database_url_jobs)
         factory = make_session_factory(engine)
@@ -217,7 +217,7 @@ def build_tasks(settings: Settings) -> list[Task]:
                 await activity_heatmap.run_once(session, settings)
         finally:
             await engine.dispose()
-            
+
     tasks.append(
         Task(
             name="activity_heatmap",

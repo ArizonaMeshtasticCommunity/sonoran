@@ -1,7 +1,7 @@
 """Add location_source to position_metrics.
 
-Revision ID: abc12345
-Revises: 0021
+Revision ID: pr344
+Revises: i368
 Create Date: 2026-10-01
 """
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "abc12345"
-down_revision: str | None = "0021"
+revision: str = "pr344"
+down_revision: str | None = "i368"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -41,13 +41,16 @@ async def store_position(session: AsyncSession, message: Message, context: Handl
         position.latitude_i / 10_000_000 if position.latitude_i else None,
         position.longitude_i / 10_000_000 if position.longitude_i else None,
     )
-    
+
     try:
         from sonoran.meshtastic import mesh_pb2
-        location_source = mesh_pb2.Position.LocSource.Name(position.location_source)
+
+        location_source = mesh_pb2.Position.LocSource.Name(  # type: ignore[attr-defined]
+            position.location_source
+        )
     except Exception:
         location_source = None
-        
+
     values = {
         "node_num": context.from_node_num,
         "packet_pk": context.packet_pk,
