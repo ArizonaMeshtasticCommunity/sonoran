@@ -11,7 +11,24 @@ import pytest
 from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 
-TIMESCALE_IMAGE = "timescale/timescaledb-ha:pg17"
+# Pinned by digest, the same image as the CI services. `pg17` is a
+# moving tag: it changed 6 times in 14 days, and each change pulled and
+# unpacked about 4 GB again on the CI runners' shared, slow disk. To
+# update it, change the digest on purpose, in its own commit, here and in
+# both services of .github/workflows/ci.yml. test_ci_database_image.py
+# holds the three to one value.
+TIMESCALE_IMAGE = (
+    "timescale/timescaledb-ha:pg17"
+    "@sha256:e77fc7a0395b63a89d27b8b5043abcc7e8120576429ea9a470977d4bed3d0261"
+)
+
+# The database's files go to RAM. The container is thrown away when the
+# run ends, and on the CI runners' disk the image's init server could not
+# flush its shutdown checkpoint in 60 s under load, so the container
+# exited 1 and every database test failed. The path is $PGDATA in
+# this image; uid 1000 is postgres, and initdb needs mode 0700. Docker
+# Desktop, Colima and plain Docker all support it.
+TIMESCALE_TMPFS = {"/home/postgres/pgdata/data": "rw,uid=1000,gid=1000,mode=0700,size=2g"}
 
 # The password the three least-privilege roles are created with.
 #
@@ -108,6 +125,11 @@ def timescale_url() -> Iterator[str]:
     # `ALTER TABLE packet ALTER COLUMN want_ack DROP DEFAULT`. A setting
     # read at server start cannot be undone by the schema under test.
     container.with_command("postgres -c timescaledb.max_background_workers=0")
+    # Into `tmpfs`, which `start()` passes to Docker as `tmpfs=`. Not
+    # `with_kwargs(tmpfs=...)`: testcontainers 4.15 then sends `tmpfs`
+    # twice, and every database test failed with "got multiple values
+    # for keyword argument 'tmpfs'".
+    container.tmpfs.update(TIMESCALE_TMPFS)
     _disable_ryuk()
     try:
         container.start()

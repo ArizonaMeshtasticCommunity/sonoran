@@ -66,7 +66,14 @@ jobs:
     runs-on: self-hosted
     services:
       timescaledb:
-        image: timescale/timescaledb-ha:pg17
+        # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
+        # 14 days, and each change pulled and unpacked about 4 GB again on
+        # the runners' shared, slow disk. The days with the most pulls had
+        # the most failures. To update it, change the digest on purpose, in
+        # its own commit, here, in the e2e service and in
+        # tests/integration/conftest.py (test_ci_database_image.py holds
+        # the three to one value).
+        image: timescale/timescaledb-ha:pg17@sha256:e77fc7a0395b63a89d27b8b5043abcc7e8120576429ea9a470977d4bed3d0261
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: sonoran
@@ -100,11 +107,22 @@ jobs:
         # and the init server had still not handed over at 15:15:51.
         # Over TCP the check cannot pass before the real server is
         # listening, which is the thing the job actually needs to know.
+        # `--tmpfs` puts the database's files in RAM, not on the runner's
+        # disk. The database is thrown away when the job ends, and the
+        # disk is too slow at synchronous writes: the image's init server
+        # could not flush its shutdown checkpoint in 60 s under load, and
+        # the container exited 1. Measured on the runner VM, ready over
+        # TCP: 14.8 s on disk on a quiet box and over 60 s under load,
+        # 5.1 s on tmpfs whatever the load. The path is $PGDATA in this
+        # image (mounting its parent fails: root owns a new tmpfs). uid
+        # 1000 is postgres, and initdb needs mode 0700. Raise `size` if
+        # Postgres ever says "No space left on device".
         options: >-
           --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d sonoran"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+          --tmpfs /home/postgres/pgdata/data:rw,uid=1000,gid=1000,mode=0700,size=2g
     env:
       DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:test@localhost:5432/sonoran
       # Revision 0001 creates the three least-privilege roles and has no
@@ -146,7 +164,14 @@ jobs:
     runs-on: self-hosted
     services:
       timescaledb:
-        image: timescale/timescaledb-ha:pg17
+        # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
+        # 14 days, and each change pulled and unpacked about 4 GB again on
+        # the runners' shared, slow disk. The days with the most pulls had
+        # the most failures. To update it, change the digest on purpose, in
+        # its own commit, here, in the e2e service and in
+        # tests/integration/conftest.py (test_ci_database_image.py holds
+        # the three to one value).
+        image: timescale/timescaledb-ha:pg17@sha256:e77fc7a0395b63a89d27b8b5043abcc7e8120576429ea9a470977d4bed3d0261
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: azmsh
@@ -178,11 +203,22 @@ jobs:
         # and the init server had still not handed over at 15:15:51.
         # Over TCP the check cannot pass before the real server is
         # listening, which is the thing the job actually needs to know.
+        # `--tmpfs` puts the database's files in RAM, not on the runner's
+        # disk. The database is thrown away when the job ends, and the
+        # disk is too slow at synchronous writes: the image's init server
+        # could not flush its shutdown checkpoint in 60 s under load, and
+        # the container exited 1. Measured on the runner VM, ready over
+        # TCP: 14.8 s on disk on a quiet box and over 60 s under load,
+        # 5.1 s on tmpfs whatever the load. The path is $PGDATA in this
+        # image (mounting its parent fails: root owns a new tmpfs). uid
+        # 1000 is postgres, and initdb needs mode 0700. Raise `size` if
+        # Postgres ever says "No space left on device".
         options: >-
           --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d azmsh"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+          --tmpfs /home/postgres/pgdata/data:rw,uid=1000,gid=1000,mode=0700,size=2g
     env:
       DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:test@localhost:5432/azmsh
       # Throwaway values for a throwaway container, as in `migrations`.
