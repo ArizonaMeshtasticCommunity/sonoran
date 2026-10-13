@@ -19,7 +19,9 @@ process (`python -m sonoran.jobs.run_task <name>`):
   the container has (its cgroup limit, or `JOBS_MEMORY_BUDGET_MB`) and
   starts a job only when the job fits beside the ones running. A job
   that does not fit waits its turn. One bigger than the whole budget
-  runs alone.
+  runs alone. So overlap is a matter of memory: at `JOBS_MEMORY_LIMIT`
+  900m a coverage run (planned at about 720 MB) leaves no room, and the
+  other jobs wait for it; a larger limit lets them run beside it.
 - **Planned by measurement.** Each run records its peak. A job is
   planned at its last peak plus `PLAN_MARGIN`, never above its ceiling,
   and at its ceiling until it has a recorded peak. So the overlap follows
@@ -68,8 +70,16 @@ PLAN_MARGIN = 1.15
 #: Memory the container keeps free beside the supervisor itself.
 HEADROOM_MB = 50.0
 
-#: How often the watchdog reads a job's memory.
+#: How often the watchdog reads a job's memory, after its first seconds.
 WATCH_SECONDS = 1.0
+#: For a run's first `EARLY_SECONDS`, it reads every `EARLY_WATCH_SECONDS`,
+#: so a short job still records a peak.
+EARLY_SECONDS = 5.0
+EARLY_WATCH_SECONDS = 0.25
+#: A finished run lowers the recorded peak by at most this share, so one
+#: short run (coverage with nothing to plan, say) cannot make the next
+#: plan too small to be safe.
+PEAK_DECAY = 0.9
 
 #: The OOM score a child gives itself: the kernel's first choice.
 CHILD_OOM_SCORE_ADJ = 1000
@@ -118,13 +128,34 @@ def container_limit_mb() -> float | None:
 
 def rss_mb(pid: int) -> float:
     """The resident memory of one process, in MB. 0 when it is gone."""
+    return _status_kb(pid, "VmRSS:") / 1024
+
+
+def _status_kb(pid: int, field_name: str) -> float:
     try:
         for line in Path(f"/proc/{pid}/status").read_text(encoding="ascii").splitlines():
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1]) / 1024
+            if line.startswith(field_name):
+                return float(line.split()[1])
     except (OSError, ValueError, IndexError):
         pass
     return 0.0
+
+
+def share_mb(pid: int) -> float:
+    """One process's share of memory (PSS), in MB, or its RSS when PSS is unreadable.
+
+    PSS divides each shared page between the processes that map it. A
+    tree's RSS counts the Python runtime and its libraries once per
+    process: a coverage child and its engine worker read about 50 MB
+    more than they hold. Summed PSS is what the container is charged.
+    """
+    try:
+        for line in Path(f"/proc/{pid}/smaps_rollup").read_text(encoding="ascii").splitlines():
+            if line.startswith("Pss:"):
+                return float(line.split()[1]) / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return rss_mb(pid)
 
 
 def process_tree(root: int) -> list[int]:
@@ -149,8 +180,8 @@ def process_tree(root: int) -> list[int]:
 
 
 def tree_rss_mb(root: int) -> float:
-    """The resident memory of a process and everything below it, in MB."""
-    return sum(rss_mb(pid) for pid in process_tree(root))
+    """The memory of a process and everything below it, in MB (summed PSS)."""
+    return sum(share_mb(pid) for pid in process_tree(root))
 
 
 def _kill_tree(root: int) -> None:
@@ -174,6 +205,10 @@ def read_peak(settings: Settings, name: str) -> float | None:
 
 
 def _record_peak(settings: Settings, name: str, peak: float) -> None:
+    """Keep a finished run's peak, falling by at most `PEAK_DECAY` a run."""
+    previous = read_peak(settings, name)
+    if previous is not None:
+        peak = max(peak, previous * PEAK_DECAY)
     path = _peak_file(settings, name)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -265,8 +300,11 @@ async def run_job(name: str, settings: Settings, budget: Budget) -> None:
             sys.executable, "-m", "sonoran.jobs.run_task", name
         )
         while True:
+            early = time.monotonic() - started < EARLY_SECONDS
             try:
-                await asyncio.wait_for(child.wait(), timeout=WATCH_SECONDS)
+                await asyncio.wait_for(
+                    child.wait(), timeout=EARLY_WATCH_SECONDS if early else WATCH_SECONDS
+                )
                 break
             except TimeoutError:
                 pass
@@ -287,10 +325,12 @@ async def run_job(name: str, settings: Settings, budget: Budget) -> None:
             wanted,
             time.monotonic() - started,
         )
+        if child.returncode != 0:
+            # A failed run is not a measure of the job: it may have ended
+            # before it reached its working size.
+            raise RuntimeError(f"the {name} job exited with {child.returncode}")
         if peak > 0:
             _record_peak(settings, name, peak)
-        if child.returncode != 0:
-            raise RuntimeError(f"the {name} job exited with {child.returncode}")
     finally:
         await budget.release(wanted)
 

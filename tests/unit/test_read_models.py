@@ -4,6 +4,7 @@
 the live one through the API.
 """
 
+import asyncio
 import inspect
 from datetime import UTC, datetime, timedelta
 
@@ -89,3 +90,29 @@ def test_the_statistics_counts_read_the_hourly_totals() -> None:
         (stats.broadcast_ranking, "hourly.sender_port_counts("),
     ):
         assert call in inspect.getsource(function), function.__name__
+
+
+class _Session:
+    """Answers the one `built_at` query `_due` makes."""
+
+    def __init__(self, built_at: datetime | None) -> None:
+        self.built_at = built_at
+        self.asked = 0
+
+    async def scalar(self, *_: object) -> datetime | None:
+        self.asked += 1
+        return self.built_at
+
+
+def test_a_30_day_window_is_built_when_its_build_is_old_enough() -> None:
+    settings = _settings(read_models_interval_minutes=10, read_models_long_every=3)
+    model = job.LinkEvidenceRun
+
+    def due(session: _Session, hours: int) -> bool:
+        return asyncio.run(job._due(session, settings, model, hours, channel="", hours=hours))  # type: ignore[arg-type]
+
+    short = _Session(datetime.now(UTC))
+    assert due(short, 168) and short.asked == 0, "a short window is built every run"
+    assert due(_Session(None), 720), "nothing stored: build it"
+    assert not due(_Session(datetime.now(UTC) - timedelta(minutes=10)), 720)
+    assert due(_Session(datetime.now(UTC) - timedelta(minutes=26)), 720), "30 min less half a run"

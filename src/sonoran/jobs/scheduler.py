@@ -94,6 +94,9 @@ async def _coverage_cycle(session: AsyncSession, settings: Settings, run_calibra
     """
     if run_calibration:
         await calibrate.run_once(session, settings)
+        # After it succeeded, not before: a calibration that failed is
+        # tried again with the next coverage run, not a day later.
+        _record_attempt(settings, "calibration")
     await coverage.run_once(session, settings)
     if settings.gaps_enabled and settings.gaps_siting_enabled:
         # It reads the coverage run above and the gaps assessment, and
@@ -232,10 +235,7 @@ async def _job_coverage(settings: Settings) -> None:
     factory = make_session_factory(engine)
     try:
         async with factory() as session:
-            calibration_due = _calibration_due(settings)
-            if calibration_due:
-                _record_attempt(settings, "calibration")
-            await _coverage_cycle(session, settings, calibration_due)
+            await _coverage_cycle(session, settings, _calibration_due(settings))
     finally:
         await engine.dispose()
 

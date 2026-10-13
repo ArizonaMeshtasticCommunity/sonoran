@@ -142,11 +142,98 @@ def test_with_a_budget_every_task_runs_in_a_child(
     assert asked == [task.name for task in tasks]
 
 
-def test_a_stopped_job_waits_its_interval_not_the_short_retry() -> None:
-    import inspect
+def test_a_stopped_job_waits_its_interval_not_the_short_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def stopped() -> None:
+        raise supervisor.OverLimit("the gaps job used 900 MB, over its limit")
 
-    source = inspect.getsource(scheduler._run_forever)
-    stopped = source.index("except supervisor.OverLimit")
-    other = source.index("except Exception")
-    assert stopped < other, "the general handler would catch a stop first"
-    assert "task.next_delay()" in source[stopped:other]
+    waits: list[float] = []
+
+    class Done(Exception):
+        pass
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        raise Done
+
+    monkeypatch.setattr(scheduler.asyncio, "sleep", sleep)
+    task = scheduler.Task(name="gaps", run=stopped, next_delay=lambda: 1800.0)
+    with pytest.raises(Done):
+        asyncio.run(scheduler._run_forever(task, _settings(tmp_path)))
+    assert waits == [1800.0], f"waited {waits}, not its interval"
+
+
+def test_a_failed_run_does_not_record_a_peak_and_a_short_one_lowers_it_slowly(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    supervisor._record_peak(settings, "coverage", 627.0)
+    supervisor._record_peak(settings, "coverage", 100.0)  # nothing to plan this time
+    assert supervisor.read_peak(settings, "coverage") == pytest.approx(564.3, abs=1)
+    assert supervisor.planned_mb(settings, "coverage") > 600.0
+
+
+def test_a_failed_run_leaves_the_recorded_peak_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    supervisor._record_peak(settings, "gaps", 200.0)
+    monkeypatch.setattr(
+        supervisor.asyncio,
+        "create_subprocess_exec",
+        _child("import time; time.sleep(0.6); raise SystemExit(1)"),
+    )
+    with pytest.raises(RuntimeError):
+        asyncio.run(supervisor.run_job("gaps", settings, supervisor.Budget(total_mb=None)))
+    assert supervisor.read_peak(settings, "gaps") == 200.0
+
+
+def test_a_short_job_still_records_a_peak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(
+        supervisor.asyncio,
+        "create_subprocess_exec",
+        _child("import time; time.sleep(0.6)"),
+    )
+    asyncio.run(supervisor.run_job("snapshot", settings, supervisor.Budget(total_mb=None)))
+    assert supervisor.read_peak(settings, "snapshot") is not None
+
+
+def test_the_memory_of_a_tree_counts_shared_pages_once() -> None:
+    me = os.getpid()
+    assert 0 < supervisor.share_mb(me) <= supervisor.rss_mb(me) + 1
+
+
+def test_calibration_is_due_by_its_last_success(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, calibration_interval_hours=24)
+    assert scheduler._calibration_due(settings), "never run: due"
+    scheduler._record_attempt(settings, "calibration")
+    assert not scheduler._calibration_due(settings)
+    old = scheduler._attempt_file(settings, "calibration")
+    old.write_text(str(float(old.read_text()) - 25 * 3600))
+    assert scheduler._calibration_due(settings)
+    assert not scheduler._calibration_due(_settings(tmp_path, calibration_enabled=False))
+
+
+def test_a_failed_calibration_is_tried_again_with_the_next_coverage_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+
+    async def broken(*_: object) -> None:
+        raise ConnectionError("the database restarted")
+
+    monkeypatch.setattr(scheduler.calibrate, "run_once", broken)
+    with pytest.raises(ConnectionError):
+        asyncio.run(scheduler._coverage_cycle(object(), settings, True))  # type: ignore[arg-type]
+    assert scheduler._calibration_due(settings), "a failed calibration counted as done"
+
+    async def fine(*_: object) -> None:
+        return None
+
+    monkeypatch.setattr(scheduler.calibrate, "run_once", fine)
+    monkeypatch.setattr(scheduler.coverage, "run_once", fine)
+    monkeypatch.setattr(scheduler.gaps_siting, "run_once", fine)
+    asyncio.run(scheduler._coverage_cycle(object(), settings, True))  # type: ignore[arg-type]
+    assert not scheduler._calibration_due(settings)

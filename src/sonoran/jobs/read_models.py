@@ -17,8 +17,10 @@ stored. Each build is its own transaction, so a reader sees a whole
 build or the one before it, never half of one.
 
 No engine. Each run is its own process under the jobs supervisor
-(`jobs/supervisor.py`), with its own memory ceiling, and runs beside a
-coverage build when both fit in the container's memory.
+(`jobs/supervisor.py`), with its own memory ceiling. It runs beside a
+coverage build only when both fit in the container's memory; on a small
+container it waits for the coverage run, and the API computes the views
+live meanwhile.
 """
 
 from __future__ import annotations
