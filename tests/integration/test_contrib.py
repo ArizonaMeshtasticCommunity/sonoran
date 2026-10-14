@@ -181,3 +181,37 @@ def test_the_ingest_role_cannot_touch_contributor_tables(  # type: ignore[no-unt
             connection.execute(text("SELECT 1 FROM contrib_job"))
     finally:
         ingest.dispose()
+
+
+def test_the_node_page_and_the_rf_layer_show_the_reading(  # type: ignore[no-untyped-def]
+    timescale_url, migrated_engine, clean
+) -> None:
+    """#182: the measured noise floor on the node page and the RF map."""
+    from fastapi.testclient import TestClient
+
+    from sonoran.api.app import create_app
+    from sonoran.config import Settings
+
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE node SET last_lat = 33.4, last_lon = -112.1 WHERE node_num = :n"),
+            {"n": ROUTER},
+        )
+    _as_jobs(timescale_url, lambda s: store.store_status(s, A, _status(A, [(ROUTER, 1)], now), now))
+    (job,) = _as_jobs(timescale_url, lambda s: store.plan_jobs(s, now))
+    result = _result(job.job, A, ROUTER, received=now.isoformat(), sent=now.isoformat())
+    _as_jobs(timescale_url, lambda s: store.store_result(s, result, now))
+
+    app = create_app(
+        Settings(_env_file=None, database_url_api=role_url(timescale_url, "azmsh_api"))
+    )
+    with TestClient(app) as client:
+        detail = client.get(f"/api/nodes/{_id(ROUTER)}/detail").json()
+        assert detail["local_stats"]["noise_floor"] == -104
+        series = client.get(f"/api/nodes/{_id(ROUTER)}/telemetry?family=local_stats").json()
+        assert [point["noise_floor"] for point in series] == [-104]
+        layer = client.get("/api/rf/noise-floor").json()
+    (point,) = [item for item in layer if item["node_id"] == _id(ROUTER)]
+    assert point["noise_floor_dbm"] == -104
+    assert point["measured_by"]["location"] == "contrib-a"

@@ -42,6 +42,7 @@ from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
     EnvironmentMetrics,
+    LocalStatsMetrics,
     NeighborMetrics,
     Node,
     NodeConfig,
@@ -66,6 +67,8 @@ TELEMETRY_MODELS = {
     "air_quality": AirQualityMetrics,
     "power": PowerMetrics,
     "pax": PaxMetrics,
+    # Read by a contributor on request (#178), not sent by the node.
+    "local_stats": LocalStatsMetrics,
 }
 
 # Environment fields that the user interface shows as weather.
@@ -994,6 +997,8 @@ async def node_detail(
         "device": await _latest_metric(session, DeviceMetrics, node_num),
         "air_quality": await _latest_metric(session, AirQualityMetrics, node_num),
         "power": await _latest_metric(session, PowerMetrics, node_num),
+        # The newest reading a contributor brought back (#178, #182).
+        "local_stats": await _latest_metric(session, LocalStatsMetrics, node_num),
         "activity": await _activity(session, node_num, since),
         "messages": await _messages(session, node_num, since, limit=25),
         "graph": {

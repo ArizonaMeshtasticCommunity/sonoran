@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session
 from sonoran.db.models import (
+    LocalStatsMetrics,
+    Node,
     RfCustom,
     RfHeard,
     RfHiddenMod,
@@ -911,3 +913,66 @@ async def channels(request: Request) -> dict[str, object]:
             for item in sorted([*all_channels(), *custom], key=lambda c: c.centre_hz)
         ],
     }
+
+
+@router.get("/noise-floor")
+async def noise_floor(
+    hours: int = Query(default=24, ge=1, le=720),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, object]]:
+    """The latest measured noise floor of each node with a position (#182).
+
+    Measured by the node itself and read by a contributor (#178). It is
+    not the theoretical floor the coverage map uses. A node with no
+    reading in the window is not in the list: "not measured", never
+    "quiet". The default window is two of a router's 12 hour intervals
+    (docs/design/contributors.md 5.1), so one missed round still shows.
+    """
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    latest = (
+        select(LocalStatsMetrics)
+        .where(LocalStatsMetrics.time >= since, LocalStatsMetrics.noise_floor.is_not(None))
+        .distinct(LocalStatsMetrics.node_num)
+        .order_by(LocalStatsMetrics.node_num, LocalStatsMetrics.time.desc())
+        .subquery()
+    )
+    rows = await session.execute(
+        select(
+            latest.c.node_num,
+            latest.c.time,
+            latest.c.noise_floor,
+            latest.c.channel_utilization,
+            latest.c.location,
+            latest.c.source,
+            Node.node_id,
+            Node.long_name,
+            Node.short_name,
+            Node.role,
+            Node.last_lat,
+            Node.last_lon,
+            RfStation.display_name,
+        )
+        .join(Node, Node.node_num == latest.c.node_num)
+        .outerjoin(RfStation, RfStation.station_id == latest.c.location)
+        .where(Node.last_lat.is_not(None), Node.last_lon.is_not(None))
+        .order_by(latest.c.time.desc())
+    )
+    return [
+        {
+            "node_id": row.node_id,
+            "long_name": row.long_name,
+            "short_name": row.short_name,
+            "role": row.role,
+            "lat": row.last_lat,
+            "lon": row.last_lon,
+            "time": row.time,
+            "noise_floor_dbm": row.noise_floor,
+            "channel_utilization": row.channel_utilization,
+            "measured_by": {
+                "location": row.location,
+                "source": row.source,
+                "display_name": row.display_name,
+            },
+        }
+        for row in rows.all()
+    ]

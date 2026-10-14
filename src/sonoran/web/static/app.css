@@ -3917,6 +3917,19 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-mods details summary { cursor: pointer; }
 .rf-tip .rf-unverified { color: var(--warn); }
 
+/*
+ * Measured noise floor (#182). The value in dBm as text, one neutral
+ * style for every node: no colour scale, because no source sets its
+ * thresholds yet (AGENTS.md 3A.2).
+ */
+.rf-noise-mark {
+  box-sizing: border-box; text-align: center;
+  padding: 1px 2px; border-radius: 3px; white-space: nowrap;
+  font: 600 11px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line);
+}
+
 /* ===================================================== the menu footer
  *
  * Status, preset, appearance — in the order somebody asks: am I
