@@ -200,6 +200,26 @@ services:
       timescaledb:
         condition: service_healthy
 
+  # Contributors (#178, docs/design/contributors.md). Off by default:
+  #   docker compose --profile contrib up -d contrib
+  # It holds the only broker login that may publish jobs (CONTRIB_MQTT_*),
+  # and writes as the jobs role, which can read node roles.
+  contrib:
+    build: .
+    restart: unless-stopped
+    logging: *logging
+    profiles: ["contrib"]
+    command: ["sonoran-contrib"]
+    env_file: .env
+    environment:
+      <<: *no-credentials
+      DATABASE_URL_JOBS: ${DATABASE_URL_JOBS:?set DATABASE_URL_JOBS in .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+
   jobs:
     build: .
     restart: unless-stopped

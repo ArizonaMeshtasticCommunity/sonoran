@@ -529,6 +529,17 @@ class Settings(BaseSettings):
     rf_mqtt_password: str = ""
     rf_mqtt_use_tls: bool = False
     rf_topics: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["rf/v1/#"])
+    # Contributors (#178, docs/design/contributors.md). `sonoran-contrib`
+    # holds the only broker login that may publish jobs. An empty host
+    # means the RF broker above, which is the one contributors reach.
+    contrib_mqtt_host: str = ""
+    contrib_mqtt_port: int = 1883
+    contrib_mqtt_username: str = ""
+    contrib_mqtt_password: str = ""
+    contrib_mqtt_use_tls: bool = False
+    # How often `sonoran-contrib` expires, plans and clears jobs. It is
+    # how soon a due target or a failed job is acted on, not a measure.
+    contrib_tick_seconds: int = 60
     # One track point per thing per this many seconds, across every
     # station. The design's capacity arithmetic assumes 20 (5.4).
     rf_bucket_seconds: int = 20

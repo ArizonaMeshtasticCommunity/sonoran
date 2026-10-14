@@ -66,6 +66,8 @@ sonoran-rf-ingest = "sonoran.rf.ingest:run"
 sonoran-rf-purge = "sonoran.rf.purge:run"
 # Trust levels and hidden mods for RF stations (#324). Run in `migrate`.
 sonoran-rf-trust = "sonoran.rf.operator:run"
+# Jobs for members' contributors, and their results (#178).
+sonoran-contrib = "sonoran.contrib.service:run"
 
 [build-system]
 requires = ["hatchling"]

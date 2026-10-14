@@ -101,7 +101,8 @@ list sends the 250 most recently heard.
 
 One new process, `sonoran-contrib` (compose profile `contrib`). It
 holds the only broker login that can publish jobs. It runs as
-`azmsh_ingest`.
+`azmsh_jobs`, which can read `node.role`. The ingest role cannot, on
+purpose (revision 0003), and gets nothing here.
 
 ### 5.1 Which nodes, and how often
 
