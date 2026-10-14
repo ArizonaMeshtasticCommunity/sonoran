@@ -5,6 +5,25 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.13.2 — 2026-10-13
+
+1 pull request merged, 1 issue closed.
+
+#### New features
+
+- Read models, a jobs supervisor with per-job memory limits, and cache holds by window (#371) (#373) by @logans-stuff — done: #371
+
+#### Issues
+
+- Done: #371 Precompute the long-window views in the jobs service (read models), so the API only reads (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.13...v2026.10.13.2
+
 ## v2026.10.13 — 2026-10-13
 
 3 pull requests merged, 1 issue closed.
