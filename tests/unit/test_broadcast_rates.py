@@ -7,8 +7,6 @@ must never claim more than that.
 
 from sonoran.api.routes.stats import (
     BROADCAST_INTERVALS,
-    BROWNOUT_HIGH,
-    BROWNOUT_LOW,
     NOTABLE_RATIO,
     ON_MAINS_ABOVE,
     FamilyRate,
@@ -88,21 +86,14 @@ class TestReport:
         assert report["faster_than_default"] == []
 
 
-class TestBrownoutBand:
-    """The band where a node can boot but not hold a transmission."""
+class TestBattery:
+    """The battery is context only (#365).
 
-    def test_the_band_is_the_documented_range(self) -> None:
-        assert (BROWNOUT_LOW, BROWNOUT_HIGH) == (5.0, 35.0)
-
-    def test_a_healthy_battery_is_outside_the_band(self) -> None:
-        assert not BROWNOUT_LOW <= 80.0 <= BROWNOUT_HIGH
-
-    def test_a_flat_battery_is_below_the_band(self) -> None:
-        """A flat node is silent, which is a different fault."""
-        assert not BROWNOUT_LOW <= 2.0 <= BROWNOUT_HIGH
-
-    def test_the_middle_of_the_band_qualifies(self) -> None:
-        assert BROWNOUT_LOW <= 20.0 <= BROWNOUT_HIGH
+    The 5-35 % "brownout band" tests that stood here were removed with
+    the band: it had no source (AGENTS.md §3A.2), and #365 (its author's
+    issue) asks for it to stop deciding anything. A power loop is now
+    counted restarts; see `test_power_loop.py`.
+    """
 
     def test_over_a_hundred_percent_means_mains(self) -> None:
         """The firmware reports a powered device above 100, not a full one."""

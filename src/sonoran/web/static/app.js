@@ -6197,9 +6197,9 @@ const HEALTH_STATES = {
   unknown: { word: 'Unknown', glyph: '?' },
 };
 
-/* The battery band stats.py calls a brownout risk, and the level the
- * firmware reports for a node on external power. Same numbers, so the
- * two pages agree. */
+/* The node page's battery bands, and the level the firmware reports for
+ * a node on external power. Statistics no longer judges the battery
+ * (#365); these bands still need a source (AGENTS.md §3A.2). */
 const BATTERY_LOW = 5;
 const BATTERY_WEAK = 35;
 const ON_MAINS_ABOVE = 100;
@@ -6487,7 +6487,7 @@ const FIELD_HINTS = {
     + 'to measure height than position. A node with a fixed position can have its height entered by hand. '
     + 'TAK roles send a different kind of height that this site does not store, so they are never red here.',
   // telemetry.proto DeviceMetrics.battery_level: "0-100 (>100 means
-  // powered)". Bands: `batteryState`, and stats.py's brownout band.
+  // powered)". Bands: `batteryState`.
   battery_level: 'How full the battery is, as the node measures it. '
     + '"External power" means the node reports no battery, or that it is charging. '
     + `Yellow from ${BATTERY_LOW} to ${BATTERY_WEAK} %: low enough that the node can restart `
@@ -9392,16 +9392,28 @@ function drawBroadcastTable(page, data) {
 
   note.textContent =
     `${count(data.notable_count)} of ${count(data.node_count)} at ${data.notable_ratio}x ` +
-    `the default or more, ${count(data.power_loop_count)} possibly power cycling`;
+    `the default or more, ${count(data.power_loop_count)} restarted ${data.loop_restarts} ` +
+    `or more times in ${data.loop_hours} h while re-sending node info`;
 
   const health = (row) => {
     const h = row.health;
     if (!h) return el('span', { class: 'muted', text: 'no telemetry' });
     const parts = [];
+    /*
+     * A count, not a guess (#365). "Maybe power cycling" was any battery
+     * node that restarted once in the window, from a battery band with
+     * no source. A loop is now counted restarts close together while the
+     * node re-sends its node info faster than the default.
+     */
+    // A loop is two or more restarts, so its count is always plural.
     if (h.likely_power_loop) {
-      parts.push(el('span', { class: 'tag bad', text: 'maybe power cycling' }));
+      parts.push(el('span', {
+        class: 'tag bad', text: `restarted ${count(h.restarts_24h)} times in 24 h`,
+      }));
     } else if (h.restarted) {
-      parts.push(el('span', { class: 'tag', text: 'restarted' }));
+      parts.push(el('span', {
+        class: 'tag', text: `restarted ${count(h.restarts)} time${h.restarts === 1 ? '' : 's'}`,
+      }));
     }
     /*
      * The meaning of each of these was a `title`, which a phone never
@@ -9409,7 +9421,8 @@ function drawBroadcastTable(page, data) {
      */
     if (h.battery_level != null) {
       const mains = h.battery_level > 100;
-      parts.push(tapTip(h.brownout_risk ? 'tag bad' : 'tag',
+      // Context only: no battery level is judged here (#365).
+      parts.push(tapTip('tag',
         mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
         mains ? 'On mains' : 'Battery',
         [mains

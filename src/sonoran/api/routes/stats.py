@@ -6,7 +6,7 @@ from typing import Any, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran import read_models
@@ -64,17 +64,22 @@ BROADCAST_INTERVALS: dict[str, int] = {
 # worth asking about. Two is inside the noise of reboots and requests.
 NOTABLE_RATIO = 3.0
 
-# The battery band where a node is most likely stuck in a restart loop.
+# A power loop is several restarts close together (#365): the node boots,
+# fails, boots again, and re-sends its NodeInfo on each boot. Restarts are
+# counted from `uptime_seconds` falling between a node's readings, in our
+# receive order (AGENTS.md 9.4), never inferred from a battery level.
 #
-# Between these two figures a node has enough charge to boot and start
-# transmitting, but not enough to hold the current a transmission draws.
-# It browns out, restarts, announces itself again, and repeats. That is
-# why a node with a low battery can be one of the noisiest on the mesh.
+# There used to be a "brownout band" of 5 to 35 % battery here, and any
+# node in it that restarted once in the window was "maybe power cycling":
+# 24 nodes on the 30 day view, one of them up for 21 days. The band had no
+# firmware, datasheet or measurement behind it (AGENTS.md §3A.2), so the
+# battery is now shown as context only.
 #
-# Below the lower figure the node is usually just flat and silent, which
-# is a different problem and not a loop.
-BROWNOUT_LOW = 5.0
-BROWNOUT_HIGH = 35.0
+# The span is the issue's ("N restarts within 24 h", #365).
+LOOP_SPAN = timedelta(hours=24)
+# PROVISIONAL, NOT YET SOURCED: replace with the measurement on our data
+# (docs/DECISIONS.md) before this merges. AGENTS.md §3A.2.
+LOOP_RESTARTS = 3
 
 # Above 100 percent means the node is on mains. That is how the firmware
 # reports a powered device, not a battery charged past full.
@@ -489,13 +494,15 @@ class NodeHealth(TypedDict):
     voltage: float | None
     uptime_seconds: int | None
     on_battery: bool
-    #: The battery is in the band where a restart loop is likely.
-    brownout_risk: bool
-    #: The node cannot have been running for the whole window, so it
-    #: restarted inside it.
+    #: Restarts counted in the window: readings whose uptime fell.
+    restarts: int
+    #: The most restarts inside any `LOOP_SPAN` of the window.
+    restarts_24h: int
+    #: At least one restart counted in the window.
     restarted: bool
-    #: Restarting and in the brownout band. This node probably needs
-    #: power, not a change of settings.
+    #: `LOOP_RESTARTS` or more restarts inside `LOOP_SPAN`, and NodeInfo
+    #: sent faster than its default. Set by the broadcast report, which
+    #: knows the NodeInfo rate.
     likely_power_loop: bool
 
 
@@ -506,32 +513,22 @@ async def _node_health(
     window_seconds: int,
     end: datetime | None = None,
 ) -> dict[int, NodeHealth]:
-    """Return the latest battery and uptime of each node.
+    """Return each node's latest battery and uptime, and its counted restarts.
 
-    A node that keeps announcing itself is usually restarting, and a
-    node that keeps restarting usually has a power problem. This reads
-    the evidence for that.
+    A restart is a reading whose `uptime_seconds` is lower than the node's
+    reading before it (#365). The readings are put in our receive order
+    -- the receive time of the packet that carried each one, AGENTS.md
+    9.4 -- and only readings received inside the window count. The first
+    reading of the window has nothing before it, so it is never a restart.
 
-    The longest uptime reported in the window is the useful part. A node
-    that ran the whole window must report an uptime at least as long as
-    the window. A shorter one restarted.
-
-    The time on these rows comes from the node, not from this process,
-    so a node with a badly wrong clock can fall outside the window. See
-    AGENTS.md 9.4. That loses the node from this report; it never
-    invents a fault.
+    What this cannot tell: a node that restarts and is not heard between
+    two boots shows one restart, not two; a node that sends no device
+    telemetry shows none. `likely_power_loop` is left False here; the
+    broadcast report sets it, because it needs the NodeInfo rate.
     """
     if not node_nums:
         return {}
 
-    # Bounded at both ends, and this one matters more than a window.
-    #
-    # `DISTINCT ON ... ORDER BY time DESC` picks the reading the node
-    # says is newest, so without an upper bound a node claiming 2036
-    # always wins its own "latest battery" -- and keeps winning it
-    # after the radio has been off for a month. 79 rows across 13 nodes
-    # are dated in the future today. See AGENTS.md 9.4. A window that
-    # ends in the past ends there (#294).
     now = end or datetime.now(UTC)
     latest = (
         await session.execute(
@@ -551,35 +548,107 @@ async def _node_health(
         )
     ).all()
 
-    uptime_rows = (
-        await session.execute(
-            select(DeviceMetrics.node_num, func.max(DeviceMetrics.uptime_seconds))
-            .where(
-                DeviceMetrics.node_num.in_(node_nums),
-                DeviceMetrics.time >= start,
-                DeviceMetrics.time <= now,
-            )
-            .group_by(DeviceMetrics.node_num)
-        )
-    ).all()
-    longest: dict[int, int | None] = {node: uptime for node, uptime in uptime_rows}
+    restarts = await _restart_times(session, node_nums, start, now)
 
     health: dict[int, NodeHealth] = {}
     for node_num, battery, voltage, uptime in latest:
-        on_battery = battery is not None and battery <= ON_MAINS_ABOVE
-        brownout = on_battery and battery is not None and BROWNOUT_LOW <= battery <= BROWNOUT_HIGH
-        best = longest.get(node_num)
-        restarted = best is not None and best < window_seconds
+        times = restarts.get(node_num, [])
         health[node_num] = NodeHealth(
             battery_level=battery,
             voltage=voltage,
             uptime_seconds=uptime,
-            on_battery=on_battery,
-            brownout_risk=brownout,
-            restarted=restarted,
-            likely_power_loop=restarted and brownout,
+            on_battery=battery is not None and battery <= ON_MAINS_ABOVE,
+            restarts=len(times),
+            restarts_24h=most_restarts_within(times, LOOP_SPAN),
+            restarted=bool(times),
+            likely_power_loop=False,
         )
     return health
+
+
+# How far behind the receive time a reading's own time can be, so the
+# readings of a window are found by the device-time index. One upload on
+# this deployment arrived 19.5 days late (`ingest/handlers/clocks.py`).
+READING_LAG = timedelta(days=20)
+
+
+async def _restart_times(
+    session: AsyncSession, node_nums: list[int], start: datetime, end: datetime
+) -> dict[int, list[datetime]]:
+    """Each node's restarts in `[start, end]`, as the receive times of the readings."""
+    received = Packet.first_seen_at
+    before = (
+        func.lag(DeviceMetrics.uptime_seconds)
+        .over(partition_by=DeviceMetrics.node_num, order_by=(received, DeviceMetrics.id))
+        .label("before")
+    )
+    readings = (
+        select(
+            DeviceMetrics.node_num.label("node"),
+            received.label("at"),
+            DeviceMetrics.uptime_seconds.label("uptime"),
+            before,
+        )
+        .join(
+            Packet,
+            and_(
+                Packet.id == DeviceMetrics.packet_pk,
+                received >= start,
+                received <= end,
+            ),
+        )
+        .where(
+            DeviceMetrics.node_num.in_(node_nums),
+            DeviceMetrics.uptime_seconds.is_not(None),
+            DeviceMetrics.time >= start - READING_LAG,
+            DeviceMetrics.time <= end,
+        )
+        .subquery()
+    )
+    rows = await session.execute(
+        select(readings.c.node, readings.c.at)
+        .where(readings.c.uptime < readings.c.before)
+        .order_by(readings.c.node, readings.c.at)
+    )
+    found: dict[int, list[datetime]] = {}
+    for node, at in rows.all():
+        found.setdefault(int(node), []).append(at)
+    return found
+
+
+def most_restarts_within(times: list[datetime], span: timedelta) -> int:
+    """The most restarts inside any stretch of `span`."""
+    ordered = sorted(times)
+    most, first = 0, 0
+    for last, at in enumerate(ordered):
+        while at - ordered[first] >= span:
+            first += 1
+        most = max(most, last - first + 1)
+    return most
+
+
+def is_power_loop(restarts_in_span: int, nodeinfo_ratio: float | None) -> bool:
+    """`LOOP_RESTARTS` or more restarts in `LOOP_SPAN`, and NodeInfo above its default.
+
+    A booting node sends its NodeInfo, so a node in a loop sends it more
+    often than `node_info_broadcast_secs` asks. Either part alone is
+    something else: restarts at the default rate are a node somebody
+    reboots; a fast NodeInfo with no restarts is a setting.
+    """
+    return restarts_in_span >= LOOP_RESTARTS and nodeinfo_ratio is not None and nodeinfo_ratio > 1.0
+
+
+def broadcast_order(
+    *, loop: bool, notable: list[str], faster: list[str], packets: int, node: int
+) -> tuple[bool, bool, int, int, int, int]:
+    """Sort key of the broadcast table (#365).
+
+    Counted power loops first, then the rows the table's heading names
+    (`NOTABLE_RATIO` or more), then by how many families are notable and
+    faster than default, then by packets. The node number breaks ties, so
+    a stored ranking and a live one agree.
+    """
+    return (not loop, not notable, -len(notable), -len(faster), -packets, node)
 
 
 #: Above this many hours the activity chart is drawn by day, not by hour.
@@ -774,7 +843,8 @@ EMPTY_HEALTH = NodeHealth(
     voltage=None,
     uptime_seconds=None,
     on_battery=False,
-    brownout_risk=False,
+    restarts=0,
+    restarts_24h=0,
     restarted=False,
     likely_power_loop=False,
 )
@@ -889,17 +959,19 @@ async def broadcast_ranking(
         )
 
     health = await _node_health(session, list(families), start, window_seconds, end)
+    for node_num, reading in health.items():
+        nodeinfo = families.get(node_num, {}).get("NODEINFO_APP")
+        reading["likely_power_loop"] = is_power_loop(
+            reading["restarts_24h"], nodeinfo.ratio if nodeinfo else None
+        )
     report = [_broadcast_report(node_num, "", rates) for node_num, rates in families.items()]
     report.sort(
-        key=lambda item: (
-            not health.get(_node_num_of(item), EMPTY_HEALTH)["likely_power_loop"],
-            -len(item["notable"]),
-            -len(item["faster_than_default"]),
-            -item["packet_count"],
-            # Equal on everything above: the node number decides, so a
-            # stored ranking and a live one list the same nodes in the
-            # same order.
-            _node_num_of(item),
+        key=lambda item: broadcast_order(
+            loop=health.get(_node_num_of(item), EMPTY_HEALTH)["likely_power_loop"],
+            notable=item["notable"],
+            faster=item["faster_than_default"],
+            packets=item["packet_count"],
+            node=_node_num_of(item),
         )
     )
     return BroadcastRanking(
@@ -936,7 +1008,8 @@ async def _present_broadcast(
         **described,
         "intervals": BROADCAST_INTERVALS,
         "notable_ratio": NOTABLE_RATIO,
-        "brownout_band": [BROWNOUT_LOW, BROWNOUT_HIGH],
+        "loop_restarts": LOOP_RESTARTS,
+        "loop_hours": round(LOOP_SPAN.total_seconds() / 3600),
         "node_count": len(ranking.nodes),
         "notable_count": ranking.notable_count,
         "power_loop_count": ranking.power_loop_count,

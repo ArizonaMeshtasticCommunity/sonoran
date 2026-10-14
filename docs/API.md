@@ -2059,8 +2059,8 @@ Query parameters: the window (8.00, default 24 hours), `limit`
 (default 40).
 
 Response: the window fields, `intervals` (the defaults used),
-`notable_ratio`, `brownout_band`, `node_count`, `notable_count`,
-`power_loop_count`, and `nodes`.
+`notable_ratio`, `loop_restarts`, `loop_hours`, `node_count`,
+`notable_count`, `power_loop_count`, and `nodes`.
 
 Each node has `node_id`, `display_name`, `packet_count`, `families`,
 `notable`, `faster_than_default`, and `health`.
@@ -2071,7 +2071,7 @@ Each family holds `count`, `interval_seconds` (the measured average),
 
 `health` is null when the node sent no device telemetry. Otherwise it
 holds `battery_level`, `voltage`, `uptime_seconds`, `on_battery`,
-`brownout_risk`, `restarted`, and `likely_power_loop`.
+`restarts`, `restarts_24h`, `restarted`, and `likely_power_loop`.
 
 **Read this as a reason to ask, never as a verdict.** Three limits:
 
@@ -2086,15 +2086,20 @@ holds `battery_level`, `voltage`, `uptime_seconds`, `on_battery`,
 A battery above 100 percent means the node is on mains. That is how the
 firmware reports a powered device.
 
-`brownout_risk` is true inside `brownout_band`, which is 5 to 35
-percent. In that band a node has enough charge to boot and start
-transmitting but not enough to hold the current a transmission draws, so
-it browns out and restarts. That is why a node with a low battery can be
-one of the noisiest on the mesh. Below the band a node is usually flat
-and silent, which is a different problem.
+**Restarts are counted, not inferred (#365).** A restart is a device
+telemetry reading whose `uptime_seconds` is lower than the node's reading
+before it, with the readings in our receive order (AGENTS.md 9.4).
+`restarts` counts them in the window, and `restarts_24h` is the most
+inside any 24 hours of it. The first reading of the window is never a
+restart. A node that restarts unheard between two boots shows one
+restart, and a node with no device telemetry shows none.
 
-`likely_power_loop` is true only when the node both restarted inside the
-window and sits in that band. It is deliberately narrow.
+`likely_power_loop` is true when `restarts_24h` is `loop_restarts` or
+more **and** the node sends its node info faster than the default (a
+booting node sends it). The table lists these nodes first, then the
+nodes at `notable_ratio` or more. The battery is shown, never judged:
+the old 5 to 35 percent "brownout band" had no source (AGENTS.md
+§3A.2), and `brownout_band` and `brownout_risk` are gone.
 
 ### 8.8 `GET /api/stats/reliability/{node_id}`
 
