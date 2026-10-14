@@ -377,6 +377,30 @@ role can read or write `rf_operator_log`; `rf_trust` and
 case, for aircraft. `rssi_db` is in the receiver's own units, so it
 compares one station with itself and never two stations.
 
+## 5A.1 Contributor tables (#178)
+
+Written by `sonoran-contrib` as `azmsh_jobs`. See
+`docs/design/contributors.md` section 5.4. Migration `i178`.
+
+- `contrib_source`: one row per contributor (`location`, `source`): its
+  last heartbeat (`sent`, `received_at`, `version`, `mesh_node`, `kinds`).
+- `contrib_heard`: the nodes each contributor's node hears (`node_num`,
+  `hops`, `last_heard`). Replaced with each heartbeat. Deleted with its
+  `contrib_source` row.
+- `contrib_job`: every job: the contributor, `kind`, `target`,
+  `round_started`, `issued`, `expires`, `outcome` (None while open, a
+  result outcome, or `expired`), `finished`, `detail`, and `cleared`
+  (its retained outbox message is gone). Finished jobs older than
+  `RETENTION_DAYS_METRIC` are deleted.
+- `local_stats`: a hypertable of readings: `time`, `node_num`, `job`,
+  `location`, `source`, the answer's `hops`, `rx_snr`, `rx_rssi`, and
+  every `LocalStats` field from `meshtastic/telemetry.proto`.
+  `noise_floor` is the node's measured floor in dBm.
+
+Grants: `azmsh_jobs` SELECT, INSERT, UPDATE, DELETE on the `contrib_`
+tables and SELECT, INSERT on `local_stats`. `azmsh_api` SELECT on
+`local_stats` and `contrib_source`. `azmsh_ingest` nothing.
+
 ## 5B. Job output tables (#351)
 
 What the background jobs compute, and the API serves. Before #351 these
@@ -442,6 +466,7 @@ Applied in migrations with `add_retention_policy`.
 | `pax_metrics` | 90 days |
 | `mesh_packet_metrics` | 90 days |
 | `neighbor_metrics` | 90 days |
+| `local_stats` | 90 days (`RETENTION_DAYS_METRIC`) |
 
 The migration service applies `RETENTION_DAYS_*` environment overrides.
 Run the migration service after a retention setting change.

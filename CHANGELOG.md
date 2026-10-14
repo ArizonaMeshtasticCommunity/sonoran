@@ -5,6 +5,27 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.14 — 2026-10-14
+
+1 pull request merged, 2 issues closed.
+
+#### Other
+
+- AGENTS.md: a person, a source, a test (#359); power loops are counted restarts (#365) (#374) by @logans-stuff — done: #359, #365
+  The Statistics broadcast table no longer marks nodes "maybe power cycling" from their battery level. It now counts restarts, and flags a node only when it restarted 4 or more times in a day while re-sending its node info; the label says how many times.
+
+#### Issues
+
+- Done: #359 AGENTS.md: new features need a person who understands them, and every metric needs a source (reported by @logans-stuff)
+- Done: #365 Statistics: "maybe power cycling" flags any battery node that restarted once in the window (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.13.2...v2026.10.14
+
 ## v2026.10.13.2 — 2026-10-13
 
 1 pull request merged, 1 issue closed.
