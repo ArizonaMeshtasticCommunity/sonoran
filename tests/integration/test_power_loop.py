@@ -40,13 +40,21 @@ def _insert_packet(connection: Any, node: int, packet_id: int, port: int, at: da
 def _reading(
     connection: Any, node: int, packet_id: int, at: datetime, uptime: int, battery: float
 ) -> None:
-    pk = _insert_packet(connection, node, packet_id, TELEMETRY, at)
+    """One device telemetry reading, stored the way ingest stores it.
+
+    Ingest never knows the packet's row id (`ingest/dedup.py` claims the
+    packet through the key table and returns `packet_pk=None`), so the
+    reading links to its packet by (node, packet ID), AGENTS.md 9.1. The
+    first version of this fixture set `packet_pk`, which ingest does not:
+    on live data that join found 18 of 521 nodes.
+    """
+    _insert_packet(connection, node, packet_id, TELEMETRY, at)
     connection.execute(
         text(
             "INSERT INTO device_metrics (node_num, packet_pk, packet_id, battery_level, "
-            "uptime_seconds, time) VALUES (:n, :pk, :p, :b, :u, :t)"
+            "uptime_seconds, time) VALUES (:n, NULL, :p, :b, :u, :t)"
         ),
-        {"n": node, "pk": pk, "p": packet_id, "b": battery, "u": uptime, "t": at},
+        {"n": node, "p": packet_id, "b": battery, "u": uptime, "t": at},
     )
 
 

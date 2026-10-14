@@ -32,6 +32,25 @@ def test_restarts_are_counted_inside_the_busiest_day() -> None:
     assert stats.most_restarts_within([_at(0), _at(25)], timedelta(hours=24)) == 1
 
 
+def test_the_busiest_span_says_where_it_starts() -> None:
+    """NodeInfo is judged inside the same 24 h as the restarts.
+
+    Measured on live data (docs/DECISIONS.md): a node with 15 restarts in
+    one day averaged 0.87x NodeInfo over 30 days, and 1.75x on that day.
+    A window-long average hides the day.
+    """
+    times = [_at(0), _at(40), _at(41), _at(42), _at(80)]
+    count, start = stats.busiest_span(times, timedelta(hours=24))
+    assert (count, start) == (3, _at(40))
+    assert stats.busiest_span([], timedelta(hours=24)) == (0, None)
+
+
+def test_the_loop_threshold_is_the_measured_one() -> None:
+    """At 4 or more restarts in 24 h, every node also sent NodeInfo above its
+    default that day (8 of 8); at 3, 5 of 14 did (docs/DECISIONS.md, #365)."""
+    assert stats.LOOP_RESTARTS == 4
+
+
 def test_a_power_loop_needs_restarts_and_a_fast_nodeinfo() -> None:
     many = stats.LOOP_RESTARTS + 2
     assert stats.is_power_loop(many, 4.0)
