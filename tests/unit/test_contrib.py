@@ -21,6 +21,7 @@ from sonoran.contrib.dispatch import (
     choose,
     interval_for_role,
     is_due,
+    next_job,
     refuse_result,
 )
 from sonoran.contrib.schema import (
@@ -318,3 +319,46 @@ def test_the_published_json_schema_matches_the_code() -> None:
 
     published = json.loads(Path("docs/contributor-message-v1.schema.json").read_text())
     assert published == json.loads(json.dumps(json_schema()))
+
+
+# --- A round: assign, reassign, end (#181) -----------------------------
+
+HOUR = timedelta(hours=1)
+
+
+def _heard(*items: tuple[Contributor, int]) -> list[Candidate]:
+    return [Candidate(who, hops=hops, last_heard=NOW) for who, hops in items]
+
+
+def test_a_due_target_starts_a_round_with_the_best_candidate() -> None:
+    assert next_job(None, None, [], _heard((A, 2), (B, 1)), NOW, HOUR, busy=set()) == (B, NOW)
+
+
+def test_an_open_job_holds_the_round() -> None:
+    started = NOW - timedelta(minutes=2)
+    assert next_job(None, started, [(B, None)], _heard((A, 2), (B, 1)), NOW, HOUR, set()) is None
+
+
+def test_a_failed_job_moves_to_the_next_candidate_in_the_same_round() -> None:
+    """#181: if the job doesn't get picked up within an interval, reassign it."""
+    started = NOW - timedelta(minutes=6)
+    candidates = _heard((A, 2), (B, 1))
+    assert next_job(None, started, [(B, "expired")], candidates, NOW, HOUR, set()) == (A, started)
+
+
+def test_a_round_ends_when_every_candidate_failed() -> None:
+    started = NOW - timedelta(minutes=12)
+    jobs = [(B, "no_reply"), (A, "expired")]
+    assert next_job(None, started, jobs, _heard((A, 2), (B, 1)), NOW, HOUR, set()) is None
+
+
+def test_a_round_with_a_reading_is_done() -> None:
+    started = NOW - timedelta(minutes=12)
+    reading = NOW - timedelta(minutes=10)
+    assert next_job(reading, started, [(B, "ok")], _heard((A, 2), (B, 1)), NOW, HOUR, set()) is None
+
+
+def test_after_the_interval_a_new_round_starts_and_forgets_old_failures() -> None:
+    started = NOW - timedelta(hours=2)
+    jobs = [(B, "no_reply"), (A, "expired")]
+    assert next_job(None, started, jobs, _heard((A, 2), (B, 1)), NOW, HOUR, set()) == (B, NOW)

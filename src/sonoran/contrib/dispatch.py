@@ -120,6 +120,19 @@ def choose(
     return best.contributor
 
 
+def next_job(
+    last_reading: datetime | None,
+    round_started: datetime | None,
+    round_jobs: list[tuple[Contributor, str | None]],
+    candidates: list[Candidate],
+    now: datetime,
+    interval: timedelta,
+    busy: set[Contributor],
+) -> tuple[Contributor, datetime] | None:
+    """Skeleton for the red step."""
+    raise NotImplementedError
+
+
 def refuse_result(
     facts: JobFacts | None,
     contributor: Contributor,
