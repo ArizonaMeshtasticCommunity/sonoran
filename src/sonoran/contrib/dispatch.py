@@ -21,6 +21,7 @@ __all__ = [
     "choose",
     "interval_for_role",
     "is_due",
+    "next_job",
     "refuse_result",
 ]
 
@@ -129,8 +130,27 @@ def next_job(
     interval: timedelta,
     busy: set[Contributor],
 ) -> tuple[Contributor, datetime] | None:
-    """Skeleton for the red step."""
-    raise NotImplementedError
+    """The next job for one target: who asks, and in which round.
+
+    `round_jobs` are the jobs of the target's latest round, which
+    started at `round_started`, with their outcomes (None while open).
+
+    - A round with an open job, or with a reading, waits.
+    - Within its interval, a round moves to the next candidate that has
+      not failed in it (#181). With none left, the round is over.
+    - After its interval, a due target starts a new round, and old
+      failures are forgotten.
+    """
+    if round_started is not None and now - round_started < interval:
+        if any(outcome is None or outcome == "ok" for _, outcome in round_jobs):
+            return None
+        failed = {who for who, _ in round_jobs}
+        chosen = choose(candidates, now, interval, failed=failed, busy=busy)
+        return None if chosen is None else (chosen, round_started)
+    if not is_due(last_reading, None, now, interval):
+        return None
+    chosen = choose(candidates, now, interval, failed=set(), busy=busy)
+    return None if chosen is None else (chosen, now)
 
 
 def refuse_result(
