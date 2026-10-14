@@ -1454,11 +1454,21 @@ node, the busiest 24 hours, and its NodeInfo inside them (8 in 24 h is
 | 7 | 1 | 1 |
 | 15 | 1 | 1 |
 
-From 4 restarts up, the two signals agree on every node (8 of 8, at
-1.1x to 12x NodeInfo that day); below 4 they mostly do not. Run through
-the new code on the same data, the rule flags 0 nodes in 24 hours, 4 in
-7 days and 8 in 30 days, against 24 before. Two of the eight are on
-mains power, which the battery band could never flag.
+**Against chance.** On an ordinary day, 22.8 % of these nodes send
+NodeInfo above default (2,230 of 9,799 node-days, query below). At 2
+restarts the share that day is 29 %, about chance; at 3 it is 36 %; from
+4 up it is 100 % (8 of 8, at 1.1x to 12x). So 4 is where restarts and
+NodeInfo stop agreeing by chance.
+
+Run through the new code on the same data, the rule flags 2 nodes in 24
+hours (both looping now), 4 in 7 days and 8 in 30 days, against 24
+before. Two of the eight are on mains power, which the battery band
+could never flag.
+
+**A loop going on now is judged on the part of the day it has had.** Its
+span runs into "now", so NodeInfo is compared with what the default
+gives in that length (`nodeinfo_expected`, at least one). Expecting a
+full day's 8 hid both of the nodes looping in the last 24 hours.
 
 **NodeInfo on the same day, not over the window.** The node with 15
 restarts in one day averaged 0.87x NodeInfo over 30 days, and 1.75x on
@@ -1467,6 +1477,27 @@ that day. A window-long average hides the day.
 **Readings link to packets by (node, packet ID).** `device_metrics.packet_pk`
 is empty on the rows ingest writes (`ingest/dedup.py`): joined on it, the
 same query found 18 of 521 nodes. AGENTS.md 9.1.
+
+The base rate:
+
+```sql
+CREATE TEMP TABLE n365 AS
+SELECT DISTINCT dm.node_num FROM device_metrics dm
+JOIN packet p ON p.from_node_num = dm.node_num AND p.packet_id = dm.packet_id AND p.first_seen_at >= now() - interval '30 days'
+WHERE dm.uptime_seconds IS NOT NULL AND dm.time >= now() - interval '50 days';
+-- Base rate: of the node-days (UTC days) on which a node with device
+-- telemetry sent anything, how many had NodeInfo above default (> 8)?
+WITH days AS (
+  SELECT from_node_num AS n, date_trunc('day', bucket) AS d FROM packet_hourly
+  WHERE bucket >= now() - interval '30 days' AND from_node_num IN (SELECT node_num FROM n365)
+  GROUP BY 1, 2),
+ni AS (
+  SELECT from_node_num AS n, date_trunc('day', first_seen_at) AS d, count(*) AS c FROM packet
+  WHERE portnum = 4 AND first_seen_at >= now() - interval '30 days' GROUP BY 1, 2)
+SELECT count(*) AS node_days, count(*) FILTER (WHERE coalesce(ni.c, 0) > 8) AS nodeinfo_above_default,
+       round(100.0 * count(*) FILTER (WHERE coalesce(ni.c, 0) > 8) / count(*), 1) AS percent
+FROM days LEFT JOIN ni USING (n, d);
+```
 
 The query:
 
@@ -1499,13 +1530,6 @@ LEFT JOIN LATERAL (
   FROM r365 a WHERE a.node_num = n.node_num) w ON true
 LEFT JOIN (SELECT node_num, count(*) AS total FROM r365 GROUP BY node_num) t USING (node_num)
 GROUP BY n.node_num, t.total;
-
--- NodeInfo against its default (10800 s): 240 in 30 days is 1.0x.
-CREATE TEMP TABLE i365 AS
-SELECT from_node_num AS node_num, count(*) / 240.0 AS nodeinfo_ratio
-FROM packet WHERE portnum = 4 AND first_seen_at >= now() - interval '30 days'
-GROUP BY from_node_num;
-
 
 -- Nodes by the most restarts in any 24 h (the first two table columns).
 SELECT most_24h, count(*) AS nodes FROM m365 GROUP BY most_24h ORDER BY most_24h;

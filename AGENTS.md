@@ -114,7 +114,7 @@ The tests come from the issue, not from the code. Tests that only prove
 7. **A bug fix starts with a test that reproduces the bug** and fails on
    `main`.
 8. **Somebody else checks the tests.** A second agent or a person reviews
-   the tests against the issue, apart from the code.
+   the tests against the issue, separately from the code.
 9. **Prove that a broken version fails.** Add a test that a plausible
    wrong implementation would fail, as the existing "would be caught"
    tests do.
@@ -167,7 +167,9 @@ A change is complete only when all of these pass:
    `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
    ignored, and nothing is added to the served frontend.
 10. The PR shows its red step (§3A.5): the new tests, and their failing
-    output on `main` before the change.
+    output on `main` before the change. A change that §3A.5 exempts
+    (documentation, comments, configuration with no logic, or layout)
+    says why instead.
 11. Every new number has its source in the code comment and in the doc
     (§3A.2), and the PR lists them under "Basis".
 

@@ -531,7 +531,8 @@ async def _node_health(
 
     What this cannot tell: a node that restarts and is not heard between
     two boots shows one restart, not two; a node that sends no device
-    telemetry shows none.
+    telemetry shows none; and a reading that arrives late from a backlog,
+    after a newer one, reads as a restart if its uptime is lower.
     """
     if not node_nums:
         return {}
@@ -563,7 +564,7 @@ async def _node_health(
         most, span_start = busiest_span(times, LOOP_SPAN)
         nodeinfo = None
         if most >= LOOP_RESTARTS and span_start is not None:
-            nodeinfo = await _nodeinfo_ratio(session, node_num, span_start)
+            nodeinfo = await _nodeinfo_ratio(session, node_num, span_start, now)
         health[node_num] = NodeHealth(
             battery_level=battery,
             voltage=voltage,
@@ -578,18 +579,34 @@ async def _node_health(
     return health
 
 
-async def _nodeinfo_ratio(session: AsyncSession, node_num: int, start: datetime) -> float:
-    """NodeInfo the node sent in `LOOP_SPAN` from `start`, against its default."""
+async def _nodeinfo_ratio(
+    session: AsyncSession, node_num: int, start: datetime, end: datetime
+) -> float:
+    """NodeInfo the node sent in its busiest span, against its default.
+
+    The span is `LOOP_SPAN` from `start`, cut at the window's `end`: a
+    loop going on now has had only part of a day, and is judged on that
+    part (`nodeinfo_expected`), never on a full day it has not had yet.
+    """
+    stop = min(start + LOOP_SPAN, end)
     sent = await session.scalar(
         select(func.count()).where(
             Packet.from_node_num == node_num,
             Packet.portnum == portnums_pb2.PortNum.Value("NODEINFO_APP"),  # type: ignore[attr-defined]
             Packet.first_seen_at >= start,
-            Packet.first_seen_at < start + LOOP_SPAN,
+            Packet.first_seen_at < stop,
         )
     )
-    expected = LOOP_SPAN.total_seconds() / BROADCAST_INTERVALS["NODEINFO_APP"]
-    return round((sent or 0) / expected, 2)
+    return round((sent or 0) / nodeinfo_expected(stop - start), 2)
+
+
+def nodeinfo_expected(length: timedelta) -> float:
+    """How many NodeInfo a node sends at its default in `length`, at least one.
+
+    The default is `node_info_broadcast_secs`. At least one, so a span of
+    a few minutes does not turn one NodeInfo into a large ratio.
+    """
+    return max(length.total_seconds() / BROADCAST_INTERVALS["NODEINFO_APP"], 1.0)
 
 
 # How far behind the receive time a reading's own time can be, so the
