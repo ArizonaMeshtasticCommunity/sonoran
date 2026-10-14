@@ -45,6 +45,18 @@ def test_the_busiest_span_says_where_it_starts() -> None:
     assert stats.busiest_span([], timedelta(hours=24)) == (0, None)
 
 
+def test_nodeinfo_is_expected_for_the_span_really_seen() -> None:
+    """A span that runs into "now" is short: expect NodeInfo for its length.
+
+    The default is one NodeInfo per 3 h (`node_info_broadcast_secs`). A
+    loop in the last 6 h is judged against 2 expected, not a full day's 8.
+    At least one is always expected, so a very short span is not inflated.
+    """
+    assert stats.nodeinfo_expected(timedelta(hours=24)) == 8.0
+    assert stats.nodeinfo_expected(timedelta(hours=6)) == 2.0
+    assert stats.nodeinfo_expected(timedelta(minutes=30)) == 1.0
+
+
 def test_the_loop_threshold_is_the_measured_one() -> None:
     """At 4 or more restarts in 24 h, every node also sent NodeInfo above its
     default that day (8 of 8); at 3, 5 of 14 did (docs/DECISIONS.md, #365)."""
