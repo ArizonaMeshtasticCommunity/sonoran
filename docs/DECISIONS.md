@@ -1426,3 +1426,108 @@ were made to build it.
   assessment, because the `rf_intermittent` signal, the gaps page and
   the node page read them. The board files no longer carry them: nothing
   else reads those files.
+
+## 2026-10-14 — a power loop is counted restarts (#365)
+
+The broadcast table's "maybe power cycling" flagged any node between 5
+and 35 % battery that restarted once in the window: 24 nodes on the
+30 day view. The band had no source (AGENTS.md §3A.2). A power loop is
+now `LOOP_RESTARTS` (4) or more restarts inside 24 hours while the node
+sends NodeInfo above its default (`node_info_broadcast_secs`, 10800 s)
+inside the same 24 hours. The battery is shown, not judged.
+
+**The measurement behind 4.** Live data, 2026-10-14, the last 30 days,
+521 nodes with device telemetry. A restart is a reading whose
+`uptime_seconds` is lower than the node's reading before it, in our
+receive order, exactly as `stats._restart_times` counts it. For each
+node, the busiest 24 hours, and its NodeInfo inside them (8 in 24 h is
+1.0x):
+
+| Restarts in the busiest 24 h | Nodes | NodeInfo above default that day |
+|---|---|---|
+| 0 | 296 | - |
+| 1 | 151 | - |
+| 2 | 52 | 15 (29 %) |
+| 3 | 14 | 5 (36 %) |
+| 4 | 4 | 4 |
+| 5 | 2 | 2 |
+| 7 | 1 | 1 |
+| 15 | 1 | 1 |
+
+From 4 restarts up, the two signals agree on every node (8 of 8, at
+1.1x to 12x NodeInfo that day); below 4 they mostly do not. Run through
+the new code on the same data, the rule flags 0 nodes in 24 hours, 4 in
+7 days and 8 in 30 days, against 24 before. Two of the eight are on
+mains power, which the battery band could never flag.
+
+**NodeInfo on the same day, not over the window.** The node with 15
+restarts in one day averaged 0.87x NodeInfo over 30 days, and 1.75x on
+that day. A window-long average hides the day.
+
+**Readings link to packets by (node, packet ID).** `device_metrics.packet_pk`
+is empty on the rows ingest writes (`ingest/dedup.py`): joined on it, the
+same query found 18 of 521 nodes. AGENTS.md 9.1.
+
+The query:
+
+```sql
+-- #365: restarts counted as the code counts them (uptime falls between
+-- readings, our receive order), over the last 30 days.
+CREATE TEMP TABLE r365 AS
+WITH readings AS (
+  SELECT dm.node_num, p.first_seen_at AS at, dm.uptime_seconds AS up,
+         lag(dm.uptime_seconds) OVER (PARTITION BY dm.node_num ORDER BY p.first_seen_at, dm.id) AS before
+  FROM device_metrics dm
+  JOIN packet p ON p.from_node_num = dm.node_num AND p.packet_id = dm.packet_id AND p.first_seen_at >= now() - interval '30 days'
+  WHERE dm.uptime_seconds IS NOT NULL AND dm.time >= now() - interval '50 days'
+)
+SELECT node_num, at FROM readings WHERE up < before;
+
+-- Nodes with device telemetry in the window, for the zero row.
+CREATE TEMP TABLE n365 AS
+SELECT DISTINCT dm.node_num FROM device_metrics dm
+JOIN packet p ON p.from_node_num = dm.node_num AND p.packet_id = dm.packet_id AND p.first_seen_at >= now() - interval '30 days'
+WHERE dm.uptime_seconds IS NOT NULL AND dm.time >= now() - interval '50 days';
+
+-- The most restarts inside any 24 h, per node.
+CREATE TEMP TABLE m365 AS
+SELECT n.node_num, coalesce(max(w.cnt), 0) AS most_24h, coalesce(t.total, 0) AS total
+FROM n365 n
+LEFT JOIN LATERAL (
+  SELECT (SELECT count(*) FROM r365 b WHERE b.node_num = a.node_num
+          AND b.at >= a.at AND b.at < a.at + interval '24 hours') AS cnt
+  FROM r365 a WHERE a.node_num = n.node_num) w ON true
+LEFT JOIN (SELECT node_num, count(*) AS total FROM r365 GROUP BY node_num) t USING (node_num)
+GROUP BY n.node_num, t.total;
+
+-- NodeInfo against its default (10800 s): 240 in 30 days is 1.0x.
+CREATE TEMP TABLE i365 AS
+SELECT from_node_num AS node_num, count(*) / 240.0 AS nodeinfo_ratio
+FROM packet WHERE portnum = 4 AND first_seen_at >= now() - interval '30 days'
+GROUP BY from_node_num;
+
+
+-- Nodes by the most restarts in any 24 h (the first two table columns).
+SELECT most_24h, count(*) AS nodes FROM m365 GROUP BY most_24h ORDER BY most_24h;
+
+-- The busiest 24 h of each node with 3 or more restarts in it, and its
+-- NodeInfo inside that same span (8 in 24 h is the default, 1.0x).
+CREATE TEMP TABLE b365 AS
+SELECT DISTINCT ON (a.node_num) a.node_num, a.at AS span_start,
+       (SELECT count(*) FROM r365 b WHERE b.node_num = a.node_num
+        AND b.at >= a.at AND b.at < a.at + interval '24 hours') AS restarts
+FROM r365 a ORDER BY a.node_num, restarts DESC, a.at;
+SELECT b.restarts AS restarts_24h, count(*) AS nodes,
+       count(*) FILTER (WHERE x.nodeinfo > 8) AS nodeinfo_above_default_same_day,
+       round(avg(x.nodeinfo / 8.0), 2) AS mean_nodeinfo_ratio_same_day
+FROM b365 b
+CROSS JOIN LATERAL (SELECT count(*) AS nodeinfo FROM packet p WHERE p.from_node_num = b.node_num
+     AND p.portnum = 4 AND p.first_seen_at >= b.span_start AND p.first_seen_at < b.span_start + interval '24 hours') x
+WHERE b.restarts >= 2 GROUP BY b.restarts ORDER BY b.restarts;
+SELECT b.node_num, b.restarts, round(x.nodeinfo / 8.0, 2) AS nodeinfo_ratio_same_day, b.span_start
+FROM b365 b
+CROSS JOIN LATERAL (SELECT count(*) AS nodeinfo FROM packet p WHERE p.from_node_num = b.node_num
+     AND p.portnum = 4 AND p.first_seen_at >= b.span_start AND p.first_seen_at < b.span_start + interval '24 hours') x
+WHERE b.restarts >= 3 ORDER BY b.restarts DESC, nodeinfo_ratio_same_day DESC;
+```
+

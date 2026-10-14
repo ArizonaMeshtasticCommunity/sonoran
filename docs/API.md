@@ -2071,7 +2071,8 @@ Each family holds `count`, `interval_seconds` (the measured average),
 
 `health` is null when the node sent no device telemetry. Otherwise it
 holds `battery_level`, `voltage`, `uptime_seconds`, `on_battery`,
-`restarts`, `restarts_24h`, `restarted`, and `likely_power_loop`.
+`restarts`, `restarts_24h`, `nodeinfo_ratio_24h`, `restarted`, and
+`likely_power_loop`.
 
 **Read this as a reason to ask, never as a verdict.** Three limits:
 
@@ -2095,8 +2096,11 @@ restart. A node that restarts unheard between two boots shows one
 restart, and a node with no device telemetry shows none.
 
 `likely_power_loop` is true when `restarts_24h` is `loop_restarts` or
-more **and** the node sends its node info faster than the default (a
-booting node sends it). The table lists these nodes first, then the
+more **and** the node sent its node info faster than the default inside
+that same busiest 24 hours (a booting node sends it). `nodeinfo_ratio_24h`
+is that rate, 1.0 being the default; it is null below `loop_restarts`.
+Both numbers come from a measurement on our data (`docs/DECISIONS.md`,
+#365). The table lists these nodes first, then the
 nodes at `notable_ratio` or more. The battery is shown, never judged:
 the old 5 to 35 percent "brownout band" had no source (AGENTS.md
 §3A.2), and `brownout_band` and `brownout_risk` are gone.

@@ -77,9 +77,10 @@ NOTABLE_RATIO = 3.0
 #
 # The span is the issue's ("N restarts within 24 h", #365).
 LOOP_SPAN = timedelta(hours=24)
-# PROVISIONAL, NOT YET SOURCED: replace with the measurement on our data
-# (docs/DECISIONS.md) before this merges. AGENTS.md §3A.2.
-LOOP_RESTARTS = 3
+# Measured on our data, 2026-10-14, 521 nodes over 30 days (docs/DECISIONS.md
+# "#365"): at 4 or more restarts inside 24 h, every node (8 of 8) also sent
+# NodeInfo above its default on that day; at 3, 5 of 14 did; at 2, 15 of 52.
+LOOP_RESTARTS = 4
 
 # Above 100 percent means the node is on mains. That is how the firmware
 # reports a powered device, not a battery charged past full.
@@ -498,11 +499,13 @@ class NodeHealth(TypedDict):
     restarts: int
     #: The most restarts inside any `LOOP_SPAN` of the window.
     restarts_24h: int
+    #: NodeInfo sent inside that busiest span, against its default (1.0 is
+    #: the default). None unless `restarts_24h` reaches `LOOP_RESTARTS`.
+    nodeinfo_ratio_24h: float | None
     #: At least one restart counted in the window.
     restarted: bool
     #: `LOOP_RESTARTS` or more restarts inside `LOOP_SPAN`, and NodeInfo
-    #: sent faster than its default. Set by the broadcast report, which
-    #: knows the NodeInfo rate.
+    #: sent faster than its default inside that same span.
     likely_power_loop: bool
 
 
@@ -521,10 +524,14 @@ async def _node_health(
     9.4 -- and only readings received inside the window count. The first
     reading of the window has nothing before it, so it is never a restart.
 
+    A power loop is `LOOP_RESTARTS` or more restarts inside `LOOP_SPAN`
+    while the node sends NodeInfo above its default **in that same span**.
+    A window-long NodeInfo average hides a bad day: one node with 15
+    restarts in a day averaged 0.87x over 30 days and 1.75x on the day.
+
     What this cannot tell: a node that restarts and is not heard between
     two boots shows one restart, not two; a node that sends no device
-    telemetry shows none. `likely_power_loop` is left False here; the
-    broadcast report sets it, because it needs the NodeInfo rate.
+    telemetry shows none.
     """
     if not node_nums:
         return {}
@@ -553,17 +560,36 @@ async def _node_health(
     health: dict[int, NodeHealth] = {}
     for node_num, battery, voltage, uptime in latest:
         times = restarts.get(node_num, [])
+        most, span_start = busiest_span(times, LOOP_SPAN)
+        nodeinfo = None
+        if most >= LOOP_RESTARTS and span_start is not None:
+            nodeinfo = await _nodeinfo_ratio(session, node_num, span_start)
         health[node_num] = NodeHealth(
             battery_level=battery,
             voltage=voltage,
             uptime_seconds=uptime,
             on_battery=battery is not None and battery <= ON_MAINS_ABOVE,
             restarts=len(times),
-            restarts_24h=most_restarts_within(times, LOOP_SPAN),
+            restarts_24h=most,
+            nodeinfo_ratio_24h=nodeinfo,
             restarted=bool(times),
-            likely_power_loop=False,
+            likely_power_loop=is_power_loop(most, nodeinfo),
         )
     return health
+
+
+async def _nodeinfo_ratio(session: AsyncSession, node_num: int, start: datetime) -> float:
+    """NodeInfo the node sent in `LOOP_SPAN` from `start`, against its default."""
+    sent = await session.scalar(
+        select(func.count()).where(
+            Packet.from_node_num == node_num,
+            Packet.portnum == portnums_pb2.PortNum.Value("NODEINFO_APP"),  # type: ignore[attr-defined]
+            Packet.first_seen_at >= start,
+            Packet.first_seen_at < start + LOOP_SPAN,
+        )
+    )
+    expected = LOOP_SPAN.total_seconds() / BROADCAST_INTERVALS["NODEINFO_APP"]
+    return round((sent or 0) / expected, 2)
 
 
 # How far behind the receive time a reading's own time can be, so the
@@ -589,10 +615,14 @@ async def _restart_times(
             DeviceMetrics.uptime_seconds.label("uptime"),
             before,
         )
+        # By (node, packet ID), the packet's identity (AGENTS.md 9.1).
+        # Ingest never knows the row id, so `packet_pk` is empty on the
+        # rows it writes: joined on it, live data found 18 of 521 nodes.
         .join(
             Packet,
             and_(
-                Packet.id == DeviceMetrics.packet_pk,
+                Packet.from_node_num == DeviceMetrics.node_num,
+                Packet.packet_id == DeviceMetrics.packet_id,
                 received >= start,
                 received <= end,
             ),
@@ -616,15 +646,24 @@ async def _restart_times(
     return found
 
 
-def most_restarts_within(times: list[datetime], span: timedelta) -> int:
-    """The most restarts inside any stretch of `span`."""
+def busiest_span(times: list[datetime], span: timedelta) -> tuple[int, datetime | None]:
+    """The most restarts inside any stretch of `span`, and where it starts.
+
+    The stretch starts at its first restart. With no restarts: (0, None).
+    """
     ordered = sorted(times)
-    most, first = 0, 0
+    most, start, first = 0, None, 0
     for last, at in enumerate(ordered):
         while at - ordered[first] >= span:
             first += 1
-        most = max(most, last - first + 1)
-    return most
+        if last - first + 1 > most:
+            most, start = last - first + 1, ordered[first]
+    return most, start
+
+
+def most_restarts_within(times: list[datetime], span: timedelta) -> int:
+    """The most restarts inside any stretch of `span`."""
+    return busiest_span(times, span)[0]
 
 
 def is_power_loop(restarts_in_span: int, nodeinfo_ratio: float | None) -> bool:
@@ -845,6 +884,7 @@ EMPTY_HEALTH = NodeHealth(
     on_battery=False,
     restarts=0,
     restarts_24h=0,
+    nodeinfo_ratio_24h=None,
     restarted=False,
     likely_power_loop=False,
 )
@@ -959,11 +999,6 @@ async def broadcast_ranking(
         )
 
     health = await _node_health(session, list(families), start, window_seconds, end)
-    for node_num, reading in health.items():
-        nodeinfo = families.get(node_num, {}).get("NODEINFO_APP")
-        reading["likely_power_loop"] = is_power_loop(
-            reading["restarts_24h"], nodeinfo.ratio if nodeinfo else None
-        )
     report = [_broadcast_report(node_num, "", rates) for node_num, rates in families.items()]
     report.sort(
         key=lambda item: broadcast_order(
