@@ -46,6 +46,87 @@ All documentation and code comments use ASD-STE100 Simplified Technical English.
 - Do not use slang.
 - Do not use complex grammar.
 
+## 3A. Before you build: a person, a source, a test (#359)
+
+Read this before you start any work. §6 says how to finish a change.
+This section says what you may start, and what a new number must rest on.
+
+### 3A.1 A person must understand the feature first
+
+- A new feature or a new metric starts from an issue that a person wrote.
+- The issue says, in that person's own words:
+  - what the feature measures or does, and why a mesh operator needs it;
+  - where the data comes from (which packet, which field, which table);
+  - what it **cannot** tell us.
+- If the issue does not show this, do not start. Ask the person in the
+  issue, and wait for the answer.
+- "Make X better" or "add a stat for Y" is not enough on its own.
+- A bug fix to existing behaviour needs a clear report, not a full design.
+
+### 3A.2 No metric from thin air
+
+Every number the site shows, and every threshold, weight, floor or score
+behind it, links to a hard source:
+
+- the Meshtastic firmware (`meshtastic/firmware`: a file and line at a tag
+  or commit);
+- the protobufs (`meshtastic/protobufs`: the field);
+- published documentation (for example a Semtech datasheet, an NTIA report
+  or the Meshtastic docs);
+- a measurement on our own data, recorded in `docs/DECISIONS.md` with the
+  query and its result.
+
+Put the link in the code comment beside the constant **and** in the
+matching doc. Do not merge a number with no source. "A reasonable value"
+and "a common rule of thumb" are not sources.
+
+### 3A.3 No new coverage-gaps features for now
+
+Do not add gaps signals, scores, leaderboards or gaps pages until Logan or
+Tyler says otherwise in an issue. Bug fixes to what exists are still fine.
+
+### 3A.4 No tool credit and no session links
+
+- Do not add "Generated with ...", "Co-Authored-By: <a tool or model>" or
+  any other tool or model credit to a commit, a PR, an issue or a comment.
+- **Never paste an agent session link** (for example
+  an agent session link). It points into a private session
+  that can hold file contents, command output, paths and secrets.
+- The author of a PR is the person responsible for it.
+
+### 3A.5 Test-driven development
+
+The tests come from the issue, not from the code. Tests that only prove
+"the code does what the agent decided" prove nothing about the measure.
+
+1. **Tests come from the issue.** Turn each claim of the issue (3A.1)
+   into a test before you write code. Take expected numbers from the
+   issue or from the source (3A.2). Do not invent them.
+2. **Red first.** Write the test, run it, and see it fail for the right
+   reason. Put that failing output in the PR. A test that never failed
+   proves nothing.
+3. **Green.** Write the smallest code that makes the test pass.
+4. **Never change a test to make it pass.** Do not weaken, skip or delete
+   a test to get green. If a test is wrong, say so in the PR, and get the
+   issue author's agreement before you change it.
+5. **Refactor** while the tests stay green.
+6. **Small steps.** One behaviour for each cycle.
+7. **A bug fix starts with a test that reproduces the bug** and fails on
+   `main`.
+8. **Somebody else checks the tests.** A second agent or a person reviews
+   the tests against the issue, apart from the code.
+9. **Prove that a broken version fails.** Add a test that a plausible
+   wrong implementation would fail, as the existing "would be caught"
+   tests do.
+
+Exceptions: documentation, comments, configuration with no logic, and
+visual layout that a test cannot express. For layout, a screenshot before
+and after is the evidence.
+
+Why (sources in #359): small, steady test cycles are what the studies tie
+to better results (Fucci et al., IEEE TSE 2017), and agents are known to
+edit a failing test to match wrong code.
+
 ## 4. Architecture rules
 
 - The `decode` and `crypto` modules must never touch the database.
@@ -85,6 +166,10 @@ A change is complete only when all of these pass:
 9. `npx eslint src/sonoran/web/static` passes. Install it with
    `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
    ignored, and nothing is added to the served frontend.
+10. The PR shows its red step (§3A.5): the new tests, and their failing
+    output on `main` before the change.
+11. Every new number has its source in the code comment and in the doc
+    (§3A.2), and the PR lists them under "Basis".
 
 `node --check` is not a substitute for item 9. It parses a file and does
 no scope analysis, so a reference to a deleted name passes it and throws
@@ -795,7 +880,9 @@ one.**
       fieldValues(first:12){nodes{... on ProjectV2ItemFieldSingleSelectValue
       {name field{... on ProjectV2FieldCommon{name}}}}}}}}}}'
 
-An issue **absent** from the board is not gated and is fair game.
+An issue **absent** from the board is not gated by the board. It is not
+automatically fair game: it must still meet §3A.1, and a gaps feature is
+paused by §3A.3.
 
 #### The trap: an empty answer that means two different things
 
