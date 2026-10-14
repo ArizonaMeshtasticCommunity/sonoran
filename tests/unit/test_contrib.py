@@ -152,7 +152,13 @@ def test_status_heard_list_is_capped_at_the_largest_node_db() -> None:
     ]
     with pytest.raises(ValidationError):
         Status.model_validate(
-            {"v": 1, "location": "phoenix", "source": "pi5", "sent": NOW.isoformat(), "heard": heard}
+            {
+                "v": 1,
+                "location": "phoenix",
+                "source": "pi5",
+                "sent": NOW.isoformat(),
+                "heard": heard,
+            }
         )
 
 
@@ -304,3 +310,11 @@ def test_a_second_result_for_one_job_is_refused() -> None:
 def test_a_result_with_another_job_id_in_its_body_is_refused() -> None:
     result = Result.model_validate(_ok_result(job="f" * 32))
     assert refuse_result(_facts(), A, result) is not None
+
+
+def test_the_published_json_schema_matches_the_code() -> None:
+    """The contributor repository copies the file. It must never drift."""
+    from pathlib import Path
+
+    published = json.loads(Path("docs/contributor-message-v1.schema.json").read_text())
+    assert published == json.loads(json.dumps(json_schema()))
