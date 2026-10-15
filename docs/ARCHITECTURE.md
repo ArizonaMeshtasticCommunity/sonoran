@@ -62,7 +62,6 @@ uses:
 | api | `DATABASE_URL_API` |
 | ingest | `DATABASE_URL` and `CHANNEL_KEYS` |
 | jobs | `DATABASE_URL_JOBS` |
-| contrib | `DATABASE_URL_JOBS` and `CONTRIB_MQTT_PASSWORD` |
 | migrate | `DATABASE_URL_MIGRATE` and the three `AZMSH_*_PASSWORD` |
 | mesh-graph | four MQTT variables, and no `.env` at all |
 

@@ -63,10 +63,6 @@ x-no-credentials: &no-credentials
   # The api and the jobs held them because the file was handed over
   # whole, not because anything asked.
   CHANNEL_KEYS: ""
-  # The only broker login that may publish a mesh job (#178). The
-  # contrib service gets it back; the api, which faces the internet,
-  # never holds it.
-  CONTRIB_MQTT_PASSWORD: ""
 
 services:
   timescaledb:
@@ -218,7 +214,6 @@ services:
     environment:
       <<: *no-credentials
       DATABASE_URL_JOBS: ${DATABASE_URL_JOBS:?set DATABASE_URL_JOBS in .env}
-      CONTRIB_MQTT_PASSWORD: ${CONTRIB_MQTT_PASSWORD:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
