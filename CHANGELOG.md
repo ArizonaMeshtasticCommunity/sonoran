@@ -5,6 +5,30 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.15 — 2026-10-15
+
+1 pull request merged.
+
+#### New features
+
+- Contributors, mesh jobs and the measured noise floor (#178) (#375) by @logans-stuff
+  Node pages can show a router's **measured noise floor** and its other local stats, read by members' contributors. The RF tab has a **Measured noise floor** layer. Both stay empty until a contributor runs.
+
+#### Issues
+
+- Worked on: #178 Noise Floor Tracking (reported by @tylerpieper)
+- Worked on: #179 Sonoran-Contributor docker service (reported by @tylerpieper)
+- Worked on: #181 Sonoran - Contributor management (reported by @tylerpieper)
+- Worked on: #182 Sonoran - Noise Floor display (reported by @tylerpieper)
+
+#### Thank you
+
+- Reported: @tylerpieper
+- Code: @logans-stuff
+- Tested and helped: @tylerpieper, @returnzork
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.14...v2026.10.15
+
 ## v2026.10.14 — 2026-10-14
 
 1 pull request merged, 2 issues closed.
