@@ -60,10 +60,19 @@ uses:
 | Service | Holds |
 |---------|-------|
 | api | `DATABASE_URL_API` |
-| ingest | `DATABASE_URL` and `CHANNEL_KEYS` |
+| ingest | `DATABASE_URL`, `CHANNEL_KEYS` and `MQTT_PASSWORD` |
+| rf-ingest | `DATABASE_URL` and `RF_MQTT_PASSWORD` |
+| contrib | `DATABASE_URL_JOBS` and `CONTRIB_MQTT_PASSWORD` |
 | jobs | `DATABASE_URL_JOBS` |
 | migrate | `DATABASE_URL_MIGRATE` and the three `AZMSH_*_PASSWORD` |
 | mesh-graph | four MQTT variables, and no `.env` at all |
+
+The three broker passwords are blanked by their own anchors
+(`x-no-mqtt`, `x-no-rf-mqtt`, `x-no-contrib-mqtt`), merged into every
+service but the one that logs in with it. That service does not set
+the password in `environment:` at all, because `environment:` beats
+every `env_file` and would replace a password a host gives it in an
+override file. `tests/unit/test_broker_credentials.py` pins this.
 
 **A credential added to `.env` later must be added to
 `x-no-credentials` too**, or it is shared with every service by
