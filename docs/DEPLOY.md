@@ -75,6 +75,7 @@ Which services to rebuild:
 | `src/sonoran/ingest/` | `ingest` |
 | `src/sonoran/jobs/`, `src/sonoran/coverage/`, `src/sonoran/gaps/` | `jobs` |
 | `src/sonoran/rf/` ingest code | `rf-ingest` |
+| `src/sonoran/contrib/` | `contrib` (profile `contrib`) |
 | A migration | `migrate` runs first on its own |
 
 Do not restart `jobs` while a coverage run is in progress. A restart

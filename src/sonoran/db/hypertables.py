@@ -19,4 +19,5 @@ HYPERTABLES: list[tuple[str, str, int]] = [
     ("pax_metrics", "time", 90),
     ("mesh_packet_metrics", "time", 90),
     ("neighbor_metrics", "time", 90),
+    ("local_stats", "time", 90),
 ]

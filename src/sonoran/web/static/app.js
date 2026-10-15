@@ -6048,6 +6048,62 @@ function devicePanel(detail) {
     list || telemetryEmpty('This node sends no device telemetry.'));
 }
 
+/*
+ * Local stats (#178, #182): what the node measured about its own radio,
+ * read on request by a member's contributor. Field names and meanings
+ * are `LocalStats` in `meshtastic/telemetry.proto`. The noise floor is
+ * the node's own measurement (`getAverageNoiseFloor()` in the firmware),
+ * so it is always "measured" here: the coverage map assumes another,
+ * theoretical floor, and the two do not agree (rancur on #182).
+ */
+const LOCAL_STATS_LABELS = {
+  noise_floor: ['Measured noise floor', (v) => `${round(v, 0)} dBm`],
+  channel_utilization: ['Channel use', (v) => `${round(v, 1)} %`],
+  air_util_tx: ['Air time TX', (v) => `${round(v, 1)} %`],
+  num_packets_rx: ['Packets received', (v) => count(v)],
+  num_packets_rx_bad: ['Bad packets received', (v) => count(v)],
+  num_rx_dupe: ['Duplicates received', (v) => count(v)],
+  num_packets_tx: ['Packets sent', (v) => count(v)],
+  num_tx_relay: ['Relayed', (v) => count(v)],
+  num_tx_relay_canceled: ['Relays cancelled', (v) => count(v)],
+  num_tx_dropped: ['Dropped from the send queue', (v) => count(v)],
+  num_online_nodes: ['Nodes online', (v) => count(v)],
+  num_total_nodes: ['Nodes known', (v) => count(v)],
+};
+const LOCAL_STATS_HINTS = {
+  noise_floor: 'The noise this radio hears when nobody is sending, averaged by its firmware, in dBm. '
+    + 'A member\'s contributor asked the node for it. '
+    + 'It is not the floor the coverage map assumes, which is calculated, not measured.',
+};
+// The roles #178 asks contributors to read. Others get no panel unless
+// they have a reading.
+const LOCAL_STATS_ROLES = new Set(['ROUTER', 'ROUTER_LATE', 'CLIENT_BASE']);
+
+function localStatsPanel(detail) {
+  const stats = detail.local_stats || {};
+  const rows = Object.entries(LOCAL_STATS_LABELS)
+    .filter(([key]) => stats[key] != null)
+    .map(([key, [label, format]]) => ({ key, label, text: format(stats[key]), flag: null }));
+  if (!rows.length && !LOCAL_STATS_ROLES.has(detail.node.role)) return null;
+  let list = null;
+  if (rows.length) {
+    list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text }) => [
+      el('dt', { 'data-label': label, 'data-hint': LOCAL_STATS_HINTS[key] || FIELD_HINTS[key] || null }, label),
+      el('dd', { text }),
+    ]));
+    revealHints(list);
+  }
+  const by = stats.location ? `read by ${stats.location}${stats.source ? `/${stats.source}` : ''}` : null;
+  return el('div', { class: 'panel' },
+    el('h3', {
+      'data-label': 'Local stats',
+      'data-hint': 'What the node measured about its own radio. It does not send this over the mesh, '
+        + 'so a member\'s contributor asks it. A new reading is asked for at most once per interval: 12 hours for a router, 1 hour for other roles.',
+    }, 'Local stats',
+      stats.time ? el('span', { class: 'muted', text: `${ago(stats.time)} ago${by ? `, ${by}` : ''}` }) : null),
+    list || el('p', { class: 'empty', text: 'Not measured yet. No contributor has read this node.' }));
+}
+
 function messagesPanel(detail) {
   const messages = detail.messages.recent || [];
   // `recent` is capped by the API; `count` is measured (#200). When
@@ -7865,7 +7921,8 @@ async function loadNodeDetail(nodeId) {
     jumpTarget('identity', identityPanel(node)),
     el('div', { class: 'summary-stack' }, devicePanel(detail), health),
     jumpTarget('activity', activityPanel(detail)),
-    weatherPanel(detail));
+    weatherPanel(detail),
+    localStatsPanel(detail));
 
   /*
    * Identity and device first, health after (#95).

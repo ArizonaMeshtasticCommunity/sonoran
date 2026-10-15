@@ -796,6 +796,93 @@ class RfOperatorLog(Base):
     detail: Mapped[str | None] = mapped_column(Text)
 
 
+# --- Contributors (#178) ------------------------------------------------
+#
+# Members' own machines do jobs on their own nodes. Written by
+# `sonoran-contrib` as `azmsh_jobs`. See docs/design/contributors.md.
+
+
+class ContribSource(Base):
+    """The last heartbeat of one contributor."""
+
+    __tablename__ = "contrib_source"
+
+    location: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    sent: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    version: Mapped[str | None] = mapped_column(Text)
+    mesh_node: Mapped[int | None] = mapped_column(BigInteger)
+    kinds: Mapped[list[str]] = mapped_column(ARRAY(Text))
+
+
+class ContribHeard(Base):
+    """One node in one contributor's node list, from its last heartbeat."""
+
+    __tablename__ = "contrib_heard"
+
+    location: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    hops: Mapped[int | None] = mapped_column(SmallInteger)
+    last_heard: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ContribJob(Base):
+    """One job given to one contributor, and its outcome."""
+
+    __tablename__ = "contrib_job"
+
+    job: Mapped[str] = mapped_column(Text, primary_key=True)
+    location: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text)
+    target: Mapped[int] = mapped_column(BigInteger)
+    round_started: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    issued: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(Text)
+    finished: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    detail: Mapped[str | None] = mapped_column(Text)
+    cleared: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class LocalStatsMetrics(Base):
+    """`LocalStats` as a contributor read it from a node. Hypertable on time.
+
+    `noise_floor` is the node's own measured floor in dBm. It is not the
+    theoretical floor in `sonoran/radio/presets.py`.
+    """
+
+    __tablename__ = "local_stats"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    job: Mapped[str] = mapped_column(Text, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger)
+    location: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    hops: Mapped[int | None] = mapped_column(SmallInteger)
+    rx_snr: Mapped[float | None] = mapped_column(REAL)
+    rx_rssi: Mapped[int | None] = mapped_column(Integer)
+    uptime_seconds: Mapped[int | None] = mapped_column(BigInteger)
+    channel_utilization: Mapped[float | None] = mapped_column(REAL)
+    air_util_tx: Mapped[float | None] = mapped_column(REAL)
+    num_packets_tx: Mapped[int | None] = mapped_column(BigInteger)
+    num_packets_rx: Mapped[int | None] = mapped_column(BigInteger)
+    num_packets_rx_bad: Mapped[int | None] = mapped_column(BigInteger)
+    num_online_nodes: Mapped[int | None] = mapped_column(BigInteger)
+    num_total_nodes: Mapped[int | None] = mapped_column(BigInteger)
+    num_rx_dupe: Mapped[int | None] = mapped_column(BigInteger)
+    num_tx_relay: Mapped[int | None] = mapped_column(BigInteger)
+    num_tx_relay_canceled: Mapped[int | None] = mapped_column(BigInteger)
+    heap_total_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    heap_free_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    num_tx_dropped: Mapped[int | None] = mapped_column(BigInteger)
+    noise_floor: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (Index("ix_local_stats_node_time", "node_num", time.desc()),)
+
+
 # --- What the background jobs computed (#351) --------------------------
 #
 # The gaps job, the siting half and the calibration fit used to write

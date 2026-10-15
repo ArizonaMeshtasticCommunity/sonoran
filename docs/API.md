@@ -517,7 +517,10 @@ Returns telemetry series for charts.
 
 Query parameters:
 
-- `family` — one of `device`, `environment`, `air_quality`, `power`, `pax`. Required.
+- `family` — one of `device`, `environment`, `air_quality`, `power`, `pax`,
+  `local_stats`. Required. `local_stats` is read by a contributor on
+  request (#178), not sent by the node. Each point also has `job`,
+  `location` and `source`: who measured it.
 - `start`, `end` — time range. Default: last 24 hours.
 - `max_points` — downsample target. Default 500.
 
@@ -542,6 +545,10 @@ replaces many. Fields:
 - `weather` — the newest environment telemetry. Empty when the node
   sends none. `weather_time` gives its time.
 - `device`, `air_quality`, `power` — the newest telemetry of each family.
+- `local_stats` — the newest LocalStats a contributor read from this node
+  (#178, #182), with `time`, `location` and `source`. Empty when none has.
+  `noise_floor` is the **measured** noise floor in dBm, not the theoretical
+  one the coverage map uses.
 - `activity` — `packet_count` and a count for each port number.
 - `messages` — `count` and the newest messages this node sent.
 - `graph` — the mesh-graph URLs for this node.
@@ -2548,6 +2555,21 @@ layer. A mod an operator hid (`sonoran-rf-trust hide-mod`) and every mod
 of a quarantined station or source are left out. Text in `meta` arrives
 without invisible or direction-changing characters, and the page shows
 it as text only.
+
+### 12.5.4 `GET /api/rf/noise-floor`
+
+The latest **measured** noise floor of each node with a position (#182).
+A contributor read it from the node on request (#178,
+`docs/design/contributors.md`). It is not the theoretical floor the
+coverage map uses.
+
+Query parameter: `hours` — the window, 1 to 720. Default 24: two of a
+router's 12 hour intervals, so one missed round still shows.
+
+Each row: `node_id`, `long_name`, `short_name`, `role`, `lat`, `lon`,
+`time`, `noise_floor_dbm`, `channel_utilization`, and `measured_by`
+(`location`, `source`, `display_name`). A node with no reading in the
+window is not listed: "not measured", never "quiet".
 
 ### 12.6 `GET /api/rf/channels`
 
