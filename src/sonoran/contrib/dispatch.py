@@ -32,8 +32,9 @@ TARGET_ROLES = frozenset({"ROUTER", "ROUTER_LATE", "CLIENT_BASE"})
 # that sends it: `default_telemetry_broadcast_interval_secs` is
 # `IF_ROUTER(ONE_DAY / 2, 60 * 60)`, and IF_ROUTER means ROUTER or
 # ROUTER_LATE (`src/mesh/Default.h` lines 18 and 47, meshtastic/firmware
-# v2.7.26.54e0d8d). We ask a node no more often than it would send its
-# own telemetry.
+# v2.7.26.54e0d8d). At most one round starts for a node in this
+# interval. A round can hold one request per candidate, when the ones
+# before it fail (docs/design/contributors.md 5.1).
 ROUTER_ROLES = frozenset({"ROUTER", "ROUTER_LATE"})
 ROUTER_INTERVAL = timedelta(seconds=24 * 60 * 60 // 2)
 OTHER_INTERVAL = timedelta(seconds=60 * 60)

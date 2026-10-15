@@ -13,8 +13,15 @@ A node measures its own radio environment and keeps it in `LocalStats`.
 (`DeviceTelemetry.cpp`, `sendLocalStatsToPhone`). Any node answers a
 **request** for it (`DeviceTelemetryModule::allocReply`, firmware
 v2.7.26.54e0d8d, `src/modules/Telemetry/DeviceTelemetry.cpp` lines 87
-to 89). The answer goes to the node that asked, as a direct message
-with PKI. So it never reaches MQTT, and Sonoran cannot ask for it alone.
+to 89). The answer goes back to the node that asked, as a direct
+message. Sonoran has no node on the mesh, so it cannot ask.
+
+Whether the answer is encrypted with PKI, so that only the asking node
+can read it, is not checked here. #178 says it is. The firmware uses
+PKI for a direct message only when the sender has the receiver's
+public key; otherwise it may use the channel key. This design does not
+depend on it: the contributor reads the answer from its own node either
+way.
 
 A **contributor** is a member's own machine with a Meshtastic node it
 can talk to. Sonoran gives it jobs. It does a job with its node and
@@ -114,7 +121,16 @@ purpose (revision 0003), and gets nothing here.
   `src/mesh/Default.h` line 18 at v2.7.26.54e0d8d, with `IF_ROUTER`
   at line 47): **12 hours** for `ROUTER` and `ROUTER_LATE`, **1 hour**
   for every other role. A router's makers chose 12 hours for its own
-  telemetry to save airtime. We ask no more often than that.
+  telemetry to save airtime.
+- **This limits rounds, not requests.** At most one round starts for a
+  target in its interval. Inside a round, a failed job moves to the
+  next candidate (5.2), so a target that does not answer can get one
+  request from each candidate, about one every 5 minutes, in one round.
+  There is no cap on candidates per round yet: a cap needs a number
+  with a source (AGENTS.md 3A.2).
+- **Airtime.** One job is one request and one answer. Each is relayed by
+  the nodes between, so a target `n` hops away costs about `2n`
+  transmissions or more, and a failed request can add a routing NAK.
 
 ### 5.2 Which contributor (#181)
 
@@ -123,7 +139,9 @@ purpose (revision 0003), and gets nothing here.
 2. A contributor that already failed this round is not a candidate.
 3. A contributor with an open job is not a candidate. A contributor
    does one job at a time, so a contributor sends at most one request
-   at a time.
+   at a time. A reassignment waits for the next tick of
+   `sonoran-contrib` (`CONTRIB_TICK_SECONDS`), and so does clearing a
+   finished job's outbox message.
 4. The best candidate has the fewest hops to the target. Unknown hops
    come last. Then the most recent `last_heard`.
 5. No candidate: no job. The target waits for a heartbeat that lists

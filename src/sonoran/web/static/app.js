@@ -6098,7 +6098,7 @@ function localStatsPanel(detail) {
     el('h3', {
       'data-label': 'Local stats',
       'data-hint': 'What the node measured about its own radio. It does not send this over the mesh, '
-        + 'so a member\'s contributor asks it, about as often as the node would send its own telemetry.',
+        + 'so a member\'s contributor asks it. A new reading is asked for at most once per interval: 12 hours for a router, 1 hour for other roles.',
     }, 'Local stats',
       stats.time ? el('span', { class: 'muted', text: `${ago(stats.time)} ago${by ? `, ${by}` : ''}` }) : null),
     list || el('p', { class: 'empty', text: 'Not measured yet. No contributor has read this node.' }));
