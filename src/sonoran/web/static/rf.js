@@ -2,7 +2,7 @@
  * The RF page: what the community's own receivers hear beyond Meshtastic.
  *
  * Aircraft first. Every mark is something one of our stations heard,
- * sent by `rf-agent` and stored by `sonoran-rf-ingest`. Nothing is
+ * sent by `sonoran-contributor` (its RF agent) and stored by `sonoran-rf-ingest`. Nothing is
  * fetched from anywhere else, so an aircraft that is not here was not
  * heard by us. See docs/design/rf-map.md.
  *
@@ -2013,7 +2013,7 @@
     loadMods(page);
     loadNoise();
     if (!stations.body.length) {
-      summary.textContent = 'No RF station has reported yet. A station runs rf-agent beside its SDR.';
+      summary.textContent = 'No RF station has reported yet. A station runs sonoran-contributor beside its SDR.';
       return;
     }
     const online = stations.body.filter((station) => station.online).length;

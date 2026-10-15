@@ -111,6 +111,16 @@ holds the only broker login that can publish jobs. It runs as
 `azmsh_jobs`, which can read `node.role`. The ingest role cannot, on
 purpose (revision 0003), and gets nothing here.
 
+**RF is not needed, on either side.**
+
+- A contributor with mesh jobs only runs no SDR and sends nothing on
+  `rf/v1/`.
+- `sonoran-contrib` does not need `rf-ingest` (profile `rf`). The two
+  share only the registrar's location and source ids.
+- Without `rf-ingest`, the location's display name from the registry
+  is not stored. The pages then show the location id as the "read by"
+  name.
+
 ### 5.1 Which nodes, and how often
 
 - Targets are the roles #178 names: `ROUTER`, `ROUTER_LATE` and
@@ -135,7 +145,8 @@ purpose (revision 0003), and gets nothing here.
 ### 5.2 Which contributor (#181)
 
 1. The candidates are the contributors whose last heartbeat lists the
-   target, heard within the target's interval.
+   target, heard within the target's interval, and lists the job's kind
+   in `kinds`. `kinds` is the member's own `MESH_JOBS`.
 2. A contributor that already failed this round is not a candidate.
 3. A contributor with an open job is not a candidate. A contributor
    does one job at a time, so a contributor sends at most one request
@@ -190,6 +201,28 @@ in this list fails. The reading is real.
 - The RF tab: a **Measured noise floor** layer, the latest reading per
   node with a position, from `/api/rf/noise-floor`. Each point says
   when it was measured and by which contributor.
+
+### 5.6 Who decides what
+
+| Who | Decides | With |
+|---|---|---|
+| The member | Whether their Pi does RF, mesh jobs, or both, and with which node | `SOURCES`, `MESH_NODE` on the Pi |
+| The member | Which job kinds their Pi does | `MESH_JOBS`, sent to Sonoran as the heartbeat's `kinds` |
+| Sonoran | Which node is asked, by which contributor, and when | The rules in 5.1 to 5.3 |
+| The operator | Whether any job is sent at all | Starting or stopping `contrib` (profile `contrib`) |
+| The operator | Whether one Pi takes part at all | Revoking its login, which stops its RF too |
+
+What each side cannot do:
+
+- A member cannot choose the nodes that are asked, or when, and cannot
+  make a job. Their login cannot publish to an outbox (3).
+- Sonoran cannot start RF on a Pi, cannot send a kind the Pi does not
+  list, and cannot make the Pi do anything but the job's one request
+  (6).
+
+**Missing:** there is no operator switch to pause one contributor's
+jobs and keep its RF. Today the choices are to revoke its login, or to
+ask the member to remove `MESH_NODE`.
 
 ## 6. The contributor (#179)
 

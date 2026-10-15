@@ -138,6 +138,10 @@ edit a failing test to match wrong code.
   tables, `docs/DATABASE.md` 5B) with DELETE and INSERT in one
   transaction. It has no UPDATE on them. A job output is a table, not
   a JSON file, except the coverage tiles and the run manifest (#351).
+- One exception: `sonoran-contrib` runs as the jobs role and UPDATEs the
+  `contrib_` tables (a job's outcome, a contributor's last heartbeat).
+  Those are state, not job outputs. It never UPDATEs `local_stats`: a
+  reading is only inserted (#178, migration i178).
 - Modules talk to each other through small, documented interfaces.
 - Keep functions small. Keep modules small.
 

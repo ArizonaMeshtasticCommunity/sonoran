@@ -4583,7 +4583,8 @@ async function main() {
     await hint.tap();
     await page.waitForTimeout(250);
     const said = await page.locator(`#${await hint.getAttribute('aria-controls')}`).innerText();
-    must(/rf-agent beside an SDR/.test(said), 'the ? does not hold the whole description');
+    // The last words of the description, not the product name in them, which changed (#178).
+    must(/beside an SDR\./.test(said), 'the ? does not hold the whole description');
     await page.keyboard.press('Escape');
 
     await page.setViewportSize({ width: 1024, height: 768 });

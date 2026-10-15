@@ -121,6 +121,58 @@ Before a deployment that many people will watch goes live, load it on
 It prints each request's 50th, 95th and 99th percentile time, its
 failures and its share of 304 answers, and exits 1 when anything failed.
 
+## 4.2 Turn on contributors (#178)
+
+Contributors are off until you turn them on. The design is
+`docs/design/contributors.md`.
+
+1. **The dispatcher login.** On the broker, make one login for Sonoran,
+   for example `sonoran-contrib`, with a long random password. Keep the
+   password for step 3.
+2. **The registrar.** Set `DISPATCHER_USERNAME=sonoran-contrib` in the
+   registrar's `.env`, and restart it with code that has the
+   contributor rules (sonoran-contributor `docs/REGISTRAR.md`). At start
+   it:
+   - adds the all-clients deny for `sonoran/v1/contributors/#`;
+   - writes every login's rules again, with its own job topics;
+   - gives the dispatcher login its rules.
+
+   Its log says `added an all-clients broker rule` the first time.
+3. **This deployment's `.env`.** Add `CONTRIB_MQTT_HOST` (empty means
+   `RF_MQTT_HOST`), `CONTRIB_MQTT_PORT`, `CONTRIB_MQTT_USERNAME`,
+   `CONTRIB_MQTT_PASSWORD` and `CONTRIB_MQTT_USE_TLS`. Only the
+   `contrib` service receives the password (ARCHITECTURE.md 2.1).
+4. **The migration.** `docker compose run --rm migrate </dev/null`
+   applies `i178`.
+5. **The services.** Rebuild `api`, which has the node page panel and
+   the RF layer. Then start the dispatcher:
+
+   ```bash
+   docker compose build api contrib
+   docker compose up -d --no-deps api
+   docker compose --profile contrib up -d --no-deps contrib
+   ```
+
+6. **Check it.**
+   - `docker compose logs contrib` shows no broker error. When
+     messages arrive, it logs `contrib, last minute: {...}` at most once
+     a minute, with counts such as `status`, `jobs`, `reading`,
+     `refused` and `invalid`. With no contributor running, it logs
+     nothing.
+   - `/api/rf/noise-floor` answers `[]` until a reading comes.
+   - With a contributor running, `status` counts go up within a
+     minute, and `jobs` within a tick after a router is due.
+7. **The Discord bot.** Update the cog, and enable and sync the
+   `contributor` slash group (sonoran-cog README, "Upgrading").
+
+To stop all mesh jobs, stop `contrib`
+(`docker compose --profile contrib stop contrib`). Jobs that are out
+expire. Nothing else changes. To remove one member, revoke their login
+in Discord. That stops their RF too.
+
+Roll back: stop `contrib`. Migration `i178` only adds tables, so it can
+stay. `alembic downgrade` drops them, and every reading with them.
+
 ## 5. Roll back
 
 ```bash
