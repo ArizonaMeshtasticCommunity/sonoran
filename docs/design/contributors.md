@@ -111,6 +111,16 @@ holds the only broker login that can publish jobs. It runs as
 `azmsh_jobs`, which can read `node.role`. The ingest role cannot, on
 purpose (revision 0003), and gets nothing here.
 
+**RF is not needed, on either side.**
+
+- A contributor with mesh jobs only runs no SDR and sends nothing on
+  `rf/v1/`.
+- `sonoran-contrib` does not need `rf-ingest` (profile `rf`). The two
+  share only the registrar's location and source ids.
+- Without `rf-ingest`, the location's display name from the registry
+  is not stored. The pages then show the location id as the "read by"
+  name.
+
 ### 5.1 Which nodes, and how often
 
 - Targets are the roles #178 names: `ROUTER`, `ROUTER_LATE` and
