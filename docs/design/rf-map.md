@@ -88,7 +88,10 @@ the sonoran host.
 ## 3. `rf-agent`
 
 A separate repository and image, because it runs on members' machines,
-usually a Raspberry Pi. Proposed: `ArizonaMeshtasticCommunity/rf-agent`.
+usually a Raspberry Pi. It is `ArizonaMeshtasticCommunity/sonoran-contributor`
+(the repository was `rf-map` until 2026-10-15), image `sonoran-contributor`.
+`rf-agent` is now the RF part of that service; it also does mesh jobs
+(`docs/design/contributors.md`).
 
 ### 3.1 It never touches the SDR
 
