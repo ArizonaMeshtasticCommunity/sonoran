@@ -16,13 +16,16 @@ It uses ASD-STE100 Simplified Technical English.
 
 ## 2. Process layout
 
-Three processes share one Python package:
+Three processes always run, and two more are optional. All share one
+Python package:
 
 | Process | Module entry point | Database role |
 |---------|-------------------|---------------|
 | ingest | `sonoran.ingest.pipeline:main` | INSERT and UPDATE only |
 | api | `sonoran.api.app:create_app` | SELECT only |
 | jobs | `sonoran.jobs.scheduler:run` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
+| rf-ingest (profile `rf`) | `sonoran.rf.ingest:run` | the ingest role, plus SELECT on `rf_trust` (AGENTS.md 9.29) |
+| contrib (profile `contrib`) | `sonoran.contrib.service:run` | the jobs role: SELECT, INSERT, UPDATE, DELETE on the `contrib_` tables, SELECT and INSERT on `local_stats` (#178) |
 
 The daily snapshot has its own clock. Calibration and coverage share a
 clock because coverage consumes the calibration file. A due calibration
@@ -59,6 +62,7 @@ uses:
 | api | `DATABASE_URL_API` |
 | ingest | `DATABASE_URL` and `CHANNEL_KEYS` |
 | jobs | `DATABASE_URL_JOBS` |
+| contrib | `DATABASE_URL_JOBS` and `CONTRIB_MQTT_PASSWORD` |
 | migrate | `DATABASE_URL_MIGRATE` and the three `AZMSH_*_PASSWORD` |
 | mesh-graph | four MQTT variables, and no `.env` at all |
 
@@ -456,6 +460,20 @@ Readers: the planner page (through `api/routes/climate.py`), the
 coverage job (`coverage/sites.py::engine_params`) and the calibration
 (`jobs/calibrate.py::_params`). See `docs/PLANNER.md` 4.3.
 
+### 3.8.2 `contrib`
+
+- Job: give mesh jobs to members' contributors and keep what they bring
+  back (#178). See `docs/design/contributors.md`.
+- `schema.py` is the contract, exported to
+  `docs/contributor-message-v1.schema.json`.
+- `dispatch.py` holds the rules, with no database and no broker: which
+  node, which contributor, and whether a result is accepted.
+- `store.py` reads and writes the `contrib_` tables and `local_stats`.
+- `service.py` is the process: one broker connection, and a tick that
+  expires, plans, publishes and clears jobs.
+- It reads `rf.schema` for the station and source id rules, so a
+  contributor's ids are the registrar's.
+
 ### 3.9 `jobs`
 
 - Job: run scheduled maintenance.
@@ -802,6 +820,8 @@ mqtt -> decode -> crypto
 ingest -> mqtt, decode, crypto, db
 api -> db
 jobs -> db
+rf -> db
+contrib -> db, rf (the id rules only)
 web/static -> api (over HTTP only)
 ```
 
