@@ -30,6 +30,16 @@ anything is drawn, and it has not been.
 So this file is the tripwire. `relay_node_num` and `next_hop_node_num`
 are stored (`db/models.py`) and reach no route and no map today. If
 somebody exposes them, they meet this test and its reasoning first.
+
+**2026-10-17 — option 3 reversed for the packet page only (Logan,
+PR #378).** Each upload now keeps its own relay byte
+(`packet_seen.relay_node`). The packet page lists it per gateway as
+**candidates** — every node ending in the byte, heard within a day —
+and says "one of these candidates" when there is more than one. That is
+the honest form this file's own test allowed ("relayed by one of these
+19"). Still declined: drawing anything from it. The live map stays hop
+count only, and the byte reaches a route only as candidates. The tests
+below hold both. See `docs/DECISIONS.md`, 2026-10-17.
 """
 
 from pathlib import Path
@@ -69,13 +79,36 @@ def test_no_route_exposes_the_ambiguous_relayer() -> None:
         )
 
 
+def test_the_per_upload_relay_reaches_a_route_only_as_candidates() -> None:
+    """2026-10-17: `packet_seen.relay_node` may leave the API only through
+    `relay_candidates`, which lists every node the byte may name."""
+    for path in sorted(ROUTES.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        uses = source.count(".relay_node")
+        if path.name != "packets.py":
+            assert uses == 0, f"{path.name} reads a relay byte; only packets.py may (#47)"
+            continue
+        assert "relay_candidates(" in source
+        for line in source.splitlines():
+            if "item.relay_node" in line and "relay_bytes" not in line:
+                assert "relay_candidates(" in line or line.strip().startswith("item.relay_node,"), (
+                    f"packets.py uses the relay byte outside relay_candidates: {line.strip()}"
+                )
+
+
 def test_the_live_map_draws_nothing_from_a_relayer_guess() -> None:
-    for name in ("map-live.js", "app.js"):
-        source = (STATIC / name).read_text(encoding="utf-8")
-        assert "relay_node" not in source, (
-            f"{name} references a relayer field; the live map must draw hop "
+    source = (STATIC / "map-live.js").read_text(encoding="utf-8")
+    for field in ("relay_node", "relayed_by", "relayCell"):
+        assert field not in source, (
+            f"map-live.js references {field!r}; the live map must draw hop "
             f"COUNT and never an inferred hop (#47)"
         )
+    app = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert "relay_node" not in app
+    # The packet page's Who heard it is the one place a relay is shown.
+    allowed = app[app.index("function relayCell(") : app.index("function rawPanel(")]
+    rest = app.replace(allowed, "")
+    assert "relayed_by" not in rest, "relayed_by is used outside Who heard it (#47)"
 
 
 def test_the_hop_count_still_reaches_the_reader_in_words() -> None:

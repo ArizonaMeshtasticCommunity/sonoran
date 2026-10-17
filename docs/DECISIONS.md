@@ -1555,3 +1555,40 @@ CROSS JOIN LATERAL (SELECT count(*) AS nodeinfo FROM packet p WHERE p.from_node_
 WHERE b.restarts >= 3 ORDER BY b.restarts DESC, nodeinfo_ratio_same_day DESC;
 ```
 
+
+## 2026-10-17 — the packet page names relay candidates (#47, PR #378)
+
+**Decided by Logan.** This reverses #47's option 3 for the packet page
+only.
+
+**What changed.** `MeshPacket.relay_node` is the last byte of the node
+that sent a gateway its copy. It was kept once per packet, from the
+first upload. Each gateway hears its own relay, so each upload now
+keeps it (`packet_seen.relay_node`, migration `pr378`). The packet API
+gives each observation `relayed_by`: the byte, and every node ending in
+it that was heard within a day of the packet, newest first. The packet
+page shows them in "Who heard it", and says "one of these candidates"
+when there is more than one.
+
+**Why this is allowed now.** #47 declined drawing a relayer, because
+one byte names 4.91 nodes on average and 19 at worst (7 days, 1,164
+nodes, 237 bytes). Its tripwire allowed the honest form: "a page that
+showed 'relayed by one of these 19' would be honest. Exposing it
+quietly ... is the failure". The page lists every candidate and never
+picks one.
+
+**What is still declined.** Drawing anything from the byte: no line,
+no hop, no route on the live map or the graph. The map stays hop count
+only. `tests/unit/test_live_map_draws_no_inferred_hop.py` holds both:
+`map-live.js` may use no relay field, and the byte reaches a route only
+through `relay_candidates`.
+
+**What it cannot tell.** Which node relayed the copy, when there is
+more than one candidate; that the relay was a direct radio link to the
+gateway, when the gateway used several hops; anything about a packet
+stored before the migration.
+
+**What would change it again.** #47's own test: upstream sending a full
+relayer id, or a measured narrowing (same preset, heard recently, in
+range of both ends) that leaves one candidate for most uploads. The
+per-upload column is the data that measurement needs.
