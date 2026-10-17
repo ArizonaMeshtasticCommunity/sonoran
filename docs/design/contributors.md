@@ -8,9 +8,22 @@ The transport is from Tyler's comment on #179. Logan chose it on
 ## 1. Why
 
 A node measures its own radio environment and keeps it in `LocalStats`.
-`noise_floor` is the one value we want first. A node does not send
+`noise_floor` is the one value we want first.
+
+Which firmware answers, checked tag by tag in
+`src/modules/Telemetry/DeviceTelemetry.cpp`:
+
+| Target firmware | Answers a LocalStats request | Sets `noise_floor` |
+|---|:-:|:-:|
+| 2.4 and older | no | no |
+| 2.5 to 2.7.24 | yes (`allocReply`) | no |
+| 2.7.25 and newer (first stable 2.7.26) | yes | yes |
+
+So a reading from a node on 2.5 to 2.7.24 has every stat but the noise
+floor. Sonoran does not store a node's firmware version, so it cannot
+skip those targets. The node page says why the floor is missing. A node does not send
 `LocalStats` over the mesh: it sends it to its own phone only
-(`DeviceTelemetry.cpp`, `sendLocalStatsToPhone`). Any node answers a
+(`DeviceTelemetry.cpp`, `sendLocalStatsToPhone`). A node on firmware 2.5 or newer answers a
 **request** for it (`DeviceTelemetryModule::allocReply`, firmware
 v2.7.26.54e0d8d, `src/modules/Telemetry/DeviceTelemetry.cpp` lines 87
 to 89). The answer goes back to the node that asked, as a direct

@@ -6094,6 +6094,15 @@ function localStatsPanel(detail) {
     revealHints(list);
   }
   const by = stats.location ? `read by ${stats.location}${stats.source ? `/${stats.source}` : ''}` : null;
+  // A reading with no noise floor: the node's firmware does not measure it.
+  // 2.5 to 2.7.24 answer the request but never set noise_floor; 2.7.25 is
+  // the first that does (src/modules/Telemetry/DeviceTelemetry.cpp,
+  // meshtastic/firmware, checked tag by tag).
+  let noFloor = null;
+  if (stats.time && stats.noise_floor == null) {
+    noFloor = el('p', { class: 'muted', text: 'No measured noise floor in this reading. '
+      + 'A node reports one only on firmware 2.7.25 or newer.' });
+  }
   return el('div', { class: 'panel' },
     el('h3', {
       'data-label': 'Local stats',
@@ -6101,7 +6110,8 @@ function localStatsPanel(detail) {
         + 'so a member\'s contributor asks it. A new reading is asked for at most once per interval: 12 hours for a router, 1 hour for other roles.',
     }, 'Local stats',
       stats.time ? el('span', { class: 'muted', text: `${ago(stats.time)} ago${by ? `, ${by}` : ''}` }) : null),
-    list || el('p', { class: 'empty', text: 'Not measured yet. No contributor has read this node.' }));
+    list || el('p', { class: 'empty', text: 'Not measured yet. No contributor has read this node.' }),
+    noFloor);
 }
 
 function messagesPanel(detail) {

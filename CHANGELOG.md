@@ -5,6 +5,30 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.15.2 — 2026-10-15
+
+2 pull requests merged.
+
+#### Fixes
+
+- Each broker password reaches only its own service (#377) by @logans-stuff
+
+#### Documentation
+
+- Stations run sonoran-contributor; CHANGELOG v2026.10.15 (#376) by @logans-stuff
+  The RF tab says that stations run sonoran-contributor.
+
+#### Issues
+
+- Worked on: #178 Noise Floor Tracking (reported by @tylerpieper)
+
+#### Thank you
+
+- Reported: @tylerpieper
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.15...v2026.10.15.2
+
 ## v2026.10.15 — 2026-10-15
 
 1 pull request merged.

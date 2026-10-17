@@ -20,6 +20,6 @@ def test_a_reading_without_a_noise_floor_names_the_firmware_it_needs() -> None:
 
 def test_the_note_shows_only_with_a_reading() -> None:
     """No reading at all is 'not measured yet', not a firmware question."""
-    note = PANEL.index("2.7.25")
+    note = PANEL.index("firmware 2.7.25 or newer")  # the text the reader sees
     guard = PANEL.rfind("if (", 0, note)
     assert "stats.time" in PANEL[guard:note]
