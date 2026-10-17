@@ -33,8 +33,10 @@ def test_who_heard_it_names_the_relay_of_each_upload() -> None:
     panel = app[app.index("function whoHeardPanel(") :]
     panel = panel[: panel.index("\n}\n")]
     assert "'Relayed by'" in panel
-    assert "row.relayed_by" in panel
-    assert "candidates" in panel
+    assert "relayCell(row.relayed_by)" in panel
+    cell = app[app.index("function relayCell(") :]
+    cell = cell[: cell.index("\n}\n")]
+    assert "candidates" in cell
 
 
 def test_the_raw_data_starts_open_and_comes_last() -> None:

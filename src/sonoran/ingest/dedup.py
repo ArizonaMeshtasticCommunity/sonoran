@@ -58,6 +58,8 @@ class ObservationInput:
     hop_start: int | None = None
     # The modem preset of this upload, or None when unknown (#313).
     modem_preset: str | None = None
+    # The last byte of the node that relayed this copy (AGENTS.md 9.20).
+    relay_node: int | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,7 @@ async def store_packet(
             hop_start=observation.hop_start,
             seen_at=observation.seen_at,
             modem_preset=observation.modem_preset,
+            relay_node=observation.relay_node,
         )
     )
     return StoredPacket(packet_pk=None, is_new=is_new)

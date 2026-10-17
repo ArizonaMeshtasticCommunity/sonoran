@@ -1282,11 +1282,23 @@ Response:
       "hops_taken": 2,
       "self_reported": false,
       "direct": false,
-      "seen_at": "2026-08-01T12:00:01Z"
+      "seen_at": "2026-08-01T12:00:01Z",
+      "relayed_by": {
+        "byte": "4f",
+        "candidates": [{"node_id": "!a1b2c34f", "display_name": "Mesa relay"}]
+      }
     }
   ]
 }
 ```
+
+`relayed_by` is the node that sent this gateway its copy, as the
+firmware gives it: one byte, the last of the node number (AGENTS.md
+9.20). `byte` is that byte in hex. `candidates` are the nodes whose
+number ends in it and that were heard within a day of the packet,
+newest first. More than one candidate means the byte names none of them
+for sure. It is null for an upload that carried no relay, and for rows
+stored before migration `pr378`.
 
 ## 5. Chat endpoints
 

@@ -10453,6 +10453,49 @@ function envelopePanel(packet, packetId, observations) {
 /* The JSON starts open: closed, it read as an empty panel. It is still
  * a `details`, so it can be folded away, and it is still the last thing
  * on the page. */
+/*
+ * Which node sent each gateway its copy: one byte, the last of the node's
+ * number (AGENTS.md 9.20), so a list of candidates, never one node.
+ */
+function relayCell(relay) {
+  if (!relay) return el('span', { class: 'muted', text: '-' });
+  const names = relay.candidates;
+  if (!names.length) return el('span', { class: 'muted', text: `…${relay.byte}, no node heard lately` });
+  return el('span', {},
+    el('span', { class: 'muted', text: `…${relay.byte}: ` }),
+    names.slice(0, 3).map((c, i) => [i ? ', ' : '', nodeChip(c)]),
+    names.length > 3 ? el('span', { class: 'muted', text: ` +${names.length - 3}` }) : null,
+    names.length > 1 ? el('span', { class: 'muted', text: ' (one of these candidates)' }) : null);
+}
+
+function whoHeardPanel(data, gateways, uploads, direct) {
+  return el('div', { class: 'panel span-2' },
+    el('h3', {}, 'Who heard it',
+      el('span', { class: 'muted',
+        text: `${count(gateways)} gateways, ${count(uploads)} uploads, ${count(direct)} direct` })),
+    el('p', { class: 'notice' },
+      'This is which MQTT gateways uploaded a copy of this packet. It is not '
+      + 'which nodes could hear the sender: a node that is not a gateway hears '
+      + 'plenty and reports none of it. A gateway that used a hop received the '
+      + 'packet from a relay, so only a direct row measures the sender’s own '
+      + 'link. A sender that gateways its own traffic uploads what it just sent, '
+      + 'which is not a radio link at all.'),
+    el('div', { class: 'table-wrap' }, table([
+      { label: 'Gateway', cell: (row) => nodeChip({ node_id: row.gateway, display_name: row.gateway_name }) },
+      {
+        label: 'Path',
+        cell: (row) => (row.self_reported
+          ? el('span', { class: 'muted', text: 'its own upload' })
+          : row.direct ? 'direct' : row.hops_taken == null ? 'unknown' : `${row.hops_taken} hops`),
+      },
+      { label: 'SNR', num: true, cell: (row) => (row.direct ? snrCell(row.rx_snr) : el('span', { class: 'muted', text: '-' })) },
+      { label: 'RSSI', num: true, cell: (row) => (row.direct && row.rx_rssi != null ? `${row.rx_rssi} dBm` : '-') },
+      { label: 'Relayed by', cell: (row) => relayCell(row.relayed_by) },
+    { label: 'When', cell: (row) => clock(row.seen_at) },
+      { label: 'Topic', wrap: true, cell: (row) => row.mqtt_topic },
+    ], data.observations, 'No gateway observation stored.')));
+}
+
 function rawPanel(data) {
   return el('details', { class: 'panel span-2 raw-data', open: true },
     el('summary', {}, 'Raw data'),
@@ -10502,39 +10545,14 @@ PAGES.packet = async (page) => {
         text: `${count(gateways)} gateways uploaded it, `
           + (direct ? `${count(direct)} heard it direct.` : 'none heard it direct.') })));
 
-  /*
-   * Who heard it comes first. It is the one thing on this page that no
-   * other page shows for a single packet, and it was at the bottom.
-   */
-  const panels = [
-    el('div', { class: 'panel span-2' },
-      el('h3', {}, 'Who heard it',
-        el('span', { class: 'muted',
-          text: `${count(gateways)} gateways, ${count(uploads)} uploads, ${count(direct)} direct` })),
-      el('p', { class: 'notice' },
-        'This is which MQTT gateways uploaded a copy of this packet. It is not '
-        + 'which nodes could hear the sender: a node that is not a gateway hears '
-        + 'plenty and reports none of it. A gateway that used a hop received the '
-        + 'packet from a relay, so only a direct row measures the sender’s own '
-        + 'link. A sender that gateways its own traffic uploads what it just sent, '
-        + 'which is not a radio link at all.'),
-      el('div', { class: 'table-wrap' }, table([
-        { label: 'Gateway', cell: (row) => nodeChip({ node_id: row.gateway, display_name: row.gateway_name }) },
-        {
-          label: 'Path',
-          cell: (row) => (row.self_reported
-            ? el('span', { class: 'muted', text: 'its own upload' })
-            : row.direct ? 'direct' : row.hops_taken == null ? 'unknown' : `${row.hops_taken} hops`),
-        },
-        { label: 'SNR', num: true, cell: (row) => (row.direct ? snrCell(row.rx_snr) : el('span', { class: 'muted', text: '-' })) },
-        { label: 'RSSI', num: true, cell: (row) => (row.direct && row.rx_rssi != null ? `${row.rx_rssi} dBm` : '-') },
-        { label: 'When', cell: (row) => clock(row.seen_at) },
-        { label: 'Topic', wrap: true, cell: (row) => row.mqtt_topic },
-      ], data.observations, 'No gateway observation stored.'))),
-  ];
-
+  const panels = [];
   panels.push(...[decodedPanels(packet)].flat());
   panels.push(envelopePanel(packet, packetId, data.observations));
+  /*
+   * Who heard it goes last, before the raw data (Logan, 2026-10-17). It
+   * holds every gateway's MQTT topic, and was first since the UX batch.
+   */
+  panels.push(whoHeardPanel(data, gateways, uploads, direct));
   panels.push(rawPanel(data));
   replace(body, el('div', { class: 'grid two' }, panels));
 

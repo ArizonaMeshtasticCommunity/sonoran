@@ -181,6 +181,7 @@ async def _store_opaque(
         hop_start=packet.hop_start or None,
         seen_at=message.received_at,
         modem_preset=seen.preset,
+        relay_node=relay_byte(packet),
     )
     stored = await store_packet(session, packet_input, observation_input)
     await store_heard(session, from_node_num, observation_input.seen_at, packet_input.channel)
@@ -301,6 +302,7 @@ async def process_message(
         hop_start=packet.hop_start or None,
         seen_at=message.received_at,
         modem_preset=seen.preset,
+        relay_node=relay_byte(packet),
     )
     stored = await store_packet(session, packet_input, observation_input)
 
@@ -389,6 +391,10 @@ def run() -> None:
     asyncio.run(main())
 
 
-def relay_byte(packet: object) -> int | None:
-    """Skeleton for the red step."""
-    raise NotImplementedError
+def relay_byte(packet: Any) -> int | None:
+    """The last byte of the node that relayed this copy, or None.
+
+    The firmware sends one byte (AGENTS.md 9.20); 0 means it set none.
+    """
+    value = packet.relay_node & 0xFF
+    return value or None
