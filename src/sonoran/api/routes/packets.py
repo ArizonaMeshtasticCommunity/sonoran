@@ -381,3 +381,8 @@ async def get_packet(
             for item in observations
         ],
     }
+
+
+def relay_candidates(byte: object, nodes: object, now: object) -> dict[str, object] | None:
+    """Skeleton for the red step."""
+    raise NotImplementedError

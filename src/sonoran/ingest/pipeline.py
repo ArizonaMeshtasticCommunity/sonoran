@@ -387,3 +387,8 @@ def run() -> None:
 
     configure_logging(get_settings().log_level)
     asyncio.run(main())
+
+
+def relay_byte(packet: object) -> int | None:
+    """Skeleton for the red step."""
+    raise NotImplementedError
