@@ -1,11 +1,13 @@
 """Read-only packet endpoints."""
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
@@ -17,6 +19,7 @@ from sonoran.db.models import (
     EnvironmentMetrics,
     MeshPacketMetrics,
     NeighborMetrics,
+    Node,
     Packet,
     PacketSeen,
     PositionMetrics,
@@ -310,6 +313,7 @@ async def get_packet(
     observations = (
         await session.scalars(
             select(PacketSeen)
+            .options(undefer(PacketSeen.relay_node))
             .where(
                 PacketSeen.from_node_num == packet.from_node_num,
                 PacketSeen.packet_id == packet.packet_id,
@@ -325,6 +329,20 @@ async def get_packet(
             *(item.gateway_node_num for item in observations),
         ],
     )
+    # The nodes each upload's relay byte may name (AGENTS.md 9.20).
+    relay_bytes = sorted({item.relay_node for item in observations if item.relay_node})
+    relay_nodes: list[tuple[int, str | None, datetime | None]] = []
+    if relay_bytes:
+        rows = (
+            await session.execute(
+                select(Node.node_num, Node.last_heard).where(
+                    Node.node_num.op("&")(0xFF).in_(relay_bytes),
+                    Node.last_heard >= packet.first_seen_at - RELAY_WINDOW,
+                )
+            )
+        ).all()
+        relay_names = await resolve_names(session, [num for num, _ in rows])
+        relay_nodes = [(num, name_of(relay_names, num), heard) for num, heard in rows]
     # Whether the packet was sealed with the recipient's public key (PKI)
     # rather than the channel key. Ingest keeps it per upload in
     # `mesh_packet_metrics`, so it is read from there. None when no row
@@ -377,7 +395,45 @@ async def get_packet(
                     and item.gateway_node_num != packet.from_node_num
                 ),
                 "seen_at": item.seen_at,
+                # One byte: candidates, never one node (AGENTS.md 9.20).
+                "relayed_by": relay_candidates(item.relay_node, relay_nodes, packet.first_seen_at),
             }
             for item in observations
+        ],
+    }
+
+
+# Candidates for a relay byte are the nodes heard within a day. AGENTS.md
+# 9.20 counted the ambiguity over the nodes active in a day: 3.2
+# candidates for an average byte, 12 for the worst.
+RELAY_WINDOW = timedelta(days=1)
+
+
+def relay_candidates(
+    byte: int | None,
+    nodes: Sequence[tuple[int, str | None, datetime | None]],
+    now: datetime,
+) -> dict[str, object] | None:
+    """The nodes a relay byte may name, newest first. None without a byte.
+
+    `nodes` are (node_num, display name, last heard). One byte names no
+    node for sure, so this is a list of candidates, never an answer.
+    """
+    if byte is None:
+        return None
+    found = sorted(
+        (
+            (num, name, heard)
+            for num, name, heard in nodes
+            if num & 0xFF == byte and heard is not None and now - heard <= RELAY_WINDOW
+        ),
+        key=lambda row: row[2],
+        reverse=True,
+    )
+    return {
+        "byte": f"{byte:02x}",
+        "candidates": [
+            {"node_id": _node_id(num), "display_name": name or _node_id(num)}
+            for num, name, _ in found
         ],
     }

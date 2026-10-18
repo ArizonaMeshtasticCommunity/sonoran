@@ -192,6 +192,11 @@ class PacketSeen(Base):
     # when the topic is preset-named, else the gateway's current preset,
     # else NULL. See `ingest/presets.py`.
     modem_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
+    # The last byte of the node that sent this copy to the gateway
+    # (MeshPacket.relay_node; AGENTS.md 9.20). One byte names no node for
+    # sure. NULL on rows written before migration pr378. Deferred, so a
+    # SELECT of a whole row runs the same SQL as before.
+    relay_node: Mapped[int | None] = mapped_column(SmallInteger, deferred=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "seen_at"),

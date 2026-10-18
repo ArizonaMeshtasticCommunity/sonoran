@@ -18,10 +18,25 @@ def _page() -> str:
     return page[: page.index("\n};\n")]
 
 
-def test_who_heard_it_comes_before_what_it_said() -> None:
+def test_who_heard_it_comes_after_the_packet_and_before_the_raw_data() -> None:
+    """Logan, 2026-10-17: who heard it, with every MQTT topic, goes to the
+    bottom. It was first, from the UX batch (ec69728); the raw data stays
+    last (test below)."""
     page = _page()
-    assert page.index("'Who heard it'") < page.index("decodedPanels(packet)")
     assert page.index("decodedPanels(packet)") < page.index("envelopePanel(")
+    assert page.index("envelopePanel(") < page.index("whoHeardPanel(")
+    assert page.index("whoHeardPanel(") < page.index("rawPanel(data)")
+
+
+def test_who_heard_it_names_the_relay_of_each_upload() -> None:
+    app = _app()
+    panel = app[app.index("function whoHeardPanel(") :]
+    panel = panel[: panel.index("\n}\n")]
+    assert "'Relayed by'" in panel
+    assert "relayCell(row.relayed_by)" in panel
+    cell = app[app.index("function relayCell(") :]
+    cell = cell[: cell.index("\n}\n")]
+    assert "candidates" in cell
 
 
 def test_the_raw_data_starts_open_and_comes_last() -> None:

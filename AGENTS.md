@@ -1211,8 +1211,14 @@ a true path can be drawn is `/api/map/traceroute-paths`.
 
 `MeshPacket.relay_node` looks like the missing piece and is not. The
 firmware truncates it to one byte, the low byte of the relayer's node
-number, and `mesh_packet_metrics.relay_node_num` stores that byte as it
-arrives. Values run 2 to 255. With 694 nodes active in a day this mesh
+number. `mesh_packet_metrics.relay_node_num` stores it for the first
+upload of a packet, and since migration `pr378` `packet_seen.relay_node`
+stores it for every upload, since each gateway hears its own relay. The
+packet page shows it per gateway as a list of candidates, never as one
+node. That reverses #47's option 3 for the packet page only (Logan,
+2026-10-17, `docs/DECISIONS.md`). Drawing anything from it is still
+declined, and `tests/unit/test_live_map_draws_no_inferred_hop.py` holds
+that. Values run 2 to 255. With 694 nodes active in a day this mesh
 had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for
 the worst, and only 5.4 percent of relay observations resolving to a
 single node. It also names the last hop alone, never the path. Drawing

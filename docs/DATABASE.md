@@ -183,6 +183,7 @@ One row per observation of a packet. Hypertable on `seen_at`.
 | `hop_limit` | integer | nullable. Hops left when the gateway heard it |
 | `hop_start` | integer | nullable. The same header's hop start, so `hop_start = hop_limit` says direct without a join (#304). NULL on rows written before revision 0017, which are not backfilled: read them through `api/sightings.py`, which joins those to `packet` |
 | `seen_at` | timestamptz | not null. partition key |
+| `relay_node` | smallint | nullable. The last byte of the node that sent this gateway its copy (`MeshPacket.relay_node`; AGENTS.md 9.20). One byte names no node for sure. Kept per upload since migration `pr378`; NULL before it. Deferred in the model |
 | `modem_preset` | text | nullable. The modem preset of this upload (#313): the topic's own preset when the topic is preset-named, else the gateway's current preset, else NULL. NULL when the gateway is ambiguous: it uploaded two different preset-named topics within `GATEWAY_PRESET_CONFLICT_MINUTES` |
 
 #### 3.4.1 How ingest decides a modem preset
