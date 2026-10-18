@@ -1285,6 +1285,7 @@ Response:
       "seen_at": "2026-08-01T12:00:01Z",
       "relayed_by": {
         "byte": "4f",
+        "exact": false,
         "candidates": [{"node_id": "!a1b2c34f", "display_name": "Mesa relay"}]
       }
     }
@@ -1297,7 +1298,10 @@ firmware gives it: one byte, the last of the node number (AGENTS.md
 9.20). `byte` is that byte in hex. `candidates` are the nodes whose
 number ends in it and that were heard within a day of the packet,
 newest first. More than one candidate means the byte names none of them
-for sure. It is null for an upload that carried no relay, and for rows
+for sure. The firmware's rules narrow the list: a `CLIENT_MUTE` node
+never relays, and after a hop the sender is never its own relay. On an
+upload with no hop the byte is the sender's own, so `exact` is true and
+the one candidate is the sender. It is null for an upload that carried no relay, and for rows
 stored before migration `pr378`.
 
 ## 5. Chat endpoints

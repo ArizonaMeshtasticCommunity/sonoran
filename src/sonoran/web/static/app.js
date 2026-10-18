@@ -10466,7 +10466,8 @@ function relayCell(relay) {
     // flatMap: el() flattens its children one level only.
     names.slice(0, 3).flatMap((c, i) => [i ? ', ' : '', nodeChip(c)]),
     names.length > 3 ? el('span', { class: 'muted', text: ` +${names.length - 3}` }) : null,
-    names.length > 1 ? el('span', { class: 'muted', text: ' (one of these candidates)' }) : null);
+    relay.exact ? el('span', { class: 'muted', text: ' (the sender, no hop)' })
+      : names.length > 1 ? el('span', { class: 'muted', text: ' (one of these candidates)' }) : null);
 }
 
 function whoHeardPanel(data, gateways, uploads, direct) {
