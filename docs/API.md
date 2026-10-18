@@ -1295,14 +1295,17 @@ Response:
 
 `relayed_by` is the node that sent this gateway its copy, as the
 firmware gives it: one byte, the last of the node number (AGENTS.md
-9.20). `byte` is that byte in hex. `candidates` are the nodes whose
-number ends in it and that were heard within a day of the packet,
-newest first. More than one candidate means the byte names none of them
-for sure. The firmware's rules narrow the list: a `CLIENT_MUTE` node
-never relays, and after a hop the sender is never its own relay. On an
-upload with no hop the byte is the sender's own, so `exact` is true and
-the one candidate is the sender. It is null for an upload that carried no relay, and for rows
-stored before migration `pr378`.
+9.20). `byte` is that byte in hex. `candidates` are this gateway's
+direct neighbours that end in that byte: the nodes the gateway uploaded
+at 0 hops within a day of the packet, newest first. That is the
+firmware's own scope for the byte (`NodeDB::resolveLastByte`), and it
+leaves out every node on another preset. A `CLIENT_MUTE` node never
+relays, and after a hop the sender is never its own relay. On an upload
+with no hop the byte is the sender's own, so `exact` is true and the one
+candidate is the sender. More than one candidate means the byte names
+none of them for sure. An empty list means the gateway uploaded no
+direct packet from such a node in that day. It is null for an upload
+that carried no relay, and for rows stored before migration `pr378`.
 
 ## 5. Chat endpoints
 

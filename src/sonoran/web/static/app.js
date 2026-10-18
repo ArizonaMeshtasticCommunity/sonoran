@@ -10460,7 +10460,7 @@ function envelopePanel(packet, packetId, observations) {
 function relayCell(relay) {
   if (!relay) return el('span', { class: 'muted', text: '-' });
   const names = relay.candidates;
-  if (!names.length) return el('span', { class: 'muted', text: `…${relay.byte}, no node heard lately` });
+  if (!names.length) return el('span', { class: 'muted', text: `…${relay.byte}, no node this gateway heard directly` });
   return el('span', {},
     el('span', { class: 'muted', text: `…${relay.byte}: ` }),
     // flatMap: el() flattens its children one level only.
@@ -10549,7 +10549,8 @@ PAGES.packet = async (page) => {
 
   const panels = [];
   panels.push(...[decodedPanels(packet)].flat());
-  panels.push(envelopePanel(packet, packetId, data.observations));
+  const envelope = envelopePanel(packet, packetId, data.observations);
+  panels.push(envelope);
   /*
    * Who heard it goes last, before the raw data (Logan, 2026-10-17). It
    * holds every gateway's MQTT topic, and was first since the UX batch.
@@ -10561,13 +10562,17 @@ PAGES.packet = async (page) => {
   const mapHolder = $('[data-position-map]', body);
   if (mapHolder && packet.decoded) positionMap(mapHolder, packet.decoded.values);
 
-  // A traceroute packet carries a path. Show it and the drawing here.
+  /*
+   * A traceroute packet carries a path. It loads after the page is drawn,
+   * and goes with what the packet says, before the envelope: appended,
+   * it landed below who heard it and the raw data.
+   */
   if (packet.portnum === 'TRACEROUTE_APP') {
     const trace = await get(
       `api/traceroutes/by-packet/${encodeURIComponent(fromNode)}/${encodeURIComponent(packetId)}`)
       .catch(() => null);
     if (trace) {
-      $('.grid', body).append(
+      envelope.before(
         el('div', { class: 'panel' },
           el('h3', {}, 'Path this packet took',
             el('a', { class: 'linky', href: `#traceroute/${trace.id}`, text: 'full page' })),

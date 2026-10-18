@@ -1,7 +1,8 @@
 """Each upload keeps its relay byte, and the packet API names the candidates.
 
 Unit rules are in tests/unit/test_relay_node.py. This file holds the SQL:
-the migration's column, ingest's role writing it, and the API reading it.
+the migration's column, ingest's role writing it, and the API reading the
+gateway's direct neighbours: the nodes that gateway uploaded at 0 hops.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,8 @@ from tests.integration.conftest import role_url
 
 SENDER, GW_A, GW_B = 0x0E1A_0001, 0x0E1A_0002, 0x0E1A_0003
 RELAY_1, RELAY_2, STALE = 0x0E1A_114F, 0x0E1A_224F, 0x0E1A_334F
+# Ends in the same byte, heard directly by GW_B only: never GW_A's relay.
+FAR = 0x0E1A_444F
 PACKET_ID = 990001
 
 
@@ -27,6 +30,7 @@ def _seed_nodes(engine, now: datetime) -> None:  # type: ignore[no-untyped-def]
             (RELAY_1, "Relay one", now - timedelta(minutes=5)),
             (RELAY_2, "Relay two", now - timedelta(hours=3)),
             (STALE, "Gone", now - timedelta(days=3)),
+            (FAR, "Far", now),
         ):
             c.execute(
                 text(
@@ -35,6 +39,24 @@ def _seed_nodes(engine, now: datetime) -> None:  # type: ignore[no-untyped-def]
                     " ON CONFLICT (node_num) DO UPDATE SET last_heard = :h"
                 ),
                 {"n": num, "i": f"!{num:08x}", "s": name, "h": heard},
+            )
+        # Direct (0-hop) uploads that make each node a gateway's neighbour.
+        for num, gateway, heard in (
+            (RELAY_1, GW_A, now - timedelta(minutes=5)),
+            (RELAY_2, GW_A, now - timedelta(hours=3)),
+            (STALE, GW_A, now - timedelta(days=3)),
+            (FAR, GW_B, now - timedelta(minutes=1)),
+            # A relayed (1-hop) upload does not make a neighbour.
+            (FAR, GW_A, now - timedelta(minutes=2)),
+        ):
+            direct = 3 if gateway == GW_B or num != FAR else 2
+            c.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num,"
+                    " mqtt_topic, hop_start, hop_limit, seen_at)"
+                    " VALUES (:f, :p, :g, 'msh/US/AZ/test', 3, :l, :at)"
+                ),
+                {"f": num, "p": 880000 + (num & 0xFFFF), "g": gateway, "l": direct, "at": heard},
             )
         c.execute(
             text(
@@ -73,6 +95,7 @@ def test_each_upload_keeps_its_relay_and_the_api_names_candidates(  # type: igno
     by_gateway = {row["gateway"]: row["relayed_by"] for row in body["observations"]}
     relay = by_gateway[f"!{GW_A:08x}"]
     assert relay["byte"] == "4f"
-    # Newest first; the node not heard in a day is left out.
+    # GW_A's direct neighbours, newest first. Left out: the one not heard
+    # in a day, and FAR, which GW_A heard only through a relay.
     assert [c["node_id"] for c in relay["candidates"]] == [f"!{RELAY_1:08x}", f"!{RELAY_2:08x}"]
     assert by_gateway[f"!{GW_B:08x}"] is None

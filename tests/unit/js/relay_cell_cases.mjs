@@ -61,8 +61,8 @@ check('one candidate is just its name',
 check('more than three: three names, then the rest as a count',
   relayCell({ byte: 'c8', candidates: cand('a', 'b', 'c', 'd', 'e') }).text,
   '…c8: a, b, c +2 (one of these candidates)');
-check('no candidate heard lately',
-  relayCell({ byte: '0f', candidates: [] }).text, '…0f, no node heard lately');
+check('no direct neighbour of the gateway ends in the byte',
+  relayCell({ byte: '0f', candidates: [] }).text, '…0f, no node this gateway heard directly');
 check('no hop: the sender itself, named as the sender, not as a candidate',
   relayCell({ byte: 'b6', exact: true, candidates: cand('Cactus Gaming Lounge') }).text,
   '…b6: Cactus Gaming Lounge (the sender, no hop)');
