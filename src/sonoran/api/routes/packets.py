@@ -331,18 +331,20 @@ async def get_packet(
     )
     # The nodes each upload's relay byte may name (AGENTS.md 9.20).
     relay_bytes = sorted({item.relay_node for item in observations if item.relay_node})
-    relay_nodes: list[tuple[int, str | None, datetime | None]] = []
+    # The firmware sends 0xff for a node whose last byte is 0 (NodeDB.h:431).
+    low_bytes = [*relay_bytes, 0] if 0xFF in relay_bytes else relay_bytes
+    relay_nodes: list[tuple[int, str | None, datetime | None, str | None]] = []
     if relay_bytes:
         rows = (
             await session.execute(
-                select(Node.node_num, Node.last_heard).where(
-                    Node.node_num.op("&")(0xFF).in_(relay_bytes),
+                select(Node.node_num, Node.last_heard, Node.role).where(
+                    Node.node_num.op("&")(0xFF).in_(low_bytes),
                     Node.last_heard >= packet.first_seen_at - RELAY_WINDOW,
                 )
             )
         ).all()
-        relay_names = await resolve_names(session, [num for num, _ in rows])
-        relay_nodes = [(num, name_of(relay_names, num), heard) for num, heard in rows]
+        relay_names = await resolve_names(session, [row[0] for row in rows])
+        relay_nodes = [(num, name_of(relay_names, num), heard, role) for num, heard, role in rows]
     # Whether the packet was sealed with the recipient's public key (PKI)
     # rather than the channel key. Ingest keeps it per upload in
     # `mesh_packet_metrics`, so it is read from there. None when no row
@@ -396,7 +398,17 @@ async def get_packet(
                 ),
                 "seen_at": item.seen_at,
                 # One byte: candidates, never one node (AGENTS.md 9.20).
-                "relayed_by": relay_candidates(item.relay_node, relay_nodes, packet.first_seen_at),
+                "relayed_by": relay_candidates(
+                    item.relay_node,
+                    relay_nodes,
+                    packet.first_seen_at,
+                    sender=packet.from_node_num,
+                    hops_taken=(
+                        None
+                        if packet.hop_start is None or item.hop_limit is None
+                        else packet.hop_start - item.hop_limit
+                    ),
+                ),
             }
             for item in observations
         ],
@@ -409,29 +421,68 @@ async def get_packet(
 RELAY_WINDOW = timedelta(days=1)
 
 
+def last_byte(num: int) -> int:
+    """The relay byte the firmware sends for a node (getLastByteOfNodeNum, NodeDB.h:431)."""
+    return num & 0xFF or 0xFF
+
+
+# Roles that never rebroadcast (FloodingRouter::isRebroadcaster,
+# FloodingRouter.cpp:154-158, firmware v2.8.1). A node with
+# rebroadcast_mode NONE never does either, but NodeInfo does not say so.
+NEVER_RELAYS = frozenset({"CLIENT_MUTE"})
+
+
 def relay_candidates(
     byte: int | None,
-    nodes: Sequence[tuple[int, str | None, datetime | None]],
+    nodes: Sequence[tuple[int, str | None, datetime | None, str | None]],
     now: datetime,
+    *,
+    sender: int,
+    hops_taken: int | None,
 ) -> dict[str, object] | None:
     """The nodes a relay byte may name, newest first. None without a byte.
 
-    `nodes` are (node_num, display name, last heard). One byte names no
-    node for sure, so this is a list of candidates, never an answer.
+    `nodes` are (node_num, display name, last heard, role). The radio
+    header carries one byte (RadioInterface.h:54). Every send writes the
+    sender's own byte first, and each rebroadcast overwrites it with the
+    relayer's (FloodingRouter.cpp:22, NextHopRouter.cpp:116). So:
+
+    - no hop: the byte is the sender's, and the sender is the answer
+      (`exact`);
+    - a hop or more: never the sender (a node does not relay its own
+      packet) and never a node that does not rebroadcast;
+    - hops unknown: the sender may be the byte; another muted node not.
     """
     if byte is None:
         return None
+    if hops_taken == 0 and last_byte(sender) == byte:
+        name = next((n for num, n, _, _ in nodes if num == sender), None)
+        return {
+            "byte": f"{byte:02x}",
+            "exact": True,
+            "candidates": [{"node_id": _node_id(sender), "display_name": name or _node_id(sender)}],
+        }
+
+    def possible(num: int, role: str | None) -> bool:
+        if num == sender:
+            return not hops_taken
+        return role not in NEVER_RELAYS
+
     found = sorted(
         (
             (num, name, heard)
-            for num, name, heard in nodes
-            if num & 0xFF == byte and heard is not None and now - heard <= RELAY_WINDOW
+            for num, name, heard, role in nodes
+            if last_byte(num) == byte
+            and heard is not None
+            and now - heard <= RELAY_WINDOW
+            and possible(num, role)
         ),
         key=lambda row: row[2],
         reverse=True,
     )
     return {
         "byte": f"{byte:02x}",
+        "exact": False,
         "candidates": [
             {"node_id": _node_id(num), "display_name": name or _node_id(num)}
             for num, name, _ in found

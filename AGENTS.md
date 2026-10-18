@@ -1218,7 +1218,20 @@ packet page shows it per gateway as a list of candidates, never as one
 node. That reverses #47's option 3 for the packet page only (Logan,
 2026-10-17, `docs/DECISIONS.md`). Drawing anything from it is still
 declined, and `tests/unit/test_live_map_draws_no_inferred_hop.py` holds
-that. Values run 2 to 255. With 694 nodes active in a day this mesh
+that.
+
+The candidates follow the firmware (v2.8.1), not the byte alone. Every
+send writes the sender's own byte first and each rebroadcast overwrites
+it (`FloodingRouter.cpp:22`, `NextHopRouter.cpp:116`). So a 0-hop upload
+names the sender exactly (live, 2026-10-18: 563 of 563). After a hop the
+relay is never the sender and never a `CLIENT_MUTE` node
+(`FloodingRouter.cpp:154-158`). Byte `ff` also stands for a node that
+ends in `00` (`NodeDB.h:431`). A node with `rebroadcast_mode NONE` does
+not relay either, but NodeInfo does not carry that, so it can still be
+listed. On 2026-10-18 (780 nodes in a day) that left 3.39 relay
+candidates for an average byte and 13 for the worst, from 4.01 and 15.
+
+Values run 2 to 255. With 694 nodes active in a day this mesh
 had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for
 the worst, and only 5.4 percent of relay observations resolving to a
 single node. It also names the last hop alone, never the path. Drawing

@@ -63,10 +63,13 @@ check('more than three: three names, then the rest as a count',
   '…c8: a, b, c +2 (one of these candidates)');
 check('no candidate heard lately',
   relayCell({ byte: '0f', candidates: [] }).text, '…0f, no node heard lately');
+check('no hop: the sender itself, named as the sender, not as a candidate',
+  relayCell({ byte: 'b6', exact: true, candidates: cand('Cactus Gaming Lounge') }).text,
+  '…b6: Cactus Gaming Lounge (the sender, no hop)');
 check('no relay byte', relayCell(null).text, '-');
 
 if (failures.length) {
   console.error(failures.join('\n'));
   process.exit(1);
 }
-console.log('relay cell: 5 cases pass');
+console.log('relay cell: 6 cases pass');
