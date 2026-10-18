@@ -39,6 +39,22 @@ def test_who_heard_it_names_the_relay_of_each_upload() -> None:
     assert "candidates" in cell
 
 
+def test_the_traceroute_panels_join_the_packet_not_the_end() -> None:
+    """A traceroute's path and drawing load after the page is drawn.
+
+    They were appended to the end of the grid, below who heard it and the
+    raw data, so the source order the tests above read did not hold on a
+    traceroute packet (Logan, 2026-10-18). They belong with what the
+    packet says: before the envelope.
+    """
+    page = _page()
+    late = page[page.index("if (packet.portnum === 'TRACEROUTE_APP')") :]
+    assert "$('.grid', body).append(" not in late
+    assert "envelope.before(" in late
+    assert "const envelope = envelopePanel(" in page
+    assert "panels.push(envelope)" in page
+
+
 def test_the_raw_data_starts_open_and_comes_last() -> None:
     """The JSON is always on screen, and never the first thing read.
 
