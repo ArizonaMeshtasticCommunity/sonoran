@@ -10463,7 +10463,8 @@ function relayCell(relay) {
   if (!names.length) return el('span', { class: 'muted', text: `…${relay.byte}, no node heard lately` });
   return el('span', {},
     el('span', { class: 'muted', text: `…${relay.byte}: ` }),
-    names.slice(0, 3).map((c, i) => [i ? ', ' : '', nodeChip(c)]),
+    // flatMap: el() flattens its children one level only.
+    names.slice(0, 3).flatMap((c, i) => [i ? ', ' : '', nodeChip(c)]),
     names.length > 3 ? el('span', { class: 'muted', text: ` +${names.length - 3}` }) : null,
     names.length > 1 ? el('span', { class: 'muted', text: ' (one of these candidates)' }) : null);
 }
