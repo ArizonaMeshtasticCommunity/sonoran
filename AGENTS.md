@@ -1220,16 +1220,21 @@ node. That reverses #47's option 3 for the packet page only (Logan,
 declined, and `tests/unit/test_live_map_draws_no_inferred_hop.py` holds
 that.
 
-The candidates follow the firmware (v2.8.1), not the byte alone. Every
-send writes the sender's own byte first and each rebroadcast overwrites
-it (`FloodingRouter.cpp:22`, `NextHopRouter.cpp:116`). So a 0-hop upload
-names the sender exactly (live, 2026-10-18: 563 of 563). After a hop the
-relay is never the sender and never a `CLIENT_MUTE` node
-(`FloodingRouter.cpp:154-158`). Byte `ff` also stands for a node that
-ends in `00` (`NodeDB.h:431`). A node with `rebroadcast_mode NONE` does
-not relay either, but NodeInfo does not carry that, so it can still be
-listed. On 2026-10-18 (780 nodes in a day) that left 3.39 relay
-candidates for an average byte and 13 for the worst, from 4.01 and 15.
+The candidates follow the firmware (v2.8.1), not the byte alone. The
+firmware resolves a byte only among the receiving node's direct
+neighbours (`NodeDB::resolveLastByte`, `NodeDB.cpp:4179-4182`), so the
+candidates for an upload are the nodes that gateway uploaded at 0 hops
+within a day. Never match the byte against the whole mesh: that listed
+a LongFast-only node on a MediumFast gateway's upload
+(`!8fa02db0/2591142278`). Every send writes the sender's own byte first
+and each rebroadcast overwrites it (`FloodingRouter.cpp:22`,
+`NextHopRouter.cpp:116`), and the first hop always lowers the hop limit
+(`Router.cpp:256-258`). So a 0-hop upload names the sender exactly
+(live, 2026-10-18: 563 of 563). After a hop the relay is never the sender
+and never a `CLIENT_MUTE` node (`FloodingRouter.cpp:154-158`). Byte `ff`
+also stands for a node that ends in `00` (`NodeDB.h:431`). Live,
+2026-10-18, 12,645 relayed uploads: one candidate for 79.9 %, none for
+6.7 %, at most 6.
 
 Values run 2 to 255. With 694 nodes active in a day this mesh
 had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for

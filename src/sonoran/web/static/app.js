@@ -10460,7 +10460,7 @@ function envelopePanel(packet, packetId, observations) {
 function relayCell(relay) {
   if (!relay) return el('span', { class: 'muted', text: '-' });
   const names = relay.candidates;
-  if (!names.length) return el('span', { class: 'muted', text: `…${relay.byte}, no node heard lately` });
+  if (!names.length) return el('span', { class: 'muted', text: `…${relay.byte}, no node this gateway heard directly` });
   return el('span', {},
     el('span', { class: 'muted', text: `…${relay.byte}: ` }),
     // flatMap: el() flattens its children one level only.

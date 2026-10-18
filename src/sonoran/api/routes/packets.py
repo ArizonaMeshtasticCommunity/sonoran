@@ -1,6 +1,6 @@
 """Read-only packet endpoints."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -329,22 +329,45 @@ async def get_packet(
             *(item.gateway_node_num for item in observations),
         ],
     )
-    # The nodes each upload's relay byte may name (AGENTS.md 9.20).
+    # The nodes each upload's relay byte may name (AGENTS.md 9.20): the
+    # gateway's direct neighbours, the nodes it uploaded at 0 hops. That is
+    # the firmware's own scope for a relay byte (NodeDB::resolveLastByte).
     relay_bytes = sorted({item.relay_node for item in observations if item.relay_node})
     # The firmware sends 0xff for a node whose last byte is 0 (NodeDB.h:431).
     low_bytes = [*relay_bytes, 0] if 0xFF in relay_bytes else relay_bytes
-    relay_nodes: list[tuple[int, str | None, datetime | None, str | None]] = []
+    neighbours: dict[int, list[tuple[int, str | None, datetime | None, str | None]]] = {}
     if relay_bytes:
+        gateways = sorted({item.gateway_node_num for item in observations})
         rows = (
             await session.execute(
-                select(Node.node_num, Node.last_heard, Node.role).where(
-                    Node.node_num.op("&")(0xFF).in_(low_bytes),
-                    Node.last_heard >= packet.first_seen_at - RELAY_WINDOW,
+                select(
+                    PacketSeen.gateway_node_num,
+                    PacketSeen.from_node_num,
+                    func.max(PacketSeen.seen_at),
                 )
+                .where(
+                    PacketSeen.gateway_node_num.in_(gateways),
+                    PacketSeen.seen_at >= packet.first_seen_at - RELAY_WINDOW,
+                    PacketSeen.seen_at <= packet.first_seen_at + RELAY_WINDOW,
+                    PacketSeen.hop_start > 0,
+                    PacketSeen.hop_start == PacketSeen.hop_limit,
+                    PacketSeen.gateway_node_num != PacketSeen.from_node_num,
+                    PacketSeen.from_node_num.op("&")(0xFF).in_(low_bytes),
+                )
+                .group_by(PacketSeen.gateway_node_num, PacketSeen.from_node_num)
             )
         ).all()
-        relay_names = await resolve_names(session, [row[0] for row in rows])
-        relay_nodes = [(num, name_of(relay_names, num), heard, role) for num, heard, role in rows]
+        nums = sorted({row[1] for row in rows})
+        roles = dict(
+            (await session.execute(select(Node.node_num, Node.role).where(Node.node_num.in_(nums))))
+            .tuples()
+            .all()
+        )
+        relay_names = await resolve_names(session, nums)
+        for gateway, num, heard in rows:
+            neighbours.setdefault(gateway, []).append(
+                (num, name_of(relay_names, num), heard, roles.get(num))
+            )
     # Whether the packet was sealed with the recipient's public key (PKI)
     # rather than the channel key. Ingest keeps it per upload in
     # `mesh_packet_metrics`, so it is read from there. None when no row
@@ -397,12 +420,14 @@ async def get_packet(
                     and item.gateway_node_num != packet.from_node_num
                 ),
                 "seen_at": item.seen_at,
-                # One byte: candidates, never one node (AGENTS.md 9.20).
+                # One byte, resolved among this gateway's direct neighbours
+                # (AGENTS.md 9.20).
                 "relayed_by": relay_candidates(
                     item.relay_node,
-                    relay_nodes,
-                    packet.first_seen_at,
+                    item.gateway_node_num,
+                    neighbours,
                     sender=packet.from_node_num,
+                    sender_name=name_of(names, packet.from_node_num),
                     hops_taken=(
                         None
                         if packet.hop_start is None or item.hop_limit is None
@@ -415,9 +440,12 @@ async def get_packet(
     }
 
 
-# Candidates for a relay byte are the nodes heard within a day. AGENTS.md
-# 9.20 counted the ambiguity over the nodes active in a day: 3.2
-# candidates for an average byte, 12 for the worst.
+# A gateway's direct neighbours are the nodes it uploaded at 0 hops within
+# a day of the packet. The firmware keeps a neighbour for 2 hours
+# (NEXTHOP_NEIGHBOR_FRESH_SECS, MeshTypes.h:51), but Sonoran sees a
+# neighbour only when it sends its own traffic, and many nodes send every
+# few hours. Live, 2026-10-18, 12,645 relayed uploads: one candidate for
+# 79.9 %, none for 6.7 %, at most 6.
 RELAY_WINDOW = timedelta(days=1)
 
 
@@ -434,21 +462,27 @@ NEVER_RELAYS = frozenset({"CLIENT_MUTE"})
 
 def relay_candidates(
     byte: int | None,
-    nodes: Sequence[tuple[int, str | None, datetime | None, str | None]],
-    now: datetime,
+    gateway: int,
+    neighbours: Mapping[int, Sequence[tuple[int, str | None, datetime | None, str | None]]],
     *,
     sender: int,
     hops_taken: int | None,
+    sender_name: str | None = None,
 ) -> dict[str, object] | None:
-    """The nodes a relay byte may name, newest first. None without a byte.
+    """The nodes a relay byte may name for one upload, newest first. None without a byte.
 
-    `nodes` are (node_num, display name, last heard, role). The radio
-    header carries one byte (RadioInterface.h:54). Every send writes the
-    sender's own byte first, and each rebroadcast overwrites it with the
-    relayer's (FloodingRouter.cpp:22, NextHopRouter.cpp:116). So:
+    The radio header carries one byte (RadioInterface.h:54). Every send
+    writes the sender's own byte first, and each rebroadcast overwrites it
+    with the relayer's (FloodingRouter.cpp:22, NextHopRouter.cpp:116). The
+    gateway heard that relayer directly, and the firmware itself resolves
+    a byte among direct neighbours only (NodeDB::resolveLastByte,
+    NodeDB.cpp:4179-4182). So the candidates are `neighbours[gateway]`:
+    (node_num, display name, last direct upload, role) for each node the
+    gateway uploaded at 0 hops within RELAY_WINDOW of the packet.
 
     - no hop: the byte is the sender's, and the sender is the answer
-      (`exact`);
+      (`exact`). The first hop always lowers the hop limit
+      (Router::shouldDecrementHopLimit, Router.cpp:256-258);
     - a hop or more: never the sender (a node does not relay its own
       packet) and never a node that does not rebroadcast;
     - hops unknown: the sender may be the byte; another muted node not.
@@ -456,11 +490,12 @@ def relay_candidates(
     if byte is None:
         return None
     if hops_taken == 0 and last_byte(sender) == byte:
-        name = next((n for num, n, _, _ in nodes if num == sender), None)
         return {
             "byte": f"{byte:02x}",
             "exact": True,
-            "candidates": [{"node_id": _node_id(sender), "display_name": name or _node_id(sender)}],
+            "candidates": [
+                {"node_id": _node_id(sender), "display_name": sender_name or _node_id(sender)}
+            ],
         }
 
     def possible(num: int, role: str | None) -> bool:
@@ -471,11 +506,8 @@ def relay_candidates(
     found = sorted(
         (
             (num, name, heard)
-            for num, name, heard, role in nodes
-            if last_byte(num) == byte
-            and heard is not None
-            and now - heard <= RELAY_WINDOW
-            and possible(num, role)
+            for num, name, heard, role in neighbours.get(gateway, ())
+            if last_byte(num) == byte and heard is not None and possible(num, role)
         ),
         key=lambda row: row[2],
         reverse=True,
