@@ -710,6 +710,11 @@
     const label = (role) => (role === 'NULL'
       ? 'No role reported'
       : (window.SonoranLabels ? SonoranLabels.roleLabel(role) : role));
+    /* Each chip is a new element after this, so the one that held the
+       focus is gone. Without this a keyboard user who pressed Space on
+       a chip lands on <body>. Put the focus back on the same role. */
+    const active = document.activeElement;
+    const focused = active && host.contains(active) && active.dataset ? active.dataset.role : null;
     replace(
       host,
       roles.length
@@ -721,6 +726,11 @@
         }))
         : el('span', { class: 'muted', text: 'No node markers to filter yet.' }),
     );
+    if (focused) {
+      const again = [...host.querySelectorAll('button[data-role]')]
+        .find((chip) => chip.dataset.role === focused);
+      if (again) again.focus({ preventScroll: true });
+    }
   }
 
   /* The label of the map source on show, from the run. */

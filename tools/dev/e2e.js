@@ -2154,6 +2154,38 @@ async function main() {
     return '7 changed, Reset puts every one back, badge 0';
   });
 
+  await journey(context, 'coverage settings: a role chip keeps the keyboard focus (#334)', async (page) => {
+    /*
+     * The chips are drawn again on a click and again when the node
+     * markers are drawn. A chip drawn again is a new element, so a
+     * keyboard user who pressed Space was left on <body> and had to tab
+     * back from the top. The focus must stay on the same role.
+     */
+    await stubCoverage(page);
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    await waitFor(page, () => document.querySelector('[data-coverage-roles] button[data-role="ROUTER"]'), 10000);
+    await page.locator('[data-coverage-roles] button[data-role="ROUTER"]').focus();
+    const read = () => {
+      const active = document.activeElement;
+      return {
+        role: active && active.dataset ? active.dataset.role || active.tagName : null,
+        pressed: active && active.getAttribute ? active.getAttribute('aria-pressed') : null,
+      };
+    };
+    const seen = [];
+    for (const expected of ['false', 'true']) {
+      await page.keyboard.press('Space');
+      // Wait past the marker redraw, which draws the chips once more.
+      await page.waitForTimeout(1200);
+      const got = await page.evaluate(read);
+      seen.push(`${got.role}:${got.pressed}`);
+      must(got.role === 'ROUTER', `after Space the focus is on ${got.role}, not the Router chip`);
+      must(got.pressed === expected, `after Space the Router chip is aria-pressed ${got.pressed}`);
+    }
+    return `Space twice, focus held: ${seen.join(', ')}`;
+  });
+
   await journey(context, 'coverage settings: an approximate link never fakes the map (#334)', async (page) => {
     // A link from a server that computes the approximate map, opened on
     // one that does not. The precise map is drawn, and named as such.
