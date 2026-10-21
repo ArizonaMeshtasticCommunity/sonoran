@@ -6,6 +6,9 @@ Follow these rules at all times.
 To pick up work that someone else started, to leave a hand-off, or to
 record what you learned, read `docs/COLLABORATION.md` as well.
 
+Before you change anything a reader sees, read §3B: every screen is
+written for a Meshtastic newcomer.
+
 ## 1. Project summary
 
 This project is Sonoran, the azmsh.net Meshtastic dashboard.
@@ -130,6 +133,46 @@ and after is the evidence.
 Why (sources in #359): small, steady test cycles are what the studies tie
 to better results (Fucci et al., IEEE TSE 2017), and agents are known to
 edit a failing test to match wrong code.
+
+## 3B. Newcomer first: every screen is for a Meshtastic newcomer
+
+Read this before you change anything a reader sees. `docs/NEWCOMER.md`
+has the patterns, the jargon table and the review.
+
+**The reader** is somebody in their first weeks of Meshtastic, often on
+a phone. They know what a node and a message are. They do not know SNR,
+RSSI, hops, a modem preset, a gateway, MQTT, a role or a traceroute.
+Logan, Tyler and their agents are experts, so a word that is plain to
+them is often a wall to this reader.
+
+**Every UI change must have:**
+
+1. A plain label that says what the control does for the reader.
+2. A tooltip from the glossary on each technical word: `data-term="<id>"`
+   on the element, or `term: '<id>'` on a column. The explanations live
+   only in `web/static/glossary.js`. Add a missing word there, then run
+   `uv run python -m tools.newcomer_check --write-doc`.
+3. Advanced options behind "Advanced", as the planner does.
+4. Defaults that give a correct, useful result with no change.
+5. An empty state or an error that says what to do next.
+6. Units in words ("15 min", "3 hops", "-110 dBm").
+7. No internal names such as `ROUTER_LATE` in primary text. Show the
+   name from `labels.js`, and keep the exact value in the tooltip.
+8. A check at 360 px wide: each tooltip opens by a tap and closes on
+   Escape.
+
+**The checklist** is the "Newcomer check" section of the PR template.
+Fill it in, with a screenshot at phone width.
+
+**The guard.** `tests/unit/test_newcomer_glossary.py` fails when new
+on-screen text uses a glossary word without its tooltip, when an entry
+has no plain explanation, or when `docs/GLOSSARY.md` drifts. Its
+baseline only gets shorter: never add a line to make it pass, unless a
+maintainer agrees in the PR (`docs/NEWCOMER.md` §6.3). Never weaken the
+check to get green (§3A.5 item 4).
+
+**The review.** Before you ask for a merge, run the newcomer review in
+`docs/NEWCOMER.md` §5, or ask a second agent to run it.
 
 ## 4. Architecture rules
 
@@ -1365,3 +1408,7 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/RELEASING.md` — how to publish a release, and what it costs in CI
 - `docs/COLLABORATION.md` — how people and agents hand work to each other,
   leave notes, record lessons, and avoid the known hand-off mistakes
+- `docs/NEWCOMER.md` — how to write every screen for a Meshtastic
+  newcomer, and the review that checks it (§3B)
+- `docs/GLOSSARY.md` — the words the dashboard explains, made from
+  `web/static/glossary.js`

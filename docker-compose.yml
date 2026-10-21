@@ -97,10 +97,15 @@ services:
     image: timescale/timescaledb-ha:pg17@sha256:e77fc7a0395b63a89d27b8b5043abcc7e8120576429ea9a470977d4bed3d0261
     restart: unless-stopped
     logging: *logging
+    networks:
+      sonoran-internal:
+        aliases:
+          - ${DB_HOSTNAME:-timescaledb}
     environment:
       POSTGRES_DB: azmsh
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PATRONI_SUPERUSER_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       # The timescaledb-ha image keeps PGDATA at /home/postgres/pgdata,
       # not /var/lib/postgresql/data. Mounting the volume on the wrong
@@ -114,10 +119,13 @@ services:
       timeout: 5s
       retries: 10
 
-  api:
+  web:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - default
+      - sonoran-internal
     command: ["sonoran-api"]
     # Ask the application, not the port.
     #
@@ -130,7 +138,7 @@ services:
     # here rather than a decorative one. A real probe for them has to
     # read a heartbeat they do not yet write; see docs/ISSUES.md.
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:${WEB_PORT:-8000}/health', timeout=4).status == 200 else 1)\""]
       interval: 30s
       timeout: 6s
       retries: 3
@@ -159,13 +167,19 @@ services:
     # and on a standard (rootful) Docker install published ports bypass
     # ufw, so the dashboard would be open to the internet with no
     # reverse proxy in front of it. A
-    # deployment that needs another address says so in its override.
+    # deployment that needs another address says so in its override,
+    # or sets WEB_BIND_IP and WEB_BIND_PORT in `.env` (for example on
+    # Coolify, where the host already uses port 8000). WEB_PORT is the
+    # port inside the container; the health check above asks the same.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${WEB_BIND_IP:-127.0.0.1}:${WEB_BIND_PORT:-8000}:${WEB_PORT:-8000}"
 
   migrate:
     build: .
+    restart: "no"
     logging: *logging
+    networks:
+      - sonoran-internal
     command: ["alembic", "upgrade", "head"]
     env_file: .env
     # The one service that holds the superuser, because it is the one
@@ -180,7 +194,7 @@ services:
     # as `docker compose up -d timescaledb` as well.
     environment:
       <<: [*no-credentials, *no-mqtt, *no-rf-mqtt, *no-contrib-mqtt]
-      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@timescaledb:5432/azmsh
+      DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@${DB_HOSTNAME:-timescaledb}:5432/azmsh
       AZMSH_INGEST_PASSWORD: ${AZMSH_INGEST_PASSWORD:-}
       AZMSH_API_PASSWORD: ${AZMSH_API_PASSWORD:-}
       AZMSH_JOBS_PASSWORD: ${AZMSH_JOBS_PASSWORD:-}
@@ -192,6 +206,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     command: ["sonoran-ingest"]
     env_file: .env
     # INSERT and UPDATE on the payload tables, and nothing else.
@@ -216,6 +232,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     profiles: ["rf"]
     command: ["sonoran-rf-ingest"]
     env_file: .env
@@ -236,6 +254,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     profiles: ["contrib"]
     command: ["sonoran-contrib"]
     env_file: .env
@@ -252,6 +272,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     command: ["sonoran-jobs"]
     # A small init as PID 1 (#371). The jobs supervisor stops a job over
     # its memory ceiling by killing its process tree; the processes below
@@ -322,6 +344,8 @@ services:
     image: ghcr.io/ianmcorvidae/mesh-graph:latest@sha256:7126a91d0952e1f0cb1a456ba661cdb8562aa95781bfc6a507f5d375ba2510c2
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     # No `env_file`. This is the one service in the stack that is not
     # our code, and `.env` holds the Postgres superuser password, four
     # database DSNs, the three role passwords and the Meshtastic channel
@@ -343,12 +367,13 @@ services:
     entrypoint: ["sh", "-c"]
     volumes:
       - meshgraph_data:/data
-      - ./mesh-graph.config.toml:/config.toml:ro
-    # Loopback only, as for the api above.
+      - ./config:/config:ro
+    # Loopback only, as for web above. mesh-graph always listens on
+    # 8080 inside the container; only the host side can change.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${GRAPH_BIND_IP:-127.0.0.1}:${GRAPH_BIND_PORT:-8080}:8080"
     # Writes the broker, port and login into a copy of the config.
-    # `broker` in mesh-graph.config.toml is replaced by MQTT_HOST, so
+    # `broker` in config/mesh-graph.config.toml is replaced by MQTT_HOST, so
     # the host and port come from the environment like the ingest's do,
     # and are not a second copy of the broker address that can disagree.
     #
@@ -389,7 +414,7 @@ services:
             print "username = \"" user "\""
             print "password = \"" pass "\""
           }
-        ' /config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both
+        ' /config/mesh-graph.config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both
 
   backup:
     # A daily logical dump of the database, kept in rotation. See
@@ -405,10 +430,12 @@ services:
       dockerfile: tools/backup.Dockerfile
     restart: unless-stopped
     logging: *logging
+    networks:
+      - sonoran-internal
     # No `env_file`, for the same reason as mesh-graph: this service
     # gets the one credential it uses, and nothing else from `.env`.
     environment:
-      PGHOST: timescaledb
+      PGHOST: ${DB_HOSTNAME:-timescaledb}
       PGUSER: postgres
       PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       PGDATABASE: azmsh
@@ -446,3 +473,11 @@ volumes:
   terrain_cache:
   landcover_cache:
   coverage_cache:
+
+networks:
+  # The backend's own network, apart from any shared proxy network the
+  # web service joins, so two stacks on one host cannot reach each other's
+  # containers by name. Not `internal`: ingest, rf-ingest and mesh-graph
+  # read an MQTT broker outside the stack, and jobs fetches terrain and
+  # land cover, so they need a route out.
+  sonoran-internal: {}

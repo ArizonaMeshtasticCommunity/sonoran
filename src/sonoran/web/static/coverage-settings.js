@@ -34,7 +34,7 @@ window.SonoranCoverageSettings = (function build() {
 
   const DEFAULT_BASE = 'infrastructure';
   const APPROXIMATE_SUFFIX = '_approximate';
-  const LAYERS = ['usable', 'downlink', 'uplink'];
+  const LAYERS = ['usable', 'downlink', 'uplink', 'empirical_heatmap_position'];
 
   /*
    * The signal floors the panel offers, in dB above what the radio

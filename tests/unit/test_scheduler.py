@@ -47,6 +47,7 @@ def test_coverage_does_not_get_a_competing_calibration_task() -> None:
     # that DOES use the engine must join `_coverage_cycle` instead.
     assert [task.name for task in tasks] == [
         "snapshot",
+        "activity_heatmap",
         "coverage",
         "gaps",
         "rf-rollup",
@@ -61,6 +62,7 @@ def test_calibration_keeps_its_task_when_coverage_is_off() -> None:
 
     assert [task.name for task in tasks] == [
         "snapshot",
+        "activity_heatmap",
         "calibration",
         "gaps",
         "rf-rollup",

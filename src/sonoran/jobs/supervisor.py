@@ -59,6 +59,10 @@ DEFAULT_LIMITS_MB: dict[str, float] = {
     "read-models": 400.0,
     "rf-rollup": 250.0,
     "snapshot": 250.0,
+    # A whole run on the default region with 780 000 joined rows peaked
+    # at 493 MB (review of PR 344, synthetic rows). The first real peak
+    # is logged; lower this when it is known.
+    "activity_heatmap": 800.0,
 }
 
 #: A job with no recorded peak and no configured ceiling is planned at this.

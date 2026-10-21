@@ -58,6 +58,8 @@ sonoran-jobs = "sonoran.jobs.scheduler:run"
 # One coverage run, now, instead of waiting for the timer. For bringing
 # a box up and for watching the first run.
 sonoran-coverage-once = "sonoran.jobs.coverage:run"
+# One heatmap generation run, now.
+sonoran-heatmap-once = "sonoran.jobs.activity_heatmap:run"
 # One gap assessment, now, instead of waiting for the timer. The same
 # bargain as sonoran-coverage-once.
 sonoran-gaps-once = "sonoran.jobs.gaps:run"

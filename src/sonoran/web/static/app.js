@@ -499,6 +499,7 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
         scope: 'col',
         class: classes.join(' ').trim() || null,
         'data-hint': column.hint || null,
+        'data-term': column.term || null,
         'data-label': column.label,
         text: column.label,
       });
@@ -511,6 +512,7 @@ function table(columns, rows, emptyMessage = 'No data.', options = {}) {
       scope: 'col',
       class: classes.join(' ').trim() || null,
       'data-hint': column.hint || null,
+      'data-term': column.term || null,
       'data-label': column.label,
       'aria-sort': active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none',
     }, el('button', {
@@ -580,13 +582,14 @@ function expandingTable(columns, rows, emptyMessage, options = {}) {
 /* A summary tile. Its `hint` travels the same way a column's does: in
  * `data-hint`, for `revealHints` to turn into a button on the label.
  * See the note in `table()`. */
-function statTile(label, value, delta, hint) {
+function statTile(label, value, delta, hint, term) {
   return el('div', { class: 'panel' },
     el('div', { class: 'stat' },
       el('span', { class: 'value', text: value }),
       el('span', {
         class: 'label',
         'data-hint': hint || null,
+        'data-term': term || null,
         'data-label': label,
         text: label,
       }),
@@ -1766,7 +1769,7 @@ PAGES.dashboard = async (page) => {
   replace($('[data-recent-nodes]', page), nodes
     ? table([
         { label: 'Node', cell: (row) => nodeChip(row) },
-        { label: 'Role', cell: (row) => roleCell(row.role) },
+        { label: 'Role', term: 'role', cell: (row) => roleCell(row.role) },
         { label: 'Heard', num: true, hint: HEARD_HINT, cell: (row) => `${ago(row.last_heard)} ago` },
       ], nodes, 'No nodes heard yet.')
     : failure(new Error('Cannot load nodes.')));
@@ -2120,6 +2123,12 @@ function drawMapLegend(target, rows) {
     });
 
   replace(target, [
+    /*
+     * What a role is, once, at the start of the key (AGENTS.md 3B). The
+     * keys are buttons and a button cannot hold another, so the
+     * explanation sits on this word rather than on fifteen keys.
+     */
+    el('span', { class: 'legend-note legend-lead', 'data-term': 'role' }, 'Roles'),
     ...present.map(([role, total]) =>
       el('button', {
         type: 'button',
@@ -2135,13 +2144,13 @@ function drawMapLegend(target, rows) {
     roleFilter.size
       ? el('button', { type: 'button', class: 'legend-key clear', text: 'Show every role' })
       : null,
-    el('span', { class: 'legend-note' }, el('span', { class: 'swatch ring' }), 'MQTT gateway'),
+    el('span', { class: 'legend-note', 'data-term': 'gateway' }, el('span', { class: 'swatch ring' }), 'MQTT gateway'),
     el('span', { class: 'legend-note' }, el('span', { class: 'swatch faded' }), 'Not heard in 24 h'),
     // The two kinds of traffic line mean different things, so both are
     // named. A relayed line is a path, not a radio link.
-    el('span', { class: 'legend-note' }, el('span', { class: 'line direct' }), 'Heard direct'),
-    el('span', { class: 'legend-note' }, el('span', { class: 'line relayed' }), 'Relayed, arrow shows where it went'),
-    el('span', { class: 'legend-note' }, el('span', { class: 'line neighbour' }), 'Neighbor link'),
+    el('span', { class: 'legend-note', 'data-term': 'direct' }, el('span', { class: 'line direct' }), 'Heard direct'),
+    el('span', { class: 'legend-note', 'data-term': 'hop' }, el('span', { class: 'line relayed' }), 'Relayed, arrow shows where it went'),
+    el('span', { class: 'legend-note', 'data-term': 'neighbor-info' }, el('span', { class: 'line neighbour' }), 'Neighbor link'),
     /*
      * The two heat layers, named here as well as in the watch legend.
      *
@@ -2177,6 +2186,8 @@ function drawMapLegend(target, rows) {
       applyRoleFilter();
     });
   }
+  // The legend is redrawn outside `render` too, on every live update.
+  revealHints(target);
 }
 
 /* The region the map opens on, as Leaflet bounds, or null (#195).
@@ -3183,16 +3194,16 @@ function trafficTable(packets) {
       cell: (row) => el('a', { class: 'linky', href: packetHref(row), text: portnumLabel(row.portnum) }),
     },
     {
-      label: 'Hops',
+      label: 'Hops', term: 'hop',
       num: true,
       cell: (row) => (row.min_hops == null
         ? el('span', { class: 'muted', text: 'not recorded' })
         : el('span', { text: String(row.min_hops) })),
     },
-    { label: 'Gateways', num: true, cell: (row) => el('span', { text: count(row.gateway_count) }) },
-    { label: 'Uploads', num: true, cell: (row) => el('span', { text: count(row.upload_count) }) },
+    { label: 'Gateways', term: 'gateway', num: true, cell: (row) => el('span', { text: count(row.gateway_count) }) },
+    { label: 'Uploads', term: 'upload', num: true, cell: (row) => el('span', { text: count(row.upload_count) }) },
     {
-      label: 'SNR',
+      label: 'SNR', term: 'snr',
       num: true,
       cell: (row) => (row.any_direct && row.direct_snr != null
         ? snrCell(row.direct_snr)
@@ -5846,7 +5857,7 @@ function nodeColumns(onSort) {
       hint: 'The board model the node reports for itself.',
       cell: (row) => row.hw_model || '-',
     }),
-    sortable({ label: 'Role', sort: 'role', export: 'role', cell: (row) => roleCell(row.role) }),
+    sortable({ label: 'Role', term: 'role', sort: 'role', export: 'role', cell: (row) => roleCell(row.role) }),
     sortable({
       label: 'Flags',
       // Flags is not one value, so sorting it is a decision rather than
@@ -6170,7 +6181,7 @@ function neighborPanel(neighbors, windowHours) {
         text: `${count(neighbors.length)} in ${windowHours} h` })),
     expandingTable([
       { label: 'Node', cell: (row) => nodeChip(row) },
-      { label: 'SNR', num: true, cell: (row) => snrCell(row.snr) },
+      { label: 'SNR', term: 'snr', num: true, cell: (row) => snrCell(row.snr) },
       { label: 'Last RX', num: true, cell: (row) => `${ago(row.last_rx_time || row.time)} ago` },
     ], neighbors, 'This node reports no neighbors.', { noun: 'neighbors' }));
 }
@@ -6229,7 +6240,7 @@ function heardByPanel(gateways) {
     }, 'Heard by',
       el('span', { class: 'muted', text: `${count(gateways.length)} gateways` })),
     expandingTable([
-      { label: 'Gateway', cell: (row) => nodeChip(row) },
+      { label: 'Gateway', term: 'gateway', cell: (row) => nodeChip(row) },
       { label: 'Relayed', num: true, cell: (row) => count(row.relayed_count) },
       { label: 'Direct', num: true, cell: (row) => count(row.direct_count) },
       { label: 'Avg SNR', num: true, cell: (row) => snrCell(row.avg_snr) },
@@ -6284,8 +6295,21 @@ function deviceRows(device) {
  * panel is, and not only after the slowest chart on the page loads.
  */
 function fieldList(rows) {
-  const list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text, flag }) => [
-    el('dt', { 'data-label': label, 'data-hint': FIELD_HINTS[key] || null }, label),
+  // The glossary word each field is (AGENTS.md 3B). A row may name its
+  // own, as the role row does with the node's role.
+  const terms = {
+    node_id: 'node-id', is_mqtt_gateway: 'gateway', is_licensed: 'licensed',
+    last_channel: 'channel', position: 'position-precision',
+    channel_utilization: 'channel-utilization', air_util_tx: 'airtime',
+  };
+  const list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text, flag, term, exact }) => [
+    el('dt', {
+      'data-label': label,
+      'data-hint': FIELD_HINTS[key] || null,
+      'data-term': term || terms[key] || null,
+      'data-exact': exact || null,
+      'data-exact-text': exact ? text : null,
+    }, label),
     fieldValue(text, flag),
   ]));
   revealHints(list);
@@ -6404,7 +6428,18 @@ function identityRows(node) {
     { key: 'long_name', label: 'Long name', text: node.long_name || 'Not reported' },
     { key: 'short_name', label: 'Short name', text: node.short_name || 'Not reported' },
     { key: 'hw_model', label: 'Hardware', text: node.hw_model || 'Unknown' },
-    { key: 'role', label: 'Role', text: node.role ? `${roleLabel(node.role)} (${node.role})` : 'Unknown' },
+    /*
+     * The plain name only (AGENTS.md 3B). The exact value, such as
+     * ROUTER_LATE, is in the field's panel with what the role does.
+     */
+    {
+      key: 'role',
+      label: 'Role',
+      text: node.role ? roleLabel(node.role) : 'Unknown',
+      exact: node.role || null,
+      // What a role is, then what this one does: `role role-router-late`.
+      term: [...new Set(['role', globalThis.SonoranGlossary?.roleTerm(node.role) || 'role'])].join(' '),
+    },
     // Through `yesNo`, not inlined. These two were the reason #193.4
     // could be "fixed" in the helper and still show lower case here.
     // The API always sends a boolean; were it ever absent, the row says
@@ -7727,7 +7762,7 @@ function routesPanel(routes) {
       hint: 'Under each name: how many reports show the link in this direction, and what kind. A direct upload is a gateway uploading a packet it heard with no relay in between.',
       cell: (row) => el('div', { class: 'route-who' },
         nodeChip(row), el('span', { class: 'muted', text: evidence(row) })) },
-    { label: 'SNR', num: true, hint: 'The best signal-to-noise ratio any of those reports measured on the link.', cell: (row) => snrCell(row.best_snr) },
+    { label: 'SNR', term: 'snr', num: true, hint: 'The best signal-to-noise ratio any of those reports measured on the link.', cell: (row) => snrCell(row.best_snr) },
     { label: 'Distance', num: true, wrap: true,
       hint: 'Straight-line distance. Marked "about", with a ± range, when either position is rounded: the range is how far the rounding can move it.',
       cell: (row) => reachText(row) },
@@ -7962,10 +7997,10 @@ async function drawTimeline(target, nodeId, pageHours, types) {
     { label: 'Type', ...sortable('type', 'What the packet carried: a position, telemetry, a message, and so on.'), cell: (row) => portnumCell(row.portnum) },
     { label: 'To', ...sortable('to', 'Everyone for a broadcast, or the one node it was addressed to.'), cell: (row) => toLabel(row) },
     { label: 'Channel', ...sortable('channel'), cell: (row) => row.channel || '-' },
-    { label: 'Hops', num: true, ...sortable('hops', 'The fewest relays any gateway saw it use before it was uploaded.'), cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
-    { label: 'Gateways', num: true, ...sortable('gateways', 'How many different gateways uploaded it, not counting the sender uploading its own packet.'), cell: (row) => count(row.gateways) },
-    { label: 'SNR', num: true, ...sortable('snr', 'The best signal at a gateway that heard it with no hop used. A relayed reading belongs to the last relay, so it is not shown.'), cell: (row) => snrCell(row.direct_snr) },
-    { label: 'RSSI', num: true, ...sortable('rssi'), cell: (row) => (row.direct_rssi == null ? '-' : `${row.direct_rssi} dBm`) },
+    { label: 'Hops', term: 'hop', num: true, ...sortable('hops', 'The fewest relays any gateway saw it use before it was uploaded.'), cell: (row) => (row.fewest_hops == null ? '-' : String(row.fewest_hops)) },
+    { label: 'Gateways', term: 'gateway', num: true, ...sortable('gateways', 'How many different gateways uploaded it, not counting the sender uploading its own packet.'), cell: (row) => count(row.gateways) },
+    { label: 'SNR', term: 'snr', num: true, ...sortable('snr', 'The best signal at a gateway that heard it with no hop used. A relayed reading belongs to the last relay, so it is not shown.'), cell: (row) => snrCell(row.direct_snr) },
+    { label: 'RSSI', term: 'rssi', num: true, ...sortable('rssi'), cell: (row) => (row.direct_rssi == null ? '-' : `${row.direct_rssi} dBm`) },
     { label: 'Size', num: true, ...sortable('size'), cell: (row) => (row.size_bytes == null ? '-' : `${row.size_bytes} B`) },
   ].filter(Boolean);
 
@@ -8137,7 +8172,7 @@ async function loadNodeDetail(nodeId) {
   link.hidden = false;
 
   const signalPanel = el('div', { class: 'panel span-2' },
-    el('h3', {}, 'Direct link signal over time',
+    el('h3', { 'data-term': 'direct snr' }, 'Direct link signal over time',
       el('span', { class: 'muted', text: 'from neighbor reports' })),
     el('div', { class: 'chart', 'data-signal-chart': '' }));
 
@@ -8544,10 +8579,10 @@ function chatTable(messages) {
     },
     { label: 'From', cell: (message) => nodeChip({ node_id: message.from_node, display_name: message.from_name }) },
     { label: 'Message', wrap: true, cell: (message) => messageBody(message.body) },
-    { label: 'Gateways', num: true, hint: METRICS_HINT, cell: (message) => count(metric(message, 'gateway_count') ?? 0) },
+    { label: 'Gateways', term: 'gateway', num: true, hint: METRICS_HINT, cell: (message) => count(metric(message, 'gateway_count') ?? 0) },
     { label: 'Direct', num: true, cell: (message) => count(metric(message, 'direct_gateways') ?? 0) },
     {
-      label: 'Hops',
+      label: 'Hops', term: 'hop',
       num: true,
       hint: 'The fewest relays any gateway saw this message use.',
       cell: (message) => {
@@ -8555,9 +8590,9 @@ function chatTable(messages) {
         return hops == null ? '-' : String(hops);
       },
     },
-    { label: 'SNR', num: true, cell: (message) => snrCell(metric(message, 'best_direct_snr')) },
+    { label: 'SNR', term: 'snr', num: true, cell: (message) => snrCell(metric(message, 'best_direct_snr')) },
     {
-      label: 'RSSI',
+      label: 'RSSI', term: 'rssi',
       num: true,
       cell: (message) => {
         const rssi = metric(message, 'best_direct_rssi');
@@ -9611,7 +9646,7 @@ PAGES.firehose = async (page) => {
     },
     { label: 'Channel', cell: (row) => row.channel || '-' },
     {
-      label: 'Hops',
+      label: 'Hops', term: 'hop',
       num: true,
       // Named in #99 as the example of a hint written in the
       // protocol's words. "Hop start minus hop limit" is how the
@@ -9629,7 +9664,7 @@ PAGES.firehose = async (page) => {
        * said "Gateways", so the page named a number it was not holding.
        * The number is untouched; only the word for it is corrected.
        */
-      label: 'Uploads',
+      label: 'Uploads', term: 'upload',
       num: true,
       hint: 'How many times a gateway uploaded this packet to MQTT. One gateway often uploads the same packet more than once, so this is not a count of gateways.',
       cell: (row) => count(row.seen_count),
@@ -9661,7 +9696,7 @@ PAGES.traceroutes = async (page) => {
     { label: 'From', cell: (row) => nodeChip({ node_id: row.from_node, display_name: row.from_name }) },
     { label: 'To', cell: (row) => nodeChip({ node_id: row.to_node, display_name: row.to_name }) },
     { label: 'Path', wrap: true, cell: (row) => (row.route_names || []).join(' \u2192 ') || 'direct' },
-    { label: 'Hops', num: true, low: true, cell: (row) => (row.hops || []).length },
+    { label: 'Hops', term: 'hop', num: true, low: true, cell: (row) => (row.hops || []).length },
     {
       label: 'Signal measured',
       num: true,
@@ -10231,7 +10266,7 @@ PAGES.link = async (page) => {
         { label: 'Kind', cell: (row) => row.kind },
         { label: 'Reported by', cell: (row) => row.reported_by },
         { label: 'Hop', num: true, cell: (row) => (row.hop == null ? '-' : `${row.hop} of ${row.path_length}`) },
-        { label: 'SNR', num: true, cell: (row) => snrCell(row.snr) },
+        { label: 'SNR', term: 'snr', num: true, cell: (row) => snrCell(row.snr) },
         {
           label: 'Packet',
           cell: (row) => (row.packet_id == null
@@ -10623,7 +10658,7 @@ function neighbourValues(rows) {
       },
     },
     {
-      label: 'SNR',
+      label: 'SNR', term: 'snr',
       num: true,
       hint: 'How well this node heard that neighbor, as it reported it. This is a measured radio link.',
       cell: (row) => snrCell(row.snr),
@@ -10749,15 +10784,15 @@ function whoHeardPanel(data, gateways, uploads, direct) {
       + 'link. A sender that gateways its own traffic uploads what it just sent, '
       + 'which is not a radio link at all.'),
     el('div', { class: 'table-wrap' }, table([
-      { label: 'Gateway', cell: (row) => nodeChip({ node_id: row.gateway, display_name: row.gateway_name }) },
+      { label: 'Gateway', term: 'gateway', cell: (row) => nodeChip({ node_id: row.gateway, display_name: row.gateway_name }) },
       {
         label: 'Path',
         cell: (row) => (row.self_reported
           ? el('span', { class: 'muted', text: 'its own upload' })
           : row.direct ? 'direct' : row.hops_taken == null ? 'unknown' : `${row.hops_taken} hops`),
       },
-      { label: 'SNR', num: true, cell: (row) => (row.direct ? snrCell(row.rx_snr) : el('span', { class: 'muted', text: '-' })) },
-      { label: 'RSSI', num: true, cell: (row) => (row.direct && row.rx_rssi != null ? `${row.rx_rssi} dBm` : '-') },
+      { label: 'SNR', term: 'snr', num: true, cell: (row) => (row.direct ? snrCell(row.rx_snr) : el('span', { class: 'muted', text: '-' })) },
+      { label: 'RSSI', term: 'rssi', num: true, cell: (row) => (row.direct && row.rx_rssi != null ? `${row.rx_rssi} dBm` : '-') },
       { label: 'Relayed by', cell: (row) => relayCell(row.relayed_by) },
     { label: 'When', cell: (row) => clock(row.seen_at) },
       { label: 'Topic', wrap: true, cell: (row) => row.mqtt_topic },
@@ -10994,8 +11029,9 @@ function revealHints(root = document) {
     for (const th of table ? $$('th', table) : []) {
       const hint = th.dataset.hint;
       const exact = exactValues(table, th);
-      if (!hint && !exact.length) continue;
-      fitHint(th, 'column', th.dataset.label || th.textContent.trim(), hint, exact);
+      const terms = termsOf(th);
+      if (!hint && !exact.length && !terms.length) continue;
+      fitHint(th, 'column', th.dataset.label || th.textContent.trim(), hint, exact, terms);
     }
   }
   /*
@@ -11008,7 +11044,7 @@ function revealHints(root = document) {
   // node page's route tiles carry the same shape (#191).
   for (const label of $$('.label[data-hint]', root)) {
     fitHint(label, 'figure', label.dataset.label || label.textContent.trim(),
-      label.dataset.hint, []);
+      label.dataset.hint, [], termsOf(label));
   }
   /*
    * And panel headings (#191).
@@ -11027,7 +11063,7 @@ function revealHints(root = document) {
    */
   for (const heading of $$('h3[data-hint]', root)) {
     fitHint(heading, 'panel', heading.dataset.label || heading.firstChild?.textContent?.trim()
-      || heading.textContent.trim(), heading.dataset.hint, []);
+      || heading.textContent.trim(), heading.dataset.hint, [], termsOf(heading));
   }
   /*
    * And the fields of a definition list (#256): the node page's
@@ -11037,9 +11073,88 @@ function revealHints(root = document) {
    * because once the button is in the `dt` its text includes the
    * button's "i".
    */
-  for (const term of $$('dt[data-hint]', root)) {
-    fitHint(term, 'field', term.dataset.label || term.textContent.trim(), term.dataset.hint, []);
+  for (const term of $$('dt[data-hint], dt[data-term]', root)) {
+    // The exact wire value of a field, such as a role's enum, rides in
+    // `data-exact`, so the field itself can print the plain name.
+    const exact = term.dataset.exact
+      ? [{ text: term.dataset.exactText || '', exact: term.dataset.exact }] : [];
+    fitHint(term, 'field', term.dataset.label || term.textContent.trim(), term.dataset.hint,
+      exact, termsOf(term));
   }
+  revealTerms(root);
+}
+
+/*
+ * A word from the glossary, explained where it stands (AGENTS.md 3B).
+ *
+ * `data-term="snr"` on any element gives it the same button and the
+ * same popover as a column hint, filled from `glossary.js`. Where the
+ * element is a heading, a column, a field or a tile label that the
+ * passes above handle, the glossary sentence goes into that one panel,
+ * so nothing carries two buttons.
+ *
+ * Why a disclosure (a button with `aria-expanded`) and not
+ * `role="tooltip"`: a tooltip opens on hover or focus only, so a finger
+ * cannot open it, and WCAG 2.2 SC 1.4.13 then asks it to stay open while
+ * the pointer moves onto it. A button opens on click, tap, Enter and
+ * Space; a screen reader announces its name ("What SNR means") and its
+ * state; and the panel stays until Escape, a tap outside or a second
+ * press. That is the reasoning of the hint buttons above, kept the same.
+ *
+ * Where the button goes:
+ *
+ * - Inside the element, after its text, as on a heading.
+ * - Beside it, when the element is itself a control (a button cannot
+ *   hold a button) or has an `id` (another control may take its name
+ *   from it with `aria-labelledby`, and the button's name would join).
+ * - Inside a `<label>`, the control first gets its current name as an
+ *   `aria-label`, so the button's words do not join the control's name.
+ *
+ * A page with no `data-term` pays one selector and builds nothing.
+ */
+function revealTerms(root = document) {
+  for (const host of $$('[data-term]', root)) {
+    // The passes above already put these terms into their own panel.
+    if (host.matches('dt, .label[data-hint], h3[data-hint]')) continue;
+    if (host.tagName === 'TH' && host.closest('.table-wrap')) continue;
+    const terms = termsOf(host);
+    if (!terms.length) continue;
+    const beside = host.matches('button, a, select, input, textarea, summary, [id]');
+    if (!beside) keepControlName(host);
+    fitHint(host, 'word', SonoranGlossary.get(terms[0]).label, null, [], terms, beside);
+  }
+}
+
+/** The glossary ids an element names in `data-term`, known ones only. */
+function termsOf(host) {
+  const glossary = globalThis.SonoranGlossary;
+  if (!glossary || !host.dataset.term) return [];
+  return host.dataset.term.split(/\s+/).filter((id) => glossary.get(id));
+}
+
+/** Give a label's control its name before a button joins the label. */
+function keepControlName(host) {
+  const label = host.closest('label');
+  const control = label && label.control;
+  if (!control || control.hasAttribute('aria-label') || control.hasAttribute('aria-labelledby')) return;
+  const words = [...label.childNodes]
+    .filter((node) => node !== control)
+    .map((node) => node.textContent).join(' ').replace(/\s+/g, ' ').trim();
+  if (words) control.setAttribute('aria-label', words);
+}
+
+/** The glossary sentences for a panel, each with its link if it has one. */
+function termBody(terms, named) {
+  return terms.map((id) => {
+    const entry = SonoranGlossary.get(id);
+    return el('p', { class: 'hint-term' },
+      named ? el('strong', { text: `${entry.label}: ` }) : null,
+      entry.plain,
+      entry.more
+        ? [' ', el('a', { href: entry.more, target: '_blank', rel: 'noopener' }, 'Learn more',
+          el('span', { class: 'sr-only', text: ' (opens in a new tab)' }))]
+        : null);
+  });
 }
 
 /** Every distinct exact value one column holds, in the order first seen. */
@@ -11063,10 +11178,13 @@ function exactValues(table, th) {
 }
 
 /** The sentence and the exact values, as the panel's contents. */
-function hintBody(label, hint, exact) {
+function hintBody(label, hint, exact, terms = []) {
+  // A panel of one glossary word needs no second name inside it.
+  const named = Boolean(hint || exact.length || terms.length > 1);
   return [
     el('p', { class: 'hint-name', text: label }),
     hint ? el('p', { text: hint }) : null,
+    ...termBody(terms, named),
     exact.length
       ? el('p', { class: 'hint-exact' },
         el('span', { class: 'muted', text: 'Exact values here: ' }),
@@ -11084,7 +11202,7 @@ function hintBody(label, hint, exact) {
  * time, and shut a panel somebody was reading, so the contents are
  * compared first and only a real change is written.
  */
-function fitHint(host, noun, label, hint, exact) {
+function fitHint(host, noun, label, hint, exact, terms = [], beside = false) {
   /*
    * The name carries the heading, because a page holds a dozen of
    * these and "What this column means" a dozen times names nothing to
@@ -11092,13 +11210,14 @@ function fitHint(host, noun, label, hint, exact) {
    * — "What Uploads means" reads well until the column is called "What
    * it said", and then it reads "What What it said means".
    */
-  const name = `What this ${noun} means: ${label}`;
-  const key = [label, hint, ...exact.map((value) => `${value.text}=${value.exact}`)].join(' ');
-  const found = $('.hint-open', host);
+  const name = noun === 'word' ? `What ${label} means` : `What this ${noun} means: ${label}`;
+  const key = [label, hint, ...terms, ...exact.map((value) => `${value.text}=${value.exact}`)].join(' ');
+  const next = host.nextElementSibling;
+  const found = beside ? (next && next.matches('.hint-open') ? next : null) : $('.hint-open', host);
   if (found) {
     const panel = document.getElementById(found.getAttribute('aria-controls'));
     if (panel && panel.dataset.key !== key) {
-      replace(panel, hintBody(label, hint, exact));
+      replace(panel, hintBody(label, hint, exact, terms));
       panel.dataset.key = key;
       found.setAttribute('aria-label', name);
     }
@@ -11106,7 +11225,7 @@ function fitHint(host, noun, label, hint, exact) {
   }
   const id = `hint-${++hintSeq}`;
   const panel = el('div', { class: 'hint-pop', id, 'data-key': key, hidden: !POPOVER },
-    hintBody(label, hint, exact));
+    hintBody(label, hint, exact, terms));
   if (POPOVER) panel.setAttribute('popover', 'auto');
   const button = el('button', {
     type: 'button', class: 'hint-open',
@@ -11115,7 +11234,8 @@ function fitHint(host, noun, label, hint, exact) {
     'aria-controls': id,
   }, el('span', { class: 'hint-mark', 'aria-hidden': 'true', text: 'i' }));
   wireHint(button, panel);
-  host.append(button, panel);
+  if (beside) host.after(button, panel);
+  else host.append(button, panel);
 }
 
 /**
@@ -12610,4 +12730,6 @@ function markNavHere(known) {
 addEventListener('hashchange', route);
 wire();
 scheduleLive();
+// The menu's words are outside every page, so `render` never reaches them.
+revealHints($('.menu-foot') || document.body);
 route();

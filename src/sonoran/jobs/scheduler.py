@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.jobs import (
+    activity_heatmap,
     calibrate,
     coverage,
     gaps,
@@ -270,6 +271,16 @@ async def _job_rf_rollup(settings: Settings) -> None:
         await engine.dispose()
 
 
+async def _job_activity_heatmap(settings: Settings) -> None:
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            await activity_heatmap.run_once(session, settings)
+    finally:
+        await engine.dispose()
+
+
 async def _job_read_models(settings: Settings) -> None:
     engine = make_engine(settings.database_url_jobs)
     factory = make_session_factory(engine)
@@ -288,6 +299,7 @@ JOB_BODIES: dict[str, Callable[[Settings], Awaitable[None]]] = {
     "gaps": _job_gaps,
     "rf-rollup": _job_rf_rollup,
     "read-models": _job_read_models,
+    "activity_heatmap": _job_activity_heatmap,
 }
 
 
@@ -316,6 +328,10 @@ def build_tasks(settings: Settings, budget: supervisor.Budget | None = None) -> 
         return Task(name=name, run=_runner(name, settings, budget), next_delay=next_delay)
 
     tasks = [task("snapshot", _delay_to_next_utc_day)]
+
+    # SQL and numpy, no engine. Once a day, in its own child like the
+    # others, so its memory has a ceiling and the supervisor plans it.
+    tasks.append(task("activity_heatmap", _delay_to_next_utc_day))
 
     if settings.coverage_enabled:
         # Calibration, coverage and the siting half share one clock and
