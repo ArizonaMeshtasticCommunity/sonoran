@@ -5312,7 +5312,16 @@ async function main() {
     const out = [];
     for (const key of ['timeline', 'links', 'identity']) {
       await page.locator(`.node-jump [data-jump-to="${key}"]`).tap();
-      await page.waitForTimeout(1200);
+      // The jump is a smooth scroll of up to 7000 px. Wait for it to end
+      // (the page still for 300 ms), not a fixed time: on a long page the
+      // scroll was still moving at 1200 ms and the panel read 201 px.
+      await page.waitForTimeout(300);
+      for (let last = -1, still = 0, waited = 0; still < 3 && waited < 5000; waited += 100) {
+        const y = await page.evaluate(() => Math.round(window.scrollY));
+        still = y === last ? still + 1 : 0;
+        last = y;
+        await page.waitForTimeout(100);
+      }
       const at = await page.evaluate((name) => {
         const panel = document.querySelector(`[data-jump="${name}"]`);
         const bar = document.querySelector('.node-jump').getBoundingClientRect();
@@ -6287,6 +6296,67 @@ async function main() {
     return `cards to 640 px, a table above; ${out.join(' ')}`;
   });
   await narrow.close();
+
+  /*
+   * Newcomer first (AGENTS.md 3B): a glossary word opens its plain
+   * explanation by a tap and by the keyboard, on a phone, and Escape
+   * closes it. The Settings page is used because its words are in the
+   * page itself, so the journey needs no mesh data and no seed rows.
+   *
+   * 360 px, the most common Android width, with touch. The panel must
+   * stay on the screen there: it is in the top layer, so nothing would
+   * scroll to reach a part that ran off the edge.
+   */
+  const glossaryPhone = await browser.newContext({
+    viewport: { width: 360, height: 740 }, isMobile: true, hasTouch: true,
+  });
+  await journey(glossaryPhone, 'a glossary word explains itself by tap and by keyboard (AGENTS.md 3B)', async (page) => {
+    await open(page, 'settings', 1500);
+    const host = page.locator('[data-page="settings"] [data-term="modem-preset"]');
+    must((await host.count()) === 1, 'the Settings page has no glossary word to explain');
+    const button = host.locator('.hint-open');
+    must((await button.count()) === 1, 'the word has no button that explains it');
+    must((await button.getAttribute('aria-label')) === 'What Modem preset means',
+      `the button is named "${await button.getAttribute('aria-label')}"`);
+    must((await button.getAttribute('aria-expanded')) === 'false', 'the explanation starts open');
+    const panel = page.locator(`#${await button.getAttribute('aria-controls')}`);
+    must(!(await panel.isVisible()), 'the explanation is on the screen before it is asked for');
+
+    // The words come from glossary.js, not from a copy in the page.
+    const wanted = await page.evaluate(() => window.SonoranGlossary.get('modem-preset').plain);
+
+    // A tap.
+    await button.tap();
+    await page.waitForTimeout(250);
+    must((await button.getAttribute('aria-expanded')) === 'true', 'a tap did not open it');
+    must(await panel.isVisible(), 'a tap showed no panel');
+    must((await panel.innerText()).includes(wanted.slice(0, 40)), 'the panel does not hold the glossary words');
+    const link = panel.locator('a[href^="https://meshtastic.org/"]');
+    must((await link.count()) === 1, 'the panel has no link to the Meshtastic docs');
+    const box = await panel.boundingBox();
+    must(box.x >= -1 && box.x + box.width <= 361,
+      `the panel runs off a 360 px screen: ${Math.round(box.x)}..${Math.round(box.x + box.width)}`);
+    const sideways = await page.evaluate(() => document.documentElement.scrollWidth
+      > document.documentElement.clientWidth + 1);
+    must(!sideways, 'the open panel makes the page scroll sideways');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    must(!(await panel.isVisible()), 'Escape did not close the tapped panel');
+    must((await button.getAttribute('aria-expanded')) === 'false', 'Escape left aria-expanded true');
+
+    // The keyboard: focus, Enter, then Escape.
+    await button.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+    must(await panel.isVisible(), 'Enter on the button did not open it');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    must(!(await panel.isVisible()), 'Escape did not close the panel opened by Enter');
+    const focused = await page.evaluate(() => document.activeElement?.className || '');
+    must(focused.includes('hint-open'), `Escape lost the focus (now on "${focused}")`);
+    return `tap and Enter open "${wanted.slice(0, 30)}...", Escape closes, ${Math.round(box.width)} px wide`;
+  });
+  await glossaryPhone.close();
 
   await browser.close();
 
