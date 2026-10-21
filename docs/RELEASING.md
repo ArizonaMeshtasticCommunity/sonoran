@@ -30,6 +30,18 @@ The project deploys from `main` and has no API versions to promise, so a
 date tells a reader more than a semantic version number.
 The script calculates the name. Do not type it yourself.
 
+### 3.1 The version that the API reports
+
+`/health` and `/api/version` report `version`, which is the package
+version in `pyproject.toml` and `src/sonoran/__init__.py`. It is
+`0.1.0`, and a release does not change it, because a release makes no
+commit (section 5). So it does not tell you which release runs.
+
+To know what a deployment runs, read its commit:
+`git rev-parse --short HEAD` in the deployment (`docs/DEPLOY.md` 4).
+Then, in a clone that has the tags, `git describe --tags <sha>` names the
+newest release before that commit.
+
 ## 4. How to publish
 
 1. Pull `main`.
