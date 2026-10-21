@@ -1459,7 +1459,7 @@ Query parameters: `hours` (default 168), `per_channel` (default 25),
 
 With `preset` (see 1.2) each section counts and lists only the messages
 carried on that preset, and a channel with none on it has no section.
-The chat page sends the menu's preset. It used to fetch every channel and
+The chat page sends the presets chosen on the Settings page. It used to fetch every channel and
 keep, in the browser, the topic channels on the default preset only, so
 azmsh was never shown on LongFast.
 

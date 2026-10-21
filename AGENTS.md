@@ -506,8 +506,10 @@ answer was drawn under the new switch. With the Live timer off it
 stayed until a reload.
 
 `PAGES.map` now clears the live layer when its channel changes, and
-draws nothing from answers that arrive after the preset changed. The
-switch queues its render with `navigateRender`. The e2e journey
+draws nothing from answers that arrive after the preset changed. A
+change of preset queues its render with `navigateRender`
+(`wirePresetFollow`). The menu has no preset switch since #383: the
+Settings page is the only place to change the presets. The e2e journey
 "switching presets on the map leaves nothing of the old one" holds
 both, and reads the canvas pixels where the old preset's nodes stood.
 
