@@ -433,6 +433,27 @@ time from a list of gateways: that was PR #349, and it was closed for
 it. The map, graph, coverage and gaps pages still filter by the
 preset's own channel name. Moving them to the tag is the next step.
 
+### 9.7.0 A preset switch must clear the live canvas too (#384)
+
+The map's dots and lines are Leaflet layers, and each draw replaces
+them. The live traffic is not a layer. It is one canvas in
+`map-live.js` that holds marks in flight, a replay queue of up to one
+poll, and each node's heat, which decays with a half-life of 20 s and
+30 s. Nothing cleared it on a preset switch, so after Medium Fast to
+Long Fast and back the Long Fast halos stayed on the Medium Fast map
+for more than a minute.
+
+`render` also returns at once while another draw is in flight. A
+switch made during a slow map draw was dropped, and the old preset's
+answer was drawn under the new switch. With the Live timer off it
+stayed until a reload.
+
+`PAGES.map` now clears the live layer when its channel changes, and
+draws nothing from answers that arrive after the preset changed. The
+switch queues its render with `navigateRender`. The e2e journey
+"switching presets on the map leaves nothing of the old one" holds
+both, and reads the canvas pixels where the old preset's nodes stood.
+
 ### 9.7.1 A topic channel is not a preset
 
 `azmsh`, `Weather`, `Traffic` and `PKI` are topic channels. Each rides

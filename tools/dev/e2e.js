@@ -241,6 +241,22 @@ async function valueOf(page, read, timeout = 15000, step = 300) {
   }
 }
 
+/*
+ * Read a page value until `good` accepts it, and return the last one
+ * read either way, so a failure can say what it saw. One `evaluate` per
+ * read (AGENTS.md 9.32).
+ */
+async function waitForValue(page, read, arg, good, timeout = 10000) {
+  const until = Date.now() + timeout;
+  let got = null;
+  for (;;) {
+    got = await page.evaluate(read, arg);
+    if (good(got)) return { ok: true, got };
+    if (Date.now() >= until) return { ok: false, got };
+    await page.waitForTimeout(250);
+  }
+}
+
 async function predict(page, start, timeout = 240000) {
   if (start) await start();
   if (!(await waitFor(page, PLANNER_SETTLED, timeout))) {
@@ -2508,6 +2524,161 @@ async function main() {
     (page) => familyMenuWalk(page, { watch: false }));
   await journey(context, 'the packet type menu works in watch mode (#385)',
     (page) => familyMenuWalk(page, { watch: true }));
+  /*
+   * #384, reported by Will: Medium Fast to Long Fast and back left Long
+   * Fast on the map until a reload. Two causes, and this catches each:
+   *
+   * - the live canvas (marks in flight, the replay queue, and each
+   *   node's heat) was never cleared on a switch, so the Long Fast halos
+   *   and rings stayed on the Medium Fast map for more than a minute;
+   * - a switch made while a map draw was in flight was dropped, so the
+   *   old preset's answer was drawn under the new switch, and stayed.
+   *
+   * The seed has no node on a Long Fast topic, so the Long Fast answers
+   * are served through routes: two nodes far from every Medium Fast
+   * node, one link between them, and fresh traffic on each poll. The
+   * positive control asserts that Long Fast IS drawn, dots, line and
+   * live pixels, before "nothing is left" is believed.
+   *
+   * A context of its own, because the chosen preset is kept in
+   * localStorage and must not leak into the journeys that share `context`.
+   */
+  const switching = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
+  await journey(switching, 'switching presets on the map leaves nothing of the old one (#384)', async (page) => {
+    const LF_NODE = { node_id: '!0e2e3841', lat: 36.62, lon: -109.42, name: 'Long Fast only' };
+    const LF_GW = { node_id: '!0e2e3842', lat: 36.18, lon: -109.95, name: 'Long Fast gateway' };
+    const row = (node, gateway) => ({
+      node_id: node.node_id, node_num: parseInt(node.node_id.slice(1), 16),
+      display_name: node.name, short_name: node.name.slice(0, 4), long_name: node.name,
+      lat: node.lat, lon: node.lon, altitude: 1500, last_heard: new Date().toISOString(),
+      hw_model: 'HELTEC_V3', role: 'ROUTER', is_mqtt_gateway: gateway,
+    });
+    const point = (node) => ({ node_id: node.node_id, display_name: node.name, lat: node.lat, lon: node.lon });
+    let packetId = 3840000;
+    const lfEvents = () => {
+      const now = Date.now();
+      return Array.from({ length: 8 }, (_, index) => {
+        packetId += 1;
+        return {
+          time: new Date(now - index * 1500).toISOString(), packet_id: packetId,
+          channel: 'LongFast', mqtt_topic: `msh/US/AZ/2/e/LongFast/${LF_GW.node_id}`,
+          snr: 6, rssi: -90, hop_limit: 3, hop_start: 3, hops_taken: 0, direct: true,
+          portnum: 'TEXT_MESSAGE_APP', from: point(LF_NODE), gateway: point(LF_GW), has_line: true,
+        };
+      }).reverse();
+    };
+    const isLong = (url) => new URL(url).searchParams.get('channel') === 'LongFast';
+    // A slow server for Long Fast, as on the live instance, so a switch
+    // can land while its answer is still on the way.
+    const delay = { ms: 0 };
+    const late = () => new Promise((done) => setTimeout(done, delay.ms));
+    await page.route(/\/api\/map\/nodes\?/, async (route) => {
+      if (!isLong(route.request().url())) return route.continue();
+      await late();
+      return route.fulfill({ json: [row(LF_NODE, false), row(LF_GW, true)] });
+    });
+    await page.route(/\/api\/map\/traffic\?/, async (route) => {
+      if (!isLong(route.request().url())) return route.continue();
+      await late();
+      const events = lfEvents();
+      return route.fulfill({ json: {
+        window_minutes: 15, event_count: events.length, direct_count: events.length,
+        returned_count: events.length, truncated: false, events,
+      } });
+    });
+    await page.route(/\/api\/map\/edges\?/, async (route) => {
+      if (!isLong(route.request().url())) return route.continue();
+      await late();
+      return route.fulfill({ json: [{
+        from_node: LF_NODE.node_id, to_node: LF_GW.node_id, snr: 5.5,
+        kind: 'neighbor', channel: 'LongFast', time: new Date().toISOString(),
+      }] });
+    });
+
+    await open(page, 'map', 500);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0 && !loading, 20000), 'the map drew no Medium Fast node');
+    // The Live timer off, so nothing but the switch can redraw the map.
+    // A picture left behind then stays, as it does in a hidden tab.
+    await page.click('[data-page="map"] [data-live]');
+    await page.click('[data-page="map"] [data-show-links]');
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 50));
+      await render('map');
+    });
+
+    /* What of Long Fast is on the map: dots, lines, and painted pixels. */
+    const longFastShown = (nodes) => {
+      const { map, marks, links } = window.SonoranMap;
+      const ids = new Set(nodes.map((node) => node.node_id));
+      const at = (node) => `${node.lat},${node.lon}`;
+      const places = new Set(nodes.map(at));
+      const dots = [...marks.keys()].filter((id) => ids.has(id));
+      const lines = map.hasLayer(links) ? links.getLayers().filter((line) => line.getLatLngs()
+        .some((ll) => places.has(`${ll.lat},${ll.lng}`))).length : 0;
+      const canvas = document.querySelector('[data-page="map"] canvas.live-canvas');
+      const scale = canvas.width / canvas.clientWidth;
+      const context = canvas.getContext('2d');
+      let painted = 0;
+      for (const node of nodes) {
+        const p = map.latLngToContainerPoint([node.lat, node.lon]);
+        const size = Math.round(24 * scale);
+        const x = Math.max(0, Math.round(p.x * scale) - size / 2);
+        const y = Math.max(0, Math.round(p.y * scale) - size / 2);
+        const data = context.getImageData(x, y, size, size).data;
+        for (let index = 3; index < data.length; index += 4) if (data[index] > 0) painted += 1;
+      }
+      return { dots: dots.length, lines, painted };
+    };
+    const nodes = [LF_NODE, LF_GW];
+    const frame = () => page.evaluate((all) => {
+      const { map, marks } = window.SonoranMap;
+      const points = [...marks.values()].map(({ row }) => [row.lat, row.lon]);
+      map.fitBounds([...points, ...all.map((node) => [node.lat, node.lon])], { animate: false, padding: [40, 40] });
+    }, nodes);
+    const choose = (name) => page.evaluate((preset) => window.SonoranPreset.set(preset), name);
+    const settled = () => waitFor(page, () => !loading, 20000, 100);
+
+    // Positive control: on Long Fast the Long Fast dots, line and live
+    // marks ARE drawn. Without this, "nothing left" below proves nothing.
+    must(await choose('LongFast'), 'the switch did not move to Long Fast');
+    await settled();
+    await frame();
+    // One more poll, as the Live timer makes: the first draw of a preset
+    // only records its window, and the next one animates what is new.
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 50));
+      await render('map');
+    });
+    const onLong = await waitForValue(page, longFastShown, nodes, (got) => got.dots === 2 && got.lines >= 1 && got.painted > 0);
+    must(onLong.ok, `Long Fast drew too little to test against: ${JSON.stringify(onLong.got)}`);
+
+    // Back to Medium Fast: nothing of Long Fast may stay.
+    must(await choose('MediumFast'), 'the switch did not move back to Medium Fast');
+    await settled();
+    await page.waitForTimeout(1500);
+    const back = await page.evaluate(longFastShown, nodes);
+    must(back.dots === 0 && back.lines === 0 && back.painted === 0,
+      `Long Fast stayed on the Medium Fast map: ${JSON.stringify(back)}`);
+
+    // The same trip while Long Fast is still answering. The switch back
+    // lands mid-draw, and must still win.
+    delay.ms = 2500;
+    must(await choose('LongFast'), 'the second switch to Long Fast did not move');
+    await page.waitForTimeout(400);
+    must(await choose('MediumFast'), 'the quick switch back did not move');
+    await page.waitForTimeout(delay.ms + 1500);
+    await settled();
+    await page.waitForTimeout(1000);
+    const quick = await page.evaluate(longFastShown, nodes);
+    const preset = await page.evaluate(() => window.SonoranPreset.current());
+    must(preset === 'MediumFast', `the switch ended on ${preset}`);
+    must(quick.dots === 0 && quick.lines === 0 && quick.painted === 0,
+      `a Long Fast answer that landed after the switch was drawn: ${JSON.stringify(quick)}`);
+    return `on Long Fast ${onLong.got.dots} dots, ${onLong.got.lines} line, ${onLong.got.painted} live px; `
+      + 'none of it after the switch back, or after a switch back mid-draw';
+  });
+  await switching.close();
 
   await journey(context, 'a mouse keeps the exact dot target (#266)', async (page) => {
     // The control for the phone journey: the wider target is for touch.

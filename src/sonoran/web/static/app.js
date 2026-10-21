@@ -2839,6 +2839,11 @@ async function linkChannelOptions(page) {
   return everyPreset ? '' : linkChannel;
 }
 
+/* The menu's preset as the map reads it, to tell a stale answer. */
+function mapPresetInForce() {
+  return window.SonoranPreset ? SonoranPreset.current() : '';
+}
+
 /* The label of the preset the map is drawn for, for the watch status
  * line. The picker's own option text carries the counts, which are noise
  * once the choice is made. */
@@ -3577,6 +3582,9 @@ PAGES.map = async (page) => {
   const showLinks = $('[data-show-links]', page).getAttribute('aria-pressed') === 'true';
   const showTraces = $('[data-show-traces]', page).getAttribute('aria-pressed') === 'true';
 
+  // The preset this draw is for. Read again after each request: a
+  // switch while the answers were on the way makes them stale (#384).
+  const askedPreset = mapPresetInForce();
   const channel = await linkChannelOptions(page);
   /*
    * The dots follow the preset that the lines follow. A node on
@@ -3605,7 +3613,7 @@ PAGES.map = async (page) => {
       ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}`
       : `?active_hours=${LINK_HOURS}`),
   );
-  if (!nodes) return;
+  if (!nodes || mapPresetInForce() !== askedPreset) return;
   const [traffic, edges, traces] = await getAll([
     showTraffic
       ? `api/map/traffic?minutes=${minutes}&limit=${TRAFFIC_LIMIT}` +
@@ -3623,6 +3631,35 @@ PAGES.map = async (page) => {
         (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
   ]);
+  /*
+   * A newer preset was chosen while these answers were on the way.
+   * Draw none of them: the switch queued a render for the new preset
+   * (`navigateRender`), and that render draws the map. Drawing these
+   * would put the old preset's dots and lines under the new switch, and
+   * with the Live timer off nothing would ever take them away (#384).
+   */
+  if (mapPresetInForce() !== askedPreset) return;
+  /*
+   * A new preset starts the live layer from nothing (#384).
+   *
+   * The dots and the lines are replaced on every draw, but the live
+   * canvas is not a Leaflet layer. It holds marks still in flight, a
+   * replay queue of up to one poll, and the heat of each node, which
+   * decays with a half-life of 20 s and 30 s. After Medium Fast to
+   * Long Fast and back, the Long Fast halos and rings stayed on the
+   * Medium Fast map for more than a minute. A node on one preset
+   * cannot hear a node on the other (AGENTS.md 9.7), so those marks
+   * are not old news: they are wrong.
+   *
+   * Priming starts again too, so the new preset's window is recorded
+   * rather than fired at the reader all at once, as on a first visit.
+   */
+  if (mapState.drawnChannel !== undefined && mapState.drawnChannel !== channel) {
+    mapState.live.clear();
+    mapState.trafficPrimed = false;
+    mapState.tracesPrimed = false;
+  }
+  mapState.drawnChannel = channel;
 
   /*
    * The scope line, which now only ever describes one preset.
@@ -11599,7 +11636,13 @@ function wirePresetSwitch() {
   // list narrowing -- redraws the control and the page under it.
   SonoranPreset.onChange(() => {
     draw();
-    render(currentPage);
+    /*
+     * Queued, not dropped (#384). `render` returns at once while another
+     * draw is in flight, so a switch made during a slow map draw used to
+     * be lost: the old preset's answer landed, and the map kept it under
+     * the new switch until the next Live tick, or for ever with Live off.
+     */
+    navigateRender(currentPage);
   });
   // The list grew or shrank with the same preset chosen: the page is
   // still right, only the switch and the select change.
