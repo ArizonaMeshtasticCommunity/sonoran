@@ -51,3 +51,20 @@ def test_every_ci_database_keeps_its_files_in_ram() -> None:
     source = CONFTEST.read_text(encoding="utf-8")
     assert "container.tmpfs.update(TIMESCALE_TMPFS)" in source
     assert '"/home/postgres/pgdata/data": "rw,uid=1000,gid=1000,mode=0700' in source
+
+
+def test_the_deployment_runs_the_database_that_ci_tested() -> None:
+    """The compose database and the backup image are the CI digest too.
+
+    The backup's pg_dump must have the major version of the server, and
+    a deployment should run the build that CI tested. So two more places
+    name the image: the `timescaledb` service of docker-compose.yml and
+    the `FROM` of tools/backup.Dockerfile. They take the same digest.
+    """
+    ci = _services()["migrations"]["image"]
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    backup = (ROOT / "tools" / "backup.Dockerfile").read_text(encoding="utf-8")
+    found = re.search(r"^FROM\s+(\S+)", backup, re.MULTILINE)
+    assert found, "tools/backup.Dockerfile has no FROM"
+    images = {"compose": compose["services"]["timescaledb"]["image"], "backup": found.group(1)}
+    assert images == {"compose": ci, "backup": ci}, f"CI tests {ci!r}, the deployment runs {images}"

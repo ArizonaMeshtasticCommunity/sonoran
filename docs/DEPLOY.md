@@ -203,6 +203,14 @@ migration's `downgrade` before you roll back past one.
 - A one-off data job (for example `python -m sonoran.ingest.recover`)
   runs with the migration role's URL, in a throwaway container from the
   ingest image. The ingest role cannot read `packet`. Take a dump first.
+- The `timescaledb` service and the `backup` image are pinned by
+  digest, the same digest as the CI database. A change to that digest
+  recreates the database container at the next `docker compose up -d`
+  without `--no-deps`. Plan it as a database restart. Before you deploy
+  a digest, read the installed extension version:
+  `SELECT extversion FROM pg_extension WHERE extname = 'timescaledb';`.
+  The image cannot load a version newer than its own. The comment in
+  `docker-compose.yml` says which version it holds.
 - Do not start an extra database container on a small host. A test
   database next to the live stack can make the kernel stop live
   services when memory runs out.
