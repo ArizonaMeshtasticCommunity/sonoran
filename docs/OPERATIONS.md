@@ -22,10 +22,10 @@ To put a new commit on a deployment, or to roll one back, see
    service is `Up`. A restart count that goes up means a crash loop:
 
    ```bash
-   docker inspect -f '{{.State.Health.Status}} {{.RestartCount}}' $(docker compose ps -q api)
+   docker inspect -f '{{.State.Health.Status}} {{.RestartCount}}' $(docker compose ps -q web)
    ```
 
-   Only `timescaledb`, `api` and `backup` have a healthcheck. `ingest`
+   Only `timescaledb`, `web` and `backup` have a healthcheck. `ingest`
    and `jobs` have none, so read their logs (step 3).
 
 2. **The API answers.** It listens on the loopback address only.
@@ -91,8 +91,8 @@ After a code change, build the image first. See `docs/DEPLOY.md` 3 for
 which service to build for each change:
 
 ```bash
-docker compose build api
-docker compose up -d --no-deps api
+docker compose build web
+docker compose up -d --no-deps web
 ```
 
 Rules:
@@ -100,7 +100,7 @@ Rules:
 - Do not restart `jobs` while a coverage run is in progress. The run
   stops. Wait for `published coverage run` in its log.
 - The static files are hashed when the API starts. A frontend change
-  needs an `api` rebuild.
+  needs a `web` rebuild.
 - Never stop a server with `pkill -f`. See `docs/DEPLOY.md` 7.
 - The optional services need their profile in every command, for
   example `docker compose --profile rf restart rf-ingest`.
@@ -150,7 +150,7 @@ and needs the `timescaledb` container to run.
 1. Stop the services that use the database:
 
    ```bash
-   docker compose stop api ingest jobs
+   docker compose stop web ingest jobs
    ```
 
    Also stop `rf-ingest` and `contrib` if they run.
@@ -263,11 +263,11 @@ Make the jobs container again after each change (section 2).
 - `no matching manifest for linux/arm64`: the image is for
   `linux/amd64` only. Run the stack without it. See "Run without
   mesh-graph" in `README.md`.
-- `mesh-graph.config.toml` is missing: the start command has no config
+- `config/mesh-graph.config.toml` is missing: the start command has no config
   to read, and the container restarts again and again. Docker can also
   make an empty directory with that name in its place. Remove that
   directory, and restore the file from the repository.
-- It runs, but holds no traces: `topic` in `mesh-graph.config.toml` is
+- It runs, but holds no traces: `topic` in `config/mesh-graph.config.toml` is
   not the topic your gateways publish to. Compose replaces only the
   broker, the port and the login in that file.
 - The traceroute page shows no drawing, and `/api/traceroutes/<id>/drawing.svg`
