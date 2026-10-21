@@ -352,7 +352,7 @@ services:
     ports:
       - "${GRAPH_BIND_IP:-127.0.0.1}:${GRAPH_BIND_PORT:-8080}:${GRAPH_PORT:-8080}"
     # Writes the broker, port and login into a copy of the config.
-    # `broker` in mesh-graph.config.toml is replaced by MQTT_HOST, so
+    # `broker` in config/mesh-graph.config.toml is replaced by MQTT_HOST, so
     # the host and port come from the environment like the ingest's do,
     # and are not a second copy of the broker address that can disagree.
     command: ["awk -v host=\"$$MQTT_HOST\" -v port=\"$$MQTT_PORT\" -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^broker[[:space:]]*=/{print \"broker = \\\"\" host \"\\\"\"; next} {print} /^\\[mqtt\\]/{print \"port = \" port; print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"}' /config/mesh-graph.config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]

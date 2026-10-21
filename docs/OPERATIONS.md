@@ -263,11 +263,11 @@ Make the jobs container again after each change (section 2).
 - `no matching manifest for linux/arm64`: the image is for
   `linux/amd64` only. Run the stack without it. See "Run without
   mesh-graph" in `README.md`.
-- `mesh-graph.config.toml` is missing: the start command has no config
+- `config/mesh-graph.config.toml` is missing: the start command has no config
   to read, and the container restarts again and again. Docker can also
   make an empty directory with that name in its place. Remove that
   directory, and restore the file from the repository.
-- It runs, but holds no traces: `topic` in `mesh-graph.config.toml` is
+- It runs, but holds no traces: `topic` in `config/mesh-graph.config.toml` is
   not the topic your gateways publish to. Compose replaces only the
   broker, the port and the login in that file.
 - The traceroute page shows no drawing, and `/api/traceroutes/<id>/drawing.svg`

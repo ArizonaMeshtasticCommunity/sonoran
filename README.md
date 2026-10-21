@@ -101,7 +101,7 @@ Do not leave `CHANNEL_KEYS` empty. An empty value gives no key at all, so
 ingest stores every packet with an unknown port.
 
 The mesh-graph service reads its broker, port and login from `.env`, but
-its topic comes from `mesh-graph.config.toml`. Change `topic` in that file
+its topic comes from `config/mesh-graph.config.toml`. Change `topic` in that file
 to match `MQTT_TOPICS`.
 
 **4. Make the backup directory.** The `backup` service writes to

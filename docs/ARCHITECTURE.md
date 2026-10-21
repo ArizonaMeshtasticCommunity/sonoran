@@ -190,7 +190,7 @@ So a third rule:
 
 The base file's `mesh-graph` command also used to ignore `MQTT_HOST`
 and `MQTT_PORT` and connect to the `broker` written in
-`mesh-graph.config.toml`. It now writes both into the config it runs,
+`config/mesh-graph.config.toml`. It now writes both into the config it runs,
 so the broker is set in one place, the environment, as it is for the
 ingest.
 
