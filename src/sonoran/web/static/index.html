@@ -296,8 +296,7 @@
             The footer link is the one that stayed, because this list is
             the fourteen pages Will named in the order he named them --
             Dashboard through Statistics -- and Settings was never one of
-            them; he asked for it at the bottom of the menu, under the
-            preset switch. The ordering case in
+            them; he asked for it at the bottom of the menu. The ordering case in
             tests/unit/test_nav_and_global_preset.py holds that list to
             exactly those fourteen, so an entry added back here fails a
             test rather than quietly reappearing on the screen.
@@ -339,68 +338,15 @@
           </p>
 
           <!--
-            The preset the whole site is looking at.
-
-            A node on LongFast cannot hear a node on MediumFast, so every
-            page that draws links, coverage, gaps or a channel has to
-            choose one. They each used to ask separately, so the map
-            could be on one preset while gaps was on another. This is
-            that choice, once, for all of them.
-
-            A radio group for two presets, the deployment's default and
-            then MediumFast and LongFast (`presetSwitchSlots` in app.js):
-            a two-option select costs a tap to open before the tap that
-            chooses. Every other preset goes in the
-            "More presets" select under it, with "All presets" first:
-            every preset in one view, because the mesh does not run on
-            one preset yet. Pages that draw one preset (coverage, gaps,
-            the planner) keep the default then and say so below. Firmware 2.8.1 made every
-            preset recognisable (#363), and a third one squeezed into the
-            switch overflowed its slot and cut the last name off. The
-            buttons and the select are built by app.js from the presets
-            actually on offer, so a deployment running something else is
-            not stuck with ours.
-
-            There was a line of explanation under it -- "Every page shows
-            Medium Fast only. Radios on one preset cannot hear the other."
-            Will asked for it to go. It was there to teach the fact that
-            makes the control make sense, and two labelled buttons under a
-            heading that says Preset do not need teaching; the sentence
-            just made the menu wordy. The fact is still in AGENTS.md 9.7
-            and in `preset.js`, where anybody changing this will meet it.
+            The preset switch was here: two buttons, Medium Fast and Long
+            Fast, and a "More" select with every other preset and "All".
+            Will asked for it to go (#383): "I don't like this dropdown on
+            the sidebar and want it gone and the settings to be the only
+            place to change the presets." The Settings page's boxes are
+            the control now. Each page that the preset narrows says which
+            preset it shows under its heading, with a link to Settings
+            (`drawPresetScope` in app.js).
           -->
-          <div class="menu-field">
-            <!--
-              The row holds the word and its glossary button side by side
-              (AGENTS.md 3B). The button goes beside the word, not inside
-              it, because the radio group takes its name from this span.
-            -->
-            <div class="menu-field-head">
-              <span class="menu-field-label" id="preset-label" data-term="modem-preset">Preset</span>
-            </div>
-            <div class="preset-switch" role="radiogroup" aria-labelledby="preset-label"
-                 data-preset-switch></div>
-            <select class="preset-more" data-preset-more aria-label="More presets" hidden></select>
-            <!--
-              Says so when the page in view ignores the preset (#232). A note
-              rather than a dimmed control: a disabled-looking switch says
-              "you cannot change this", which is false -- it is global, so it
-              can always be changed and always takes effect where it applies.
-              It is irrelevant to this page, not inoperable. Which pages those
-              are is declared in `PRESET_PAGES`, never inferred; the comment
-              there records the three ways inferring it got a page wrong.
-            -->
-            <p class="preset-scope" data-preset-scope hidden></p>
-            <!--
-              Several presets are chosen on the Settings page (#383), whose
-              link is the next row down. Not an option of the select above:
-              an arrow key on a closed select changes its value and fires
-              `change`, so an option that navigated went off while a
-              keyboard reader passed it. Not a second link either: one
-              route to Settings is a rule (Will, "there is a duplicate
-              settings button", `test_there_is_exactly_one_route_to_the_settings_page`).
-            -->
-          </div>
 
           <!--
             Appearance moved to the settings page (Will, 2026-09-26), and
@@ -1051,7 +997,7 @@
           <div class="page-head">
             <div>
               <h2>Coverage gaps</h2>
-              <p class="sub" data-sub-fold>Which nodes the mesh is not carrying well, measured from the packets we hold. Shows the preset chosen in the menu: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
+              <p class="sub" data-sub-fold data-term="modem-preset long-fast medium-fast">Which nodes the mesh is not carrying well, measured from the packets we hold. Shows the preset chosen in Settings: a node on Long Fast cannot hear a node on Medium Fast, so there is no merged view.</p>
             </div>
           </div>
 
@@ -2012,7 +1958,7 @@
                 <h2 data-chat-title>Chat</h2>
                 <span class="chat-count" data-chat-count hidden></span>
               </div>
-              <p class="sub" data-chat-sub data-sub-fold>Messages from the last 7 days. One section for each detected channel on the preset chosen in the menu, grouped by what it is for. New names land in Custom.</p>
+              <p class="sub" data-chat-sub data-sub-fold data-term="modem-preset">Messages from the last 7 days. One section for each detected channel on the presets chosen in Settings, grouped by what it is for. New names land in Custom.</p>
             </div>
             <div class="controls">
               <!--
@@ -2268,8 +2214,8 @@
                 browser under one key, that no request carries them and
                 the server never sees them, that they therefore do not
                 follow you to another device or survive clearing site
-                data, and that the preset is chosen in the menu rather
-                than here. A panel with no control in it, on a page of
+                data, and that the preset was chosen in the menu rather
+                than here (it is chosen here since #383). A panel with no control in it, on a page of
                 controls -- which is also why the grid had a lone box on
                 a second row.
 
@@ -2283,7 +2229,7 @@
                 * `localStorage` over cookies, and the API keeping SI:
                   settings.js's header comment and
                   docs/design/2026-09-26-ux-overhaul.md §2.3.
-                * why the preset is in the menu and not on this page --
+                * why the preset has its own store and not settings.js --
                   it changes what the data IS, not how it is written:
                   settings.js's header comment and AGENTS.md 9.7.
               -->
@@ -2373,9 +2319,9 @@
             </div>
 
             <!--
-              Every modem preset, and several at once (#383). The menu's
-              switch keeps the two this mesh runs for one tap; this is where
-              there is room for a box per preset. It changes what the data
+              Every modem preset, and several at once (#383). This is the
+              only place to change them: the menu's switch is gone, at
+              Will's request. It changes what the data
               IS, not how it is written, so the store is `preset.js`, not
               `settings.js`. Built by app.js from `SonoranPreset.options`.
               The sentence says the one thing a box cannot: the pages that
@@ -2383,7 +2329,7 @@
             -->
             <div class="panel settings-presets">
               <h3 id="settings-presets-label">Modem presets</h3>
-              <p class="sub" data-term="modem-preset">The pages show what was heard on the presets you choose. The map,
+              <p class="sub" data-term="modem-preset">The pages show what was heard on the presets you choose here. The map,
                 the graph, coverage, gaps and the planner draw one of them at a time, because
                 nodes on different presets cannot hear each other.</p>
               <div class="preset-boxes" role="group" aria-labelledby="settings-presets-label"

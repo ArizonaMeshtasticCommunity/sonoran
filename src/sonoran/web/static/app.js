@@ -2889,6 +2889,8 @@ async function linkChannelOptions(page) {
       .map((item) => String(item.preset));
     if (presets.length) SonoranPreset.setAvailable(presets);
   }
+  // What the map draws, for the line under its heading (part of #383).
+  page.dataset.presetShown = everyPreset ? '' : linkChannel;
   return everyPreset ? '' : linkChannel;
 }
 
@@ -4521,6 +4523,8 @@ function graphTabs(page, all) {
   // "All presets": one graph of every channel. The API holds them all
   // together without `channel`, and the heading says so.
   if (window.SonoranPreset && SonoranPreset.isAll()) graphChannel = '';
+  // What the graph draws, for the line under its heading (part of #383).
+  page.dataset.presetShown = graphChannel;
   // Only the presets, and only those with links, so the menu never offers
   // a choice that opens an empty graph here.
   if (window.SonoranPreset) {
@@ -5651,7 +5655,7 @@ let nodeFacets = null;
  * channel from the sidebar (#301). Will (2026-09-27): count only what the
  * reader changed. A toolbar control counts when it differs from its
  * default, a panel filter counts when it is set, and the preset never
- * counts, because the sidebar is where the preset shows.
+ * counts, because the line under the heading is where the preset shows.
  *
  * Counted by query key, so a filter that both the toolbar and the panel
  * can set ("Heard within", role, gateway) counts once. `gaps_preset`
@@ -8983,7 +8987,7 @@ PAGES.chat = async (page) => {
   if (window.location.hash.startsWith('#chat?')) window.history.replaceState(null, '', '#chat');
   chatHead(page, null,
     `Messages from the last ${CHAT_OVERVIEW_WINDOW}. One section for each detected channel `
-    + 'on the preset chosen in the menu, grouped by what it is for. New names land in Custom.');
+    + 'on the presets chosen in Settings, grouped by what it is for. New names land in Custom.');
   const body = $('[data-chat-body]', page);
   /*
    * The server keeps the messages carried on the menu's preset (#313).
@@ -9570,7 +9574,7 @@ PAGES.firehose = async (page) => {
     }
     if (preset) {
       refused.push(`${portnum ? 'Or the' : 'The'} server does not know the preset `
-        + `${menuPresetWords()}. Choose another in the menu.`);
+        + `${menuPresetWords()}. Choose another in Settings.`);
     }
     return replace(target, failure(new Error(refused.join(' ') || 'The server refused this filter.')));
   }
@@ -11427,31 +11431,75 @@ function presetAppliesTo(name) {
 }
 
 /*
- * Say so, next to the switch, when the page in view ignores it.
+ * Under the heading of a page the preset narrows, say which preset it
+ * shows and where to change it (part of #383).
  *
- * A NOTE and not a dimmed control, which is what the issue suggested. A
- * disabled-looking radio group says "you cannot change this", and that is
- * false: the reader can change it here and it takes effect everywhere it
- * applies, including the page they go to next. The switch is global, so it
- * is never inoperable -- it is only irrelevant to what is currently on
- * screen, and those are different sentences. Trivially swapped for dimming
- * if Tyler would rather have that.
+ * This was a note under the menu's preset switch. Will asked for the
+ * switch to go ("the settings to be the only place to change the
+ * presets"), and then nothing on a page said which preset it showed or
+ * where to change it (AGENTS.md 3B). So the note is on the page now, one
+ * line, with a link to Settings:
+ *
+ * - a page that draws one preset while several or all are chosen
+ *   (`ONE_PRESET_PAGES` under "All" or several, `LINK_PRESET_PAGES` under
+ *   several) says which: "Showing Medium Fast. This page shows one preset
+ *   at a time." The words are those the issue thread asked for;
+ * - any other page the preset narrows names it: "Preset: Medium Fast".
+ *
+ * No line under "All presets" on a page that shows every preset, and none
+ * on a page the preset does not reach: there is nothing to say. Not on the
+ * planner either: its own "Modem preset" box names the preset of the
+ * prediction, and the reader may change that box without changing the
+ * site's choice, so a second line could contradict it. Not on Settings,
+ * which is the control.
  */
+function presetScopeNote(page) {
+  let note = $('[data-preset-scope]', page);
+  if (note) return note;
+  const head = $('.page-head', page);
+  if (!head) return null;
+  note = el('p', { class: 'preset-scope', 'data-preset-scope': '' });
+  head.after(note);
+  return note;
+}
+
 function drawPresetScope(name) {
-  const note = $('[data-preset-scope]');
-  if (!note) return;
-  const applies = presetAppliesTo(name);
-  // Under "All presets" a page that draws one preset says which one it
-  // drew, so the reader does not take one mesh for the whole state.
   const store = window.SonoranPreset;
-  const several = Boolean(store && store.isSeveral && store.isSeveral());
-  const one = applies && Boolean(store)
+  const page = $(`[data-page="${name}"]`);
+  if (!page || !store) return;
+  const applies = presetAppliesTo(name) && name !== 'planner' && name !== 'settings';
+  const several = Boolean(store.isSeveral && store.isSeveral());
+  /*
+   * The preset the page reports it drew, when it reports one: the map,
+   * the graph and coverage can fall back to another preset (a link that
+   * names one, a preset with no links, a run without it). '' means it
+   * drew every preset. Read again after the draw, from `render`.
+   */
+  const reported = page.hasAttribute('data-preset-shown') ? page.dataset.presetShown : null;
+  const drawn = reported ?? SonoranPreset.single();
+  const elsewhere = Boolean(reported) && !store.isAll() && !store.selected().includes(reported);
+  const one = applies && Boolean(drawn)
     && ((ONE_PRESET_PAGES.has(name) && (store.isAll() || several))
-      || (LINK_PRESET_PAGES.has(name) && several));
-  note.hidden = applies && !one;
-  note.textContent = one
-    ? `Shows ${SonoranLabels.presetLabel(SonoranPreset.single())} only. This page draws one preset.`
-    : applies ? '' : 'Not used on this page.';
+      || (LINK_PRESET_PAGES.has(name) && (several || (store.isAll() && Boolean(reported))))
+      || elsewhere);
+  const narrowed = applies && reported !== ''
+    && (one || !store.isAll() || ONE_PRESET_PAGES.has(name));
+  const existing = $('[data-preset-scope]', page);
+  if (!narrowed) {
+    if (existing) existing.hidden = true;
+    return;
+  }
+  const note = existing || presetScopeNote(page);
+  if (!note) return;
+  const chosen = reported ? SonoranLabels.presetLabel(reported) : menuPresetWords();
+  // The glossary button goes beside the word "preset", not beside the link.
+  const word = (text) => el('span', { 'data-term': 'modem-preset', text });
+  note.hidden = false;
+  replace(note, ...(one
+    ? [`Showing ${SonoranLabels.presetLabel(drawn)}. This page shows one `, word('preset'),
+      ' at a time. ', el('a', { href: '#settings', text: 'Change it in Settings' })]
+    : [word('Preset:'), ` ${chosen || SonoranLabels.presetLabel(drawn)} · `,
+      el('a', { href: '#settings', text: 'Change in Settings' })]));
 }
 
 /*
@@ -11478,6 +11526,9 @@ async function navigateRender(name) {
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
+  // A page reports the preset it drew while it draws (the map, the graph,
+  // coverage). Until then the line says what the store would draw.
+  page.removeAttribute('data-preset-shown');
   drawPresetScope(name);
   loading = true;
   try {
@@ -11489,6 +11540,8 @@ async function render(name) {
     setStatus('down', 'Update failed');
   } finally {
     loading = false;
+    // Again after the draw: a page may have reported the preset it drew.
+    drawPresetScope(name);
     markScrollableTables(page);
     revealHints(page);
     // A render can restore a control from the address, or rewrite a
@@ -11681,19 +11734,6 @@ async function route() {
  * the same way.
  */
 /*
- * The global preset selector in the menu footer.
- *
- * Builds one radio button per preset on offer and re-renders the page in
- * view when the choice changes. The pages themselves do not subscribe:
- * they read `SonoranPreset.current()` (most of them through
- * `SonoranLabels.preferredPreset`) while they draw, so re-drawing is all
- * that is needed and there is no second copy of the choice to keep in
- * step.
- *
- * A radio group rather than a `<select>`: two options, one word each, and
- * a select costs a tap to open before the tap that chooses.
- */
-/*
  * The settings page.
  *
  * One radio group per setting, built from `SonoranSettings.options` so the
@@ -11727,7 +11767,8 @@ PAGES.settings = async (page) => {
  * reader may choose more than one. Ticking a box adds that preset and
  * clearing it takes it out; the last one cannot be cleared, because no
  * preset at all is a site with nothing on any page. "All presets" ticks
- * every box. The menu's buttons still choose one preset alone.
+ * every box. This is the only control for the presets (part of #383):
+ * one preset alone is chosen by clearing the others.
  */
 function drawPresetBoxes(page) {
   const holder = $('[data-preset-boxes]', page);
@@ -11840,140 +11881,27 @@ function applyTheme(mode) {
   if (tint && colour) tint.setAttribute('content', colour);
 }
 
-/* "MediumFast" -> "MF", for the collapsed sidebar (#300). A name with
-   no capitals keeps its first two letters rather than becoming one. */
-function presetInitials(name) {
-  const words = SonoranLabels.presetLabel(name).split(/\s+/).filter(Boolean);
-  if (words.length > 1) return words.map((word) => word[0].toUpperCase()).join('').slice(0, 3);
-  return (words[0] || '').slice(0, 2);
-}
-
-/* How many presets the switch shows as buttons. The rest go in the
-   "More presets" select, because a switch slot is too narrow for a
-   third name. */
-const PRESET_SWITCH_SLOTS = 2;
-
 /*
- * The presets on the switch's buttons: the deployment's default, then
- * the two this mesh runs, then whatever else is offered, in that order.
+ * Follow a change of preset, from the Settings page or another tab.
  *
- * Fixed, not the first two of the list on offer. That list comes from
- * several endpoints, and the channel list sorts by traffic: on a busy
- * LongTurbo day LongFast would drop into the select, and the switch
- * would change between pages.
+ * The menu's preset switch was built here, and it also did the one thing
+ * every page needs: redraw the page in view when the preset changes. The
+ * switch is gone (part of #383: "the settings to be the only place to
+ * change the presets"), and this half stays. The pages do not subscribe
+ * themselves: they read the store while they draw, so a redraw is all
+ * that is needed.
  */
-function presetSwitchSlots(offered) {
-  const configured = (window.SONORAN && window.SONORAN.defaultPreset) || '';
-  const wanted = [configured, ...SonoranPreset.FALLBACK, ...offered];
-  return [...new Set(wanted.filter((name) => name && offered.includes(name)))]
-    .slice(0, PRESET_SWITCH_SLOTS);
-}
-
-function wirePresetSwitch() {
-  const holder = $('[data-preset-switch]');
-  if (!holder || !window.SonoranPreset) return;
-  const more = $('[data-preset-more]');
-
-  const draw = () => {
-    // With several chosen (#383) no single button is the choice, so none
-    // is lit, and the select names how many are chosen.
-    const several = Boolean(SonoranPreset.isSeveral && SonoranPreset.isSeveral());
-    const current = several ? null : SonoranPreset.current();
-    const offered = SonoranPreset.options();
-    const options = presetSwitchSlots(offered);
-    const extras = offered.filter((name) => !options.includes(name));
-    // The chosen preset is in the select, so no button is chosen and
-    // the thumb hides. The first button keeps the Tab stop.
-    const pinned = options.includes(current);
-    holder.toggleAttribute('data-extra', !pinned);
-    /*
-     * The thumb's size and position, for the CSS (§3.5).
-     *
-     * CSS cannot count its own children or say which one has a class, so
-     * the two numbers it needs are published here. The index is clamped at
-     * 0: `indexOf` answers -1 for a preset that is no longer on offer,
-     * and -1 would park the thumb one whole position off the left of the
-     * track -- visible, wrong, and pointing at nothing.
-     */
-    holder.style.setProperty('--preset-count', String(Math.max(1, options.length)));
-    holder.style.setProperty('--preset-index', String(Math.max(0, options.indexOf(current))));
-    replace(holder, options.map((name) => el('button', {
-      type: 'button',
-      role: 'radio',
-      class: `preset-choice${name === current ? ' active' : ''}`,
-      'aria-checked': String(name === current),
-      /*
-       * Only the chosen button is reachable by Tab, and the arrow keys
-       * move between them. That is how a radio group behaves, and a row
-       * of buttons that each take a tab stop is the usual way this
-       * control is got wrong.
-       */
-      tabindex: name === current || (!pinned && name === options[0]) ? '0' : '-1',
-      onclick: () => { if (SonoranPreset.set(name)) draw(); },
-      onkeydown: (event) => {
-        const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
-        const step = keys[event.key];
-        if (!step) return;
-        event.preventDefault();
-        const list = options;
-        // With the chosen preset in the select, Right goes to the first
-        // button and Left to the last, as from just outside the group.
-        const from = pinned ? list.indexOf(current) : (step > 0 ? -1 : 0);
-        const next = list[(from + step + list.length) % list.length];
-        if (SonoranPreset.set(next)) draw();
-        const moved = $(`[data-preset-switch] .preset-choice.active`);
-        if (moved) moved.focus();
-      },
-    },
-    /*
-     * Two spellings (#300). The full name is the button's text and its
-     * accessible name. The initials are for the collapsed sidebar, which
-     * is about 52 px wide: there the full name goes off the screen and
-     * comes back as a label on hover and focus, and the initials are
-     * what shows. `aria-hidden`, so a screen reader hears "Medium Fast"
-     * once and never "M F".
-     */
-    el('span', { class: 'nav-label', text: SonoranLabels.presetLabel(name) }),
-    el('span', { class: 'preset-short', 'aria-hidden': 'true', text: presetInitials(name) }))));
-
-    if (!more) return;
-    // Always shown: "All presets" is always a choice.
-    more.hidden = false;
-    more.classList.toggle('active', !pinned);
-    replace(more,
-      // "More", not "More presets": on a phone the select shares the
-      // switch's row. Its accessible name says the rest.
-      el('option', {
-        value: '',
-        text: several ? `${count(SonoranPreset.selected().length)} presets` : 'More',
-      }),
-      el('option', { value: SonoranPreset.ALL, text: 'All' }),
-      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
-    more.value = pinned || several ? '' : current;
-  };
-
-  if (more) {
-    more.addEventListener('change', () => {
-      if (more.value && SonoranPreset.set(more.value)) draw();
-    });
-  }
-
-  draw();
-  // A change from anywhere -- another tab's storage, or the available
-  // list narrowing -- redraws the control and the page under it.
+function wirePresetFollow() {
+  if (!window.SonoranPreset) return;
   SonoranPreset.onChange(() => {
-    draw();
     /*
      * Queued, not dropped (#384). `render` returns at once while another
-     * draw is in flight, so a switch made during a slow map draw used to
+     * draw is in flight, so a change made during a slow map draw used to
      * be lost: the old preset's answer landed, and the map kept it under
-     * the new switch until the next Live tick, or for ever with Live off.
+     * the new choice until the next Live tick, or for ever with Live off.
      */
     navigateRender(currentPage);
   });
-  // The list grew or shrank with the same preset chosen: the page is
-  // still right, only the switch and the select change.
-  if (SonoranPreset.onOptionsChange) SonoranPreset.onOptionsChange(draw);
 
   /*
    * A setting changed in ANOTHER tab. `applySetting` already redraws for
@@ -12017,7 +11945,7 @@ function wireTheme() {
 }
 
 function wire() {
-  wirePresetSwitch();
+  wirePresetFollow();
   wireTheme();
   wireFamilyFilter();
   for (const button of $$('[data-chat-view-choice]')) {
@@ -12436,8 +12364,8 @@ function wireNav() {
    * Measured before the fix -- aria-expanded stayed "true" at 320 px.
    *
    * `#site-menu` holds the nav AND the footer, so any link in either
-   * closes it. The preset switch is buttons rather than links and the
-   * status line has no anchor, so nothing else in here can match.
+   * closes it. The status line has no anchor, so nothing else in here
+   * can match.
    */
   menu.addEventListener('click', (event) => {
     if (narrow.matches && event.target.closest('a')) setOpen(false);

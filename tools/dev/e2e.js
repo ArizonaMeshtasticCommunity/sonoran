@@ -193,6 +193,19 @@ const open = async (page, hash, settle = 3500) => {
  * `Runtime.callFunctionOn` and is not subject to the policy, which is
  * why every journey in this file uses it.
  */
+/*
+ * The words of the preset line under a page heading, without its glossary
+ * button and panel (part of #383). `textContent` would read the panel's
+ * explanation into the sentence.
+ */
+const PRESET_LINE = (name) => {
+  const line = document.querySelector(`[data-page="${name}"] [data-preset-scope]`);
+  if (!line || line.hidden) return '';
+  const copy = line.cloneNode(true);
+  for (const extra of copy.querySelectorAll('.hint-open, .hint-pop')) extra.remove();
+  return copy.textContent.replace(/\s+/g, ' ').trim();
+};
+
 async function waitFor(page, condition, timeout = 240000, step = 500, arg = undefined) {
   const until = Date.now() + timeout;
   for (;;) {
@@ -2101,8 +2114,9 @@ async function main() {
      * The page's own preset picker (`[data-coverage-preset]`) is gone: the
      * preset is the menu's, for every page (AGENTS.md 9.7). This used to
      * select the removed element, which only passed because a preview has
-     * no published run (#299). It now drives the menu's switch, and the
-     * layer drop-down that replaced the three pills.
+     * no published run (#299). It now drives the store that the Settings
+     * page sets (the menu's switch is gone, part of #383), and the layer
+     * drop-down that replaced the three pills.
      */
     const layer = page.locator('[data-coverage-layers]');
     if (!published) {
@@ -2111,9 +2125,9 @@ async function main() {
       must(said.trim().length > 40, 'no run, and the page said nothing about it');
       return 'no run published; the page says so';
     }
-    const presets = page.locator('[data-preset-switch] [role="radio"]');
-    const count = await presets.count();
-    must(count > 0, 'a run is published but the menu offers no preset');
+    const runPresets = await page.evaluate(() => window.SonoranPreset.options());
+    const count = runPresets.length;
+    must(count > 0, 'a run is published but no preset is on offer');
     // The layer is in the settings panel now (#334).
     await page.locator('[data-coverage-options]').click();
     const layers = await layer.locator('option').count();
@@ -2124,16 +2138,20 @@ async function main() {
     const title = (await page.locator('[data-coverage-legend-title]').textContent()).trim();
     const chosen = (await layer.locator('option:checked').textContent()).trim();
     must(title === chosen, `the legend says "${title}" after choosing "${chosen}"`);
-    if (count === 2) {
+    {
       // Switch, then back: the choice is global and outlives this page.
-      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
-      await page.waitForTimeout(4000);
-      must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away on a preset switch');
-      await page.locator('[data-preset-switch] [aria-checked="false"]').click();
-      await page.waitForTimeout(1000);
+      const before = await page.evaluate(() => window.SonoranPreset.current());
+      const other = ['MediumFast', 'LongFast'].find((name) => name !== before && runPresets.includes(name));
+      if (other) {
+        await page.evaluate((name) => window.SonoranPreset.set(name), other);
+        await page.waitForTimeout(4000);
+        must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away on a preset switch');
+        await page.evaluate((name) => window.SonoranPreset.set(name), before);
+        await page.waitForTimeout(1000);
+      }
     }
     must((await page.locator('#coverage-map').count()) > 0, 'the coverage map went away');
-    return `${count} presets in the menu, ${layers} layers, legend follows the layer`;
+    return `${count} presets on offer, ${layers} layers, legend follows the layer`;
   });
 
   await journey(context, 'page heads keep their controls on the title row (#299)', async (page) => {
@@ -4226,8 +4244,9 @@ async function main() {
     }
     must((await page.getByRole('link', { name: 'Dashboard', exact: true }).getAttribute('aria-current')) === 'page',
       'the current page lost aria-current in the rail');
-    const presets = page.getByRole('radio');
-    must((await presets.count()) >= 1 && await presets.first().isVisible(), 'the preset is not in the rail');
+    // The preset switch left the rail with the rest of the menu (part of
+    // #383: the Settings page is the only place to change the presets).
+    must((await page.locator('.sidebar').getByRole('radio').count()) === 0, 'a preset switch is back in the rail');
 
     // A label on hover, and on keyboard focus, beside the rail.
     const label = (nav) => page.evaluate((key) => {
@@ -4476,15 +4495,6 @@ async function main() {
       if (/\/api\/(packets|chat\/overview|nodes|map\/nodes)\?/.test(request.url())) asked.push(new URL(request.url()));
     });
     const last = (path) => [...asked].reverse().find((url) => url.pathname.endsWith(path));
-    const switchState = () => page.evaluate(() => ({
-      checked: [...document.querySelectorAll('[data-preset-switch] [role="radio"]')]
-        .filter((button) => button.getAttribute('aria-checked') === 'true')
-        .map((button) => button.querySelector('.nav-label').textContent.trim()),
-      more: (() => {
-        const select = document.querySelector('[data-preset-more]');
-        return select.options[select.selectedIndex].textContent;
-      })(),
-    }));
     const boxes = () => page.evaluate(() => Object.fromEntries(
       [...document.querySelectorAll('[data-preset-boxes] input')]
         .map((input) => [input.value, input.checked])));
@@ -4498,8 +4508,6 @@ async function main() {
     let got = await boxes();
     const ticked = Object.keys(got).filter((name) => got[name]);
     must(ticked.join() === 'MediumFast', `a fresh browser starts on ${ticked.join(', ')}`);
-    let state = await switchState();
-    must(state.checked.join() === 'Medium Fast', `the menu lights ${state.checked.join(', ') || 'nothing'}`);
 
     // "Add all of the other presets for people to select."
     for (const name of ['LongFast', 'LongSlow', 'LongMod', 'LongTurbo', 'MediumFast', 'MediumSlow',
@@ -4512,9 +4520,6 @@ async function main() {
     await tick('LongFast');
     got = await boxes();
     must(got.MediumFast && got.LongFast && !got.ShortFast, `ticking Long Fast left ${JSON.stringify(got)}`);
-    state = await switchState();
-    must(state.checked.length === 0 && state.more === '2 presets',
-      `the menu does not say two are chosen: ${JSON.stringify(state)}`);
     const kept = await page.evaluate(() => localStorage.getItem('sonoran.preset'));
     must(kept === 'MediumFast,LongFast', `the choice was kept as ${kept}`);
 
@@ -4534,11 +4539,9 @@ async function main() {
     const map = last('/api/map/nodes');
     must(map && map.searchParams.get('channel') === 'MediumFast',
       `the map did not draw Medium Fast alone: ${map}`);
-    const note = await page.evaluate(() => {
-      const scope = document.querySelector('[data-preset-scope]');
-      return scope.hidden ? '' : scope.textContent;
-    });
-    must(/Shows Medium Fast only/.test(note), `the map does not say what it drew: "${note}"`);
+    const note = await page.evaluate(PRESET_LINE, 'map');
+    must(/Showing Medium Fast\. This page shows one preset at a time\./.test(note),
+      `the map does not say what it drew: "${note}"`);
     // Positive control for the quiet preset below: Medium Fast draws dots.
     must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
       && window.SonoranMap.marks.size > 0, 10000), 'the map drew no Medium Fast node');
@@ -4561,29 +4564,6 @@ async function main() {
       `the map does not say Short Turbo is empty: "${shown.legend.slice(-120)}"`);
     await page.evaluate(() => window.SonoranPreset.setMany(['MediumFast', 'LongFast']));
 
-    // Arrowing through the menu's "More" select must not leave the page.
-    // On a closed select an arrow key changes the value and fires
-    // `change`, so an option that navigates went off on the way past.
-    // Chromium on macOS opens the list on an arrow key instead, so the
-    // real keys are pressed AND the Linux and Windows sequence -- one
-    // value and one `change` per step -- is played on the element.
-    await page.locator('[data-preset-more]').focus();
-    const steps = await page.locator('[data-preset-more] option').count();
-    for (let step = 0; step < steps; step += 1) await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Escape');
-    await page.evaluate(() => {
-      const select = document.querySelector('[data-preset-more]');
-      for (let index = 0; index < select.options.length; index += 1) {
-        const live = document.querySelector('[data-preset-more]');
-        live.selectedIndex = index;
-        live.dispatchEvent(new Event('change'));
-      }
-    });
-    await page.waitForTimeout(300);
-    const after = await page.evaluate(() => location.hash);
-    must(after === '#map', `arrowing through the More select went to ${after}`);
-    await page.evaluate(() => window.SonoranPreset.setMany(['MediumFast', 'LongFast']));
-
     // The last preset cannot be cleared.
     await open(page, 'settings', 800);
     await tick('MediumFast');
@@ -4596,13 +4576,13 @@ async function main() {
     const heard = await page.locator('[data-status-live]').textContent();
     must(/At least one preset/.test(heard), `the refusal was not announced: "${heard}"`);
 
-    // A button in the menu chooses one preset alone again.
-    await tick('ShortFast');
-    await page.locator('[data-preset-switch] [role="radio"]', { hasText: 'Medium Fast' }).click();
-    await waitFor(page, () => !loading, 10000, 100);
+    // One preset alone again, from the Settings page: the menu has no
+    // buttons for it any more (part of #383).
+    await tick('MediumFast');
+    await tick('LongFast');
     got = await boxes();
     const alone = Object.keys(got).filter((name) => got[name]);
-    must(alone.join() === 'MediumFast', `the Medium Fast button left ${alone.join(', ')}`);
+    must(alone.join() === 'MediumFast', `ticking and clearing left ${alone.join(', ')}`);
 
     // An old stored value, one name, still loads.
     // A reload, not a `goto`: the page is on #settings already, and a
@@ -4614,9 +4594,105 @@ async function main() {
     const old = Object.keys(got).filter((name) => got[name]);
     must(old.join() === 'LongFast', `an old stored "LongFast" loaded as ${old.join(', ')}`);
     return `${offered} presets offered, Medium Fast alone by default, two chosen reach the firehose `
-      + 'as one preset=, the map draws one and says so, the last box stays, an old value loads';
+      + 'as one preset=, the map draws one and says so, the last box stays, one alone again, an old value loads';
   });
   await several.close();
+
+  /*
+   * The Settings page is the only place to change the presets (part of
+   * #383). Will: "I don't like this dropdown on the sidebar and want it
+   * gone and the settings to be the only place to change the presets."
+   *
+   * The menu, on a desktop and in the phone's More, holds no preset
+   * control. A page still says which preset it shows and links to
+   * Settings, and a choice made there still changes what the map draws.
+   * The positive control is the first draw: Medium Fast, said in words.
+   */
+  const settingsOnly = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(settingsOnly, 'the menu has no preset switch, and Settings changes the map (part of #383)', async (page) => {
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/map\/nodes\?/.test(request.url())) asked.push(new URL(request.url()));
+    });
+    const last = () => asked[asked.length - 1];
+    const menuControls = () => page.evaluate(() => {
+      const side = document.querySelector('.sidebar');
+      return {
+        controls: side.querySelectorAll('[data-preset-switch], [data-preset-more], [role="radiogroup"], select, input').length,
+        word: /\bpresets?\b/i.test(side.innerText),
+      };
+    });
+    await open(page, 'map', 3000);
+    let menu = await menuControls();
+    must(menu.controls === 0, `the menu still holds ${menu.controls} preset controls`);
+    must(!menu.word, 'the menu still names a preset');
+
+    const line = page.locator('[data-page="map"] [data-preset-scope]');
+    must(last() && last().searchParams.get('channel') === 'MediumFast', `the map did not draw Medium Fast: ${last()}`);
+    must(await line.isVisible(), 'the map does not say which preset it shows');
+    let said = await page.evaluate(PRESET_LINE, 'map');
+    must(/Preset: Medium Fast/.test(said) && /Change in Settings/.test(said), `the map says "${said}"`);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0 && !loading, 15000, 100), 'the map drew no Medium Fast node');
+    const before = await page.evaluate(() => [...window.SonoranMap.marks.keys()].sort().join());
+
+    // The line's link is the way to Settings.
+    await line.locator('a', { hasText: 'Change in Settings' }).click();
+    must(await waitFor(page, () => location.hash === '#settings'
+      && document.querySelector('[data-preset-boxes] input'), 5000, 100), 'the link did not open Settings');
+    for (const value of ['LongFast', 'MediumFast']) {
+      await page.locator(`[data-preset-boxes] input[value="${value}"]`).click();
+      await waitFor(page, () => !loading, 10000, 100);
+    }
+    const kept = await page.evaluate(() => localStorage.getItem('sonoran.preset'));
+    must(kept === 'LongFast', `Settings kept ${kept}, not Long Fast alone`);
+
+    await page.evaluate(() => { location.hash = '#map'; });
+    let followed = false;
+    for (let tries = 0; tries < 60 && !followed; tries += 1) {
+      followed = await page.evaluate(() => location.hash === '#map' && !loading)
+        && /Long Fast/.test(await page.evaluate(PRESET_LINE, 'map'));
+      if (!followed) await page.waitForTimeout(250);
+    }
+    must(followed, 'the map line does not follow the choice made in Settings');
+    await page.waitForTimeout(800);
+    must(last() && last().searchParams.get('channel') === 'LongFast', `the map did not ask for Long Fast: ${last()}`);
+    said = await page.evaluate(PRESET_LINE, 'map');
+    must(/Preset: Long Fast/.test(said), `the map says "${said}" after Long Fast was chosen`);
+    const after = await page.evaluate(() => [...window.SonoranMap.marks.keys()].sort().join());
+    must(after !== before, 'the map drew the same nodes on Long Fast as on Medium Fast');
+
+    // A page the preset does not reach carries no line.
+    await open(page, 'rf', 1200);
+    const rf = Boolean(await page.evaluate(PRESET_LINE, 'rf'));
+    must(!rf, 'the RF page, which the preset does not reach, names one');
+    return `no preset control in the menu; map line "${said}"; Settings moved the map to Long Fast`;
+  });
+  await settingsOnly.close();
+
+  const settingsPhone = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  });
+  await journey(settingsPhone, 'the phone menu has no preset switch (part of #383)', async (page) => {
+    await open(page, 'dashboard', 1500);
+    await page.locator('[data-tab-more]').tap();
+    await page.waitForTimeout(400);
+    const got = await page.evaluate(() => {
+      const side = document.querySelector('.sidebar');
+      return {
+        open: [...document.querySelectorAll('#site-nav a[data-nav]')].some((link) => link.offsetParent),
+        controls: side.querySelectorAll('[data-preset-switch], [data-preset-more], [role="radiogroup"], select, input').length,
+        word: /\bpresets?\b/i.test(side.innerText),
+        settings: Boolean(document.querySelector('.menu-settings-link').offsetParent),
+      };
+    });
+    must(got.open, 'More opened no menu, so this proves nothing');
+    must(got.controls === 0, `the phone menu still holds ${got.controls} preset controls`);
+    must(!got.word, 'the phone menu still names a preset');
+    must(got.settings, 'the phone menu has no link to Settings');
+    return 'More opens the menu, with Settings and no preset control';
+  });
+  await settingsPhone.close();
 
   /*
    * An iPad on its side (#267). 1112 px is wider than every phone
@@ -4643,17 +4719,16 @@ async function main() {
         sidebar: getComputedStyle(document.querySelector('.sidebar')).position,
         nav: tall('#site-nav a'),
         hints: tall('[data-page="dashboard"] .hint-open'),
-        preset: tall('.preset-choice'),
       };
     });
     must(got.coarse, 'the tablet context does not match (pointer: coarse), so this proves nothing');
     must(got.sidebar === 'sticky', `the sidebar is ${got.sidebar}, so this is not the desktop layout`);
-    for (const [name, heights] of [['nav link', got.nav], ['? button', got.hints], ['preset choice', got.preset]]) {
+    for (const [name, heights] of [['nav link', got.nav], ['? button', got.hints]]) {
       must(heights.length > 0, `no ${name} on the page to measure`);
       const low = Math.min(...heights);
       must(low >= 44, `a ${name} is ${low} px tall on a touch screen, under 44`);
     }
-    return `${got.nav.length} nav links, ${got.hints.length} ? buttons, ${got.preset.length} preset choices, all 44 px or more`;
+    return `${got.nav.length} nav links, ${got.hints.length} ? buttons, all 44 px or more`;
   });
 
   await journey(context, 'a mouse keeps the desktop sizes (#267)', async (page) => {
@@ -4809,7 +4884,7 @@ async function main() {
   const tall = await browser.newContext({
     viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
   });
-  await journey(tall, 'the drawer shows the preset and Settings without a scroll (#279)', async (page) => {
+  await journey(tall, 'the drawer shows Settings without a scroll (#279)', async (page) => {
     await open(page, 'dashboard', 2500);
     await page.locator('[data-nav-toggle]').click();
     await page.waitForTimeout(300);
@@ -4824,7 +4899,6 @@ async function main() {
       const barTop = bar && !bar.hidden ? bar.getBoundingClientRect().top : Infinity;
       return {
         scrolled: document.querySelector('.sidebar').scrollTop + window.scrollY,
-        preset: bottom('.preset-switch'),
         settings: bottom('.menu-settings-link'),
         link: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
         height: Math.round(Math.min(window.innerHeight, barTop)),
@@ -4832,9 +4906,8 @@ async function main() {
     });
     must(got.scrolled === 0, `the drawer opened scrolled by ${got.scrolled} px`);
     must(got.link >= 44, `a nav link is ${got.link} px, under 44; the rows were tightened too far`);
-    must(got.preset && got.preset <= got.height, `the preset switch ends at ${got.preset}, under the ${got.height} px screen`);
     must(got.settings && got.settings <= got.height, `Settings ends at ${got.settings}, under the ${got.height} px screen`);
-    return `preset ends at ${got.preset}, Settings at ${got.settings} of ${got.height}`;
+    return `Settings ends at ${got.settings} of ${got.height}`;
   });
   await tall.close();
 

@@ -684,10 +684,11 @@
   /*
    * Tell the global control which presets this assessment holds.
    *
-   * The page's own picker is gone -- the choice lives in the menu now, so
+   * The page's own picker is gone -- the choice lives on the Settings
+   * page now (the menu's switch went too, part of #383), so
    * this page, the coverage map, the graph and the map's link layer can
    * no longer be on different presets at the same time. What this page
-   * still knows, and the menu does not, is which presets were actually
+   * still knows, and the store does not, is which presets were actually
    * assessed and how many nodes each holds, so it says.
    */
   function drawPresetPicker(page, summary) {
@@ -722,7 +723,7 @@
    * `writeAddress` was here and is gone.
    *
    * It existed because this page owned its preset and had to keep the
-   * choice across a reload. The menu owns it now and keeps it in
+   * choice across a reload. The store owns it now and keeps it in
    * `localStorage`, so nothing on this page writes the address any more.
    *
    * `presetFromAddress` stays: an inbound `#gaps?channel=X` link is still
