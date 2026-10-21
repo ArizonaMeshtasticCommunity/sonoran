@@ -1110,3 +1110,49 @@ prediction. Either way it is under two minutes on one niced worker,
 against an interval of six hours. `jobs/coverage.py::predict_sites` is
 the seam it goes through, so every engine rule stays in one module. See
 `docs/GAPS.md` 10.
+
+## 13. The heard positions heatmap (PR 344)
+
+The coverage page has one more layer, "Heard positions, last 30
+days". It is a record, not a prediction.
+
+### 13.1 What it shows
+
+- Each position packet of the last 30 days is one point, at the
+  position the node sent. A packet is (node, packet ID).
+- A point scores by the gateways that heard it. Each gateway counts
+  once, at its fewest hops: 0 hops scores 10, 1 to 2 hops 5, 3 to 4
+  hops 2, and more 1.
+- The colour is the score compared with the best score within about
+  16 km. Blue is the best nearby. So two colours far apart cannot be
+  compared.
+- The opacity follows how many packets were heard near a place, up to
+  100.
+
+### 13.2 What it cannot show
+
+- **No colour does not mean no coverage.** It can mean that no node
+  sent its position from there.
+- It shows where people took nodes, so roads and towns are strong.
+- A position typed in by the owner (`LOC_MANUAL`) is left out, so most
+  fixed routers are not in it.
+- A rounded position is left out by the rule of 9.1.2.1
+  (`COVERAGE_MIN_PRECISION_BITS`, 16 bits or better).
+- All presets and all channels are in one map.
+
+### 13.3 How it is made
+
+`jobs/activity_heatmap.py` runs once a UTC day as a supervised job
+(`JOBS_MEMORY_LIMITS`, `activity_heatmap=800`). It works on a grid of
+240 cells per degree, about 460 m, not the 90 m terrain grid: on the
+terrain grid the default region needed about 6 GB. It writes PNG tiles
+to `<COVERAGE_CACHE_DIR>/all/all/empirical_heatmap_position/`, and
+`/api/map/heatmap/position/{z}/{x}/{y}.png` serves them. To make it now:
+`docker compose exec jobs sonoran-heatmap-once`.
+
+### 13.4 Basis
+
+The hop scores (10, 5, 2, 1), the cap of 100 packets, the blur radii
+and the 16 km neighbourhood are the author's choice. They are not yet
+measured on our data or taken from a source (AGENTS.md 3A.2).
+

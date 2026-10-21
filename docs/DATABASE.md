@@ -301,7 +301,10 @@ Packet routing and network statistics.
 `latitude` (double precision), `longitude` (double precision),
 `altitude` (integer), `ground_speed` (integer), `ground_track` (integer),
 `precision_bits` (integer), `sats_in_view` (integer),
-`location_source` (text, nullable, revision pr344).
+`location_source` (text, nullable, revision pr344): the proto name of
+`Position.location_source` (`LOC_MANUAL`, `LOC_INTERNAL` or
+`LOC_EXTERNAL`). NULL when the node did not say (`LOC_UNSET`) and for
+every row from before pr344.
 
 ### 4.8 `neighbor_metrics`
 
