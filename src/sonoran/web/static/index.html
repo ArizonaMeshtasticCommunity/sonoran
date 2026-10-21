@@ -384,6 +384,15 @@
               there records the three ways inferring it got a page wrong.
             -->
             <p class="preset-scope" data-preset-scope hidden></p>
+            <!--
+              Several presets are chosen on the Settings page (#383), whose
+              link is the next row down. Not an option of the select above:
+              an arrow key on a closed select changes its value and fires
+              `change`, so an option that navigated went off while a
+              keyboard reader passed it. Not a second link either: one
+              route to Settings is a rule (Will, "there is a duplicate
+              settings button", `test_there_is_exactly_one_route_to_the_settings_page`).
+            -->
           </div>
 
           <!--
@@ -480,18 +489,35 @@
               </label>
               <button type="button" class="toggle" data-show-traffic aria-pressed="true">Traffic</button>
               <!--
-                Which kinds of packet the traffic layer draws. The chips
+                Which kinds of packet the traffic layer draws. The options
                 are built from SonoranLive.FAMILY_ORDER, so the list here
                 and the shapes on the map cannot disagree. "Other Types"
                 is always one of them, so a filter can never hide traffic
-                we failed to classify without a chip that says so. It sits
-                in this row, so watch mode moves it into its bar with the
-                rest.
+                we failed to classify without an option that says so. It
+                sits in this row, so watch mode moves it into its bar with
+                the rest.
+
+                A button and a drop-down menu of checkboxes (#385). The
+                menu used to open inside this row, as a line of chips, so
+                it pushed the header down, and a reader had to find the
+                summary again to close it. The menu is a popover now: it
+                opens over the map, takes no room in the row, and closes
+                on Escape, on a tap outside, on Done, or on the button.
+                Done wears the `.toggle` look and carries `data-no-refresh`,
+                so the shared toggle handler neither marks it pressed nor
+                fetches the map again: it only closes the menu.
               -->
-              <details class="family-filter" data-family-filter>
-                <summary data-family-summary>Packet Types: all</summary>
-                <div class="family-chips" data-family-chips role="group" aria-label="Packet Types to draw"></div>
-              </details>
+              <div class="family-filter" data-family-filter>
+                <button type="button" class="family-toggle" data-family-toggle
+                        aria-expanded="false" aria-controls="family-menu"><span data-family-summary>Packet Types: all</span></button>
+                <div class="family-menu" id="family-menu" data-family-menu hidden>
+                  <div class="family-chips" data-family-chips role="group" aria-label="Packet Types to draw"></div>
+                  <div class="family-menu-foot">
+                    <button type="button" class="linky" data-family-all>Show all</button>
+                    <button type="button" class="toggle" data-family-done data-no-refresh>Done</button>
+                  </div>
+                </div>
+              </div>
               <button type="button" class="toggle" data-show-traces aria-pressed="true">Live traceroutes</button>
               <button type="button" class="toggle" data-show-links aria-pressed="false">Neighbor links</button>
               <!--
@@ -691,7 +717,7 @@
           <div class="page-head">
             <div>
               <h2>RF</h2>
-              <p class="sub" data-sub-fold>What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors, the 900 MHz band and any other range a station sweeps, and members' own mods, from stations that run rf-agent beside an SDR.</p>
+              <p class="sub" data-sub-fold>What our own receivers pick up beyond Meshtastic: aircraft, APRS, radiosondes, weather sensors, the 900 MHz band and any other range a station sweeps, and members' own mods, from stations that run sonoran-contributor beside an SDR.</p>
             </div>
             <div class="controls">
               <!--
@@ -840,60 +866,131 @@
 
         <section class="page" data-page="coverage">
           <!--
-            One row, like Nodes and the Map (#299). The layer pills, the
-            Show toggles and the opacity slider were three rows OUTSIDE the
-            head, and the map began 205 px below the head's top at every
-            width. The layer is now one drop-down in the head (Will:
-            "Sounds good"), and the Show toggles and the opacity are behind
-            Options. Every moved control keeps the attribute coverage.js
-            finds it by.
+            One settings button at the top right of the head (#334, Will:
+            "Convert it to a setting button at the top right"). Every
+            choice about the map is in the panel under it: the map source,
+            rounded positions, the layer, the Show toggles, the node
+            filters and the opacity. The badge on the button counts the
+            settings that differ from the default, so a changed one is
+            never out of sight. Every moved control keeps the attribute
+            coverage.js finds it by.
+
+            `data-no-refresh`: opening the panel changes nothing that was
+            fetched. Without it the shared `.toggle` handler in app.js
+            marks the button pressed and draws the whole page again, which
+            fetched the run and the calibration on every open.
           -->
-          <div class="page-head dense fit">
+          <div class="page-head dense fit coverage-head">
             <div>
               <h2>Coverage</h2>
               <p class="sub" data-coverage-sub>Where the mesh reaches, predicted from the routers and repeaters that carry it.</p>
             </div>
             <div class="controls">
-              <!-- Only shown when the run published more than one site
-                   set, which needs COVERAGE_INCLUDE_CLIENTS. -->
-              <label class="coverage-pick" data-coverage-siteset-wrap hidden>Predict from
-                <select data-coverage-siteset aria-label="Which nodes the run predicted from"></select>
-              </label>
-              <label class="coverage-pick">Layer
-                <select data-coverage-layers aria-label="Coverage layer"></select>
-              </label>
-              <button type="button" class="toggle" data-options-open data-coverage-options
-                      aria-expanded="false" aria-controls="coverage-options">Options<span
+              <button type="button" class="toggle coverage-settings-button" data-options-open
+                      data-no-refresh data-coverage-options data-options-word="Settings"
+                      aria-expanded="false" aria-controls="coverage-options"><svg class="icon"
+                      aria-hidden="true"><use href="#i-settings"/></svg><span>Settings</span><span
                       class="filter-count" data-options-count hidden></span></button>
             </div>
           </div>
 
           <p class="notice" data-coverage-notice hidden></p>
 
-          <div class="options-panel" id="coverage-options" data-options-panel hidden>
-            <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
+          <!--
+            `data-options-changed` is the count coverage.js works out from
+            its settings. It counts settings and not controls: three hidden
+            roles are one filter. See `drawOptionCount` in app.js.
+          -->
+          <div class="options-panel coverage-settings" id="coverage-options" data-options-panel hidden>
+            <fieldset class="coverage-settings-group">
+              <legend>Map</legend>
+              <!-- Only shown when the run published more than one map
+                   source, which needs COVERAGE_INCLUDE_CLIENTS. -->
+              <label class="coverage-pick" data-coverage-siteset-wrap hidden>Map source
+                <select data-coverage-siteset aria-label="Which nodes the map is predicted from"></select>
+              </label>
+              <label class="coverage-check">
+                <input type="checkbox" data-coverage-approx />
+                <span>Include approximate positions</span>
+              </label>
+              <p class="coverage-setting-note" data-coverage-approx-note hidden></p>
+              <label class="coverage-pick">Layer
+                <select data-coverage-layers aria-label="Coverage layer"></select>
+              </label>
+              <!-- The signal floor (#334). A map choice, so it goes in the
+                   address. Drawn from the run's margin tiles, which the
+                   public embed never reads. -->
+              <label class="coverage-pick">Signal floor
+                <select data-coverage-signal-floor aria-label="Show only where the signal is at least this far above what the radio needs">
+                  <option value="0" selected>0 dB: all usable ground</option>
+                  <option value="5">5 dB above the limit</option>
+                  <option value="10">10 dB above the limit</option>
+                  <option value="20">20 dB above the limit</option>
+                </select>
+              </label>
+              <p class="coverage-setting-note" data-coverage-signal-floor-note hidden></p>
+            </fieldset>
 
-            <!-- Per-viewer control. Restyles the signal tiles already in
-                 this browser; changes nothing on the server. -->
-            <label class="coverage-opacity" data-coverage-opacity-wrap>Signal opacity
-              <input type="range" min="0" max="100" step="5" value="100"
-                     data-coverage-opacity aria-label="Signal strength opacity" />
-              <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
-            </label>
+            <fieldset class="coverage-settings-group">
+              <legend>Show</legend>
+              <div class="coverage-view-controls" role="group" aria-label="Visible map layers" data-coverage-views></div>
+              <!-- Per-viewer control. Restyles the signal tiles already in
+                   this browser; changes nothing on the server. -->
+              <label class="coverage-opacity" data-coverage-opacity-wrap>Signal opacity
+                <input type="range" min="0" max="100" step="5" value="100"
+                       data-coverage-opacity aria-label="Signal strength opacity" />
+                <span class="coverage-opacity-value" data-coverage-opacity-value>100%</span>
+              </label>
+            </fieldset>
+
+            <!-- Drawn in this browser only. Saved for this viewer, and
+                 never in the address or on the server. -->
+            <fieldset class="coverage-settings-group">
+              <legend>Node markers</legend>
+              <div class="coverage-role-chips" role="group" aria-label="Node markers by role" data-coverage-roles></div>
+              <label class="coverage-pick">Last heard
+                <select data-coverage-heard aria-label="Show nodes last heard within">
+                  <option value="any" selected>Any time</option>
+                  <option value="24h">24 h</option>
+                  <option value="7d">7 d</option>
+                </select>
+              </label>
+              <label class="coverage-check">
+                <input type="checkbox" data-coverage-moving />
+                <span>Hide moving nodes</span>
+              </label>
+              <p class="coverage-setting-note">Moving means the Tracker and TAK tracker roles. The page cannot see a node of another role move.</p>
+              <label class="coverage-check">
+                <input type="checkbox" data-coverage-circles />
+                <span>Show uncertainty circles</span>
+              </label>
+              <p class="coverage-setting-note">A circle around each site whose position was rounded, as wide as the rounding.</p>
+            </fieldset>
+
+            <div class="coverage-settings-actions">
+              <button type="button" data-coverage-reset>Reset to default</button>
+            </div>
           </div>
 
           <div class="map-shell">
             <div id="coverage-map"></div>
             <div class="coverage-legend" data-coverage-legend hidden>
               <span class="coverage-legend-title" data-coverage-legend-title></span>
-              <div class="coverage-ramp" aria-hidden="true"></div>
+              <!-- Which map this is (#334). An approximate map must never
+                   be read as the precise one. -->
+              <span class="coverage-legend-map" data-coverage-legend-map></span>
+              <!-- The part of the ramp below the signal floor is dimmed
+                   (#334). `--coverage-floor` is set by coverage.js. -->
+              <div class="coverage-ramp" data-coverage-ramp aria-hidden="true"></div>
               <div class="coverage-scale">
                 <span><strong>Weak</strong><small data-coverage-floor></small></span>
                 <span><strong>Strong</strong><small data-coverage-ceiling></small></span>
               </div>
+              <span class="coverage-legend-floor" data-coverage-legend-floor hidden></span>
             </div>
           </div>
 
+          <p class="coverage-which" data-coverage-which hidden></p>
           <div class="grid" data-coverage-stats></div>
 
           <div class="panel coverage-assumes">
@@ -2251,6 +2348,25 @@
               <div class="settings-choice" role="radiogroup" aria-label="Appearance"
                    data-setting="theme"></div>
             </div>
+
+            <!--
+              Every modem preset, and several at once (#383). The menu's
+              switch keeps the two this mesh runs for one tap; this is where
+              there is room for a box per preset. It changes what the data
+              IS, not how it is written, so the store is `preset.js`, not
+              `settings.js`. Built by app.js from `SonoranPreset.options`.
+              The sentence says the one thing a box cannot: the pages that
+              draw links or coverage still draw one preset (AGENTS.md 9.7).
+            -->
+            <div class="panel settings-presets">
+              <h3 id="settings-presets-label">Modem presets</h3>
+              <p class="sub">The pages show what was heard on the presets you choose. The map,
+                the graph, coverage, gaps and the planner draw one of them at a time, because
+                nodes on different presets cannot hear each other.</p>
+              <div class="preset-boxes" role="group" aria-labelledby="settings-presets-label"
+                   data-preset-boxes></div>
+              <p class="preset-boxes-note" data-preset-boxes-note></p>
+            </div>
           </div>
         </section>
       </main>
@@ -2337,6 +2453,7 @@
       to make app.js larger. It loads before app.js so the router
       finds it on a reload straight to #coverage.
     -->
+    <script src="static/coverage-settings.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/coverage.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!-- The RF page, its own map, before app.js like coverage.js. -->
     <script src="static/vendor/aprs/aprs-tables.js?v=__SONORAN_ASSET_VERSION__"></script>

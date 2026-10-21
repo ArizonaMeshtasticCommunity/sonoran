@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from sonoran import read_models
 from sonoran.api import hourly
 from sonoran.api.cache import KeyedCache
 from sonoran.api.channels import CORE_TIER, UNKNOWN_CHANNEL, channel_filter, classify
@@ -35,6 +36,7 @@ from sonoran.api.traces import (
     is_reply,
     return_path,
 )
+from sonoran.api.window import cache_seconds
 from sonoran.db.models import NeighborMetrics, Node, Packet, PacketSeen, Traceroute
 from sonoran.positions import clean
 
@@ -780,7 +782,7 @@ async def mesh_graph(
     key = graph_cache_key(hours=hours, limit=limit, channel=channel)
     body = await _graph_cache.get(
         key,
-        request.app.state.settings.stats_cache_seconds,
+        cache_seconds(request.app.state.settings, hours),
         lambda: _mesh_graph(session, hours, limit, channel),
     )
     # Said in the body rather than only in a comment, so a caller that
@@ -804,11 +806,27 @@ def graph_cache_key(*, hours: int, limit: int, channel: str | None) -> str:
 async def _mesh_graph(
     session: AsyncSession, hours: int, limit: int, channel: str | None
 ) -> dict[str, object]:
-    """The work behind `/api/graph`. Cached by its caller."""
-    since = datetime.now(UTC) - timedelta(hours=hours)
-    edges = await _traceroute_edges(session, since, channel)
-    for edge in (await _neighbor_edges(session, since, channel)).values():
-        _merge(edges, edge)
+    """The work behind `/api/graph`. Cached by its caller.
+
+    The links and the packet counts come from the jobs service's build
+    when a fresh one is stored for this window and channel (#371), and
+    are computed here otherwise. Everything else -- each node's name,
+    role, position and last heard time -- is read now either way.
+    """
+    stored = None
+    if hours in read_models.GRAPH_HOURS and channel != "":
+        stored = await read_models.read_links(
+            session, channel if channel is not None else read_models.EVERY_CHANNEL, hours
+        )
+    if stored is not None:
+        ranked = stored.edges
+        counts = stored.counts
+        built_at = stored.built_at
+    else:
+        built_at = datetime.now(UTC)
+        since = built_at - timedelta(hours=hours)
+        ranked = read_models.rank_edges((await link_evidence(session, since, channel)).values())
+        counts = await _packet_counts(session, since)
 
     # The limit picks which links are DRAWN. It does not decide what
     # the evidence was.
@@ -830,7 +848,6 @@ async def _mesh_graph(
     # Ranked by evidence so a truncated picture keeps the best attested
     # links, and `links_truncated` says when that happened, because a
     # partial graph that does not admit it is worse than a small one.
-    ranked = sorted(edges.values(), key=lambda edge: edge.forward + edge.backward, reverse=True)
     truncated = len(ranked) > limit
     shown = ranked[:limit]
 
@@ -841,7 +858,6 @@ async def _mesh_graph(
     rows = (await session.scalars(select(Node).where(Node.node_num.in_(node_nums)))).all()
     known = {row.node_num: row for row in rows}
     names = await resolve_names(session, node_nums)
-    counts = await _packet_counts(session, since)
 
     nodes = [
         _node_json(num, known.get(num), name_of(names, num), counts.get(num, 0))
@@ -856,6 +872,23 @@ async def _mesh_graph(
         # What was measured, against what is drawn.
         "links_found": len(ranked),
         "links_truncated": truncated,
+        # When the links were measured. A stored build is up to a few
+        # minutes old; a page can say "as of" with it.
+        "built_at": built_at,
         "nodes": nodes,
         "links": links,
     }
+
+
+async def link_evidence(
+    session: AsyncSession, since: datetime, channel: str | None, until: datetime | None = None
+) -> EdgeMap:
+    """Return every link the window's traceroutes and neighbour reports show.
+
+    The graph, the longest-link board and the jobs service's build
+    (#371) all read links through this, so they count the same evidence.
+    """
+    edges = await _traceroute_edges(session, since, channel, until)
+    for edge in (await _neighbor_edges(session, since, channel, until)).values():
+        _merge(edges, edge)
+    return edges

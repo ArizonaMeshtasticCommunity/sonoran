@@ -51,6 +51,7 @@ def test_coverage_does_not_get_a_competing_calibration_task() -> None:
         "coverage",
         "gaps",
         "rf-rollup",
+        "read-models",
     ]
 
 
@@ -65,4 +66,5 @@ def test_calibration_keeps_its_task_when_coverage_is_off() -> None:
         "calibration",
         "gaps",
         "rf-rollup",
+        "read-models",
     ]

@@ -33,7 +33,7 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
-from sonoran.api.preset_scope import preset_filter, require_preset
+from sonoran.api.preset_scope import Presets, preset_filter, require_presets
 from sonoran.api.schemas import NodeSummary
 from sonoran.api.sightings import direct as direct_sighting
 from sonoran.api.sightings import sightings
@@ -42,6 +42,7 @@ from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
     EnvironmentMetrics,
+    LocalStatsMetrics,
     NeighborMetrics,
     Node,
     NodeConfig,
@@ -66,6 +67,8 @@ TELEMETRY_MODELS = {
     "air_quality": AirQualityMetrics,
     "power": PowerMetrics,
     "pax": PaxMetrics,
+    # Read by a contributor on request (#178), not sent by the node.
+    "local_stats": LocalStatsMetrics,
 }
 
 # Environment fields that the user interface shows as weather.
@@ -267,7 +270,14 @@ def _bands(rows: Sequence[Any]) -> list[dict[str, object]]:
 async def _messages(
     session: AsyncSession, node_num: int, since: datetime, limit: int
 ) -> dict[str, object]:
-    """Return the messages that one node sent in the selected window."""
+    """Return the messages that one node sent in the selected window.
+
+    Each message carries `packet_id` and `from_node`, the two halves of
+    its packet's identity (AGENTS.md 9.1). The page draws the time of a
+    message as a link to that packet, as the chat page does (#387).
+    `packet_id` is the Meshtastic ID, never the row ID, and it is null
+    for a row stored without one.
+    """
     total = await session.scalar(
         select(func.count())
         .select_from(TextMessage)
@@ -281,11 +291,14 @@ async def _messages(
             .limit(limit)
         )
     ).all()
-    names = await resolve_names(session, (row.to_node_num for row in rows))
+    names = await resolve_names(session, [node_num, *(row.to_node_num for row in rows)])
     return {
         "count": total or 0,
         "recent": [
             {
+                "packet_id": row.packet_id,
+                "from_node": format_node_id(row.from_node_num),
+                "from_name": name_of(names, row.from_node_num),
                 "body": row.body,
                 "channel": row.channel,
                 "to_node": format_node_id(row.to_node_num),
@@ -454,7 +467,7 @@ def _apply_node_filters(
     licensed: bool | None = None,
     first_seen_hours: int | None = None,
     quiet_hours: int | None = None,
-    preset: str | None = None,
+    preset: Presets | None = None,
 ) -> Select[Any]:
     """Apply the documented node list filters to a statement.
 
@@ -541,8 +554,9 @@ class NodeListParams:
     active_hours: int | None
     before: datetime | None
     channel: str | None
-    # The menu's modem preset, already checked by `require_preset` (#313).
-    preset: str | None
+    # The menu's modem presets, already checked by `require_presets`
+    # (#313, several since #383).
+    preset: Presets | None
     position: str | None
     licensed: bool | None
     first_seen_hours: int | None
@@ -585,7 +599,7 @@ def node_list_params(
         active_hours=active_hours,
         before=before,
         channel=channel,
-        preset=require_preset(preset),
+        preset=require_presets(preset),
         position=position,
         licensed=licensed,
         first_seen_hours=first_seen_hours,
@@ -838,7 +852,7 @@ async def node_facets(
     `preset` is the menu's modem preset. It is never lifted: it says
     which mesh is being counted, not one more filter to compare.
     """
-    menu_preset = require_preset(preset)
+    menu_preset = require_presets(preset)
 
     async def counts(column: Any, lifted: str) -> list[dict[str, object]]:
         # Each facet is counted with its own filter lifted and the rest
@@ -994,6 +1008,8 @@ async def node_detail(
         "device": await _latest_metric(session, DeviceMetrics, node_num),
         "air_quality": await _latest_metric(session, AirQualityMetrics, node_num),
         "power": await _latest_metric(session, PowerMetrics, node_num),
+        # The newest reading a contributor brought back (#178, #182).
+        "local_stats": await _latest_metric(session, LocalStatsMetrics, node_num),
         "activity": await _activity(session, node_num, since),
         "messages": await _messages(session, node_num, since, limit=25),
         "graph": {

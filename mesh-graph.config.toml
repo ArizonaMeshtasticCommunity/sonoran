@@ -1,6 +1,14 @@
 # Configuration for the mesh-graph container.
 # See https://github.com/ianmcorvidae/mesh-graph for all options.
-# Fill in the azmsh.net broker values before deploy.
+#
+# docker-compose.yml writes the broker, the port and the login into a copy
+# of this file at start-up, from MQTT_HOST, MQTT_PORT, MQTT_USERNAME and
+# MQTT_PASSWORD in .env. The `broker` value below is replaced.
+#
+# The topic is NOT replaced. Set it to the topic your gateways publish to,
+# the same as MQTT_TOPICS in .env. The default is the Arizona mesh.
+#
+# The encryption key is the public Meshtastic default key.
 
 [mqtt]
 broker = "mqtt.azmsh.net"

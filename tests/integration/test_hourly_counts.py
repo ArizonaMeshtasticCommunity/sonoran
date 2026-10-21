@@ -1,4 +1,4 @@
-"""The hourly totals give the raw counts, exactly (#366, #368).
+"""The hourly totals give the raw counts, exactly (#366, #368, #371).
 
 Every count here is checked against the same count read from the raw
 rows, for windows that start and end inside an hour. Each check runs
@@ -22,8 +22,13 @@ from tests.integration.test_gaps import _packet
 
 SENDERS = (0x0DC0_0001, 0x0DC0_0002, 0x0DC0_0003)
 ZONE = "America/Phoenix"
-VIEWS = ("packet_hourly", "packet_seen_hourly", "packet_family_hourly")
-REVISIONS = ("i366_hourly_counts", "i368_family_hourly")
+VIEWS = (
+    "packet_hourly",
+    "packet_seen_hourly",
+    "packet_family_hourly",
+    "packet_sender_port_hourly",
+)
+REVISIONS = ("i366_hourly_counts", "i368_family_hourly", "i371_read_models")
 BASE = (datetime.now(UTC) - timedelta(days=3)).replace(minute=0, second=0, microsecond=0)
 
 
@@ -91,6 +96,10 @@ async def _counts(url: str, start: datetime, end: datetime) -> tuple[Any, ...]:
                 await hourly.counts_by_sender(session, start, end),
                 await hourly.family_counts(session, ZONE, start, end, by_day=False),
                 await hourly.family_counts(session, ZONE, start, end, by_day=True),
+                await hourly.top_senders(session, start, end, 2),
+                set((await session.execute(hourly.senders_heard(start, end))).scalars()),
+                await hourly.family_totals(session, start, end),
+                await hourly.sender_port_counts(session, start, end, [0, 1, 2, 3]),
             )
     finally:
         await engine.dispose()
@@ -107,9 +116,18 @@ WINDOWS = [
 def _check(timescale_url: str, migrated_engine: Any) -> None:
     for begin, finish in WINDOWS:
         start, end = BASE + begin, BASE + finish
-        packets, uploads, (days, upload_days), senders, families_by_hour, families_by_day = (
-            asyncio.run(_counts(role_url(timescale_url, "azmsh_api"), start, end))
-        )
+        (
+            packets,
+            uploads,
+            (days, upload_days),
+            senders,
+            families_by_hour,
+            families_by_day,
+            top,
+            heard,
+            totals,
+            sender_ports,
+        ) = asyncio.run(_counts(role_url(timescale_url, "azmsh_api"), start, end))
         [(raw_packets,)] = _raw(
             migrated_engine,
             "SELECT count(*) FROM packet WHERE first_seen_at >= :a AND first_seen_at < :b",
@@ -152,6 +170,30 @@ def _check(timescale_url: str, migrated_engine: Any) -> None:
             b=end,
         )
         assert senders == dict(per_sender), (begin, finish)
+        busiest = sorted(per_sender, key=lambda row: (-row[1], row[0]))[:2]
+        assert top == [tuple(row) for row in busiest], (begin, finish)
+        assert heard == {row[0] for row in per_sender}, (begin, finish)
+
+        raw_totals = _raw(
+            migrated_engine,
+            "SELECT portnum, payload_state, count(*) FROM packet "
+            "WHERE first_seen_at >= :a AND first_seen_at < :b GROUP BY 1, 2",
+            a=start,
+            b=end,
+        )
+        assert sorted(totals, key=repr) == sorted(map(tuple, raw_totals), key=repr), (
+            begin,
+            finish,
+        )
+        raw_ports = _raw(
+            migrated_engine,
+            "SELECT from_node_num, portnum, count(*) FROM packet "
+            "WHERE first_seen_at >= :a AND first_seen_at < :b AND portnum IN (0, 1, 2, 3) "
+            "GROUP BY 1, 2",
+            a=start,
+            b=end,
+        )
+        assert sorted(sender_ports) == sorted(map(tuple, raw_ports)), (begin, finish)
 
         for bucket, got in (
             ("date_trunc('hour', first_seen_at)", families_by_hour),
@@ -193,13 +235,14 @@ def refreshed(timescale_url: str) -> Iterator[None]:
 
 
 def _empty(timescale_url: str) -> None:
-    """Recreate the aggregates with no data, as revisions i366 and i368 create them."""
+    """Recreate the aggregates with no data, as revisions i366, i368 and i371 create them."""
     import importlib.util
     from pathlib import Path
 
     import sonoran
 
     engine = create_engine(timescale_url, isolation_level="AUTOCOMMIT")
+    grants: list[str] = []
     try:
         for module in REVISIONS:
             path = Path(sonoran.__file__).parent / "db" / "migrations" / "versions" / f"{module}.py"
@@ -208,11 +251,17 @@ def _empty(timescale_url: str) -> None:
             revision = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(revision)
             keep = revision._retention_days() + revision.KEEP_LONGER_DAYS
+            grants += list(getattr(revision, "JOB_GRANTS", ()))
             with engine.connect() as connection:
                 for name in revision.VIEWS:
                     connection.execute(text(f"DROP MATERIALIZED VIEW IF EXISTS {name}"))
                 for statement in revision.create_statements(keep):
                     connection.execute(text(statement))
+        # Rebuilding `packet_hourly` from i366 drops the grant i371 gave
+        # the jobs role. Later tests run the read model job as that role.
+        with engine.connect() as connection:
+            for statement in grants:
+                connection.execute(text(statement))
     finally:
         engine.dispose()
 

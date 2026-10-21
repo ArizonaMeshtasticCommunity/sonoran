@@ -59,8 +59,10 @@ from sonoran.coverage.grid import (
 from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ
 from sonoran.coverage.render import (
     colour_levels,
+    margin_levels,
     sample_tile,
     tiles_for_grid,
+    write_grey_png,
     write_png,
 )
 from sonoran.coverage.sites import (
@@ -773,6 +775,11 @@ def render_layer(
     the region, so writing it would multiply the run for no gain, and
     the API answers a missing tile with a 404 that Leaflet already
     handles.
+
+    Each colour tile gets a margin tile from the same sampled cells, so
+    the two describe the same ground (#334). The colour tile is written
+    exactly as it was before the margin tile existed: the public embed
+    serves it.
     """
     written = 0
     for zoom in range(settings.coverage_min_zoom, settings.coverage_max_zoom + 1):
@@ -783,6 +790,16 @@ def render_layer(
                 continue
             store.write_tile(
                 root, preset, site_set, layer, tile.zoom, tile.x, tile.y, write_png(image)
+            )
+            store.write_margin_tile(
+                root,
+                preset,
+                site_set,
+                layer,
+                tile.zoom,
+                tile.x,
+                tile.y,
+                write_grey_png(margin_levels(patch, threshold)),
             )
             written += 1
     return written
@@ -1212,6 +1229,8 @@ def _build(
         data_bounds=union_bounds([item.data_bounds or [] for item in summaries]),
         presets=summaries,
         site_sets=set_summaries,
+        # Every tile this run wrote has a margin tile beside it (#334).
+        margin_tiles=store.margin_spec(),
     )
 
 

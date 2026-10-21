@@ -103,6 +103,36 @@ async def coverage_calibration(session: AsyncSession = Depends(get_session)) -> 
     }
 
 
+def _check_tile(layer: str, site_set: str, zoom: int, x: int, y: int) -> None:
+    """Refuse a tile request that names no tile a run can hold."""
+    if layer not in LAYERS:
+        raise HTTPException(status_code=422, detail=f"not a coverage layer: {layer}")
+    if site_set not in SITE_SET_KEYS:
+        raise HTTPException(status_code=422, detail=f"not a coverage site set: {site_set}")
+
+    # A tile index must fit the zoom it names, or the run is asked for
+    # ground that does not exist.
+    limit = 1 << zoom
+    if x >= limit or y >= limit:
+        raise HTTPException(status_code=422, detail="the tile is outside the zoom level")
+
+
+def _tile_response(png: bytes | None, etag: str) -> Response:
+    """Return a tile, or a 404 for ground no node reaches."""
+    if png is None:
+        raise HTTPException(status_code=404, detail="no coverage here")
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            # The run stamp is part of the URL. These bytes can never
+            # change, so a browser can keep them permanently.
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{etag}"',
+        },
+    )
+
+
 @router.get("/tiles/{stamp}/{preset}/{site_set}/{layer}/{zoom}/{x}/{y}.png")
 async def coverage_tile(
     request: Request,
@@ -119,29 +149,37 @@ async def coverage_tile(
     A tile that was never written is ground no node reaches. That is a
     404, which is what a map library already knows how to draw.
     """
-    if layer not in LAYERS:
-        raise HTTPException(status_code=422, detail=f"not a coverage layer: {layer}")
-    if site_set not in SITE_SET_KEYS:
-        raise HTTPException(status_code=422, detail=f"not a coverage site set: {site_set}")
-
-    # A tile index must fit the zoom it names, or the run is asked for
-    # ground that does not exist.
-    limit = 1 << zoom
-    if x >= limit or y >= limit:
-        raise HTTPException(status_code=422, detail="the tile is outside the zoom level")
-
+    _check_tile(layer, site_set, zoom, x, y)
     settings = request.app.state.settings
     png = store.read_run_tile(settings, stamp, preset, site_set, layer, zoom, x, y)
-    if png is None:
-        raise HTTPException(status_code=404, detail="no coverage here")
+    return _tile_response(png, f"{stamp}-{preset}-{site_set}-{layer}-{zoom}-{x}-{y}")
 
-    return Response(
-        content=png,
-        media_type="image/png",
-        headers={
-            # The run stamp is part of the URL. These bytes can never
-            # change, so a browser can keep them permanently.
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{stamp}-{preset}-{site_set}-{layer}-{zoom}-{x}-{y}"',
-        },
-    )
+
+@router.get("/tiles/{stamp}/{preset}/{site_set}/{layer}/margin/{zoom}/{x}/{y}.png")
+async def coverage_margin_tile(
+    request: Request,
+    stamp: str = Path(pattern=r"^\d{8}T\d{6}Z$"),
+    preset: str = Path(pattern=r"^[A-Za-z]{1,32}$"),
+    site_set: str = Path(pattern=r"^[a-z_]{1,32}$"),
+    layer: str = Path(pattern=r"^[a-z]{1,16}$"),
+    zoom: int = Path(ge=0, le=MAX_ZOOM),
+    x: int = Path(ge=0),
+    y: int = Path(ge=0),
+) -> Response:
+    """Return the margin tile of one coverage tile (#334).
+
+    One grey byte for each pixel: zero for no usable coverage, and
+    otherwise one more than the dB above the sensitivity. The dashboard
+    colours it to draw a signal floor. See `coverage/render.py`.
+
+    The dashboard's only. The public embed has no route to these, and
+    `docs/API.md` 3B.5 does not list this path.
+
+    A run made before the margin tiles existed has none, and answers
+    404 for every one. Its manifest has no `margin_tiles`, so the page
+    does not ask.
+    """
+    _check_tile(layer, site_set, zoom, x, y)
+    settings = request.app.state.settings
+    png = store.read_run_margin_tile(settings, stamp, preset, site_set, layer, zoom, x, y)
+    return _tile_response(png, f"{stamp}-{preset}-{site_set}-{layer}-margin-{zoom}-{x}-{y}")

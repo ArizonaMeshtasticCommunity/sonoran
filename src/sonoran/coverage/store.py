@@ -13,7 +13,15 @@ The layout is:
 
     {cache}/runs/{stamp}/manifest.json
     {cache}/runs/{stamp}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png
+    {cache}/runs/{stamp}/{preset}/{site_set}/{layer}/margin/{z}/{x}/{y}.png
     {cache}/index.json
+
+The second tile is the margin tile of the first (#334). It holds the dB
+above the sensitivity, one grey byte for each pixel, so the dashboard
+can draw a signal floor. See `coverage/render.py`. It sits under a
+directory named `margin`, which is not a number. A route that takes the
+zoom as a whole number, such as the public tile route, therefore cannot
+name a margin tile.
 
 The site set is part of the path because one run can publish more than
 one map. It is also the name a reader trusts, so a run that predicted
@@ -46,7 +54,7 @@ from sonoran.coverage.calibrate import (
     MIN_REPORTED,
     Calibration,
 )
-from sonoran.coverage.render import RAMP_SPAN_DB
+from sonoran.coverage.render import COVER_ALPHA, MARGIN_ENCODING, RAMP, RAMP_SPAN_DB
 from sonoran.db.models import CoverageCalibration, CoverageCalibrationNode
 from sonoran.logging import get_logger
 from sonoran.radio.resolve import clamp_calibration
@@ -92,6 +100,9 @@ NODE_LEVELS_NAME = "coverage-at-nodes.json"
 # weaker of the two directions, so it answers "can I use the mesh from
 # here", which is what somebody looking at a coverage map wants to know.
 LAYERS = ("usable", "downlink", "uplink")
+
+# The directory of the margin tiles, inside the directory of a layer.
+MARGIN_DIR = "margin"
 
 LAYER_LABELS: dict[str, str] = {
     "usable": "Usable both ways",
@@ -218,6 +229,28 @@ class Manifest:
     # `AGENTS.md` 9.25 asks for: the narrow answer is the one a reader
     # gets without asking for anything else.
     site_sets: list[SiteSetSummary] = field(default_factory=list)
+    # How this run's margin tiles are encoded, and the ramp and alpha
+    # to colour them with. See `margin_spec`.
+    #
+    # None for a run made before the margin tiles existed. A reader
+    # reads that as "this run cannot draw a signal floor", and still
+    # draws its colour tiles. The public embed never reads this field.
+    margin_tiles: dict[str, object] | None = None
+
+
+def margin_spec() -> dict[str, object]:
+    """Return what a page needs to colour a margin tile.
+
+    The ramp and the alpha are the ones `colour_levels` uses, sent from
+    here so the page holds no copy of its own. Python writes the tiles,
+    so Python owns the colours. `ramp_span_db` is already in the
+    manifest beside this.
+    """
+    return {
+        "encoding": MARGIN_ENCODING,
+        "ramp": [list(colour) for colour in RAMP],
+        "alpha": COVER_ALPHA,
+    }
 
 
 def runs_dir(settings: Settings) -> Path:
@@ -253,6 +286,18 @@ def tile_path(
     return root / preset / site_set / layer / str(zoom) / str(x) / f"{y}.png"
 
 
+def margin_tile_path(
+    root: Path, preset: str, site_set: str, layer: str, zoom: int, x: int, y: int
+) -> Path:
+    """Return where the margin tile of one tile sits.
+
+    The `margin` directory is inside the layer, where every other entry
+    is a zoom level. A path built from a whole number zoom can never
+    reach it.
+    """
+    return root / preset / site_set / layer / MARGIN_DIR / str(zoom) / str(x) / f"{y}.png"
+
+
 def write_tile(
     root: Path,
     preset: str,
@@ -265,6 +310,22 @@ def write_tile(
 ) -> None:
     """Write one tile."""
     path = tile_path(root, preset, site_set, layer, zoom, x, y)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(png)
+
+
+def write_margin_tile(
+    root: Path,
+    preset: str,
+    site_set: str,
+    layer: str,
+    zoom: int,
+    x: int,
+    y: int,
+    png: bytes,
+) -> None:
+    """Write the margin tile of one tile."""
+    path = margin_tile_path(root, preset, site_set, layer, zoom, x, y)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(png)
 
@@ -456,7 +517,32 @@ def read_run_tile(
     root = run_root(settings, stamp)
     if root is None:
         return None
-    path = tile_path(root, preset, site_set, layer, zoom, x, y)
+    return _read_bytes(tile_path(root, preset, site_set, layer, zoom, x, y))
+
+
+def read_run_margin_tile(
+    settings: Settings,
+    stamp: str,
+    preset: str,
+    site_set: str,
+    layer: str,
+    zoom: int,
+    x: int,
+    y: int,
+) -> bytes | None:
+    """Return the margin tile of one tile of one named run, or None.
+
+    None also for a run made before the margin tiles existed. The page
+    knows that from the manifest and does not ask.
+    """
+    root = run_root(settings, stamp)
+    if root is None:
+        return None
+    return _read_bytes(margin_tile_path(root, preset, site_set, layer, zoom, x, y))
+
+
+def _read_bytes(path: Path) -> bytes | None:
+    """Return the bytes of a file, or None when it cannot be read."""
     try:
         return path.read_bytes()
     except (OSError, ValueError):

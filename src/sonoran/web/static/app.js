@@ -58,12 +58,23 @@ function requestFailed(path, status) {
  *   request can be stranded, and then draws the page again.
  * - A request that has had no answer in 60 s is abandoned. The slowest
  *   real query measured on production took 29 s (#304).
+ * - `apiFetchUntil` is the same request with one more way to end it: a
+ *   signal of the caller's. The coverage margin tiles use it, so a tile
+ *   that leaves the map stops downloading (#334).
  */
 const REQUEST_TIMEOUT_MS = 60000;
 const requestsInFlight = new Set();
 
 function apiFetch(url) {
+  return apiFetchUntil(url, null);
+}
+
+function apiFetchUntil(url, signal) {
   const controller = new AbortController();
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  }
   const timer = setTimeout(
     () => controller.abort(new Error('The server did not answer within a minute.')),
     REQUEST_TIMEOUT_MS,
@@ -1764,7 +1775,7 @@ PAGES.dashboard = async (page) => {
    * in the heading.
    */
   const feedChannel = $('[data-recent-chat-channel]', page);
-  if (feedChannel) feedChannel.textContent = menuPreset() ? SonoranLabels.presetLabel(menuPreset()) : '';
+  if (feedChannel) feedChannel.textContent = menuPresetWords();
   replace($('[data-recent-chat]', page), messages
     ? (messages.length
         ? messages.map((message) => messageItem(message))
@@ -1772,7 +1783,7 @@ PAGES.dashboard = async (page) => {
     : [failure(new Error('Cannot load messages.'))]);
 
   const portnumChart = $('[data-portnum-chart]', page);
-  const preset = menuPreset();
+  const preset = menuPresetWords();
   if (!portnums) {
     chartEmpty(portnumChart, 'Cannot load the packet types.');
   } else if (!portnums.length) {
@@ -2232,6 +2243,8 @@ function ensureMap() {
     // The backlog and the lag change every frame, so they are written
     // from the loop rather than once per fetch.
     onStats: liveCounters,
+    // The feed follows the lines, row by row, as each one starts (#386).
+    onRelease: () => paintTrafficFeed(),
   });
   mapState.live.setFamilyFilter(hiddenFamilies);
   /*
@@ -2401,47 +2414,87 @@ function familyShown(packet) {
 }
 
 /**
- * Build the packet kind chips, once.
+ * Build the packet type menu, once (#385).
  *
- * Each chip is a toggle with the family's own mark on it. "All Types"
- * appears only while something is hidden, as the way back.
+ * One checkbox for each family, with the family's own mark and name.
+ * A checkbox says "shown" or "not shown" by itself, which the old
+ * pressed chips said only by a border and a line through the text.
+ * Every change applies at once, so the map under the open menu changes
+ * while the reader watches. "Show all" is the way back.
  */
 function wireFamilyFilter() {
   const chips = $('[data-family-chips]');
   if (!chips) return;
-  const buttons = SonoranLive.FAMILY_ORDER.map((key) => {
+  const options = SonoranLive.FAMILY_ORDER.map((key) => {
     const family = SonoranLive.FAMILIES[key];
-    return el('button', {
-      type: 'button',
-      class: 'family-chip',
-      'aria-pressed': String(!hiddenFamilies.has(key)),
-      dataset: { family: key },
-      onclick: () => {
-        if (hiddenFamilies.has(key)) hiddenFamilies.delete(key);
-        else hiddenFamilies.add(key);
-        familyFilterChanged();
-      },
-    }, familySwatch(family), family.label);
+    return el('label', { class: 'family-option', dataset: { family: key } },
+      el('input', {
+        type: 'checkbox',
+        checked: !hiddenFamilies.has(key),
+        dataset: { family: key },
+        onchange: (event) => {
+          if (event.target.checked) hiddenFamilies.delete(key);
+          else hiddenFamilies.add(key);
+          familyFilterChanged();
+        },
+      }),
+      familyMark(key),
+      el('span', { text: family.label }));
   });
-  const all = el('button', {
-    type: 'button',
-    class: 'family-chip clear',
-    text: 'All Types',
-    onclick: () => {
+  replace(chips, options);
+  const all = $('[data-family-all]');
+  if (all) {
+    all.addEventListener('click', () => {
       hiddenFamilies.clear();
       familyFilterChanged();
-    },
-  });
-  replace(chips, buttons, all);
+    });
+  }
+  const button = $('[data-family-toggle]');
+  const menu = $('[data-family-menu]');
+  if (button && menu) {
+    if (POPOVER) {
+      menu.setAttribute('popover', 'auto');
+      menu.hidden = false;
+    }
+    wireHint(button, menu, placeMenu);
+    const done = $('[data-family-done]', menu);
+    if (done) {
+      done.addEventListener('click', () => {
+        if (POPOVER) menu.hidePopover();
+        else closeHint();
+        button.focus();
+      });
+    }
+  }
   paintFamilyFilter();
 }
 
+/**
+ * Put the menu under its button, left edges together, on the screen.
+ *
+ * A drop-down reads from its button, so it is not centred as a hint is.
+ * It moves left when the button is near the right edge, and goes above
+ * the button when there is no room below.
+ */
+function placeMenu(button, panel) {
+  const gutter = 8;
+  const rect = button.getBoundingClientRect();
+  const wide = document.documentElement.clientWidth;
+  const tall = document.documentElement.clientHeight;
+  const left = Math.max(gutter, Math.min(rect.left, wide - panel.offsetWidth - gutter));
+  const below = rect.bottom + 4;
+  const top = below + panel.offsetHeight > tall - gutter
+    ? Math.max(gutter, rect.top - panel.offsetHeight - 4) : below;
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+}
+
 function paintFamilyFilter() {
-  for (const button of $$('.family-chip[data-family]')) {
-    button.setAttribute('aria-pressed', String(!hiddenFamilies.has(button.dataset.family)));
+  for (const box of $$('.family-option input[data-family]')) {
+    box.checked = !hiddenFamilies.has(box.dataset.family);
   }
-  const all = $('.family-chip.clear');
-  if (all) all.hidden = hiddenFamilies.size === 0;
+  const all = $('[data-family-all]');
+  if (all) all.disabled = hiddenFamilies.size === 0;
   const total = SonoranLive.FAMILY_ORDER.length;
   const shown = total - hiddenFamilies.size;
   const summary = $('[data-family-summary]');
@@ -2456,7 +2509,9 @@ function familyFilterChanged() {
   keepHiddenFamilies();
   paintFamilyFilter();
   if (mapState.live) mapState.live.setFamilyFilter(hiddenFamilies);
-  if (currentPage === 'map') render('map');
+  // Through `navigateRender`: a second tick while the first redraw is
+  // still loading runs after it, rather than being dropped by `render`.
+  if (currentPage === 'map') navigateRender('map');
 }
 
 /**
@@ -2674,9 +2729,21 @@ const channelCache = { at: 0, value: null };
  */
 function menuPreset() {
   // "All presets" is no filter: every request built from this leaves
-  // `preset` off, and the server answers for every preset.
+  // `preset` off, and the server answers for every preset. With several
+  // chosen (#383) it is every name with commas between them, which the
+  // list endpoints read as "any of these" (docs/API.md 1.2).
   if (!window.SonoranPreset || SonoranPreset.isAll()) return '';
-  return SonoranPreset.current();
+  return SonoranPreset.query ? SonoranPreset.query() : SonoranPreset.current();
+}
+
+/**
+ * The menu's presets in words, for a sentence: "Medium Fast", or
+ * "Medium Fast and Long Fast", or "" for every preset.
+ */
+function menuPresetWords() {
+  const names = menuPreset().split(',').filter(Boolean).map((name) => SonoranLabels.presetLabel(name));
+  if (names.length < 2) return names[0] || '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /** The same, ready to append to a query that already has one parameter. */
@@ -2745,14 +2812,23 @@ async function linkChannelOptions(page) {
    * here. Worth restoring as a sub-choice WITHIN the preset if anybody
    * misses them.
    */
+  /*
+   * The menu's preset is drawn even when the channel list does not carry
+   * it (#383). Every firmware preset can be chosen now, and most have no
+   * traffic here. Keeping the old channel then drew Medium Fast lines
+   * under a Short Turbo switch, with "Medium Fast" in the watch bar. The
+   * requests for a quiet preset come back empty, and the scope line says
+   * that no node was heard on it.
+   */
+  const menuWanted = window.SonoranPreset && !SonoranPreset.isAll()
+    ? SonoranPreset.current() : '';
   if (mapFocus && mapFocus.preset
       && channels.some((item) => item.channel === mapFocus.preset)) {
     linkChannel = mapFocus.preset;
-  } else if (window.SonoranPreset) {
-    const wanted = SonoranPreset.current();
-    if (channels.some((item) => item.channel === wanted)) linkChannel = wanted;
+  } else if (menuWanted) {
+    linkChannel = menuWanted;
   }
-  if (!channels.some((item) => item.channel === linkChannel)) {
+  if (!menuWanted && !channels.some((item) => item.channel === linkChannel)) {
     linkChannel = channels[0].channel;
   }
 
@@ -2797,6 +2873,11 @@ async function linkChannelOptions(page) {
   return everyPreset ? '' : linkChannel;
 }
 
+/* The menu's preset as the map reads it, to tell a stale answer. */
+function mapPresetInForce() {
+  return window.SonoranPreset ? SonoranPreset.current() : '';
+}
+
 /* The label of the preset the map is drawn for, for the watch status
  * line. The picker's own option text carries the counts, which are noise
  * once the choice is made. */
@@ -2813,7 +2894,16 @@ let mapPresetLabel = '';
  * not a gateway is invisible to this database. See AGENTS.md 9.5.1.
  */
 function trafficRow(packet) {
-  return el('li', {},
+  /*
+   * The row wears its packet's family, as the map draws it (#386): the
+   * same colour token on the row's edge, and the same shape beside the
+   * packet type. A relayed line on the map takes this colour too. A flat
+   * line takes the colour of its signal instead, and the row's SNR cell
+   * is coloured the same way. The packet type is always written as well,
+   * so nothing here rests on colour alone.
+   */
+  const family = SonoranLive.familyKey(packet.portnum);
+  return el('li', { dataset: { family } },
     el('div', {}, nodeChip(packet.from),
       /*
        * How many packets this row stands for, when a run of them from
@@ -2838,11 +2928,27 @@ function trafficRow(packet) {
       // The packet itself, so the whole record is one click away. The map
       // marks are canvas and carry no tooltip, so this is the route in.
       el('a', {
-        class: 'linky',
+        class: 'linky pkt-kind',
         href: packetHref(packet),
-        text: portnumLabel(packet.portnum),
-      }),
+      }, familyMark(family), portnumLabel(packet.portnum)),
       el('span', { text: clock(packet.time) })));
+}
+
+/**
+ * A packet family's mark in CSS: the map's shape, in the map's colour.
+ *
+ * Not a canvas like `familySwatch`. A canvas keeps the colour it was
+ * painted with, and the feed's rows outlive a change of theme. Here the
+ * colour is the same `--pkt-*` token the map reads, so it follows the
+ * theme by itself. Decorative: the label beside it says the same thing.
+ */
+function familyMark(key) {
+  const family = SonoranLive.FAMILIES[key] || SonoranLive.FAMILIES.OTHER;
+  return el('span', {
+    class: `pkt-mark ${family.shape}`,
+    'aria-hidden': 'true',
+    dataset: { family: key },
+  });
 }
 
 /* --- The feed under load ---------------------------------------- */
@@ -2936,6 +3042,113 @@ function updateFeed(list, rows, emptyText) {
   }
   for (const item of existing.values()) item.remove();
   while (list.children.length > FEED_ROWS) list.lastChild.remove();
+}
+
+/**
+ * Draw the feed and the table from the packets the map has drawn (#386).
+ *
+ * Will: "the box for Live traffic only updates in chunks and leads to
+ * like 5 or 6 things happening". The cause was the timing, not the
+ * data. The poll fetches fifteen seconds of traffic at once. The map
+ * spreads that batch over the next fifteen seconds (`enqueue` in
+ * map-live.js), so its lines start one at a time. The list took the
+ * whole batch at fetch time, so five or six rows arrived together, each
+ * up to fifteen seconds before its line.
+ *
+ * So a packet still waiting in the map's queue is not listed yet. The
+ * engine calls this each frame that releases packets, so a row arrives
+ * in the same frame as its line. A paused map holds the feed with it.
+ * A packet the map can never draw (its kind is hidden, or the backlog
+ * was skipped) is not in the queue, so it is listed at once.
+ */
+function paintTrafficFeed() {
+  const empties = mapState.feedEmpty;
+  if (!empties) return;
+  const page = $('[data-page="map"]');
+  if (!page || !$('[data-traffic-feed]', page)) return;
+  const shown = mapState.lastPackets || [];
+  const pending = mapState.live ? mapState.live.pendingKeys() : new Set();
+  /*
+   * Read from the newest end, and only as far as the panel shows. This
+   * runs in every frame that releases a packet, and the window holds up
+   * to 2000 uploads, so a copy and a reverse of the whole list each
+   * time is work for rows nobody sees. `feed` is cut where a forty-first
+   * row would start, so a run that coalesces is still counted whole.
+   */
+  const feed = [];
+  const plain = [];
+  let rows = 0;
+  // The newest packet of the row being built, which is what
+  // `coalesceFeed` compares a packet with, so the cut falls where its
+  // rows do.
+  let head = null;
+  for (let index = shown.length - 1; index >= 0; index -= 1) {
+    const packet = shown[index];
+    if (pending.has(packet.key)) continue;
+    if (plain.length < FEED_ROWS) plain.push(packet);
+    const joins = head
+      && head.from.node_id === packet.from.node_id
+      && head.portnum === packet.portnum
+      && Math.abs(head.timeMs - packet.timeMs) <= COALESCE_MS;
+    if (!joins) rows += 1;
+    if (rows > FEED_ROWS) {
+      if (plain.length >= FEED_ROWS) break;
+      continue;
+    }
+    if (!joins) head = packet;
+    feed.push(packet);
+  }
+  const waiting = shown.length && !plain.length
+    ? 'The newest packets are on their way to the map.' : empties;
+  const newest = coalesceFeed(feed).slice(0, FEED_ROWS);
+  updateFeed($('[data-traffic-feed]', page), newest, waiting);
+  const table = $('[data-traffic-table]', page);
+  if (table) updateTrafficTable(table, plain, waiting);
+}
+
+/**
+ * Update the watch table in place, row by row.
+ *
+ * The list gets a new row each time a line starts, so the table does
+ * too. Rebuilt whole, it lost the reader's scroll position and any text
+ * they had selected every few seconds. Here a row whose packet and
+ * counts did not change is the same element after the update, a new
+ * row is put in where it belongs, and the rest is removed.
+ */
+function updateTrafficTable(holder, rows, emptyText) {
+  const ids = rows.map((row) => `${row.key}:${row.gateway_count}:${row.upload_count}`);
+  const signature = ids.join(',');
+  if (holder.dataset.rows === signature) return;
+  holder.dataset.rows = signature;
+  if (!rows.length) {
+    replace(holder, empty(emptyText));
+    return;
+  }
+  const fresh = trafficTable(rows);
+  const made = [...fresh.querySelectorAll('tbody > tr')];
+  made.forEach((tr, index) => { tr.dataset.row = ids[index]; });
+  const body = holder.querySelector('tbody');
+  if (!body || made.length !== rows.length) {
+    replace(holder, fresh);
+    return;
+  }
+  const existing = new Map();
+  for (const tr of [...body.children]) {
+    if (tr.dataset.row) existing.set(tr.dataset.row, tr);
+    else tr.remove();
+  }
+  let before = body.firstChild;
+  for (const tr of made) {
+    const held = existing.get(tr.dataset.row);
+    if (held) {
+      existing.delete(tr.dataset.row);
+      if (held !== before) body.insertBefore(held, before);
+      else before = held.nextSibling;
+      continue;
+    }
+    body.insertBefore(tr, before);
+  }
+  for (const tr of existing.values()) tr.remove();
 }
 
 /** "3 gateways, 5 uploads", with the singulars right. */
@@ -3382,6 +3595,8 @@ function installWatchMode(map) {
       if (!mapState.live) return;
       const held = mapState.live.skipToLive();
       if (mapState.live.isPaused()) mapState.live.setPaused(false);
+      // Nothing waits for those lines now, so the feed lists them.
+      paintTrafficFeed();
       SonoranWatch.status({
         pause: held ? `skipped to live, gave up ${count(held)} buffered packets` : '',
       });
@@ -3436,6 +3651,7 @@ function installWatchMode(map) {
       return;
     }
     const held = mapState.live.discardQueue();
+    paintTrafficFeed();
     /*
      * And say what happened, rather than showing stale content under a
      * stale "Updated HH:MM" with no warning at all. A tab hidden for
@@ -3466,6 +3682,9 @@ PAGES.map = async (page) => {
   const showLinks = $('[data-show-links]', page).getAttribute('aria-pressed') === 'true';
   const showTraces = $('[data-show-traces]', page).getAttribute('aria-pressed') === 'true';
 
+  // The preset this draw is for. Read again after each request: a
+  // switch while the answers were on the way makes them stale (#384).
+  const askedPreset = mapPresetInForce();
   const channel = await linkChannelOptions(page);
   /*
    * The dots follow the preset that the lines follow. A node on
@@ -3494,7 +3713,7 @@ PAGES.map = async (page) => {
       ? `?channel=${encodeURIComponent(channel)}&hours=${LINK_HOURS}`
       : `?active_hours=${LINK_HOURS}`),
   );
-  if (!nodes) return;
+  if (!nodes || mapPresetInForce() !== askedPreset) return;
   const [traffic, edges, traces] = await getAll([
     showTraffic
       ? `api/map/traffic?minutes=${minutes}&limit=${TRAFFIC_LIMIT}` +
@@ -3512,6 +3731,35 @@ PAGES.map = async (page) => {
         (channel ? `&channel=${encodeURIComponent(channel)}` : '')
       : null,
   ]);
+  /*
+   * A newer preset was chosen while these answers were on the way.
+   * Draw none of them: the switch queued a render for the new preset
+   * (`navigateRender`), and that render draws the map. Drawing these
+   * would put the old preset's dots and lines under the new switch, and
+   * with the Live timer off nothing would ever take them away (#384).
+   */
+  if (mapPresetInForce() !== askedPreset) return;
+  /*
+   * A new preset starts the live layer from nothing (#384).
+   *
+   * The dots and the lines are replaced on every draw, but the live
+   * canvas is not a Leaflet layer. It holds marks still in flight, a
+   * replay queue of up to one poll, and the heat of each node, which
+   * decays with a half-life of 20 s and 30 s. After Medium Fast to
+   * Long Fast and back, the Long Fast halos and rings stayed on the
+   * Medium Fast map for more than a minute. A node on one preset
+   * cannot hear a node on the other (AGENTS.md 9.7), so those marks
+   * are not old news: they are wrong.
+   *
+   * Priming starts again too, so the new preset's window is recorded
+   * rather than fired at the reader all at once, as on a first visit.
+   */
+  if (mapState.drawnChannel !== undefined && mapState.drawnChannel !== channel) {
+    mapState.live.clear();
+    mapState.trafficPrimed = false;
+    mapState.tracesPrimed = false;
+  }
+  mapState.drawnChannel = channel;
 
   /*
    * The scope line, which now only ever describes one preset.
@@ -3528,7 +3776,10 @@ PAGES.map = async (page) => {
    * than a reader's choice.
    */
   mapNodeScope = channel
-    ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
+    ? (nodes.length
+      ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
+      // A preset with no traffic here (#383): an empty map, said in words.
+      : `No node was heard on ${SonoranLabels.presetLabel(channel)} in ${LINK_HOURS} h.`)
     : `${count(nodes.length)} nodes heard on every preset in ${LINK_HOURS} h`;
 
   // Held so the legend filter can redraw without another request.
@@ -3727,12 +3978,8 @@ PAGES.map = async (page) => {
      * rather than replaced, so a viewer reading a row halfway down the
      * watch panel keeps their place across a refresh.
      */
-    const newest = coalesceFeed(shown.slice().reverse()).slice(0, FEED_ROWS);
-    updateFeed($('[data-traffic-feed]', page), newest, nothing);
-    replace($('[data-traffic-table]', page),
-      shown.length
-        ? trafficTable(shown.slice().reverse().slice(0, FEED_ROWS))
-        : empty(nothing));
+    mapState.feedEmpty = nothing;
+    paintTrafficFeed();
     /*
      * The rate chart, raw. The window's row cap is named under it rather
      * than left to be inferred from a short chart, because a row limit
@@ -3752,9 +3999,11 @@ PAGES.map = async (page) => {
     mapState.live.clear();
     mapState.trafficPrimed = false;
     mapState.lastPackets = [];
+    mapState.feedEmpty = null;
     $('[data-traffic-summary]', page).textContent = 'The traffic layer is off.';
     replace($('[data-traffic-feed]', page));
     replace($('[data-traffic-table]', page));
+    delete $('[data-traffic-table]', page).dataset.rows;
     updateWatchStatus(page, [], null);
   }
 
@@ -4316,6 +4565,19 @@ PAGES.config = async (page) => {
   await window.SonoranConfigCheck.show(page);
 };
 
+/*
+ * " - as of 14:05" when the links were measured more than a minute ago.
+ *
+ * The jobs service builds the graph every few minutes (#371), so the
+ * links can be a few minutes older than the page. A graph computed for
+ * this request says nothing: it is as new as the page.
+ */
+function graphAsOf(builtAt) {
+  if (!builtAt) return '';
+  const age = Date.now() - new Date(builtAt).getTime();
+  return age > 60000 ? ` - as of ${clock(builtAt)}` : '';
+}
+
 PAGES.graph = async (page) => {
   const hours = $('[data-graph-hours]', page).value || '24';
   graphHours = hours;
@@ -4461,7 +4723,8 @@ PAGES.graph = async (page) => {
       ? showWeak
         ? `, ${count(unjudged)} unjudged`
         : `, ${count(unjudged)} unjudged hidden`
-      : '');
+      : '')
+    + graphAsOf(data.built_at);
   // Links stored before channel tracking mix every preset together, so
   // this one graph does show links that cannot exist. Say so plainly.
   const dotted = $('[data-legend-unconfirmed]', page);
@@ -6034,6 +6297,72 @@ function devicePanel(detail) {
     list || telemetryEmpty('This node sends no device telemetry.'));
 }
 
+/*
+ * Local stats (#178, #182): what the node measured about its own radio,
+ * read on request by a member's contributor. Field names and meanings
+ * are `LocalStats` in `meshtastic/telemetry.proto`. The noise floor is
+ * the node's own measurement (`getAverageNoiseFloor()` in the firmware),
+ * so it is always "measured" here: the coverage map assumes another,
+ * theoretical floor, and the two do not agree (rancur on #182).
+ */
+const LOCAL_STATS_LABELS = {
+  noise_floor: ['Measured noise floor', (v) => `${round(v, 0)} dBm`],
+  channel_utilization: ['Channel use', (v) => `${round(v, 1)} %`],
+  air_util_tx: ['Air time TX', (v) => `${round(v, 1)} %`],
+  num_packets_rx: ['Packets received', (v) => count(v)],
+  num_packets_rx_bad: ['Bad packets received', (v) => count(v)],
+  num_rx_dupe: ['Duplicates received', (v) => count(v)],
+  num_packets_tx: ['Packets sent', (v) => count(v)],
+  num_tx_relay: ['Relayed', (v) => count(v)],
+  num_tx_relay_canceled: ['Relays cancelled', (v) => count(v)],
+  num_tx_dropped: ['Dropped from the send queue', (v) => count(v)],
+  num_online_nodes: ['Nodes online', (v) => count(v)],
+  num_total_nodes: ['Nodes known', (v) => count(v)],
+};
+const LOCAL_STATS_HINTS = {
+  noise_floor: 'The noise this radio hears when nobody is sending, averaged by its firmware, in dBm. '
+    + 'A member\'s contributor asked the node for it. '
+    + 'It is not the floor the coverage map assumes, which is calculated, not measured.',
+};
+// The roles #178 asks contributors to read. Others get no panel unless
+// they have a reading.
+const LOCAL_STATS_ROLES = new Set(['ROUTER', 'ROUTER_LATE', 'CLIENT_BASE']);
+
+function localStatsPanel(detail) {
+  const stats = detail.local_stats || {};
+  const rows = Object.entries(LOCAL_STATS_LABELS)
+    .filter(([key]) => stats[key] != null)
+    .map(([key, [label, format]]) => ({ key, label, text: format(stats[key]), flag: null }));
+  if (!rows.length && !LOCAL_STATS_ROLES.has(detail.node.role)) return null;
+  let list = null;
+  if (rows.length) {
+    list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text }) => [
+      el('dt', { 'data-label': label, 'data-hint': LOCAL_STATS_HINTS[key] || FIELD_HINTS[key] || null }, label),
+      el('dd', { text }),
+    ]));
+    revealHints(list);
+  }
+  const by = stats.location ? `read by ${stats.location}${stats.source ? `/${stats.source}` : ''}` : null;
+  // A reading with no noise floor: the node's firmware does not measure it.
+  // 2.5 to 2.7.24 answer the request but never set noise_floor; 2.7.25 is
+  // the first that does (src/modules/Telemetry/DeviceTelemetry.cpp,
+  // meshtastic/firmware, checked tag by tag).
+  let noFloor = null;
+  if (stats.time && stats.noise_floor == null) {
+    noFloor = el('p', { class: 'muted', text: 'No measured noise floor in this reading. '
+      + 'A node reports one only on firmware 2.7.25 or newer.' });
+  }
+  return el('div', { class: 'panel' },
+    el('h3', {
+      'data-label': 'Local stats',
+      'data-hint': 'What the node measured about its own radio. It does not send this over the mesh, '
+        + 'so a member\'s contributor asks it. A new reading is asked for at most once per interval: 12 hours for a router, 1 hour for other roles.',
+    }, 'Local stats',
+      stats.time ? el('span', { class: 'muted', text: `${ago(stats.time)} ago${by ? `, ${by}` : ''}` }) : null),
+    list || el('p', { class: 'empty', text: 'Not measured yet. No contributor has read this node.' }),
+    noFloor);
+}
+
 function messagesPanel(detail) {
   const messages = detail.messages.recent || [];
   // `recent` is capped by the API; `count` is measured (#200). When
@@ -6183,9 +6512,9 @@ const HEALTH_STATES = {
   unknown: { word: 'Unknown', glyph: '?' },
 };
 
-/* The battery band stats.py calls a brownout risk, and the level the
- * firmware reports for a node on external power. Same numbers, so the
- * two pages agree. */
+/* The node page's battery bands, and the level the firmware reports for
+ * a node on external power. Statistics no longer judges the battery
+ * (#365); these bands still need a source (AGENTS.md §3A.2). */
 const BATTERY_LOW = 5;
 const BATTERY_WEAK = 35;
 const ON_MAINS_ABOVE = 100;
@@ -6473,7 +6802,7 @@ const FIELD_HINTS = {
     + 'to measure height than position. A node with a fixed position can have its height entered by hand. '
     + 'TAK roles send a different kind of height that this site does not store, so they are never red here.',
   // telemetry.proto DeviceMetrics.battery_level: "0-100 (>100 means
-  // powered)". Bands: `batteryState`, and stats.py's brownout band.
+  // powered)". Bands: `batteryState`.
   battery_level: 'How full the battery is, as the node measures it. '
     + '"External power" means the node reports no battery, or that it is charging. '
     + `Yellow from ${BATTERY_LOW} to ${BATTERY_WEAK} %: low enough that the node can restart `
@@ -7851,7 +8180,8 @@ async function loadNodeDetail(nodeId) {
     jumpTarget('identity', identityPanel(node)),
     el('div', { class: 'summary-stack' }, devicePanel(detail), health),
     jumpTarget('activity', activityPanel(detail)),
-    weatherPanel(detail));
+    weatherPanel(detail),
+    localStatsPanel(detail));
 
   /*
    * Identity and device first, health after (#95).
@@ -8627,7 +8957,7 @@ PAGES.chat = async (page) => {
   const shown = data.sections;
   if (!shown.length) {
     return replace(body, empty(menuPreset()
-      ? `No channels on ${SonoranLabels.presetLabel(menuPreset())} have stored messages.`
+      ? `No channels on ${menuPresetWords()} have stored messages.`
       : 'No channels have stored messages. Text storage may be off.'));
   }
 
@@ -9179,8 +9509,10 @@ PAGES.firehose = async (page) => {
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
   if (rows instanceof Error) {
-    // 422 here is always the filter, and the bare status tells the
-    // reader nothing they can act on. The test is on the status, which
+    // 422 here is a filter the API refused: the packet type, or the
+    // menu's preset (#383 sends several, and a stored name the server
+    // does not know is refused). The bare status tells the reader
+    // nothing they can act on. The test is on the status, which
     // `requestFailed` still puts in the message ahead of the path.
     // Name the value that was actually sent, not the box.
     //
@@ -9188,9 +9520,16 @@ PAGES.firehose = async (page) => {
     // is a tidied-up guess: `#firehose?type=NOT_A_REAL_APP` put
     // "Not a real" in the box, so the message named something nobody had
     // asked for. Measured on the running page.
-    return replace(target, /422/.test(rows.message || '')
-      ? failure(new Error(`No packet type is called "${portnum}". Try one of the suggestions, or a port number.`))
-      : failure(rows));
+    if (!/422/.test(rows.message || '')) return replace(target, failure(rows));
+    const refused = [];
+    if (portnum) {
+      refused.push(`No packet type is called "${portnum}". Try one of the suggestions, or a port number.`);
+    }
+    if (preset) {
+      refused.push(`${portnum ? 'Or the' : 'The'} server does not know the preset `
+        + `${menuPresetWords()}. Choose another in the menu.`);
+    }
+    return replace(target, failure(new Error(refused.join(' ') || 'The server refused this filter.')));
   }
   /*
    * An empty filtered table names the filter it applied.
@@ -9203,7 +9542,7 @@ PAGES.firehose = async (page) => {
    * from a type that never runs on the preset they are looking at.
    */
   const nothing = portnum || preset || firehoseFilter.hours
-    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${preset ? ` on ${preset}` : ''}`
+    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${preset ? ` on ${menuPresetWords()}` : ''}`
       + `${firehoseFilter.hours ? ` in the ${windowWord.toLowerCase()}` : ' at any time'}. `
       + 'The mesh may be quiet, or this may not be traffic that runs here.'
     : 'No packets match the filter.';
@@ -9378,16 +9717,28 @@ function drawBroadcastTable(page, data) {
 
   note.textContent =
     `${count(data.notable_count)} of ${count(data.node_count)} at ${data.notable_ratio}x ` +
-    `the default or more, ${count(data.power_loop_count)} possibly power cycling`;
+    `the default or more, ${count(data.power_loop_count)} restarted ${data.loop_restarts} ` +
+    `or more times in ${data.loop_hours} h while re-sending node info`;
 
   const health = (row) => {
     const h = row.health;
     if (!h) return el('span', { class: 'muted', text: 'no telemetry' });
     const parts = [];
+    /*
+     * A count, not a guess (#365). "Maybe power cycling" was any battery
+     * node that restarted once in the window, from a battery band with
+     * no source. A loop is now counted restarts close together while the
+     * node re-sends its node info faster than the default.
+     */
+    // A loop is two or more restarts, so its count is always plural.
     if (h.likely_power_loop) {
-      parts.push(el('span', { class: 'tag bad', text: 'maybe power cycling' }));
+      parts.push(el('span', {
+        class: 'tag bad', text: `restarted ${count(h.restarts_24h)} times in 24 h`,
+      }));
     } else if (h.restarted) {
-      parts.push(el('span', { class: 'tag', text: 'restarted' }));
+      parts.push(el('span', {
+        class: 'tag', text: `restarted ${count(h.restarts)} time${h.restarts === 1 ? '' : 's'}`,
+      }));
     }
     /*
      * The meaning of each of these was a `title`, which a phone never
@@ -9395,7 +9746,8 @@ function drawBroadcastTable(page, data) {
      */
     if (h.battery_level != null) {
       const mains = h.battery_level > 100;
-      parts.push(tapTip(h.brownout_risk ? 'tag bad' : 'tag',
+      // Context only: no battery level is judged here (#365).
+      parts.push(tapTip('tag',
         mains ? 'on mains' : `Battery ${Math.round(h.battery_level)}%`,
         mains ? 'On mains' : 'Battery',
         [mains
@@ -10359,6 +10711,51 @@ function envelopePanel(packet, packetId, observations) {
 /* The JSON starts open: closed, it read as an empty panel. It is still
  * a `details`, so it can be folded away, and it is still the last thing
  * on the page. */
+/*
+ * Which node sent each gateway its copy: one byte, the last of the node's
+ * number (AGENTS.md 9.20), so a list of candidates, never one node.
+ */
+function relayCell(relay) {
+  if (!relay) return el('span', { class: 'muted', text: '-' });
+  const names = relay.candidates;
+  if (!names.length) return el('span', { class: 'muted', text: `…${relay.byte}, no node this gateway heard directly` });
+  return el('span', {},
+    el('span', { class: 'muted', text: `…${relay.byte}: ` }),
+    // flatMap: el() flattens its children one level only.
+    names.slice(0, 3).flatMap((c, i) => [i ? ', ' : '', nodeChip(c)]),
+    names.length > 3 ? el('span', { class: 'muted', text: ` +${names.length - 3}` }) : null,
+    relay.exact ? el('span', { class: 'muted', text: ' (the sender, no hop)' })
+      : names.length > 1 ? el('span', { class: 'muted', text: ' (one of these candidates)' }) : null);
+}
+
+function whoHeardPanel(data, gateways, uploads, direct) {
+  return el('div', { class: 'panel span-2' },
+    el('h3', {}, 'Who heard it',
+      el('span', { class: 'muted',
+        text: `${count(gateways)} gateways, ${count(uploads)} uploads, ${count(direct)} direct` })),
+    el('p', { class: 'notice' },
+      'This is which MQTT gateways uploaded a copy of this packet. It is not '
+      + 'which nodes could hear the sender: a node that is not a gateway hears '
+      + 'plenty and reports none of it. A gateway that used a hop received the '
+      + 'packet from a relay, so only a direct row measures the sender’s own '
+      + 'link. A sender that gateways its own traffic uploads what it just sent, '
+      + 'which is not a radio link at all.'),
+    el('div', { class: 'table-wrap' }, table([
+      { label: 'Gateway', cell: (row) => nodeChip({ node_id: row.gateway, display_name: row.gateway_name }) },
+      {
+        label: 'Path',
+        cell: (row) => (row.self_reported
+          ? el('span', { class: 'muted', text: 'its own upload' })
+          : row.direct ? 'direct' : row.hops_taken == null ? 'unknown' : `${row.hops_taken} hops`),
+      },
+      { label: 'SNR', num: true, cell: (row) => (row.direct ? snrCell(row.rx_snr) : el('span', { class: 'muted', text: '-' })) },
+      { label: 'RSSI', num: true, cell: (row) => (row.direct && row.rx_rssi != null ? `${row.rx_rssi} dBm` : '-') },
+      { label: 'Relayed by', cell: (row) => relayCell(row.relayed_by) },
+    { label: 'When', cell: (row) => clock(row.seen_at) },
+      { label: 'Topic', wrap: true, cell: (row) => row.mqtt_topic },
+    ], data.observations, 'No gateway observation stored.')));
+}
+
 function rawPanel(data) {
   return el('details', { class: 'panel span-2 raw-data', open: true },
     el('summary', {}, 'Raw data'),
@@ -10408,52 +10805,32 @@ PAGES.packet = async (page) => {
         text: `${count(gateways)} gateways uploaded it, `
           + (direct ? `${count(direct)} heard it direct.` : 'none heard it direct.') })));
 
-  /*
-   * Who heard it comes first. It is the one thing on this page that no
-   * other page shows for a single packet, and it was at the bottom.
-   */
-  const panels = [
-    el('div', { class: 'panel span-2' },
-      el('h3', {}, 'Who heard it',
-        el('span', { class: 'muted',
-          text: `${count(gateways)} gateways, ${count(uploads)} uploads, ${count(direct)} direct` })),
-      el('p', { class: 'notice' },
-        'This is which MQTT gateways uploaded a copy of this packet. It is not '
-        + 'which nodes could hear the sender: a node that is not a gateway hears '
-        + 'plenty and reports none of it. A gateway that used a hop received the '
-        + 'packet from a relay, so only a direct row measures the sender’s own '
-        + 'link. A sender that gateways its own traffic uploads what it just sent, '
-        + 'which is not a radio link at all.'),
-      el('div', { class: 'table-wrap' }, table([
-        { label: 'Gateway', cell: (row) => nodeChip({ node_id: row.gateway, display_name: row.gateway_name }) },
-        {
-          label: 'Path',
-          cell: (row) => (row.self_reported
-            ? el('span', { class: 'muted', text: 'its own upload' })
-            : row.direct ? 'direct' : row.hops_taken == null ? 'unknown' : `${row.hops_taken} hops`),
-        },
-        { label: 'SNR', num: true, cell: (row) => (row.direct ? snrCell(row.rx_snr) : el('span', { class: 'muted', text: '-' })) },
-        { label: 'RSSI', num: true, cell: (row) => (row.direct && row.rx_rssi != null ? `${row.rx_rssi} dBm` : '-') },
-        { label: 'When', cell: (row) => clock(row.seen_at) },
-        { label: 'Topic', wrap: true, cell: (row) => row.mqtt_topic },
-      ], data.observations, 'No gateway observation stored.'))),
-  ];
-
+  const panels = [];
   panels.push(...[decodedPanels(packet)].flat());
-  panels.push(envelopePanel(packet, packetId, data.observations));
+  const envelope = envelopePanel(packet, packetId, data.observations);
+  panels.push(envelope);
+  /*
+   * Who heard it goes last, before the raw data (Logan, 2026-10-17). It
+   * holds every gateway's MQTT topic, and was first since the UX batch.
+   */
+  panels.push(whoHeardPanel(data, gateways, uploads, direct));
   panels.push(rawPanel(data));
   replace(body, el('div', { class: 'grid two' }, panels));
 
   const mapHolder = $('[data-position-map]', body);
   if (mapHolder && packet.decoded) positionMap(mapHolder, packet.decoded.values);
 
-  // A traceroute packet carries a path. Show it and the drawing here.
+  /*
+   * A traceroute packet carries a path. It loads after the page is drawn,
+   * and goes with what the packet says, before the envelope: appended,
+   * it landed below who heard it and the raw data.
+   */
   if (packet.portnum === 'TRACEROUTE_APP') {
     const trace = await get(
       `api/traceroutes/by-packet/${encodeURIComponent(fromNode)}/${encodeURIComponent(packetId)}`)
       .catch(() => null);
     if (trace) {
-      $('.grid', body).append(
+      envelope.before(
         el('div', { class: 'panel' },
           el('h3', {}, 'Path this packet took',
             el('a', { class: 'linky', href: `#traceroute/${trace.id}`, text: 'full page' })),
@@ -10739,7 +11116,7 @@ function fitHint(host, noun, label, hint, exact) {
  * Shared by `fitHint` and `tapTip`, so the popover path and the fallback
  * path cannot drift between the two.
  */
-function wireHint(button, panel) {
+function wireHint(button, panel, place = placeHint) {
   /*
    * The browser drives it where it can. `popovertarget` toggles the
    * panel, closes it on Escape and on a tap outside, and — the part a
@@ -10757,7 +11134,7 @@ function wireHint(button, panel) {
     panel.addEventListener('toggle', (event) => {
       const open = event.newState === 'open';
       button.setAttribute('aria-expanded', String(open));
-      if (open) placeHint(button, panel);
+      if (open) place(button, panel);
     });
   } else {
     button.addEventListener('click', () => {
@@ -10767,7 +11144,7 @@ function wireHint(button, panel) {
       panel.hidden = false;
       button.setAttribute('aria-expanded', 'true');
       openHint = { button, panel };
-      placeHint(button, panel);
+      place(button, panel);
     });
   }
 }
@@ -10845,7 +11222,8 @@ if (!POPOVER) {
     if (event.key === 'Escape') closeHint();
   });
   document.addEventListener('pointerdown', (event) => {
-    if (openHint && !event.target.closest('.hint-pop, .hint-open')) closeHint();
+    if (openHint && !event.target.closest('.hint-pop, .hint-open')
+      && !event.target.closest('.family-menu, .family-toggle')) closeHint();
   });
 }
 
@@ -10879,6 +11257,8 @@ if (!POPOVER) {
 const PRESET_PAGES = new Set([
   'dashboard', 'nodes', 'chat', 'map', 'graph', 'coverage', 'planner',
   'gaps', 'firehose', 'stats',
+  // The page where several presets are chosen (#383).
+  'settings',
 ]);
 
 /*
@@ -10891,7 +11271,7 @@ const PRESET_PAGES = new Set([
  * preset has nothing left to narrow.
  */
 const PRESET_FREE_PAGES = new Set([
-  'traceroutes', 'meshnet', 'rf', 'config', 'settings',
+  'traceroutes', 'meshnet', 'rf', 'config',
   'node', 'packet', 'link', 'traceroute',
 ]);
 
@@ -10901,6 +11281,15 @@ const PRESET_FREE_PAGES = new Set([
  * so under "All" they draw the deployment's default (`single()`).
  */
 const ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps']);
+
+/*
+ * Pages that draw links, so they draw ONE preset when several are
+ * chosen (#383): a line between two presets cannot exist (AGENTS.md
+ * 9.7). "All presets" still draws everything here, as Logan asked for
+ * (#370); a choice of several is a narrower question, and these pages
+ * answer it for one preset and say which.
+ */
+const LINK_PRESET_PAGES = new Set(['map', 'graph']);
 
 /** True when the menu's preset changes what this page shows. */
 function presetAppliesTo(name) {
@@ -10924,8 +11313,11 @@ function drawPresetScope(name) {
   const applies = presetAppliesTo(name);
   // Under "All presets" a page that draws one preset says which one it
   // drew, so the reader does not take one mesh for the whole state.
-  const one = applies && ONE_PRESET_PAGES.has(name)
-    && window.SonoranPreset && SonoranPreset.isAll();
+  const store = window.SonoranPreset;
+  const several = Boolean(store && store.isSeveral && store.isSeveral());
+  const one = applies && Boolean(store)
+    && ((ONE_PRESET_PAGES.has(name) && (store.isAll() || several))
+      || (LINK_PRESET_PAGES.has(name) && several));
   note.hidden = applies && !one;
   note.textContent = one
     ? `Shows ${SonoranLabels.presetLabel(SonoranPreset.single())} only. This page draws one preset.`
@@ -11183,7 +11575,60 @@ PAGES.settings = async (page) => {
   for (const group of $$('[data-setting]', page)) {
     drawSettingChoice(group);
   }
+  drawPresetBoxes(page);
 };
+
+/*
+ * A box for each modem preset, and one for all of them (#383).
+ *
+ * Checkboxes, not the radio group the other settings use: here the
+ * reader may choose more than one. Ticking a box adds that preset and
+ * clearing it takes it out; the last one cannot be cleared, because no
+ * preset at all is a site with nothing on any page. "All presets" ticks
+ * every box. The menu's buttons still choose one preset alone.
+ */
+function drawPresetBoxes(page) {
+  const holder = $('[data-preset-boxes]', page);
+  if (!holder || !window.SonoranPreset) return;
+  const note = $('[data-preset-boxes-note]', page);
+  const all = SonoranPreset.isAll();
+  const chosen = new Set(SonoranPreset.selected());
+  // A redraw replaces the boxes; keep the keyboard on the one in use.
+  const focused = document.activeElement && holder.contains(document.activeElement)
+    ? document.activeElement.value : null;
+  const box = (value, text, checked, onchange, extra = '') => {
+    const input = el('input', { type: 'checkbox', value, onchange });
+    input.checked = checked;
+    return el('label', { class: `preset-box${checked ? ' checked' : ''}${extra}` },
+      input, el('span', { text }));
+  };
+  replace(holder,
+    box(SonoranPreset.ALL, 'All presets', all, (event) => {
+      if (event.target.checked) SonoranPreset.set(SonoranPreset.ALL);
+      else SonoranPreset.set(SonoranPreset.single());
+      drawPresetBoxes(page);
+    }, ' all'),
+    SonoranPreset.options().map((name) => box(name, SonoranLabels.presetLabel(name),
+      all || chosen.has(name), () => {
+        const changed = SonoranPreset.toggle(name);
+        const why = changed ? '' : 'At least one preset stays chosen.';
+        if (note) note.textContent = why;
+        /*
+         * Said through the site's one live region as well, so a screen
+         * reader hears why the box stayed ticked. Not a second
+         * `aria-live`: one polite region is the rule (#175,
+         * `test_there_is_exactly_one_live_region_and_it_is_polite`).
+         * A refusal changes no preset, so no redraw overwrites it.
+         */
+        const live = $('[data-status-live]');
+        if (live && why) live.textContent = why;
+        drawPresetBoxes(page);
+      })));
+  if (focused) {
+    const again = [...holder.querySelectorAll('input')].find((input) => input.value === focused);
+    if (again) again.focus();
+  }
+}
 
 function drawSettingChoice(group) {
   const name = group.dataset.setting;
@@ -11288,7 +11733,10 @@ function wirePresetSwitch() {
   const more = $('[data-preset-more]');
 
   const draw = () => {
-    const current = SonoranPreset.current();
+    // With several chosen (#383) no single button is the choice, so none
+    // is lit, and the select names how many are chosen.
+    const several = Boolean(SonoranPreset.isSeveral && SonoranPreset.isSeveral());
+    const current = several ? null : SonoranPreset.current();
     const offered = SonoranPreset.options();
     const options = presetSwitchSlots(offered);
     const extras = offered.filter((name) => !options.includes(name));
@@ -11353,10 +11801,13 @@ function wirePresetSwitch() {
     replace(more,
       // "More", not "More presets": on a phone the select shares the
       // switch's row. Its accessible name says the rest.
-      el('option', { value: '', text: 'More' }),
+      el('option', {
+        value: '',
+        text: several ? `${count(SonoranPreset.selected().length)} presets` : 'More',
+      }),
       el('option', { value: SonoranPreset.ALL, text: 'All' }),
       extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
-    more.value = pinned ? '' : current;
+    more.value = pinned || several ? '' : current;
   };
 
   if (more) {
@@ -11370,7 +11821,13 @@ function wirePresetSwitch() {
   // list narrowing -- redraws the control and the page under it.
   SonoranPreset.onChange(() => {
     draw();
-    render(currentPage);
+    /*
+     * Queued, not dropped (#384). `render` returns at once while another
+     * draw is in flight, so a switch made during a slow map draw used to
+     * be lost: the old preset's answer landed, and the map kept it under
+     * the new switch until the next Live tick, or for ever with Live off.
+     */
+    navigateRender(currentPage);
   });
   // The list grew or shrank with the same preset chosen: the page is
   // still right, only the switch and the select change.
@@ -11919,11 +12376,26 @@ function optionDiffers(control) {
   return false;
 }
 
+/*
+ * A page that knows its own settings can say how many changed.
+ *
+ * Coverage (#334) counts settings and not controls: three hidden roles
+ * are one filter in force, and a badge of 3 would make one choice look
+ * like three. It writes the number on the panel as
+ * `data-options-changed`, and that number wins. Every other page has no
+ * such attribute and is counted control by control, as before.
+ */
+function optionsChanged(panel) {
+  const own = Number(panel.dataset.optionsChanged);
+  if (panel.dataset.optionsChanged != null && Number.isInteger(own) && own >= 0) return own;
+  return $$('select, input, button[aria-pressed]', panel)
+    .filter((control) => !control.closest('[hidden]') && optionDiffers(control)).length;
+}
+
 function drawOptionCount(button) {
   const panel = document.getElementById(button.getAttribute('aria-controls'));
   if (!panel) return;
-  const changed = $$('select, input, button[aria-pressed]', panel)
-    .filter((control) => !control.closest('[hidden]') && optionDiffers(control)).length;
+  const changed = optionsChanged(panel);
   const badge = $('[data-options-count]', button);
   if (badge) {
     badge.textContent = changed ? String(changed) : '';
@@ -11963,7 +12435,10 @@ function wireOptions() {
     panel.addEventListener('change', redraw);
     panel.addEventListener('click', redraw);
     new MutationObserver(redraw).observe(panel, {
-      subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed', 'hidden'],
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['aria-pressed', 'hidden', 'data-options-changed'],
     });
     drawOptionCount(button);
   }

@@ -5,6 +5,135 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.15.2 — 2026-10-15
+
+2 pull requests merged.
+
+#### Fixes
+
+- Each broker password reaches only its own service (#377) by @logans-stuff
+
+#### Documentation
+
+- Stations run sonoran-contributor; CHANGELOG v2026.10.15 (#376) by @logans-stuff
+  The RF tab says that stations run sonoran-contributor.
+
+#### Issues
+
+- Worked on: #178 Noise Floor Tracking (reported by @tylerpieper)
+
+#### Thank you
+
+- Reported: @tylerpieper
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.15...v2026.10.15.2
+
+## v2026.10.15 — 2026-10-15
+
+1 pull request merged.
+
+#### New features
+
+- Contributors, mesh jobs and the measured noise floor (#178) (#375) by @logans-stuff
+  Node pages can show a router's **measured noise floor** and its other local stats, read by members' contributors. The RF tab has a **Measured noise floor** layer. Both stay empty until a contributor runs.
+
+#### Issues
+
+- Worked on: #178 Noise Floor Tracking (reported by @tylerpieper)
+- Worked on: #179 Sonoran-Contributor docker service (reported by @tylerpieper)
+- Worked on: #181 Sonoran - Contributor management (reported by @tylerpieper)
+- Worked on: #182 Sonoran - Noise Floor display (reported by @tylerpieper)
+
+#### Thank you
+
+- Reported: @tylerpieper
+- Code: @logans-stuff
+- Tested and helped: @tylerpieper, @returnzork
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.14...v2026.10.15
+
+## v2026.10.14 — 2026-10-14
+
+1 pull request merged, 2 issues closed.
+
+#### Other
+
+- AGENTS.md: a person, a source, a test (#359); power loops are counted restarts (#365) (#374) by @logans-stuff — done: #359, #365
+  The Statistics broadcast table no longer marks nodes "maybe power cycling" from their battery level. It now counts restarts, and flags a node only when it restarted 4 or more times in a day while re-sending its node info; the label says how many times.
+
+#### Issues
+
+- Done: #359 AGENTS.md: new features need a person who understands them, and every metric needs a source (reported by @logans-stuff)
+- Done: #365 Statistics: "maybe power cycling" flags any battery node that restarted once in the window (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.13.2...v2026.10.14
+
+## v2026.10.13.2 — 2026-10-13
+
+1 pull request merged, 1 issue closed.
+
+#### New features
+
+- Read models, a jobs supervisor with per-job memory limits, and cache holds by window (#371) (#373) by @logans-stuff — done: #371
+
+#### Issues
+
+- Done: #371 Precompute the long-window views in the jobs service (read models), so the API only reads (reported by @logans-stuff)
+
+#### Thank you
+
+- Reported: @logans-stuff
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.13...v2026.10.13.2
+
+## v2026.10.13 — 2026-10-13
+
+3 pull requests merged, 1 issue closed.
+
+#### Fixes
+
+- Remove sole_observer gaps signal (#347) by @tylerpieper — done: #327
+
+#### Documentation
+
+- Instruct agents to use PR or commit hash for alembic revision IDs (#348) by @tylerpieper
+
+#### Maintenance
+
+- CI and test databases on tmpfs, with a pinned TimescaleDB image (#372) by @logans-stuff
+
+#### Issues
+
+- Done: #327 Gaps - nodes where only one gateway hears directly (reported by @tylerpieper)
+
+#### Thank you
+
+- Reported: @tylerpieper
+- Code: @tylerpieper, @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.5...v2026.10.13
+
+## v2026.10.12.5 — 2026-10-12
+
+1 pull request merged.
+
+#### New features
+
+- Preset switch with More presets and All presets (#370) by @logans-stuff
+
+#### Thank you
+
+- Code: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.12.4...v2026.10.12.5
+
 ## v2026.10.12.4 — 2026-10-12
 
 1 pull request merged, 1 issue closed.

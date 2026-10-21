@@ -183,6 +183,7 @@ One row per observation of a packet. Hypertable on `seen_at`.
 | `hop_limit` | integer | nullable. Hops left when the gateway heard it |
 | `hop_start` | integer | nullable. The same header's hop start, so `hop_start = hop_limit` says direct without a join (#304). NULL on rows written before revision 0017, which are not backfilled: read them through `api/sightings.py`, which joins those to `packet` |
 | `seen_at` | timestamptz | not null. partition key |
+| `relay_node` | smallint | nullable. The last byte of the node that sent this gateway its copy (`MeshPacket.relay_node`; AGENTS.md 9.20). One byte names no node for sure. Kept per upload since migration `pr378`; NULL before it. Deferred in the model |
 | `modem_preset` | text | nullable. The modem preset of this upload (#313): the topic's own preset when the topic is preset-named, else the gateway's current preset, else NULL. NULL when the gateway is ambiguous: it uploaded two different preset-named topics within `GATEWAY_PRESET_CONFLICT_MINUTES` |
 
 #### 3.4.1 How ingest decides a modem preset
@@ -378,6 +379,30 @@ role can read or write `rf_operator_log`; `rf_trust` and
 case, for aircraft. `rssi_db` is in the receiver's own units, so it
 compares one station with itself and never two stations.
 
+## 5A.1 Contributor tables (#178)
+
+Written by `sonoran-contrib` as `azmsh_jobs`. See
+`docs/design/contributors.md` section 5.4. Migration `i178`.
+
+- `contrib_source`: one row per contributor (`location`, `source`): its
+  last heartbeat (`sent`, `received_at`, `version`, `mesh_node`, `kinds`).
+- `contrib_heard`: the nodes each contributor's node hears (`node_num`,
+  `hops`, `last_heard`). Replaced with each heartbeat. Deleted with its
+  `contrib_source` row.
+- `contrib_job`: every job: the contributor, `kind`, `target`,
+  `round_started`, `issued`, `expires`, `outcome` (None while open, a
+  result outcome, or `expired`), `finished`, `detail`, and `cleared`
+  (its retained outbox message is gone). Finished jobs older than
+  `RETENTION_DAYS_METRIC` are deleted.
+- `local_stats`: a hypertable of readings: `time`, `node_num`, `job`,
+  `location`, `source`, the answer's `hops`, `rx_snr`, `rx_rssi`, and
+  every `LocalStats` field from `meshtastic/telemetry.proto`.
+  `noise_floor` is the node's measured floor in dBm.
+
+Grants: `azmsh_jobs` SELECT, INSERT, UPDATE, DELETE on the `contrib_`
+tables and SELECT, INSERT on `local_stats`. `azmsh_api` SELECT on
+`local_stats` and `contrib_source`. `azmsh_ingest` nothing.
+
 ## 5B. Job output tables (#351)
 
 What the background jobs compute, and the API serves. Before #351 these
@@ -443,6 +468,7 @@ Applied in migrations with `add_retention_policy`.
 | `pax_metrics` | 90 days |
 | `mesh_packet_metrics` | 90 days |
 | `neighbor_metrics` | 90 days |
+| `local_stats` | 90 days (`RETENTION_DAYS_METRIC`) |
 
 The migration service applies `RETENTION_DAYS_*` environment overrides.
 Run the migration service after a retention setting change.
@@ -491,15 +517,17 @@ Keep indexes minimal. Each index slows inserts.
 
 ## 8. Continuous aggregates
 
-Three TimescaleDB continuous aggregates hold hourly totals (#366, revision
-i366; #368, revision i368). Statistics, the dashboard, the activity chart
-and the graph's node counts count from them.
+Four TimescaleDB continuous aggregates hold hourly totals (#366, revision
+i366; #368, revision i368; #371, revision i371). Statistics, the
+dashboard, the activity chart, the graph's node counts and the jobs'
+read models (8.1) count from them.
 
 | View | Columns | From |
 |---|---|---|
 | `packet_hourly` | `bucket` (the hour), `from_node_num`, `packets` | `packet.first_seen_at` |
 | `packet_seen_hourly` | `bucket` (the hour), `uploads` | `packet_seen.seen_at` |
 | `packet_family_hourly` | `bucket` (the hour), `portnum`, `payload_state`, `packets` | `packet.first_seen_at` |
+| `packet_sender_port_hourly` | `bucket` (the hour), `from_node_num`, `portnum`, `packets` | `packet.first_seen_at` |
 
 - **Exact counts.** `sonoran/api/hourly.py` sums whole hours from these
   views and counts the partial hour at each end of a window from the
@@ -528,7 +556,50 @@ and the graph's node counts count from them.
 - **Retention.** `RETENTION_DAYS_PACKET` plus 14 days. Raw chunks can
   outlive the retention by a few days, and the totals must cover every
   hour the raw rows still hold.
-- **Grants.** `azmsh_api` has SELECT. Only TimescaleDB writes them.
+- **Senders and ports.** `packet_sender_port_hourly` counts the
+  broadcast rates (`/api/stats/broadcast`). Top talkers and the hardware
+  mix of a window read `packet_hourly`, and the packet types with no
+  filter read `packet_family_hourly` (#371).
+- **Grants.** `azmsh_api` has SELECT. `azmsh_jobs` has SELECT on
+  `packet_hourly` and `packet_sender_port_hourly`, which the read models
+  read. Only TimescaleDB writes them.
+
+### 8.1 Read models (#371)
+
+The views that cover hours or days are built by the jobs service
+(`sonoran/jobs/read_models.py`, every `READ_MODELS_INTERVAL_MINUTES`) and
+read by the API (`sonoran/read_models.py`, revision i371). The API runs
+one event loop, and a view computed while somebody waits held up every
+other request: the longest-link board took 11.6 s over 30 days.
+
+| Tables | Key | Holds | Read by |
+|---|---|---|---|
+| `link_evidence_run`, `link_evidence_link`, `link_evidence_node` | channel (`''` is every channel), hours | each link's counts each way, median SNR, kinds, last seen; each node's packets | `/api/graph`, the longest-link board |
+| `broadcast_run`, `broadcast_node` | hours | each node's broadcast rates and health, in report order | `/api/stats/broadcast` |
+| `channel_nodes_run`, `channel_node` | channel, hours | the nodes that sent traffic seen on the channel | `/api/map/nodes` (the coverage page's 7 day list) |
+
+- **Windows.** The graph's 6 h, 24 h, 3 d and 7 d for every channel with
+  links (the busiest six) and for every channel together; the board's
+  24 h, 3 d, 7 d and 30 d for each assessed preset; broadcast rates over
+  24 h, 7 d and 30 d; node lists over 7 d. 30 day windows are built on
+  every `READ_MODELS_LONG_EVERY`-th run. Any other window is computed
+  live, as before.
+- **Latest build only.** The job deletes a run and inserts the new one in
+  one transaction; child rows go with the run (`ON DELETE CASCADE`).
+  Nothing grows with time.
+- **Numbers, never names.** Like the #351 tables, a build holds node
+  numbers. The API joins `node` when it answers, so a renamed or moved
+  node reads correctly at once, and positions and distances are current.
+- **Fresh or live.** A build older than three of its build intervals is
+  not used, and the API computes the view live. A stopped jobs service
+  costs speed, never correctness.
+- **Memory.** Each run is its own process with its own ceiling, under
+  the jobs supervisor (`docs/ARCHITECTURE.md` 3.9), and runs beside a
+  coverage build when both fit.
+- **Not the live views.** The map's live layers, the firehose, chat and
+  the RF waterfall always read the raw rows. So do the node pages: their
+  routes count distinct packets per pair, which hourly sums cannot give.
+- **Grants.** `azmsh_jobs` SELECT, INSERT and DELETE; `azmsh_api` SELECT.
 
 ## 9. Backup and restore
 

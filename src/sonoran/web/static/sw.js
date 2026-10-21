@@ -7,7 +7,7 @@
  * 2. It changes with every deploy, because the asset version below is
  *    written into it by the server. The browser compares the script
  *    byte for byte, so a deploy installs a new worker, and pwa.js tells
- *    the reader that a new version is waiting.
+ *    the reader that Sonoran was updated (#382).
  *
  * It keeps NOTHING in a cache, on purpose:
  *

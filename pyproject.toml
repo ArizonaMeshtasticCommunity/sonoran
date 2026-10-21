@@ -3,6 +3,11 @@ name = "sonoran"
 version = "0.1.0"
 description = "Sonoran Meshtastic dashboard: MQTT ingest, TimescaleDB storage, read-only API, static UI"
 readme = "README.md"
+# The same licence as LICENSE, the full GNU GPL version 3 text. The
+# vendored SPLAT! engine is GPL-3 (docs/PLANNER.md 6), so the project is
+# too. Third-party code and data are listed in THIRD_PARTY_NOTICES.md.
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "aiomqtt>=2.3,<3",
@@ -68,6 +73,8 @@ sonoran-rf-ingest = "sonoran.rf.ingest:run"
 sonoran-rf-purge = "sonoran.rf.purge:run"
 # Trust levels and hidden mods for RF stations (#324). Run in `migrate`.
 sonoran-rf-trust = "sonoran.rf.operator:run"
+# Jobs for members' contributors, and their results (#178).
+sonoran-contrib = "sonoran.contrib.service:run"
 
 [build-system]
 requires = ["hatchling"]

@@ -192,6 +192,11 @@ class PacketSeen(Base):
     # when the topic is preset-named, else the gateway's current preset,
     # else NULL. See `ingest/presets.py`.
     modem_preset: Mapped[str | None] = mapped_column(Text, deferred=True)
+    # The last byte of the node that sent this copy to the gateway
+    # (MeshPacket.relay_node; AGENTS.md 9.20). One byte names no node for
+    # sure. NULL on rows written before migration pr378. Deferred, so a
+    # SELECT of a whole row runs the same SQL as before.
+    relay_node: Mapped[int | None] = mapped_column(SmallInteger, deferred=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "seen_at"),
@@ -797,6 +802,93 @@ class RfOperatorLog(Base):
     detail: Mapped[str | None] = mapped_column(Text)
 
 
+# --- Contributors (#178) ------------------------------------------------
+#
+# Members' own machines do jobs on their own nodes. Written by
+# `sonoran-contrib` as `azmsh_jobs`. See docs/design/contributors.md.
+
+
+class ContribSource(Base):
+    """The last heartbeat of one contributor."""
+
+    __tablename__ = "contrib_source"
+
+    location: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    sent: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    version: Mapped[str | None] = mapped_column(Text)
+    mesh_node: Mapped[int | None] = mapped_column(BigInteger)
+    kinds: Mapped[list[str]] = mapped_column(ARRAY(Text))
+
+
+class ContribHeard(Base):
+    """One node in one contributor's node list, from its last heartbeat."""
+
+    __tablename__ = "contrib_heard"
+
+    location: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    hops: Mapped[int | None] = mapped_column(SmallInteger)
+    last_heard: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ContribJob(Base):
+    """One job given to one contributor, and its outcome."""
+
+    __tablename__ = "contrib_job"
+
+    job: Mapped[str] = mapped_column(Text, primary_key=True)
+    location: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text)
+    target: Mapped[int] = mapped_column(BigInteger)
+    round_started: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    issued: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(Text)
+    finished: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    detail: Mapped[str | None] = mapped_column(Text)
+    cleared: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class LocalStatsMetrics(Base):
+    """`LocalStats` as a contributor read it from a node. Hypertable on time.
+
+    `noise_floor` is the node's own measured floor in dBm. It is not the
+    theoretical floor in `sonoran/radio/presets.py`.
+    """
+
+    __tablename__ = "local_stats"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    job: Mapped[str] = mapped_column(Text, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger)
+    location: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    hops: Mapped[int | None] = mapped_column(SmallInteger)
+    rx_snr: Mapped[float | None] = mapped_column(REAL)
+    rx_rssi: Mapped[int | None] = mapped_column(Integer)
+    uptime_seconds: Mapped[int | None] = mapped_column(BigInteger)
+    channel_utilization: Mapped[float | None] = mapped_column(REAL)
+    air_util_tx: Mapped[float | None] = mapped_column(REAL)
+    num_packets_tx: Mapped[int | None] = mapped_column(BigInteger)
+    num_packets_rx: Mapped[int | None] = mapped_column(BigInteger)
+    num_packets_rx_bad: Mapped[int | None] = mapped_column(BigInteger)
+    num_online_nodes: Mapped[int | None] = mapped_column(BigInteger)
+    num_total_nodes: Mapped[int | None] = mapped_column(BigInteger)
+    num_rx_dupe: Mapped[int | None] = mapped_column(BigInteger)
+    num_tx_relay: Mapped[int | None] = mapped_column(BigInteger)
+    num_tx_relay_canceled: Mapped[int | None] = mapped_column(BigInteger)
+    heap_total_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    heap_free_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    num_tx_dropped: Mapped[int | None] = mapped_column(BigInteger)
+    noise_floor: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (Index("ix_local_stats_node_time", "node_num", time.desc()),)
+
+
 # --- What the background jobs computed (#351) --------------------------
 #
 # The gaps job, the siting half and the calibration fit used to write
@@ -1086,6 +1178,149 @@ class CoverageCalibrationNode(Base):
     reported: Mapped[int] = mapped_column(Integer)
     residual_spread_db: Mapped[float] = mapped_column(Double)
     locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
+# --- Read models (#371) ----------------------------------------------
+#
+# Views that cover hours or days, built by the jobs service and read by
+# the API (revision i371). Each table holds the latest build only: the job
+# deletes a run and inserts the new one in one transaction, and the child
+# rows go with the run (`ON DELETE CASCADE`). Like the #351 tables, they
+# hold node numbers and numbers, never names or positions: a reader joins
+# `node` for those, so a renamed or moved node reads correctly at once.
+
+
+class LinkEvidenceRun(Base):
+    """One build of the link evidence of one channel over one window.
+
+    `channel` is the empty string for every channel together (the "All
+    presets" graph). The graph and the longest-link board both read it.
+    """
+
+    __tablename__ = "link_evidence_run"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LinkEvidenceLink(Base):
+    """One link of a build: the two nodes and what was measured across it.
+
+    The fields are `graph.Edge` after every report was counted: `snr` is
+    the median of the samples, `forward` and `backward` count reports
+    from the point of view of `source`.
+    """
+
+    __tablename__ = "link_evidence_link"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    target: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text)
+    kinds: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    snr: Mapped[float | None] = mapped_column(Double)
+    count: Mapped[int] = mapped_column(Integer)
+    confirmed: Mapped[bool] = mapped_column(Boolean)
+    forward: Mapped[int] = mapped_column(Integer)
+    backward: Mapped[int] = mapped_column(Integer)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel", "hours"],
+            ["link_evidence_run.channel", "link_evidence_run.hours"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class LinkEvidenceNode(Base):
+    """The packets one node sent in the window of a build (every channel)."""
+
+    __tablename__ = "link_evidence_node"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    packet_count: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel", "hours"],
+            ["link_evidence_run.channel", "link_evidence_run.hours"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class BroadcastRun(Base):
+    """One build of the broadcast rates over one rolling window."""
+
+    __tablename__ = "broadcast_run"
+
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    notable_count: Mapped[int] = mapped_column(Integer)
+    power_loop_count: Mapped[int] = mapped_column(Integer)
+
+
+class BroadcastNode(Base):
+    """One node of a broadcast build, in the order the report ranks it.
+
+    `families` holds each family's rate (count, interval, default, ratio,
+    flags) and `health` the node's battery and uptime reading, as the
+    endpoint has always shaped them. Neither holds a name.
+    """
+
+    __tablename__ = "broadcast_node"
+
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    packet_count: Mapped[int] = mapped_column(Integer)
+    notable: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    faster_than_default: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    families: Mapped[dict] = mapped_column(JSONB)
+    health: Mapped[dict | None] = mapped_column(JSONB)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["hours"], ["broadcast_run.hours"], ondelete="CASCADE"),
+        Index("ix_broadcast_node_rank", "hours", "rank"),
+    )
+
+
+class ChannelNodesRun(Base):
+    """One build of the nodes heard on one channel over one window."""
+
+    __tablename__ = "channel_nodes_run"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ChannelNode(Base):
+    """One node that sent traffic seen on the channel inside the window."""
+
+    __tablename__ = "channel_node"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    hours: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_num: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel", "hours"],
+            ["channel_nodes_run.channel", "channel_nodes_run.hours"],
+            ondelete="CASCADE",
+        ),
+    )
 
 
 # The ingest role has INSERT and UPDATE rights only. Disable PostgreSQL

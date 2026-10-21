@@ -7,6 +7,9 @@ Simplified Technical English. See #308.
 No credentials and no host names are in this file. Ask the owner of the
 deployment host for access.
 
+For the day-to-day work on a running deployment (checks, restarts,
+logs, backups and common faults), see `docs/OPERATIONS.md`.
+
 ## 1. The shape of a deployment
 
 - The deployment is a clone of this repository in the home directory of
@@ -32,6 +35,13 @@ deployment host for access.
    ```bash
    docker tag sonoran-api:latest sonoran-api:rollback-<old-sha>
    ```
+
+   Compose names an image `<project>-<service>` and a container
+   `<project>-<service>-1`. The project is the name of the directory
+   that holds `docker-compose.yml`, unless `COMPOSE_PROJECT_NAME` sets
+   it. The commands in this file use `sonoran`. A clone in a directory
+   named `sonoran` has `sonoran-api`. `docker compose images`
+   shows the names.
 
 4. Take a snapshot of what the live API answers:
 
@@ -75,6 +85,7 @@ Which services to rebuild:
 | `src/sonoran/ingest/` | `ingest` |
 | `src/sonoran/jobs/`, `src/sonoran/coverage/`, `src/sonoran/gaps/` | `jobs` |
 | `src/sonoran/rf/` ingest code | `rf-ingest` |
+| `src/sonoran/contrib/` | `contrib` (profile `contrib`) |
 | A migration | `migrate` runs first on its own |
 
 Do not restart `jobs` while a coverage run is in progress. A restart
@@ -103,6 +114,75 @@ Do not stop at the diff. Check what runs:
 5. The logs of the rebuilt services have no errors.
 6. **After a deploy that changes a heavy endpoint, time it on the live
    data.** Seeded data hides slowness. #304 was found this way.
+
+### 4.1 Many viewers (#371)
+
+The views that cover hours or days are built by the jobs service and
+read from its tables (`docs/DATABASE.md` 8.1), so most requests are
+reads. On a box with spare cores, run several API workers with
+`WEB_WORKERS`. Keep 1 on a small box.
+
+Before a deployment that many people will watch goes live, load it on
+**that** box, never on a small one that also runs production:
+
+    python tools/load_test.py http://127.0.0.1:8000 --viewers 100 --tabs 2 \
+        --minutes 5 --i-am-not-on-production
+
+It prints each request's 50th, 95th and 99th percentile time, its
+failures and its share of 304 answers, and exits 1 when anything failed.
+
+## 4.2 Turn on contributors (#178)
+
+Contributors are off until you turn them on. The design is
+`docs/design/contributors.md`.
+
+1. **The dispatcher login.** On the broker, make one login for Sonoran,
+   for example `sonoran-contrib`, with a long random password. Keep the
+   password for step 3.
+2. **The registrar.** Set `DISPATCHER_USERNAME=sonoran-contrib` in the
+   registrar's `.env`, and restart it with code that has the
+   contributor rules (`docs/REGISTRAR.md` in the separate
+   `sonoran-contributor` repository, not in this one). At start
+   it:
+   - adds the all-clients deny for `sonoran/v1/contributors/#`;
+   - writes every login's rules again, with its own job topics;
+   - gives the dispatcher login its rules.
+
+   Its log says `added an all-clients broker rule` the first time.
+3. **This deployment's `.env`.** Add `CONTRIB_MQTT_HOST` (empty means
+   `RF_MQTT_HOST`), `CONTRIB_MQTT_PORT`, `CONTRIB_MQTT_USERNAME`,
+   `CONTRIB_MQTT_PASSWORD` and `CONTRIB_MQTT_USE_TLS`. Only the
+   `contrib` service receives the password (ARCHITECTURE.md 2.1).
+4. **The migration.** `docker compose run --rm migrate </dev/null`
+   applies `i178`.
+5. **The services.** Rebuild `api`, which has the node page panel and
+   the RF layer. Then start the dispatcher:
+
+   ```bash
+   docker compose build api contrib
+   docker compose up -d --no-deps api
+   docker compose --profile contrib up -d --no-deps contrib
+   ```
+
+6. **Check it.**
+   - `docker compose logs contrib` shows no broker error. When
+     messages arrive, it logs `contrib, last minute: {...}` at most once
+     a minute, with counts such as `status`, `jobs`, `reading`,
+     `refused` and `invalid`. With no contributor running, it logs
+     nothing.
+   - `/api/rf/noise-floor` answers `[]` until a reading comes.
+   - With a contributor running, `status` counts go up within a
+     minute, and `jobs` within a tick after a router is due.
+7. **The Discord bot.** Update the cog, and enable and sync the
+   `contributor` slash group (sonoran-cog README, "Upgrading").
+
+To stop all mesh jobs, stop `contrib`
+(`docker compose --profile contrib stop contrib`). Jobs that are out
+expire. Nothing else changes. To remove one member, revoke their login
+in Discord. That stops their RF too.
+
+Roll back: stop `contrib`. Migration `i178` only adds tables, so it can
+stay. `alembic downgrade` drops them, and every reading with them.
 
 ## 5. Roll back
 
@@ -201,3 +281,32 @@ The `jobs` log warns while it is there. To also draw the rounded
 positions on a separate, dashboard-only map, set
 `COVERAGE_INCLUDE_APPROXIMATE=true`. That costs one more prediction of
 each map, so it roughly doubles the run.
+
+## 9. The coverage signal floor (#334)
+
+The signal floor needs margin tiles beside the colour tiles. Only the
+coverage job writes them, so a run made before this change has none.
+No migration is necessary, and the database does not change.
+
+1. Rebuild `api` and `jobs` (section 3). Do not restart `jobs` while a
+   coverage run is in progress.
+2. Until the next coverage run, the page draws the old run's colour
+   tiles as before. The "Signal floor" control is disabled and says
+   that the run was made before the coverage job wrote signal margins.
+   This is a working state, not a fault. The public embed does not
+   change.
+3. The floor works from the next coverage run. To make one now, remove
+   `attempts/coverage.txt` in the coverage cache, or run
+   `docker compose exec jobs sonoran-coverage-once`.
+4. Check it. The `jobs` log says `published coverage run`. In the
+   coverage cache, `runs/<stamp>/<preset>/infrastructure/usable/margin/`
+   holds tiles. On the coverage page, open Settings: "Signal floor" is
+   enabled, and 10 dB shows less ground than 0 dB.
+
+A run's tiles take about 1.7 times the disk they took before, and the
+render step takes about 1.3 times as long. See `docs/COVERAGE.md`
+6.1.2.
+
+Roll back: the older `api` and `jobs` ignore the `margin` directories
+and the `margin_tiles` field in the manifest. Nothing has to be
+removed. The two runs the cache keeps are pruned as usual.

@@ -96,9 +96,51 @@ The name is matched without regard to case or separators, so `longfast`
 and `LONG_FAST` work. A name that is not a preset, such as `azmsh`,
 returns 422 rather than an empty list.
 
+`preset` can name several presets, with a comma between the names
+(#383): `preset=MediumFast,LongFast` keeps the rows carried on either.
+One name runs the same equality as before. Two or more run
+
+    coalesce(modem_preset, channel) IN (:presets)
+
+Each name is matched as above, and a repeat counts once. One name that
+is not a preset, or an empty name (`preset=LongFast,`), returns 422 for
+the whole request. The dashboard sends this when a reader chooses
+several presets on the Settings page.
+
 The map, graph, coverage, gaps and leaderboard endpoints do not take
 `preset` yet. They still take `channel`, and the page sends the preset's
-own channel name there.
+own channel name there. They take one channel only. With several presets
+chosen, those pages draw one of them (`SonoranPreset.single()`) and say
+which, because a link between two presets cannot exist (`AGENTS.md`
+9.7).
+
+### 1.3 Stored long-window answers (#371)
+
+Some answers are built by the jobs service every few minutes and read
+from its tables: `/api/graph` for 6, 24, 72 and 168 hours, the longest-link
+board of `/api/stats/leaderboards` for its default window and `hours=24`,
+`168` and `720`, `/api/stats/broadcast` for `hours=24`, `168` and `720`,
+and `/api/map/nodes?channel=...&hours=168`. Any other window is computed
+when asked, as before.
+
+- **The same answer.** A stored answer equals the live one, apart from
+  when it was measured. Names, roles and positions are read when the
+  request is answered.
+- **`built_at`.** The graph, the board and the broadcast rates say when
+  their links or rates were measured. A stored answer is up to a few
+  minutes old; a live one is as new as the request.
+- **Never stale for long.** A build older than three build intervals
+  (30 minutes, 90 for 30 days, by default) is not used.
+- **How long an answer is held.** The Statistics answers and the graph
+  are held in the API for 1/720 of their window: 30 s for a few hours,
+  2 minutes for a day, `STATS_CACHE_MAX_SECONDS` (5 minutes) for 3 days
+  or more and for a range that is over, 2 minutes with no window. Each
+  answer states its `window_end`. `STATS_CACHE_SECONDS=0` turns every
+  hold off.
+- **`ETag`.** Answers under `/api/graph`, `/api/stats` and
+  `/api/map/nodes` carry a weak `ETag` and `Cache-Control: private,
+  no-cache`. A request with a matching `If-None-Match` gets `304 Not
+  Modified` and no body.
 
 ## 2. System endpoints
 
@@ -489,7 +531,10 @@ Returns telemetry series for charts.
 
 Query parameters:
 
-- `family` — one of `device`, `environment`, `air_quality`, `power`, `pax`. Required.
+- `family` — one of `device`, `environment`, `air_quality`, `power`, `pax`,
+  `local_stats`. Required. `local_stats` is read by a contributor on
+  request (#178), not sent by the node. Each point also has `job`,
+  `location` and `source`: who measured it.
 - `start`, `end` — time range. Default: last 24 hours.
 - `max_points` — downsample target. Default 500.
 
@@ -514,8 +559,18 @@ replaces many. Fields:
 - `weather` — the newest environment telemetry. Empty when the node
   sends none. `weather_time` gives its time.
 - `device`, `air_quality`, `power` — the newest telemetry of each family.
+- `local_stats` — the newest LocalStats a contributor read from this node
+  (#178, #182), with `time`, `location` and `source`. Empty when none has.
+  `noise_floor` is the **measured** noise floor in dBm, not the theoretical
+  one the coverage map uses.
 - `activity` — `packet_count` and a count for each port number.
-- `messages` — `count` and the newest messages this node sent.
+- `messages` — `count` and the newest messages this node sent. Each
+  message has `packet_id`, `from_node`, `from_name`, `body`, `channel`,
+  `to_node`, `to_name`, `emoji` and `seen_at`. `packet_id` and
+  `from_node` identify the packet, so the page links the time of a
+  message to `#packet/{from_node}/{packet_id}` (#387). `packet_id` is
+  null for a message stored without one, and the page then shows the
+  time with no link.
 - `graph` — the mesh-graph URLs for this node.
 
 Query parameter: `hours` — the time window. Default 24.
@@ -642,6 +697,21 @@ reader must read a missing `approximate` as false. `presets` and
 `is_diagnostic` at the top level are always the precise infrastructure
 map.
 
+`margin_tiles` says that the run wrote a margin tile beside each colour
+tile (3A.2.1), and how to colour one (#334):
+
+| Field | Meaning |
+|---|---|
+| `encoding` | `margin_db_plus_one`. Byte 0 is no usable coverage. Byte `n` is `n - 1` dB above the sensitivity of the preset |
+| `ramp` | The colour stops of the ramp, weakest first, as `[r, g, b]` |
+| `alpha` | The alpha of a covered pixel, 0 to 255 |
+
+The ramp spans `ramp_span_db` above the sensitivity, as for the colour
+tiles. A run made before #334 has no `margin_tiles`. A reader must read
+that, or an `encoding` it does not know, as "this run cannot draw a
+signal floor", and draw the colour tiles. `/api/embed/coverage` never
+carries this field.
+
 ### 3A.2 `GET /api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`
 
 Returns one coverage tile, 256 pixels square, in the usual web map
@@ -692,6 +762,26 @@ A tile that was never written is ground no node reaches, and returns
 The run stamp is part of the URL. Tiles of one run never change, so
 they carry an immutable `Cache-Control` and an `ETag`. A new run has
 new URLs and cannot reuse a browser's old tiles.
+
+### 3A.2.1 `GET /api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/margin/{z}/{x}/{y}.png`
+
+Returns the margin tile of one coverage tile (#334). The dashboard uses
+it to draw a signal floor.
+
+The tile is a grey PNG, 256 pixels square, eight bits for each pixel.
+Byte 0 is no usable coverage. Byte `n` is `n - 1` dB above the
+sensitivity of the preset, so a margin of 0 to 254 dB is held exactly.
+A pixel is 0 exactly where the colour tile is clear. `margin_tiles` in
+3A.1 names this encoding.
+
+The parameters, the checks, the 404 and the cache headers are those of
+3A.2. A run made before #334 has no margin tiles and answers 404 for
+every one; its manifest has no `margin_tiles`, so a page does not ask.
+
+This route is the dashboard's only. The public embed has no margin
+route, and its tile route takes the zoom as a whole number, so it
+cannot name the `margin` directory. 3B.5 does not list this path, and
+a proxy must not open it.
 
 ### 3A.3 `GET /api/coverage/calibration`
 
@@ -1136,7 +1226,8 @@ was the shape of the defect this list exists to prevent. It exposes:
 
 - `/api/coverage/tiles/{stamp}/{preset}/{site_set}/...`, which serves
   the client-node map of the same run to anybody who types `extended`,
-  and a diagnostic run to anybody who guesses a stamp;
+  and a diagnostic run to anybody who guesses a stamp. Its margin tiles
+  (3A.2.1) are under the same prefix;
 - `/api/coverage`, whose `coarse_sites` carry display names with
   rounded positions and whose `presets[].nodes` carry node IDs and long
   names;
@@ -1247,11 +1338,30 @@ Response:
       "hops_taken": 2,
       "self_reported": false,
       "direct": false,
-      "seen_at": "2026-08-01T12:00:01Z"
+      "seen_at": "2026-08-01T12:00:01Z",
+      "relayed_by": {
+        "byte": "4f",
+        "exact": false,
+        "candidates": [{"node_id": "!a1b2c34f", "display_name": "Mesa relay"}]
+      }
     }
   ]
 }
 ```
+
+`relayed_by` is the node that sent this gateway its copy, as the
+firmware gives it: one byte, the last of the node number (AGENTS.md
+9.20). `byte` is that byte in hex. `candidates` are this gateway's
+direct neighbours that end in that byte: the nodes the gateway uploaded
+at 0 hops within a day of the packet, newest first. That is the
+firmware's own scope for the byte (`NodeDB::resolveLastByte`), and it
+leaves out every node on another preset. A `CLIENT_MUTE` node never
+relays, and after a hop the sender is never its own relay. On an upload
+with no hop the byte is the sender's own, so `exact` is true and the one
+candidate is the sender. More than one candidate means the byte names
+none of them for sure. An empty list means the gateway uploaded no
+direct packet from such a node in that day. It is null for an upload
+that carried no relay, and for rows stored before migration `pr378`.
 
 ## 5. Chat endpoints
 
@@ -2038,8 +2148,8 @@ Query parameters: the window (8.00, default 24 hours), `limit`
 (default 40).
 
 Response: the window fields, `intervals` (the defaults used),
-`notable_ratio`, `brownout_band`, `node_count`, `notable_count`,
-`power_loop_count`, and `nodes`.
+`notable_ratio`, `loop_restarts`, `loop_hours`, `node_count`,
+`notable_count`, `power_loop_count`, and `nodes`.
 
 Each node has `node_id`, `display_name`, `packet_count`, `families`,
 `notable`, `faster_than_default`, and `health`.
@@ -2050,7 +2160,8 @@ Each family holds `count`, `interval_seconds` (the measured average),
 
 `health` is null when the node sent no device telemetry. Otherwise it
 holds `battery_level`, `voltage`, `uptime_seconds`, `on_battery`,
-`brownout_risk`, `restarted`, and `likely_power_loop`.
+`restarts`, `restarts_24h`, `nodeinfo_ratio_24h`, `restarted`, and
+`likely_power_loop`.
 
 **Read this as a reason to ask, never as a verdict.** Three limits:
 
@@ -2065,15 +2176,23 @@ holds `battery_level`, `voltage`, `uptime_seconds`, `on_battery`,
 A battery above 100 percent means the node is on mains. That is how the
 firmware reports a powered device.
 
-`brownout_risk` is true inside `brownout_band`, which is 5 to 35
-percent. In that band a node has enough charge to boot and start
-transmitting but not enough to hold the current a transmission draws, so
-it browns out and restarts. That is why a node with a low battery can be
-one of the noisiest on the mesh. Below the band a node is usually flat
-and silent, which is a different problem.
+**Restarts are counted, not inferred (#365).** A restart is a device
+telemetry reading whose `uptime_seconds` is lower than the node's reading
+before it, with the readings in our receive order (AGENTS.md 9.4).
+`restarts` counts them in the window, and `restarts_24h` is the most
+inside any 24 hours of it. The first reading of the window is never a
+restart. A node that restarts unheard between two boots shows one
+restart, and a node with no device telemetry shows none.
 
-`likely_power_loop` is true only when the node both restarted inside the
-window and sits in that band. It is deliberately narrow.
+`likely_power_loop` is true when `restarts_24h` is `loop_restarts` or
+more **and** the node sent its node info faster than the default inside
+that same busiest 24 hours (a booting node sends it). `nodeinfo_ratio_24h`
+is that rate, 1.0 being the default; it is null below `loop_restarts`.
+Both numbers come from a measurement on our data (`docs/DECISIONS.md`,
+#365). The table lists these nodes first, then the
+nodes at `notable_ratio` or more. The battery is shown, never judged:
+the old 5 to 35 percent "brownout band" had no source (AGENTS.md
+§3A.2), and `brownout_band` and `brownout_risk` are gone.
 
 ### 8.8 `GET /api/stats/reliability/{node_id}`
 
@@ -2518,6 +2637,21 @@ layer. A mod an operator hid (`sonoran-rf-trust hide-mod`) and every mod
 of a quarantined station or source are left out. Text in `meta` arrives
 without invisible or direction-changing characters, and the page shows
 it as text only.
+
+### 12.5.4 `GET /api/rf/noise-floor`
+
+The latest **measured** noise floor of each node with a position (#182).
+A contributor read it from the node on request (#178,
+`docs/design/contributors.md`). It is not the theoretical floor the
+coverage map uses.
+
+Query parameter: `hours` — the window, 1 to 720. Default 24: two of a
+router's 12 hour intervals, so one missed round still shows.
+
+Each row: `node_id`, `long_name`, `short_name`, `role`, `lat`, `lon`,
+`time`, `noise_floor_dbm`, `channel_utilization`, and `measured_by`
+(`location`, `source`, `display_name`). A node with no reading in the
+window is not listed: "not measured", never "quiet".
 
 ### 12.6 `GET /api/rf/channels`
 
