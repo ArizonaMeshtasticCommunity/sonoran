@@ -5312,7 +5312,16 @@ async function main() {
     const out = [];
     for (const key of ['timeline', 'links', 'identity']) {
       await page.locator(`.node-jump [data-jump-to="${key}"]`).tap();
-      await page.waitForTimeout(1200);
+      // The jump is a smooth scroll of up to 7000 px. Wait for it to end
+      // (the page still for 300 ms), not a fixed time: on a long page the
+      // scroll was still moving at 1200 ms and the panel read 201 px.
+      await page.waitForTimeout(300);
+      for (let last = -1, still = 0, waited = 0; still < 3 && waited < 5000; waited += 100) {
+        const y = await page.evaluate(() => Math.round(window.scrollY));
+        still = y === last ? still + 1 : 0;
+        last = y;
+        await page.waitForTimeout(100);
+      }
       const at = await page.evaluate((name) => {
         const panel = document.querySelector(`[data-jump="${name}"]`);
         const bar = document.querySelector('.node-jump').getBoundingClientRect();
