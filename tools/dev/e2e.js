@@ -2889,18 +2889,27 @@ async function main() {
       }).reverse();
     };
     const isLong = (url) => new URL(url).searchParams.get('channel') === 'LongFast';
-    // A slow server for Long Fast, as on the live instance, so a switch
-    // can land while its answer is still on the way.
-    const delay = { ms: 0 };
-    const late = () => new Promise((done) => setTimeout(done, delay.ms));
+    // A slow server, as on the live instance, so a switch can land while
+    // an answer is still on the way. `nodes` delays the Long Fast node
+    // list, `rest` its traffic and links, and `medium` the Medium Fast
+    // traffic and links, so the redraw after a switch back takes long
+    // enough for a wrong picture in between to be seen.
+    const delay = { nodes: 0, rest: 0, medium: 0 };
+    const late = (ms) => new Promise((done) => setTimeout(done, ms));
+    // When each Long Fast request for traffic or links was sent.
+    const longAsked = [];
     await page.route(/\/api\/map\/nodes\?/, async (route) => {
       if (!isLong(route.request().url())) return route.continue();
-      await late();
+      await late(delay.nodes);
       return route.fulfill({ json: [row(LF_NODE, false), row(LF_GW, true)] });
     });
     await page.route(/\/api\/map\/traffic\?/, async (route) => {
-      if (!isLong(route.request().url())) return route.continue();
-      await late();
+      if (!isLong(route.request().url())) {
+        await late(delay.medium);
+        return route.continue();
+      }
+      longAsked.push(Date.now());
+      await late(delay.rest);
       const events = lfEvents();
       return route.fulfill({ json: {
         window_minutes: 15, event_count: events.length, direct_count: events.length,
@@ -2908,8 +2917,12 @@ async function main() {
       } });
     });
     await page.route(/\/api\/map\/edges\?/, async (route) => {
-      if (!isLong(route.request().url())) return route.continue();
-      await late();
+      if (!isLong(route.request().url())) {
+        await late(delay.medium);
+        return route.continue();
+      }
+      longAsked.push(Date.now());
+      await late(delay.rest);
       return route.fulfill({ json: [{
         from_node: LF_NODE.node_id, to_node: LF_GW.node_id, snr: 5.5,
         kind: 'neighbor', channel: 'LongFast', time: new Date().toISOString(),
@@ -2982,20 +2995,43 @@ async function main() {
     must(back.dots === 0 && back.lines === 0 && back.painted === 0,
       `Long Fast stayed on the Medium Fast map: ${JSON.stringify(back)}`);
 
-    // The same trip while Long Fast is still answering. The switch back
-    // lands mid-draw, and must still win.
-    delay.ms = 2500;
-    must(await choose('LongFast'), 'the second switch to Long Fast did not move');
-    await page.waitForTimeout(400);
-    must(await choose('MediumFast'), 'the quick switch back did not move');
-    await page.waitForTimeout(delay.ms + 1500);
-    await settled();
-    await page.waitForTimeout(1000);
-    const quick = await page.evaluate(longFastShown, nodes);
-    const preset = await page.evaluate(() => window.SonoranPreset.current());
-    must(preset === 'MediumFast', `the switch ended on ${preset}`);
-    must(quick.dots === 0 && quick.lines === 0 && quick.painted === 0,
-      `a Long Fast answer that landed after the switch was drawn: ${JSON.stringify(quick)}`);
+    /*
+     * The same trip while Long Fast is still answering, twice: once with
+     * the node list late, once with the traffic and links late. The map
+     * checks for a switch after each of the two waits, and each run lands
+     * the switch back in a different one. While the redraw for Medium
+     * Fast is on the way, the map is read every 50 ms: a Long Fast answer
+     * drawn for even a moment under the Medium Fast switch fails it.
+     */
+    const midDraw = async (label, timing) => {
+      Object.assign(delay, timing);
+      longAsked.length = 0;
+      must(await choose('LongFast'), `${label}: the switch to Long Fast did not move`);
+      await page.waitForTimeout(400);
+      must(await choose('MediumFast'), `${label}: the quick switch back did not move`);
+      const back = Date.now();
+      const worst = { dots: 0, lines: 0, painted: 0 };
+      const until = back + Math.max(timing.nodes, timing.rest) + timing.medium + 1500;
+      while (Date.now() < until) {
+        const got = await page.evaluate(longFastShown, nodes);
+        for (const key of Object.keys(worst)) worst[key] = Math.max(worst[key], got[key]);
+        await page.waitForTimeout(50);
+      }
+      await settled();
+      const preset = await page.evaluate(() => window.SonoranPreset.current());
+      must(preset === 'MediumFast', `${label}: the switch ended on ${preset}`);
+      must(worst.dots === 0 && worst.lines === 0 && worst.painted === 0,
+        `${label}: a Long Fast answer that landed after the switch was drawn: ${JSON.stringify(worst)}`);
+      return longAsked.filter((at) => at > back).length;
+    };
+    // Node list late: the map must not go on to ask for Long Fast traffic
+    // and links once the preset has changed.
+    const asked = await midDraw('node list late', { nodes: 2500, rest: 0, medium: 1500 });
+    must(asked === 0, `node list late: ${asked} Long Fast requests were sent after the switch back`);
+    // Traffic and links late: the node list is in, so only the second
+    // check stands between the late answers and the map.
+    await midDraw('traffic and links late', { nodes: 0, rest: 2500, medium: 1500 });
+    Object.assign(delay, { nodes: 0, rest: 0, medium: 0 });
     return `on Long Fast ${onLong.got.dots} dots, ${onLong.got.lines} line, ${onLong.got.painted} live px; `
       + 'none of it after the switch back, or after a switch back mid-draw';
   });
