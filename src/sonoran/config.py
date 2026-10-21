@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     web_workers: int = 1
     web_base_path: str = ""
     web_api_base_url: str = ""
+    # Parts of the site to keep out of view, as section ids, comma
+    # separated, such as `rf,planner`. Empty shows everything. A hidden
+    # section leaves the menu and the phone bar, its address shows "not
+    # available yet", and its API routes answer 404. The ids are in
+    # `api/sections.py` and docs/OPERATIONS.md. An unknown id is logged
+    # at start and ignored.
+    hidden_sections: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     # How long the whole-table statistics are held before they are
     # counted again.
@@ -613,6 +620,7 @@ class Settings(BaseSettings):
         "channel_keys",
         "core_channels",
         "embed_frame_ancestors",
+        "hidden_sections",
         mode="before",
     )
     @classmethod
