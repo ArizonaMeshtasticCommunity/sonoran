@@ -10,8 +10,8 @@ from sonoran.api.app import create_app
 from sonoran.config import Settings
 from sonoran.jobs.activity_heatmap import (
     _build_grids,
+    _points,
     _render_tile,
-    _score_packets,
     box_blur,
     run_once,
 )
@@ -88,15 +88,14 @@ def test_heatmap_tile_endpoint_routing(tmp_path: Path) -> None:
 # --- review fixes: identity, precision, memory, and the served path ----
 
 
-def _row(node: int, packet: int, gateway: int, hops: int, precision: int | None = None) -> tuple:
-    """One joined row: a position and one gateway's observation of it."""
-    return (node, 33.5, -111.5, precision, packet, gateway, 3, 3 - hops)
+def _row(precision: int | None = None, score: float = 10.0) -> tuple:
+    """One scored position, as the database returns it: lat, lon, precision, score.
 
-
-def test_two_nodes_with_the_same_packet_id_are_two_points() -> None:
-    """A packet is (node, packet ID), never the packet ID alone (AGENTS.md 9.1)."""
-    rows = [_row(1, 42, gateway=9, hops=0), _row(2, 42, gateway=9, hops=0)]
-    assert len(_score_packets(rows, minimum_bits=16)) == 2
+    The scoring rules (a packet is a node and a packet ID, each gateway
+    once at its fewest hops) run in SQL now, and
+    tests/integration/test_activity_heatmap_query.py tests them.
+    """
+    return (33.5, -111.5, precision, score)
 
 
 def test_a_rounded_position_is_left_out() -> None:
@@ -105,23 +104,9 @@ def test_a_rounded_position_is_left_out() -> None:
     A position rounded to 13 bits sits at the centre of a cell about
     2.4 km across. A blob there shows activity where there may be no radio.
     """
-    rows = [
-        _row(1, 1, gateway=9, hops=0, precision=13),
-        _row(2, 2, gateway=9, hops=0, precision=16),
-        _row(3, 3, gateway=9, hops=0, precision=None),
-    ]
-    assert len(_score_packets(rows, minimum_bits=16)) == 2
-    assert len(_score_packets(rows, minimum_bits=0)) == 3
-
-
-def test_each_gateway_counts_once_at_its_fewest_hops() -> None:
-    rows = [
-        _row(1, 7, gateway=9, hops=3),
-        _row(1, 7, gateway=9, hops=0),
-        _row(1, 7, gateway=8, hops=3),
-    ]
-    [(_lat, _lon, score)] = _score_packets(rows, minimum_bits=16)
-    assert score == 10.0 + 2.0
+    rows = [_row(precision=13), _row(precision=16), _row(precision=None)]
+    assert len(_points(rows, minimum_bits=16)) == 2
+    assert len(_points(rows, minimum_bits=0)) == 3
 
 
 def test_the_default_region_fits_in_a_jobs_ceiling() -> None:
@@ -152,7 +137,7 @@ def test_the_job_writes_the_tiles_the_route_serves(tmp_path: Path) -> None:
         coverage_min_zoom=8,
         coverage_max_zoom=8,
     )
-    asyncio.run(run_once(_Rows([_row(1, 1, gateway=9, hops=0)]), settings))
+    asyncio.run(run_once(_Rows([_row()]), settings))
     written = sorted(tmp_path.rglob("*.png"))
     assert written, "the job wrote no tile"
     z, x, y = written[0].parts[-3], written[0].parts[-2], written[0].stem
