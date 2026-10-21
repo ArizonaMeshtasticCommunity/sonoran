@@ -279,6 +279,56 @@ def test_a_run_makes_tiles_the_api_serves(
         )
 
 
+def test_a_run_writes_a_margin_tile_beside_every_colour_tile(
+    timescale_url: str, migrated_engine, tmp_path: Path, clean: None
+):  # type: ignore[no-untyped-def]
+    """The signal floor (#334), from a row to a margin the page can read.
+
+    Every colour tile has a margin tile, and no margin tile is without
+    its colour tile. The manifest says how they are encoded, and the
+    dashboard serves them. The public embed serves the colour tile and
+    nothing else.
+    """
+    settings = _settings(timescale_url, tmp_path)
+    with migrated_engine.begin() as connection:
+        _add_node(connection, 900012, 33.45, -112.07, role="ROUTER")
+
+    manifest = _run(settings, coverage.run_once)
+    assert manifest is not None
+    assert manifest.margin_tiles == store.margin_spec()
+
+    root = store.current_root(settings)
+    assert root is not None
+    for layer in store.LAYERS:
+        base = root / "LongFast" / "infrastructure" / layer
+        colours = {path.relative_to(base) for path in base.glob("*/*/*.png")}
+        margins = {
+            path.relative_to(base / store.MARGIN_DIR)
+            for path in (base / store.MARGIN_DIR).glob("*/*/*.png")
+        }
+        assert colours, f"the run wrote no {layer} tile"
+        assert colours == margins, layer
+
+    client = TestClient(create_app(settings))
+    summary = client.get("/api/coverage").json()
+    assert summary["margin_tiles"]["encoding"] == "margin_db_plus_one"
+    stamp = summary["stamp"]
+    tile = next((root / "LongFast" / "infrastructure" / "usable").glob("*/*/*.png"))
+    zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
+    response = client.get(
+        f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/usable/margin/{zoom}/{x}/{y}.png"
+    )
+    assert response.status_code == 200
+    # Grey, eight bits: colour type 0 in the header.
+    assert response.content[24:26] == bytes((8, 0))
+
+    public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
+    embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
+    assert embedded.status_code == 200
+    assert embedded.content == tile.read_bytes()
+    assert "margin_tiles" not in public.get("/api/embed/coverage").json()
+
+
 def test_two_presets_are_predicted_apart(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]

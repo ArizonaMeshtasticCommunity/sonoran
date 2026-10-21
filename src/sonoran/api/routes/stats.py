@@ -14,7 +14,7 @@ from sonoran.api import hourly
 from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.api.preset_scope import preset_filter, require_preset
+from sonoran.api.preset_scope import Presets, preset_filter, require_presets
 from sonoran.api.window import (
     Window,
     cache_seconds,
@@ -310,10 +310,11 @@ async def portnums(
     a window it was not holding.
     """
     settings: Settings = request.app.state.settings
-    wanted = require_preset(preset)
+    wanted = require_presets(preset)
     # The preset is part of the key. Without it the dashboard on
-    # LongFast would be answered with the MediumFast counts.
-    key = f"{hours or 0}:{channel or ''}:{wanted or ''}"
+    # LongFast would be answered with the MediumFast counts. Sorted, so
+    # the same presets in another order share one entry (#383).
+    key = f"{hours or 0}:{channel or ''}:{','.join(sorted(wanted or ()))}"
     return await _portnums_cache.get(
         key,
         cache_seconds(settings, hours),
@@ -322,7 +323,7 @@ async def portnums(
 
 
 async def _read_portnums(
-    session: AsyncSession, hours: int | None, channel: str | None, preset: str | None = None
+    session: AsyncSession, hours: int | None, channel: str | None, preset: Presets | None = None
 ) -> list[dict[str, object]]:
     """Group packets by port number, optionally by window and channel."""
     statement = select(

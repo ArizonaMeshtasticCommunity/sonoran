@@ -33,29 +33,25 @@
    */
   const DEFAULT_LAYER = 'usable';
 
-  // How see-through the signal layer is drawn, 0 to 1. This is the
-  // viewer's own choice, not the deployment's: it restyles the tiles
-  // already in their browser and touches nothing on the server and no
-  // other viewer. Kept in localStorage so their choice survives a
-  // reload; a viewer who has never touched it opens fully opaque. See
-  // `recallOpacity`.
-  const OPACITY_KEY = 'sonoran.coverage.signalOpacity';
+  /*
+   * The settings panel (#334). `coverage-settings.js` holds the rules:
+   * the defaults, the count, the address and the storage. This file
+   * draws the panel and applies them.
+   */
+  const SETTINGS = window.SonoranCoverageSettings;
 
-  function recallOpacity() {
+  /* The browser's storage, or null where even reading it throws. */
+  function storage() {
     try {
-      const saved = Number(localStorage.getItem(OPACITY_KEY));
-      // Honour a saved level only when it is a real fraction the map is
-      // still visible at. Nothing saved, a zero, or junk all mean "open
-      // fully opaque": a first visit should show all of the signal, and
-      // a saved zero would reopen to a blank map that looks broken.
-      // Hiding the signal outright is the "Signal strength" toggle's
-      // job, not a persisted opacity of nothing.
-      if (Number.isFinite(saved) && saved > 0 && saved <= 1) return saved;
+      return window.localStorage;
     } catch {
-      // Storage off or unreadable. The default stands.
+      return null;
     }
-    return 1;
   }
+
+  // The display filters this viewer saved. The map choices are not
+  // stored: they come from the address. See coverage-settings.js.
+  const saved = SETTINGS.load(storage());
 
   const state = {
     map: null,
@@ -66,16 +62,58 @@
     nodeRequest: 0,
     summary: null,
     preset: null,
+    // The map choices. `siteSet` is the set the tiles come from, which
+    // `resolveChoice` works out from `base` and `approximate`.
+    base: saved.base,
+    approximate: saved.approximate,
+    approximateAvailable: false,
     siteSet: null,
-    layer: DEFAULT_LAYER,
+    layer: saved.layer || DEFAULT_LAYER,
+    // The signal floor, in dB above the sensitivity (#334). A map
+    // choice: it comes from the address and is never stored.
+    floor: saved.floor,
+    // How the run's margin tiles are coloured, or null for a run that
+    // has none. See `SETTINGS.marginSpec`.
+    marginSpec: null,
     showMap: true,
     showNodes: true,
     showSignal: true,
-    // First visit opens fully opaque; after that, whatever the viewer
-    // last set. See `recallOpacity`.
-    signalOpacity: recallOpacity(),
+    // The display filters, saved for this viewer.
+    hiddenRoles: saved.hiddenRoles,
+    heard: saved.heard,
+    hideMoving: saved.hideMoving,
+    circles: saved.circles,
+    // How see-through the signal layer is drawn, 0 to 1. A first visit
+    // opens fully opaque.
+    signalOpacity: saved.opacity,
+    // The roles of the nodes the map on show was predicted from, for
+    // the role chips.
+    rolesHere: [],
+    wired: false,
     loaded: false,
   };
+
+  /* The settings in the shape coverage-settings.js reads. */
+  function settingsNow() {
+    return {
+      base: state.base,
+      approximate: state.approximate,
+      layer: state.layer,
+      floor: state.floor,
+      showMap: state.showMap,
+      showNodes: state.showNodes,
+      showSignal: state.showSignal,
+      hiddenRoles: state.hiddenRoles,
+      heard: state.heard,
+      hideMoving: state.hideMoving,
+      circles: state.circles,
+      opacity: state.signalOpacity,
+    };
+  }
+
+  function rememberFilters() {
+    SETTINGS.save(storage(), settingsNow());
+  }
 
   window.SonoranCoverageState = state;
 
@@ -183,6 +221,48 @@
     return (set && set.key) || 'infrastructure';
   }
 
+  /* The run's own first map source. A diagnostic run has no
+     `infrastructure` map, and its first map is its default. */
+  function defaultBase() {
+    const bases = SETTINGS.baseSets(siteSets(state.summary));
+    return bases.length ? bases[0].key : 'infrastructure';
+  }
+
+  /*
+   * Turn the reader's two map choices into the site set to draw.
+   *
+   * The approximate toggle needs the run to have computed the matching
+   * approximate map. When it did not, the choice falls back to the
+   * precise map and the toggle says why. It never draws the precise map
+   * while it says "rounded positions included", or the reverse.
+   */
+  function resolveChoice() {
+    const choice = SETTINGS.resolveSiteSet(siteSets(state.summary), state.base, state.approximate);
+    state.siteSet = choice.key;
+    state.base = choice.base;
+    state.approximate = choice.approximate;
+    state.approximateAvailable = choice.approximateAvailable;
+    const layers = ((state.summary && state.summary.layers) || []).map((layer) => layer.key);
+    if (layers.length && !layers.includes(state.layer)) state.layer = DEFAULT_LAYER;
+    /* A floor needs margin tiles. A run made before them draws its
+       colour tiles with no floor, and the control says why. It never
+       draws the whole map while it says a floor is in force. */
+    state.marginSpec = SETTINGS.marginSpec(state.summary);
+    state.floor = state.marginSpec ? SETTINGS.floorOf(state.floor) : 0;
+  }
+
+  /*
+   * Put the map choices in the address, without a history entry, the
+   * way `statsWriteRange` does for Statistics. A copied link then shows
+   * the same map. The display filters stay out of it: they are this
+   * viewer's own.
+   */
+  function writeAddress() {
+    if (!location.hash.startsWith('#coverage')) return;
+    const hash = SETTINGS.toHash(settingsNow());
+    if (hash !== location.hash) history.replaceState(null, '', hash);
+  }
+
   /* ------------------------------------------------------------- map */
 
   function ensureMap() {
@@ -210,6 +290,79 @@
     if (!state.showMap && map.hasLayer(state.baseTiles)) map.removeLayer(state.baseTiles);
   }
 
+  /*
+   * Colour one margin tile into a canvas, above the floor (#334).
+   *
+   * The tile is fetched rather than loaded as an image. A canvas that
+   * has drawn an image from another origin cannot be read back, and the
+   * API can be on another origin. The bitmap is decoded with no colour
+   * conversion, so each grey byte arrives as it was written.
+   */
+  async function paintMargin(canvas, url, floor, spec, signal) {
+    const response = await apiFetchUntil(url, signal);
+    // A tile that was never written is ground no node reaches.
+    if (!response.ok) return;
+    const blob = await response.blob();
+    if (signal && signal.aborted) return;
+    const bitmap = await createImageBitmap(blob, {
+      premultiplyAlpha: 'none',
+      colorSpaceConversion: 'none',
+    });
+    const width = bitmap.width;
+    const height = bitmap.height;
+    const scratch = document.createElement('canvas');
+    scratch.width = width;
+    scratch.height = height;
+    const reader = scratch.getContext('2d', { willReadFrequently: true });
+    reader.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const grey = reader.getImageData(0, 0, width, height);
+    const colours = SETTINGS.colourMargins(grey.data, floor, spec);
+    canvas.getContext('2d').putImageData(new ImageData(colours, width, height), 0, 0);
+  }
+
+  /* The signal layer when a floor is in force. A Leaflet grid layer
+     that paints each margin tile into a canvas. Made once, on first
+     use, because Leaflet is not there when this file is read. */
+  let MarginLayer = null;
+  function marginLayer(url, options) {
+    if (!MarginLayer) {
+      MarginLayer = L.GridLayer.extend({
+        initialize(template, settings) {
+          this._url = template;
+          L.GridLayer.prototype.initialize.call(this, settings);
+          /* A margin tile is fetched, not loaded as an image, so the
+             browser does not cancel it when Leaflet drops the tile.
+             Abort it here, when the tile leaves the map or the layer
+             goes. Otherwise every tile panned away keeps downloading. */
+          this.on('tileunload', (event) => {
+            const controller = event.tile && event.tile.marginRequest;
+            if (controller) controller.abort();
+          });
+        },
+        createTile(coords, done) {
+          const size = this.getTileSize();
+          const canvas = document.createElement('canvas');
+          canvas.width = size.x;
+          canvas.height = size.y;
+          const controller = new AbortController();
+          canvas.marginRequest = controller;
+          const finish = () => {
+            canvas.marginRequest = null;
+            if (!controller.signal.aborted) done(null, canvas);
+          };
+          paintMargin(canvas, L.Util.template(this._url, coords), this.options.floor,
+            this.options.spec, controller.signal).then(finish, (error) => {
+            if (!controller.signal.aborted) console.warn('coverage margin tile failed', error);
+            finish();
+          });
+          return canvas;
+        },
+      });
+    }
+    return new MarginLayer(url, options);
+  }
+
   function drawTiles() {
     const map = ensureMap();
     if (state.tiles) {
@@ -233,6 +386,29 @@
     const base = api(
       `api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`,
     );
+    const bounds = L.latLngBounds(
+      [summary.bounds[0], summary.bounds[1]],
+      [summary.bounds[2], summary.bounds[3]],
+    );
+    /*
+     * With a floor, the margin tiles of the same layer, coloured in this
+     * browser. With none, the colour tiles as they always were, so the
+     * default map costs the browser no work at all.
+     */
+    if (state.floor > 0 && state.marginSpec) {
+      state.tiles = marginLayer(`${base}margin/{z}/{x}/{y}.png`, {
+        minZoom: 0,
+        maxZoom: 19,
+        minNativeZoom: summary.min_zoom,
+        maxNativeZoom: summary.max_zoom,
+        bounds,
+        opacity: state.signalOpacity,
+        className: 'coverage-tiles',
+        floor: state.floor,
+        spec: state.marginSpec,
+      }).addTo(map);
+      return;
+    }
     state.tiles = L.tileLayer(
       `${base}{z}/{x}/{y}.png`,
       {
@@ -240,10 +416,7 @@
         maxZoom: 19,
         minNativeZoom: summary.min_zoom,
         maxNativeZoom: summary.max_zoom,
-        bounds: L.latLngBounds(
-          [summary.bounds[0], summary.bounds[1]],
-          [summary.bounds[2], summary.bounds[3]],
-        ),
+        bounds,
         opacity: state.signalOpacity,
         // A tile that was never written is ground no node reaches. That
         // is a 404 and it must not log an error for every empty square.
@@ -335,9 +508,38 @@
        (an old manifest with no site_roles, say), and hiding every node
        then is the wrong failure: the overlay is there to be read, so an
        unknown role set draws everything rather than nothing. */
-    const shown = (!allowed.size || allowed.has('ALL'))
+    const predicted = (!allowed.size || allowed.has('ALL'))
       ? rows
       : rows.filter((node) => node.role && allowed.has(node.role));
+
+    /* Then the reader's own filters (#334), in this browser only. The
+       chips offer the roles of the map on show, and a role the reader
+       hid stays offered so it can be shown again. */
+    state.rolesHere = SETTINGS.rolesPresent(predicted);
+    drawRoleChips($('[data-page="coverage"]'));
+    const now = Date.now();
+    const filters = settingsNow();
+    const shown = predicted.filter((node) => SETTINGS.nodeShown(node, filters, now));
+
+    /* An uncertainty circle for each drawn site whose position was
+       rounded. Under the markers, and not clickable, so a marker inside
+       one still opens its summary. */
+    if (state.circles) {
+      const preset = presetOf(state.summary, state.preset);
+      const warn = cssColour('warn', '#e0a030');
+      for (const circle of SETTINGS.uncertaintyCircles(preset && preset.nodes, shown)) {
+        L.circle([circle.lat, circle.lon], {
+          radius: circle.radius,
+          color: warn,
+          weight: 1.5,
+          dashArray: '4 4',
+          fillColor: warn,
+          fillOpacity: 0.08,
+          interactive: false,
+          className: 'coverage-uncertainty',
+        }).addTo(state.nodes);
+      }
+    }
 
     for (const node of shown) {
       if (node.lat == null || node.lon == null) continue;
@@ -355,9 +557,10 @@
 
   function drawLayers(page) {
     /*
-     * One drop-down, not three pills (#299). The pills were a row of
-     * their own above the map; a select sits in the page head beside
-     * the title. The same three layers, the same state, the same redraw.
+     * One drop-down, not three pills (#299). It was in the page head and
+     * is in the settings panel now (#334). The same three layers, the
+     * same state, the same redraw. The change listener is in
+     * `wireSettings`.
      * The pill's `title` for "Usable both ways" moves to the select while
      * that layer is chosen, so it is no less reachable than it was.
      */
@@ -371,15 +574,6 @@
     );
     host.value = state.layer;
     host.title = usableTitle();
-    if (!host.dataset.wired) {
-      host.dataset.wired = 'true';
-      host.addEventListener('change', () => {
-        state.layer = host.value;
-        host.title = usableTitle();
-        drawTiles();
-        drawLegend(page);
-      });
-    }
   }
 
   function drawViews(page) {
@@ -396,13 +590,13 @@
         el('button', {
           type: 'button',
           'aria-pressed': String(state[key]),
-          // Every layer starts shown. The Options count (#299) reads this
-          // to say how many choices differ from where they start.
-          'data-option-default': 'true',
+          // Every layer starts shown. The settings count is worked out in
+          // `drawCount` from the state, not from this button (#334).
           text: label,
           onclick: () => {
             state[key] = !state[key];
             drawViews(page);
+            drawCount(page);
             if (key === 'showMap') drawBaseMap();
             if (key === 'showNodes') drawNodes();
             if (key === 'showSignal') {
@@ -433,7 +627,10 @@
     const wrap = $('[data-coverage-siteset-wrap]', page);
     const picker = $('[data-coverage-siteset]', page);
     if (!wrap || !picker || !state.summary) return;
-    const sets = siteSets(state.summary);
+    /* The map sources are the precise sets. An approximate map is the
+       same source with rounded positions added, and the toggle below
+       chooses it, so it is not offered here a second time. */
+    const sets = SETTINGS.baseSets(siteSets(state.summary));
     /* One set is not a choice. The picker stays hidden rather than
        offering a control that cannot change anything. */
     if (sets.length < 2) {
@@ -445,7 +642,146 @@
       picker,
       sets.map((item) => el('option', { value: item.key, text: item.label })),
     );
-    picker.value = currentSiteSet();
+    picker.value = state.base;
+  }
+
+  // Said where the toggle is, when the run did not compute the map.
+  const NOT_COMPUTED = 'Not computed on this server. An operator can turn it on with '
+    + 'COVERAGE_INCLUDE_APPROXIMATE.';
+
+  /*
+   * The approximate toggle. Disabled, and saying why, when this run has
+   * no approximate map of the chosen source. It is never left enabled
+   * over a map that does not exist.
+   */
+  function drawApproximate(page) {
+    const box = $('[data-coverage-approx]', page);
+    const note = $('[data-coverage-approx-note]', page);
+    if (!box) return;
+    box.checked = state.approximate;
+    box.disabled = !state.approximateAvailable;
+    if (!note) return;
+    if (!state.approximateAvailable) {
+      note.textContent = NOT_COMPUTED;
+      note.hidden = false;
+    } else if (state.approximate) {
+      note.textContent = 'Sites with a rounded position are included. Their footprints can be '
+        + 'out of place by as much as the rounding.';
+      note.hidden = false;
+    } else {
+      note.textContent = '';
+      note.hidden = true;
+    }
+  }
+
+  // Said where the floor is, when the run has no margin tiles.
+  const NO_MARGINS = 'Not available for this run. It was made before the coverage job wrote '
+    + 'signal margins. The next run will have them.';
+
+  /*
+   * The signal floor control. Disabled, and saying why, when the run
+   * has no margin tiles. It is never left enabled over a floor that
+   * cannot be drawn.
+   */
+  function drawFloor(page) {
+    const picker = $('[data-coverage-signal-floor]', page);
+    const note = $('[data-coverage-signal-floor-note]', page);
+    if (!picker) return;
+    picker.value = String(state.floor);
+    picker.disabled = !state.marginSpec;
+    if (!note) return;
+    if (!state.marginSpec) {
+      note.textContent = NO_MARGINS;
+      note.hidden = false;
+    } else if (state.floor > 0) {
+      note.textContent = `Shows only ground ${SETTINGS.floorWords(state.floor)}. `
+        + 'The rest of the usable coverage is hidden, not lost.';
+      note.hidden = false;
+    } else {
+      note.textContent = '';
+      note.hidden = true;
+    }
+  }
+
+  /* The display filters' own controls, in step with the state. */
+  function drawFilters(page) {
+    const heard = $('[data-coverage-heard]', page);
+    if (heard) heard.value = state.heard;
+    const moving = $('[data-coverage-moving]', page);
+    if (moving) moving.checked = state.hideMoving;
+    const circles = $('[data-coverage-circles]', page);
+    if (circles) circles.checked = state.circles;
+  }
+
+  /*
+   * One chip for each role of the nodes on show. Pressed means drawn.
+   * A role the reader hid stays offered when no node of it is left, so
+   * the filter can always be undone where it was made.
+   */
+  function drawRoleChips(page) {
+    const host = $('[data-coverage-roles]', page);
+    if (!host) return;
+    const roles = [...new Set([...state.rolesHere, ...state.hiddenRoles])];
+    const label = (role) => (role === 'NULL'
+      ? 'No role reported'
+      : (window.SonoranLabels ? SonoranLabels.roleLabel(role) : role));
+    /* Each chip is a new element after this, so the one that held the
+       focus is gone. Without this a keyboard user who pressed Space on
+       a chip lands on <body>. Put the focus back on the same role. */
+    const active = document.activeElement;
+    const focused = active && host.contains(active) && active.dataset ? active.dataset.role : null;
+    replace(
+      host,
+      roles.length
+        ? roles.map((role) => el('button', {
+          type: 'button',
+          'data-role': role,
+          'aria-pressed': String(!state.hiddenRoles.includes(role)),
+          text: label(role),
+        }))
+        : el('span', { class: 'muted', text: 'No node markers to filter yet.' }),
+    );
+    if (focused) {
+      const again = [...host.querySelectorAll('button[data-role]')]
+        .find((chip) => chip.dataset.role === focused);
+      if (again) again.focus({ preventScroll: true });
+    }
+  }
+
+  /* The label of the map source on show, from the run. */
+  function baseLabel() {
+    const set = siteSetOf(state.summary, state.base);
+    return (set && set.label) || 'Routers and repeaters';
+  }
+
+  /*
+   * Say which map is on show, in the legend and above the figures. The
+   * tiles of the precise map and the approximate one look the same, so
+   * the words are the only thing that tells them apart.
+   */
+  function drawWhich(page) {
+    const words = SETTINGS.mapWords(baseLabel(), state.approximate, state.floor);
+    const line = $('[data-coverage-which]', page);
+    if (line) {
+      line.textContent = `Map shown: ${words}.`;
+      line.classList.toggle('warn', state.approximate);
+      line.hidden = !(state.summary && state.summary.available);
+    }
+    const legend = $('[data-coverage-legend-map]', page);
+    if (legend) {
+      legend.textContent = words;
+      legend.classList.toggle('warn', state.approximate);
+    }
+  }
+
+  /* The count on the settings button: settings that differ from the
+     default, worked out here and read by `drawOptionCount` in app.js. */
+  function drawCount(page) {
+    const panel = $('[data-options-panel]', page);
+    if (!panel) return;
+    panel.dataset.optionsChanged = String(
+      SETTINGS.changedCount(settingsNow(), { defaultBase: defaultBase() }),
+    );
   }
 
   /*
@@ -490,6 +826,19 @@
     // the tiles it describes. See coverage/render.py.
     const span = Number(state.summary.ramp_span_db) || 0;
     $('[data-coverage-ceiling]', legend).textContent = `${floor + span} dBm`;
+    /* The signal floor (#334). The ramp keeps its colours, because a
+       cell keeps its colour, and the part below the floor is dimmed. */
+    const lowest = state.floor > 0 && span > 0 ? state.floor : 0;
+    const ramp = $('[data-coverage-ramp]', legend);
+    if (ramp) ramp.style.setProperty('--coverage-floor', `${Math.min(100, (lowest / span) * 100)}%`);
+    const line = $('[data-coverage-legend-floor]', legend);
+    if (line) {
+      line.hidden = !lowest;
+      line.textContent = lowest
+        ? `Shown from ${floor + lowest} dBm, ${lowest} dB above the limit`
+        : '';
+    }
+    drawWhich(page);
   }
 
   function statTile(value, label, delta) {
@@ -515,7 +864,10 @@
       host,
       statTile(number(preset.site_count), 'Sites predicted from',
         preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
-      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area', 'Both directions'),
+      // The run measured the area at the limit. A floor hides some of
+      // it on the map and does not change the figure, so it says so.
+      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area',
+        state.floor > 0 ? 'Both directions, at the limit' : 'Both directions'),
       statTile(SonoranUnits.areaFromKm2(preset.downlink_area_km2) || '-', 'Heard area', 'One direction only'),
       statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
     );
@@ -621,7 +973,7 @@
        changed by choosing again, so it says that instead. */
     const remedy = state.summary.is_diagnostic
       ? 'Set COVERAGE_SITE_ROLES back to infrastructure roles for a map to publish.'
-      : 'Pick "Routers and repeaters" above for the map this mesh publishes.';
+      : 'Choose "Routers and repeaters" under Settings for the map this mesh publishes.';
     return el(
       'p',
       { class: 'notice warn', style: 'font-weight:600' },
@@ -974,11 +1326,17 @@
 
   function drawAll(page) {
     drawSiteSets(page);
+    drawApproximate(page);
     drawPresets(page);
     drawLayers(page);
+    drawFloor(page);
     drawViews(page);
     drawOpacity(page);
+    drawFilters(page);
+    drawRoleChips(page);
     drawLegend(page);
+    drawWhich(page);
+    drawCount(page);
     drawStats(page);
     drawDiagnosticBanner(page);
     drawAssumes(page);
@@ -990,10 +1348,136 @@
     drawCalibration(page);
   }
 
+  /* -------------------------------------------------------- settings */
+
+  /*
+   * A map choice changed: the source or the approximate toggle.
+   *
+   * The two maps need not carry the same presets: a preset whose only
+   * nodes are clients exists in one and not the other. If the chosen
+   * preset is not in the new map, land on the busiest one there, never
+   * on nothing, or the map goes blank with a preset still chosen.
+   *
+   * The node rows are keyed on preset, not on the site set, so they
+   * survive the switch. Only the role filter in drawNodes changes, and
+   * it runs again from the cache.
+   */
+  function chooseMap(page) {
+    resolveChoice();
+    if (!presetOf(state.summary, state.preset)) state.preset = busiestPreset(state.summary);
+    writeAddress();
+    drawAll(page);
+  }
+
+  /* A display filter changed. Saved for this viewer, then redrawn. */
+  function filterChanged(page) {
+    rememberFilters();
+    drawCount(page);
+    drawNodes();
+  }
+
+  /* Every setting back to Logan's and Tyler's map (#334). */
+  function resetSettings(page) {
+    const start = SETTINGS.reset();
+    state.base = defaultBase();
+    state.approximate = start.approximate;
+    state.layer = start.layer;
+    state.floor = start.floor;
+    state.showMap = start.showMap;
+    state.showNodes = start.showNodes;
+    state.showSignal = start.showSignal;
+    state.hiddenRoles = start.hiddenRoles;
+    state.heard = start.heard;
+    state.hideMoving = start.hideMoving;
+    state.circles = start.circles;
+    state.signalOpacity = start.opacity;
+    rememberFilters();
+    if (state.summary && state.summary.available) {
+      chooseMap(page);
+    } else {
+      drawCount(page);
+    }
+  }
+
+  /* The panel's listeners, once. Each control is found by its own
+     attribute, so a control moved inside the panel keeps working. */
+  function wireSettings(page) {
+    if (state.wired) return;
+    state.wired = true;
+    const on = (selector, type, handler) => {
+      const node = $(selector, page);
+      if (node) node.addEventListener(type, () => handler(node));
+    };
+    on('[data-coverage-siteset]', 'change', (picker) => {
+      state.base = picker.value;
+      chooseMap(page);
+    });
+    on('[data-coverage-approx]', 'change', (box) => {
+      state.approximate = box.checked;
+      chooseMap(page);
+    });
+    on('[data-coverage-layers]', 'change', (picker) => {
+      state.layer = picker.value;
+      writeAddress();
+      drawLayers(page);
+      drawTiles();
+      drawLegend(page);
+      drawCount(page);
+    });
+    on('[data-coverage-signal-floor]', 'change', (picker) => {
+      state.floor = state.marginSpec ? SETTINGS.floorOf(picker.value) : 0;
+      writeAddress();
+      drawFloor(page);
+      drawTiles();
+      drawLegend(page);
+      drawStats(page);
+      drawCount(page);
+    });
+    on('[data-coverage-opacity]', 'input', (slider) => {
+      const pct = Number(slider.value);
+      state.signalOpacity = Number.isFinite(pct) ? pct / 100 : 1;
+      const out = $('[data-coverage-opacity-value]', page);
+      if (out) out.textContent = `${Math.round(state.signalOpacity * 100)}%`;
+      /* setOpacity restyles the tiles already on the map, so dragging
+         refetches nothing. drawTiles is not called. */
+      if (state.tiles) state.tiles.setOpacity(state.signalOpacity);
+      // A zero is not a preference to keep; `save` stores the default.
+      rememberFilters();
+      drawCount(page);
+    });
+    on('[data-coverage-heard]', 'change', (picker) => {
+      state.heard = picker.value;
+      filterChanged(page);
+    });
+    on('[data-coverage-moving]', 'change', (box) => {
+      state.hideMoving = box.checked;
+      filterChanged(page);
+    });
+    on('[data-coverage-circles]', 'change', (box) => {
+      state.circles = box.checked;
+      filterChanged(page);
+    });
+    const roles = $('[data-coverage-roles]', page);
+    if (roles) {
+      roles.addEventListener('click', (event) => {
+        const chip = event.target.closest('button[data-role]');
+        if (!chip) return;
+        const role = chip.dataset.role;
+        state.hiddenRoles = state.hiddenRoles.includes(role)
+          ? state.hiddenRoles.filter((item) => item !== role)
+          : [...state.hiddenRoles, role];
+        drawRoleChips(page);
+        filterChanged(page);
+      });
+    }
+    on('[data-coverage-reset]', 'click', () => resetSettings(page));
+  }
+
   /* ------------------------------------------------------------ show */
 
   async function show(page) {
     const map = ensureMap();
+    wireSettings(page);
     setTimeout(() => map.invalidateSize(), 0);
     // Read current positions each time this page opens. A node list
     // kept for the whole browser session becomes stale.
@@ -1043,10 +1527,21 @@
     setControlsHidden(page, false);
     notice(page, '');
 
-    if (!state.siteSet || !siteSetOf(summary, state.siteSet)) {
-      const sets = siteSets(summary);
-      state.siteSet = sets.length ? sets[0].key : 'infrastructure';
+    /*
+     * The address decides the map on a first visit, and whenever it
+     * names one: a shared link, or Back to an earlier choice. A plain
+     * `#coverage` from the menu keeps the map this visit already chose,
+     * and the address is written again to say which one that is.
+     */
+    if (!state.loaded || SETTINGS.hashNamesMap(location.hash)) {
+      const asked = SETTINGS.fromHash(location.hash);
+      state.base = asked.base;
+      state.approximate = asked.approximate;
+      state.layer = asked.layer;
+      state.floor = asked.floor;
     }
+    resolveChoice();
+    writeAddress();
     if (!state.preset || !presetOf(summary, state.preset)) {
       state.preset = busiestPreset(summary);
     }
@@ -1055,45 +1550,6 @@
       return;
     }
     if (!state.loaded) {
-      const opacity = $('[data-coverage-opacity]', page);
-      if (opacity) {
-        opacity.addEventListener('input', () => {
-          const pct = Number(opacity.value);
-          state.signalOpacity = Number.isFinite(pct) ? pct / 100 : 1;
-          const out = $('[data-coverage-opacity-value]', page);
-          if (out) out.textContent = `${Math.round(state.signalOpacity * 100)}%`;
-          /* setOpacity restyles the tiles already on the map, so
-             dragging refetches nothing. drawTiles is not called. */
-          if (state.tiles) state.tiles.setOpacity(state.signalOpacity);
-          try {
-            // Remember a level the map is visible at; a zero is not a
-            // preference to keep, so it clears back to the default.
-            if (state.signalOpacity > 0) {
-              localStorage.setItem(OPACITY_KEY, String(state.signalOpacity));
-            } else {
-              localStorage.removeItem(OPACITY_KEY);
-            }
-          } catch {
-            // Storage off. The slider still works for this visit.
-          }
-        });
-      }
-      const setPicker = $('[data-coverage-siteset]', page);
-      if (setPicker) {
-        setPicker.addEventListener('change', () => {
-          state.siteSet = setPicker.value;
-          /* The two sets need not carry the same presets: a preset
-             whose only nodes are clients exists in one and not the
-             other. If the chosen preset is not in the new set, land on
-             the busiest one there, never on nothing, or the map goes
-             blank with a preset still named in the picker. */
-          if (!presetOf(summary, state.preset)) state.preset = busiestPreset(summary);
-          /* The node rows are keyed on preset, not on the site set, so
-             they survive a set switch. Only the role filter in
-             drawNodes changes, and it runs again from the cache. */
-          drawAll(page);
-        });
-      }
       state.loaded = true;
       /*
        * Open on the coverage, not on the region. The region covers

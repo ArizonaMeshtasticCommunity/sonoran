@@ -12,7 +12,7 @@ from sqlalchemy.orm import undefer
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
 from sonoran.api.packet_summary import summaries, text_of
-from sonoran.api.preset_scope import preset_filter, require_preset
+from sonoran.api.preset_scope import preset_filter, require_presets
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
@@ -109,10 +109,11 @@ async def list_packets(
     Set `summary=true` to add a one line `summary` of what each packet
     said, read from the decoded tables. See `api/packet_summary.py`.
 
-    Set `preset` to keep the packets carried on one modem preset. It
-    works beside `channel`. See `api/preset_scope.py`.
+    Set `preset` to keep the packets carried on one modem preset, or on
+    any of several (`preset=MediumFast,LongFast`). It works beside
+    `channel`. See `api/preset_scope.py`.
     """
-    wanted = require_preset(preset)
+    wanted = require_presets(preset)
     # Pick the page first, count second.
     #
     # This used to group the whole join before applying the limit, so

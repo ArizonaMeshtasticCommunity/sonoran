@@ -4,7 +4,7 @@ There is no JavaScript test runner here, so these hold the shapes a
 browser pass measured. Each one failed against the code before the
 change. What was measured, and where:
 
-* Against the deployed instance at ``http://203.0.113.10:8200`` with
+* Against a deployed test instance with
   this tree's ``app.js`` and ``app.css`` served in place of its own.
   On the firehose, 4 of 9 columns carry a control; on the dashboard,
   all 4 summary tiles do. No ``.hint-notes`` block is left anywhere.

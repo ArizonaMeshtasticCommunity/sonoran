@@ -3,6 +3,9 @@
 This file gives rules to AI coding agents that work on this project.
 Follow these rules at all times.
 
+To pick up work that someone else started, to leave a hand-off, or to
+record what you learned, read `docs/COLLABORATION.md` as well.
+
 ## 1. Project summary
 
 This project is Sonoran, the azmsh.net Meshtastic dashboard.
@@ -29,7 +32,8 @@ The application does these things:
 - Alembic for database migrations
 - TimescaleDB (PostgreSQL) for storage
 - Protobuf definitions from `buf.build/meshtastic/protobufs`
-- Static frontend: HTML, HTMX, Alpine.js, Leaflet, ECharts
+- Static frontend: plain HTML, CSS and JavaScript (classic scripts and
+  ES modules), with vendored Leaflet and ECharts. No build step
 - numpy for the SRTM elevation transform
 - A vendored WebAssembly build of SPLAT! for coverage prediction (GPL-3)
 - Ruff for lint and format
@@ -250,6 +254,13 @@ General Public License version 3. The Sonoran web interface uses it and
 therefore carries the same licence. Keep `LICENSE-GPL3` and the
 attribution beside it. See `docs/PLANNER.md` section 6.
 
+Every other vendored component is listed in `THIRD_PARTY_NOTICES.md`,
+with its version and licence. Its licence text is in
+`web/static/vendor/LICENSES/`, copied from upstream at the vendored
+version's tag. When you update a vendored file, update its licence text
+and its row in the same change. The vendored config checker has no
+licence yet (its upstream has none). Do not add one in the copy.
+
 ## 8. Common tasks
 
 ### Add a new packet type handler
@@ -433,6 +444,27 @@ time from a list of gateways: that was PR #349, and it was closed for
 it. The map, graph, coverage and gaps pages still filter by the
 preset's own channel name. Moving them to the tag is the next step.
 
+### 9.7.0 A preset switch must clear the live canvas too (#384)
+
+The map's dots and lines are Leaflet layers, and each draw replaces
+them. The live traffic is not a layer. It is one canvas in
+`map-live.js` that holds marks in flight, a replay queue of up to one
+poll, and each node's heat, which decays with a half-life of 20 s and
+30 s. Nothing cleared it on a preset switch, so after Medium Fast to
+Long Fast and back the Long Fast halos stayed on the Medium Fast map
+for more than a minute.
+
+`render` also returns at once while another draw is in flight. A
+switch made during a slow map draw was dropped, and the old preset's
+answer was drawn under the new switch. With the Live timer off it
+stayed until a reload.
+
+`PAGES.map` now clears the live layer when its channel changes, and
+draws nothing from answers that arrive after the preset changed. The
+switch queues its render with `navigateRender`. The e2e journey
+"switching presets on the map leaves nothing of the old one" holds
+both, and reads the canvas pixels where the old preset's nodes stood.
+
 ### 9.7.1 A topic channel is not a preset
 
 `azmsh`, `Weather`, `Traffic` and `PKI` are topic channels. Each rides
@@ -549,10 +581,15 @@ leaks nothing a path would. Keep the attribution. See `docs/API.md`.
 
 ### 9.10 Channel keys come from settings, not from `.env`
 
-`CHANNEL_KEYS` is usually absent from `.env`, so the built-in default
-public key applies. Any offline script must read keys through
-`get_settings()`. Passing an empty environment variable silently
-decodes nothing.
+Outside Compose, an absent `CHANNEL_KEYS` gives the built-in default
+public key. Under Compose it does not: `docker-compose.yml` gives the
+ingest service `CHANNEL_KEYS: ${CHANNEL_KEYS:-}`, so a `.env` without the
+key passes an empty value, and an empty value is an empty list, not the
+default. Ingest then opens no packet and stores each one with an unknown
+port. So `.env.example` sets the default key, and `.env` must keep it.
+
+Any offline script must read keys through `get_settings()`. Passing an
+empty environment variable silently decodes nothing.
 
 ### 9.11 `packet.payload_json` holds only an allowlist
 
@@ -1313,9 +1350,15 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/API.md` — the API specification
 - `docs/APP.md` — the installed app, the service worker, and offline
 - `docs/DEPLOY.md` — how to deploy, check and roll back
+- `docs/OPERATIONS.md` — routine checks, restarts, logs, backup and
+  restore, and the common faults
+- `CONTRIBUTING.md` — the same rules, for an outside contributor
 - `docs/QA.md` — the QA process
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new
   node would help, and what neither of those can say
-- `docs/REVIEW.md` — code review findings, and which are still open
+- `docs/archive/` — old session notes and reviews, kept for their
+  history only. Do not take current state from them
 - `docs/RELEASING.md` — how to publish a release, and what it costs in CI
+- `docs/COLLABORATION.md` — how people and agents hand work to each other,
+  leave notes, record lessons, and avoid the known hand-off mistakes

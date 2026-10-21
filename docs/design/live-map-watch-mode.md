@@ -828,7 +828,7 @@ gaining a filter parameter is the smallest possible change and matches
 `docs/API.md` rule 1.
 
 **(2) A way to skip the counters.** This is the big one.
-`docs/REVIEW.md` 2.1 and `docs/ISSUES.md` 2.9: the window counts run one
+`docs/archive/REVIEW-2026-08-10.md` 2.1 and `docs/ISSUES.md` 2.9: the window counts run one
 correlated probe into the `packet` hypertable **per `packet_seen` row in
 the window**. At `minutes=1440` that is hundreds of thousands of index
 probes on a public, unauthenticated endpoint that the map calls every 15
@@ -987,7 +987,7 @@ that can only go green is not a monitor.
 
 There is no rate-limiting middleware. `/api/map/traffic` is public,
 unauthenticated, accepts `minutes=1440` and `limit=2000`, and runs the
-correlated count described in `docs/REVIEW.md` 2.1. Watch mode will
+correlated count described in `docs/archive/REVIEW-2026-08-10.md` 2.1. Watch mode will
 increase traffic to it. Fixing 2.9 matters more than it did, and a
 modest per-IP cap on that one endpoint is worth considering alongside
 `counts=false`. Out of scope for this design; in scope for whoever
@@ -1050,7 +1050,7 @@ numbers in section 0 to have moved.
 - `GET /api/map/live` as SSE: one in-process broadcaster owning one
   session, a 2 s tick, `Last-Event-ID` resume, a hard cap with `503` and
   `Retry-After`, and a client that falls back to polling on any failure.
-- The `docs/ISSUES.md` 2.9 / `docs/REVIEW.md` 2.1 query rewrite. The
+- The `docs/ISSUES.md` 2.9 / `docs/archive/REVIEW-2026-08-10.md` 2.1 query rewrite. The
   counters are what make any of this expensive.
 - Tests that matter: one proving the client falls back when SSE answers
   503 (**test the failing state, not only the green one**); one proving
@@ -1135,5 +1135,5 @@ tests. It is not the animation. The animation is phases 1 and 2.
 
 Open project items this design touches: `docs/ISSUES.md` 2.3 (the
 relayed lines this design finally answers, by bowing them rather than
-deleting them), 2.9 and `docs/REVIEW.md` 2.1 (the correlated count,
+deleting them), 2.9 and `docs/archive/REVIEW-2026-08-10.md` 2.1 (the correlated count,
 which phase 2's `counts=false` sidesteps and phase 3 should fix).

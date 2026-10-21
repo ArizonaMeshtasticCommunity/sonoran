@@ -265,3 +265,62 @@ def test_the_page_is_drawn_again_only_once_the_api_answers() -> None:
     reach = PWA[PWA.index("async function whenReachable") :].split("\n  }\n", 1)[0]
     assert "apiFetch(api('api/version'))" in reach
     assert "const RETRY_LIMIT = 45;" in PWA
+
+
+# ---- The update notice (#382) ----------------------------------------
+
+UPDATE_NOTICE = "Sonoran was updated. Reload to get the new page."
+APP_DOC = (Path(__file__).resolve().parents[2] / "docs" / "APP.md").read_text(encoding="utf-8")
+
+
+def _offer_update() -> str:
+    return PWA[PWA.index("function offerUpdate") :].split("\n  }\n", 1)[0]
+
+
+def test_the_update_notice_says_the_page_changed_not_a_release() -> None:
+    """Logan, #382: "A new version of Sonoran is available" showed when
+    no release was published. The notice follows the asset version,
+    which is a hash of every static file, so any deploy that changes a
+    file shows it. That is correct, and the word "version" made it read
+    like a release. The issue proposes this sentence.
+    """
+    offer = _offer_update()
+    assert f"notice('{UPDATE_NOTICE}'" in offer
+    assert "version" not in offer.lower(), (
+        "the notice still says version, which reads like a release"
+    )
+
+
+def test_the_doc_quotes_the_notice_the_page_shows() -> None:
+    """docs/APP.md tells a reader what the app says. Same sentence.
+
+    The doc wraps its lines, so the words are compared, not the breaks.
+    """
+    words = " ".join(APP_DOC.split())
+    assert UPDATE_NOTICE in words
+    assert "A new version of Sonoran is available" not in words
+
+
+def test_the_update_notice_names_no_release() -> None:
+    """The running API knows no release tag. `/api/version` is the
+    package version (0.1.0), the image is built from a commit with no
+    tag in it, and a release is tagged after the deploy (RELEASING.md).
+    So the notice names none, rather than invent one.
+    """
+    offer = _offer_update()
+    assert "release" not in offer.lower()
+    assert "api/version" not in offer
+
+
+def test_a_restart_with_no_change_serves_the_same_worker() -> None:
+    """#382 asks whether the notice can show when nothing changed. The
+    browser installs a new worker only when the bytes of `/sw.js`
+    change. Two requests, and two API processes made from the same
+    files, must serve the same bytes. A timestamp or a nonce in the
+    worker would show the notice on every restart.
+    """
+    first = TestClient(create_app(Settings(_env_file=None)))
+    second = TestClient(create_app(Settings(_env_file=None)))
+    one = first.get("/sw.js").content
+    assert one == first.get("/sw.js").content, "one process served two different workers"
+    assert one == second.get("/sw.js").content, "a restart with no change served a new worker"

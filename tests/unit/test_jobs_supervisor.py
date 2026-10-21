@@ -11,6 +11,13 @@ import pytest
 from sonoran.config import Settings
 from sonoran.jobs import run_task, scheduler, supervisor
 
+# The supervisor reads memory from /proc, which only Linux has. The jobs
+# run in a Linux container, and CI runs on Linux, so these tests run
+# there. On a Mac they are skipped, not failed.
+needs_proc = pytest.mark.skipif(
+    not Path("/proc/self").exists(), reason="the supervisor reads /proc, which only Linux has"
+)
+
 
 def _settings(tmp_path: Path, **extra: object) -> Settings:
     return Settings(_env_file=None, coverage_cache_dir=str(tmp_path), **extra)  # type: ignore[arg-type]
@@ -66,6 +73,7 @@ def test_a_run_bigger_than_the_whole_budget_still_runs_alone() -> None:
     assert not budget.fits(800.0)
 
 
+@needs_proc
 def test_the_memory_of_a_process_tree_is_read_from_proc() -> None:
     me = os.getpid()
     assert me in supervisor.process_tree(me)
@@ -83,6 +91,7 @@ def _child(code: str) -> Any:
     return spawn
 
 
+@needs_proc
 def test_a_job_over_its_ceiling_is_stopped_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -99,6 +108,7 @@ def test_a_job_over_its_ceiling_is_stopped_alone(
     assert supervisor.read_peak(settings, "gaps") is None, "a stopped run is not a peak"
 
 
+@needs_proc
 def test_a_finished_job_records_its_peak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(tmp_path)
     monkeypatch.setattr(
@@ -174,6 +184,7 @@ def test_a_failed_run_does_not_record_a_peak_and_a_short_one_lowers_it_slowly(
     assert supervisor.planned_mb(settings, "coverage") > 600.0
 
 
+@needs_proc
 def test_a_failed_run_leaves_the_recorded_peak_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -189,6 +200,7 @@ def test_a_failed_run_leaves_the_recorded_peak_alone(
     assert supervisor.read_peak(settings, "gaps") == 200.0
 
 
+@needs_proc
 def test_a_short_job_still_records_a_peak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(tmp_path)
     monkeypatch.setattr(
@@ -200,6 +212,7 @@ def test_a_short_job_still_records_a_peak(tmp_path: Path, monkeypatch: pytest.Mo
     assert supervisor.read_peak(settings, "snapshot") is not None
 
 
+@needs_proc
 def test_the_memory_of_a_tree_counts_shared_pages_once() -> None:
     me = os.getpid()
     assert 0 < supervisor.share_mb(me) <= supervisor.rss_mb(me) + 1

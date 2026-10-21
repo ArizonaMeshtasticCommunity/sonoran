@@ -7,6 +7,9 @@ Simplified Technical English. See #308.
 No credentials and no host names are in this file. Ask the owner of the
 deployment host for access.
 
+For the day-to-day work on a running deployment (checks, restarts,
+logs, backups and common faults), see `docs/OPERATIONS.md`.
+
 ## 1. The shape of a deployment
 
 - The deployment is a clone of this repository in the home directory of
@@ -32,6 +35,13 @@ deployment host for access.
    ```bash
    docker tag sonoran-api:latest sonoran-api:rollback-<old-sha>
    ```
+
+   Compose names an image `<project>-<service>` and a container
+   `<project>-<service>-1`. The project is the name of the directory
+   that holds `docker-compose.yml`, unless `COMPOSE_PROJECT_NAME` sets
+   it. The commands in this file use `sonoran`. A clone in a directory
+   named `sonoran` has `sonoran-api`. `docker compose images`
+   shows the names.
 
 4. Take a snapshot of what the live API answers:
 
@@ -131,7 +141,8 @@ Contributors are off until you turn them on. The design is
    password for step 3.
 2. **The registrar.** Set `DISPATCHER_USERNAME=sonoran-contrib` in the
    registrar's `.env`, and restart it with code that has the
-   contributor rules (sonoran-contributor `docs/REGISTRAR.md`). At start
+   contributor rules (`docs/REGISTRAR.md` in the separate
+   `sonoran-contributor` repository, not in this one). At start
    it:
    - adds the all-clients deny for `sonoran/v1/contributors/#`;
    - writes every login's rules again, with its own job topics;
@@ -270,3 +281,32 @@ The `jobs` log warns while it is there. To also draw the rounded
 positions on a separate, dashboard-only map, set
 `COVERAGE_INCLUDE_APPROXIMATE=true`. That costs one more prediction of
 each map, so it roughly doubles the run.
+
+## 9. The coverage signal floor (#334)
+
+The signal floor needs margin tiles beside the colour tiles. Only the
+coverage job writes them, so a run made before this change has none.
+No migration is necessary, and the database does not change.
+
+1. Rebuild `api` and `jobs` (section 3). Do not restart `jobs` while a
+   coverage run is in progress.
+2. Until the next coverage run, the page draws the old run's colour
+   tiles as before. The "Signal floor" control is disabled and says
+   that the run was made before the coverage job wrote signal margins.
+   This is a working state, not a fault. The public embed does not
+   change.
+3. The floor works from the next coverage run. To make one now, remove
+   `attempts/coverage.txt` in the coverage cache, or run
+   `docker compose exec jobs sonoran-coverage-once`.
+4. Check it. The `jobs` log says `published coverage run`. In the
+   coverage cache, `runs/<stamp>/<preset>/infrastructure/usable/margin/`
+   holds tiles. On the coverage page, open Settings: "Signal floor" is
+   enabled, and 10 dB shows less ground than 0 dB.
+
+A run's tiles take about 1.7 times the disk they took before, and the
+render step takes about 1.3 times as long. See `docs/COVERAGE.md`
+6.1.2.
+
+Roll back: the older `api` and `jobs` ignore the `margin` directories
+and the `margin_tiles` field in the manifest. Nothing has to be
+removed. The two runs the cache keeps are pruned as usual.

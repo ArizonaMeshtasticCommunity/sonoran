@@ -19,8 +19,18 @@ retention expires the old rows, and it then matches nothing.
 `preset` is separate from `channel`. A caller may pass both, and gets
 both: `channel=azmsh&preset=LongFast` is the azmsh traffic on LongFast.
 A request without `preset` runs the SQL it always ran.
+
+Several presets at once (#383): `preset=MediumFast,LongFast` keeps the
+rows carried on any of them. One name runs the same equality as before;
+two or more run
+
+    coalesce(modem_preset, channel) IN (:presets)
+
+Every name is checked, and one name that is not a preset refuses the
+whole request.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import HTTPException
@@ -43,12 +53,46 @@ def require_preset(value: str | None) -> str | None:
     return preset.name
 
 
-def preset_filter(tag: Any, channel: Any, preset: str) -> ColumnElement[bool]:
+# The separator of several presets in one `preset=`. No preset name holds it.
+SEPARATOR = ","
+
+Presets = tuple[str, ...]
+
+
+def require_presets(value: str | None) -> Presets | None:
+    """Return the canonical names of one or more presets, or None for none.
+
+    `value` is one name, or several with commas between them. Each is
+    matched like `require_preset`, a repeat is kept once, and the order
+    given is kept. An empty part or a name that is not a preset is a bad
+    request, for the same reason as there.
+    """
+    if value is None or value == "":
+        return None
+    names: list[str] = []
+    for part in value.split(SEPARATOR):
+        name = require_preset(part.strip())
+        if name is None:
+            raise HTTPException(status_code=422, detail=f"empty modem preset in: {value}")
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def preset_filter(tag: Any, channel: Any, preset: str | Sequence[str]) -> ColumnElement[bool]:
     """Return the rows tagged `preset`, and the untagged rows on its channel.
 
     Written as `coalesce(tag, channel) = :preset`, which is the same test
     as the two lines in the module docstring. One form, so that `tag` is
     named once: for a chat message it is a correlated read of the
     packet's tag, and the OR form would run that read twice.
+
+    `preset` may be several names (#383). One name keeps the equality, so
+    a request for one preset runs the SQL it ran before; two or more use
+    `IN`.
     """
-    return func.coalesce(tag, channel) == preset
+    names = (preset,) if isinstance(preset, str) else tuple(preset)
+    value = func.coalesce(tag, channel)
+    if len(names) == 1:
+        return value == names[0]
+    return value.in_(names)

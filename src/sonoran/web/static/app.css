@@ -1745,36 +1745,106 @@ body.watch-mode { overflow: hidden; }
 .pkt-swatch { width: 16px; height: 16px; margin-right: .35rem; vertical-align: middle; }
 
 /*
- * The packet kind filter on the live map.
- *
- * A disclosure, because seven chips in the controls row would crowd out
- * every other control on a phone. The summary says what is shown, so a
- * filtered map says so while the chips are closed. Open, the chips take
- * a line of their own. A hidden kind is struck through as well as dimmed,
- * so the state does not rest on contrast alone.
+ * A packet family's mark in CSS, for rows that outlive a theme change
+ * (#386). Same tokens as the map, so a feed row and its line agree in
+ * both themes. Shape and colour are both redundant with the text label
+ * beside the mark, so it is hidden from a screen reader.
  */
-.family-filter { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
-.family-filter[open] { flex-basis: 100%; }
-.family-filter > summary {
-  display: flex; align-items: center; gap: .4rem;
+[data-family="POSITION_APP"] { --pkt: var(--pkt-position); }
+[data-family="NODEINFO_APP"] { --pkt: var(--pkt-nodeinfo); }
+[data-family="TELEMETRY_APP"] { --pkt: var(--pkt-telemetry); }
+[data-family="TEXT_MESSAGE_APP"] { --pkt: var(--pkt-text); }
+[data-family="TRACEROUTE_APP"] { --pkt: var(--pkt-trace); }
+[data-family="ROUTING_APP"] { --pkt: var(--pkt-routing); }
+[data-family="OTHER"] { --pkt: var(--pkt-other); }
+.pkt-mark {
+  display: inline-block; box-sizing: border-box; flex: none;
+  width: .7rem; height: .7rem; margin-right: .3rem; vertical-align: middle;
+  color: var(--pkt, var(--muted));
+}
+.pkt-mark.disc { background: currentColor; border-radius: 50%; }
+.pkt-mark.ring { border: 2px solid currentColor; border-radius: 50%; }
+.pkt-mark.square { background: currentColor; width: .6rem; height: .6rem; }
+.pkt-mark.capsule { background: currentColor; width: .85rem; height: .32rem; border-radius: .16rem; }
+.pkt-mark.diamond { border: 2px solid currentColor; width: .55rem; height: .55rem; transform: rotate(45deg); }
+.pkt-mark.cross {
+  background:
+    linear-gradient(currentColor, currentColor) center / 100% 2px no-repeat,
+    linear-gradient(currentColor, currentColor) center / 2px 100% no-repeat;
+}
+.pkt-mark.tick { background: currentColor; width: .2rem; height: .55rem; }
+.pkt-kind { display: inline-flex; align-items: center; }
+/* The row's edge carries its family's colour, as its line on the map does. */
+[data-traffic-feed] > li[data-family] { border-left: 3px solid var(--pkt, var(--line)); }
+
+/*
+ * The packet type menu on the live map (#385).
+ *
+ * A button in the controls row and a drop-down of checkboxes. The menu
+ * is a popover, so it opens over the page in the top layer and takes no
+ * room in the row: the header keeps its height whether the menu is open
+ * or shut. The top layer also clears the watch bar's sideways scroll on
+ * a phone, which would clip an ordinary absolute panel.
+ *
+ * The button says what is shown, so a filtered map says so while the
+ * menu is shut. A hidden kind is an empty checkbox, and its name and
+ * mark are dimmed as well, so the state does not rest on contrast alone.
+ */
+.family-filter { display: inline-flex; align-items: center; }
+.family-toggle {
+  display: inline-flex; align-items: center; gap: .4rem;
   min-height: 1.75rem; padding: .4rem .6rem; white-space: nowrap;
   border: 1px solid var(--line); border-radius: .4rem; background: var(--panel-2);
-  cursor: pointer; list-style: none;
+  color: inherit; font: inherit; cursor: pointer;
 }
-.family-filter > summary::-webkit-details-marker { display: none; }
-.family-filter > summary::after {
-  content: ""; width: .4rem; height: .4rem;
+.family-toggle::after {
+  content: ""; width: .4rem; height: .4rem; margin: 0 .1rem .2rem;
   border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
   transform: rotate(45deg); transition: transform .15s ease;
 }
-.family-filter[open] > summary::after { transform: rotate(-135deg); }
-.family-filter > summary:hover { border-color: var(--accent); }
-.family-chips { display: flex; flex-wrap: wrap; gap: .4rem; }
-.family-chip { display: inline-flex; align-items: center; white-space: nowrap; }
-.family-chip[aria-pressed="true"] { border-color: var(--accent); }
-.family-chip[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
-.family-chip[aria-pressed="false"] .pkt-swatch { opacity: .35; }
-.watch-bar .family-filter > summary, .watch-bar .family-chip { font-size: .8rem; }
+.family-toggle[aria-expanded="true"]::after { transform: rotate(-135deg); margin-bottom: -.2rem; }
+.family-toggle:hover, .family-toggle[aria-expanded="true"] { border-color: var(--accent); }
+.family-menu {
+  /*
+   * No `display` here. The browser hides a shut popover with its own
+   * `display: none`, and any `display` in this rule would win over it
+   * and leave the menu open for good. `inset: auto` and `margin: 0`
+   * undo the rules that centre a popover; `placeMenu` in app.js writes
+   * `left` and `top` under the button.
+   */
+  position: fixed; inset: auto; left: 0; top: 0; margin: 0;
+  z-index: 1900;
+  box-sizing: border-box;
+  width: min(16rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem); overflow-y: auto;
+  padding: .4rem;
+  color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: .5rem;
+  box-shadow: 0 .5rem 1.5rem var(--scroll-shadow);
+  font-size: .9rem; letter-spacing: normal; text-align: left;
+}
+.family-menu[hidden] { display: none; }
+.family-chips { display: grid; gap: .1rem; }
+.family-option {
+  /* Three columns, so every name starts at the same place whatever
+     the width of its mark. */
+  display: grid; grid-template-columns: 1.1rem .9rem 1fr; align-items: center; gap: .55rem;
+  /* A finger-sized row on touch, WCAG 2.2 SC 2.5.8 and more. */
+  min-height: 2.25rem; padding: 0 .45rem; border-radius: .35rem;
+  cursor: pointer; white-space: nowrap;
+}
+@media (pointer: coarse) { .family-option { min-height: 2.75rem; } }
+.family-option:hover { background: var(--panel-2); }
+.family-option input { width: 1.1rem; height: 1.1rem; margin: 0; flex: none; accent-color: var(--accent); }
+.family-option .pkt-mark { margin-right: 0; justify-self: center; }
+.family-option:has(input:not(:checked)) > span:last-child { color: var(--muted); }
+.family-option:has(input:not(:checked)) .pkt-mark { opacity: .35; }
+.family-menu-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  margin-top: .3rem; padding: .4rem .2rem 0; border-top: 1px solid var(--line);
+}
+.family-menu-foot .linky:disabled { color: var(--muted); text-decoration: none; cursor: default; }
+.watch-bar .family-toggle { font-size: .8rem; }
 
 /* The packet page. */
 .packet-sentence { max-width: 60rem; }
@@ -3176,7 +3246,8 @@ div.check { cursor: default; }
   letter-spacing: .06em;
   margin-right: .15rem;
 }
-.coverage-view-controls button {
+.coverage-view-controls button,
+.coverage-role-chips button {
   font: inherit;
   font-size: .78rem;
   padding: .3rem .65rem;
@@ -3186,18 +3257,22 @@ div.check { cursor: default; }
   color: var(--muted);
   cursor: pointer;
 }
-.coverage-view-controls button:hover { border-color: var(--accent-soft); color: var(--text); }
-.coverage-view-controls button[aria-pressed="true"] {
+.coverage-view-controls button:hover,
+.coverage-role-chips button:hover { border-color: var(--accent-soft); color: var(--text); }
+.coverage-view-controls button[aria-pressed="true"],
+.coverage-role-chips button[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--text);
   background: var(--panel-2);
 }
-.coverage-view-controls button[aria-pressed="true"]::before {
+.coverage-view-controls button[aria-pressed="true"]::before,
+.coverage-role-chips button[aria-pressed="true"]::before {
   content: "✓";
   color: var(--accent);
   margin-right: .35rem;
 }
-.coverage-view-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.coverage-view-controls button:focus-visible,
+.coverage-role-chips button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /*
  * The layer pills were here (`.coverage-layers button`). The layer is a
@@ -3225,6 +3300,17 @@ div.check { cursor: default; }
   color: var(--muted);
   margin-bottom: .4rem;
 }
+/* Which map the legend describes (#334). The approximate map is in the
+   warning colour, and it says so in words as well: never colour alone. */
+.coverage-legend-map {
+  display: block;
+  font-size: max(.68rem, var(--text-floor, 0px));
+  color: var(--text);
+  margin: -.2rem 0 .4rem;
+}
+.coverage-legend-map.warn { color: var(--warn); font-weight: 650; }
+.coverage-which { margin: 0 0 .6rem; font-size: .85rem; color: var(--muted); }
+.coverage-which.warn { color: var(--warn); font-weight: 600; }
 /* The stops are the ramp in coverage/render.py. Keep the two the same. */
 .coverage-ramp {
   height: .65rem;
@@ -3233,6 +3319,23 @@ div.check { cursor: default; }
     to right,
     #ff2d55 0%, #ff7a00 25%, #ffe600 50%, #00d98b 75%, #00a8ff 100%
   );
+}
+/* The signal floor (#334). The part of the ramp below the floor is not
+   drawn on the map, so the legend dims it. coverage.js sets the width. */
+.coverage-ramp[data-coverage-ramp] { position: relative; overflow: hidden; }
+.coverage-ramp[data-coverage-ramp]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--coverage-floor, 0%);
+  background: var(--panel);
+  opacity: .8;
+}
+.coverage-legend-floor {
+  display: block;
+  font-size: max(.68rem, var(--text-floor, 0px));
+  color: var(--text);
+  margin: .3rem 0 0;
 }
 .coverage-scale {
   display: flex;
@@ -3348,6 +3451,59 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* The coverage controls carried margins for their old rows above the map. */
 .options-panel .coverage-view-controls,
 .options-panel .coverage-opacity { margin: 0; }
+
+/*
+ * The coverage settings panel (#334): three groups and a reset. Each
+ * group is a column that wraps under the one before it on a narrow
+ * screen, so the panel has no fixed width to overflow at 320 px.
+ */
+.options-panel.coverage-settings { align-items: flex-start; gap: .9rem 1.5rem; }
+.coverage-settings-group {
+  flex: 1 1 15rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .5rem;
+}
+.coverage-settings-group > legend {
+  padding: 0;
+  margin-bottom: .45rem;
+  font-size: max(.76rem, var(--text-floor, 0px));
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+/* The group's legend says "Show"; the toggles' own label would say it twice. */
+.coverage-settings .coverage-view-controls::before { content: none; }
+.coverage-settings .coverage-pick { flex-wrap: wrap; max-width: 100%; }
+.coverage-settings select { max-width: 100%; min-width: 0; }
+.coverage-check {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.coverage-check input { accent-color: var(--accent); margin: 0; flex: none; }
+.coverage-check:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+.coverage-setting-note { margin: -.3rem 0 0; font-size: max(.76rem, var(--text-floor, 0px)); color: var(--muted); max-width: 32rem; }
+.coverage-role-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.coverage-settings-actions { flex: 1 1 100%; display: flex; justify-content: flex-end; }
+.coverage-settings-button { display: inline-flex; align-items: center; }
+/* The head holds one button, so on a phone it stays on the title row,
+   at the right, where Will asked for it. Other dense heads give their
+   controls a row of their own below 40rem. */
+@media (max-width: 40rem) {
+  .page-head.dense.coverage-head .controls { flex-basis: auto; margin-left: auto; }
+  /* The title's 10rem basis left no room for the button beside it with
+     the CI runner's wider fonts (AGENTS.md 9.31). The heading is one
+     word, so it takes what the button leaves. */
+  .page-head.dense.fit.coverage-head > div:first-child { flex-basis: 0; }
+}
 
 /*
  * Folding on a phone (#275). See `wireFolds` and `foldSub` in app.js.
@@ -4243,6 +4399,46 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .settings-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /*
+ * The preset boxes (#383): a box per preset, in columns that fill the
+ * row. The panel takes the whole row, because seventeen names do not fit
+ * a third of it. Each label is a full 44 px target, like the switch.
+ */
+.page[data-page="settings"] .settings-presets { grid-column: 1 / -1; }
+.preset-boxes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.5rem), 1fr));
+  gap: .3rem;
+  padding: .25rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+}
+.preset-box {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 44px;
+  min-width: 0;
+  padding: .3rem .5rem;
+  border-radius: .4rem;
+  font-size: .85rem;
+  font-weight: 550;
+  color: var(--muted);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.preset-box:hover { color: var(--text); }
+.preset-box.checked { color: var(--text); background: var(--panel); }
+.preset-box input { width: 1.1rem; height: 1.1rem; margin: 0; flex: none; accent-color: var(--accent); }
+.preset-box.all { grid-column: 1 / -1; }
+.preset-boxes-note {
+  color: var(--muted);
+  font-size: .82rem;
+  margin: .6rem 0 0;
+  min-height: 1.2em;
+}
+
+/*
  * The menu's link to the page, styled as the footer's other rows are so
  * the three read as one group.
  */
@@ -4612,7 +4808,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-tick.channel.custom { color: var(--accent); }
 
 /*
- * The installed app's two notices (#322): "a new version is available"
+ * The installed app's two notices (#322): "Sonoran was updated" (#382)
  * and "you are offline". pwa.js makes them. They sit at the bottom
  * edge, clear of the home indicator, and above the page's own layers.
  */
