@@ -664,6 +664,56 @@ async function familyMenuWalk(page, { watch }) {
  * positive control is the packet page itself: it must show that packet
  * ID and not "packet not found".
  */
+/*
+ * A proxy on this machine in front of BASE, for the update notice journey
+ * (#382). It passes every request through, and adds `extra` to the body
+ * of `/sw.js`, which is what a deploy does to the worker's bytes. The
+ * worker is asked for without compression, so the added line is text.
+ */
+async function workerProxy() {
+  const http = require('http');
+  const target = new URL(BASE);
+  const client = target.protocol === 'https:' ? require('https') : http;
+  const state = { extra: '', served: [] };
+  const server = http.createServer((request, response) => {
+    const worker = /^\/sw\.js(\?|$)/.test(request.url);
+    const headers = { ...request.headers, host: target.host };
+    if (worker) headers['accept-encoding'] = 'identity';
+    const upstream = client.request({
+      protocol: target.protocol, hostname: target.hostname, port: target.port,
+      path: request.url, method: request.method, headers,
+    }, (answer) => {
+      if (!worker) {
+        response.writeHead(answer.statusCode, answer.headers);
+        answer.pipe(response);
+        return;
+      }
+      const chunks = [];
+      answer.on('data', (chunk) => chunks.push(chunk));
+      answer.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8') + state.extra;
+        state.served.push(body);
+        const out = { ...answer.headers };
+        delete out['content-length'];
+        response.writeHead(answer.statusCode, out);
+        response.end(body);
+      });
+    });
+    upstream.on('error', () => response.destroy());
+    request.pipe(upstream);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    served: state.served,
+    change: (extra) => { state.extra = extra; },
+    close: () => new Promise((resolve) => {
+      server.close(resolve);
+      server.closeAllConnections();
+    }),
+  };
+}
+
 async function nodeMessageOpensPacket(page, how) {
   const chat = await page.request.get(`${BASE}/api/chat?limit=50`).then((r) => r.json());
   const sent = chat.find((message) => message.packet_id != null);
@@ -3830,6 +3880,81 @@ async function main() {
     return 'the panel works for the visit';
   });
   await nostore.close();
+
+  /*
+   * The update notice (#382). Logan saw "A new version of Sonoran is
+   * available" when no release was published. The notice follows the
+   * bytes of `/sw.js`, which change with every deploy that changes a
+   * static file, so it says the page was updated, not that a release
+   * came out. The issue also asks whether it can show when nothing
+   * changed, and whether Reload makes it go.
+   *
+   * Chromium fetches a worker update in the browser process, where
+   * `page.route` and `context.route` never see it. So the page is loaded
+   * through a small proxy on this machine that can add a line to
+   * `/sw.js`, which is what a deploy does to it. 127.0.0.1 is a secure
+   * context, so the worker registers over plain HTTP.
+   *
+   * Negative and positive in one run: with the same bytes, three update
+   * checks and reloads show nothing; with changed bytes, the notice
+   * shows. Then Reload must reload the page and the notice must not come
+   * back, on that page or a new one.
+   */
+  const updates = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const proxy = await workerProxy();
+  await journey(updates, 'the update notice shows only for a changed worker, and goes after Reload (#382)', async (page) => {
+    const notices = () => page.evaluate(() => [...document.querySelectorAll('.app-notice p')]
+      .map((item) => item.textContent).filter((text) => !/offline/i.test(text)));
+    const check = () => page.evaluate(() => navigator.serviceWorker.getRegistration()
+      .then((registration) => registration && registration.update()).then(() => true, () => false));
+    await page.goto(`${proxy.url}/#dashboard`, { waitUntil: 'load' });
+    const ready = await page.evaluate(() => Promise.race([
+      navigator.serviceWorker.ready.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 15000)),
+    ]));
+    must(ready, 'the service worker never became active, so nothing here was measured');
+    for (let round = 0; round < 3; round += 1) {
+      await check();
+      await page.waitForTimeout(800);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForTimeout(800);
+    }
+    const quiet = await notices();
+    must(quiet.length === 0, `with an unchanged worker the page says "${quiet.join(' ')}"`);
+    const served = new Set(proxy.served);
+    must(proxy.served.length >= 4 && served.size === 1,
+      `the worker was fetched ${proxy.served.length} times with ${served.size} different bodies`);
+
+    proxy.change('\n// a deploy\n');
+    await check();
+    must(await waitFor(page, () => document.querySelectorAll('.app-notice button').length > 0, 10000),
+      'a changed worker showed no notice, so the quiet run above proves nothing');
+    const said = (await notices()).join(' ');
+    must(/updated/i.test(said) && !/version/i.test(said),
+      `the notice says "${said}", which reads like a release`);
+
+    const reloaded = page.waitForNavigation({ timeout: 10000 }).then(() => true, () => false);
+    await page.locator('.app-notice button').first().click();
+    must(await reloaded, 'Reload did not reload the page');
+    await page.waitForTimeout(1500);
+    for (let round = 0; round < 2; round += 1) {
+      await check();
+      await page.waitForTimeout(800);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForTimeout(800);
+    }
+    const after = await notices();
+    must(after.length === 0, `after Reload the page still says "${after.join(' ')}"`);
+    const fresh = await updates.newPage();
+    await fresh.goto(`${proxy.url}/#nodes`, { waitUntil: 'load' });
+    await fresh.waitForTimeout(2000);
+    const other = await fresh.evaluate(() => document.querySelectorAll('.app-notice button').length);
+    await fresh.close();
+    must(other === 0, 'a new tab after Reload shows the notice again');
+    return `quiet over ${proxy.served.length} identical fetches; "${said}"; gone after Reload and in a new tab`;
+  });
+  await updates.close();
+  await proxy.close();
 
   /*
    * azmsh runs on both presets (#313). Ingest tags each packet with the

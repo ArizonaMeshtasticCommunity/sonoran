@@ -4808,7 +4808,7 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .rf-tick.channel.custom { color: var(--accent); }
 
 /*
- * The installed app's two notices (#322): "a new version is available"
+ * The installed app's two notices (#322): "Sonoran was updated" (#382)
  * and "you are offline". pwa.js makes them. They sit at the bottom
  * edge, clear of the home indicator, and above the page's own layers.
  */
