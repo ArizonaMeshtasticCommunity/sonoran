@@ -131,7 +131,8 @@ Contributors are off until you turn them on. The design is
    password for step 3.
 2. **The registrar.** Set `DISPATCHER_USERNAME=sonoran-contrib` in the
    registrar's `.env`, and restart it with code that has the
-   contributor rules (sonoran-contributor `docs/REGISTRAR.md`). At start
+   contributor rules (`docs/REGISTRAR.md` in the separate
+   `sonoran-contributor` repository, not in this one). At start
    it:
    - adds the all-clients deny for `sonoran/v1/contributors/#`;
    - writes every login's rules again, with its own job topics;

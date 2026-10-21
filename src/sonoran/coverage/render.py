@@ -10,7 +10,7 @@ help: `{z}/{x}/{y}.png`, 256 pixels square, Web Mercator.
 
 The colours are the ones the dashboard already uses. The palette lives
 in `web/static/app.css` and this module holds the same values, because
-Python cannot read a stylesheet. `tests/unit/test_coverage_render.py`
+Python cannot read a stylesheet. `tests/unit/test_coverage_map.py`
 pins the two together.
 
 PNG is written here rather than with an imaging library. A tile is a

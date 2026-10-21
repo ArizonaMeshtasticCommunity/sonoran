@@ -524,8 +524,8 @@ configuration, not code, and is left to the deployment.
 ### 5.6 Members' mods (#324)
 
 A member may run their own program beside the agent and send what it
-hears as their station's data, on `rf/v1/<station>/custom` (rf-map
-`docs/MODS.md`). Each point is stored in `rf_custom` under its station
+hears as their station's data, on `rf/v1/<station>/custom` (`docs/MODS.md`
+in the separate `sonoran-contributor` repository, once named `rf-map`). Each point is stored in `rf_custom` under its station
 and mod, so no mod can post as another station, another mod, or a
 built-in kind, and it never enters a shared layer. A mod gets no more
 trust than a built-in decoder: the same validation, quotas and trust
