@@ -655,6 +655,49 @@ async function familyMenuWalk(page, { watch }) {
     + ` of ${opened.wide} px; filters, Escape, outside, Show all, Done`;
 }
 
+/*
+ * Will, #387: the "16m ago" of a message on a node page opened a popup
+ * with the date. A click, a tap or Enter must open the packet page, as
+ * on the chat page, and a hover still gives the exact time through the
+ * link's title. The node is the sender of the newest stored message
+ * whose packet is known, so the link has a packet to land on. The
+ * positive control is the packet page itself: it must show that packet
+ * ID and not "packet not found".
+ */
+async function nodeMessageOpensPacket(page, how) {
+  const chat = await page.request.get(`${BASE}/api/chat?limit=50`).then((r) => r.json());
+  const sent = chat.find((message) => message.packet_id != null);
+  must(sent, 'no stored message has a packet, so there is nothing to link');
+  await page.goto('about:blank');
+  await open(page, `node/${encodeURIComponent(sent.from_node)}`, 500);
+  const panel = '[data-page="node"] .panel:has(h3:has-text("Messages sent"))';
+  const link = page.locator(`${panel} a.when`).first();
+  await link.waitFor({ state: 'attached', timeout: 20000 }).catch(() => {});
+  must(await link.count(), `${how}: a message time on the node page is not a link`);
+  const href = await link.getAttribute('href');
+  const match = /^#packet\/([^/]+)\/(\d+)$/.exec(href || '');
+  must(match && decodeURIComponent(match[1]) === sent.from_node,
+    `${how}: the time links to ${href}, not to a packet of ${sent.from_node}`);
+  const title = (await link.getAttribute('title')) || '';
+  must(/\d:\d\d/.test(title), `${how}: hovering the time no longer gives the exact time ("${title}")`);
+  const name = await page.locator(`${panel} .who .name`).first().innerText();
+  must(name.trim().length > 0, `${how}: the sender button beside the time is empty`);
+  await link.scrollIntoViewIfNeeded();
+  if (how === 'tap') await link.tap();
+  else if (how === 'keyboard') {
+    await link.focus();
+    await page.keyboard.press('Enter');
+  } else await link.click();
+  const id = match[2];
+  const shown = await waitFor(page, (wanted) => {
+    const view = document.querySelector('.page.active');
+    return Boolean(view && view.dataset.page === 'packet' && view.textContent.includes(wanted)
+      && !/packet not found/i.test(view.textContent));
+  }, 15000, 300, id);
+  must(shown, `${how} on the time did not open the packet page of ${id}`);
+  return `${how} -> ${href}`;
+}
+
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
@@ -1737,6 +1780,12 @@ async function main() {
     must(dash.every((time) => time.w >= 44 && time.h >= 44),
       `a dashboard time link is under 44 px: ${dash.map((t) => `${t.w}x${t.h}`).join(' ')}`);
     return `${seen.join('; ')}; dashboard ${dash.length} at >= 44x44`;
+  });
+
+  await journey(context, 'a message time on a node page opens its packet (#387)', async (page) => {
+    const clicked = await nodeMessageOpensPacket(page, 'click');
+    const keyed = await nodeMessageOpensPacket(page, 'keyboard');
+    return `${clicked}; ${keyed}`;
   });
 
   await journey(context, 'the chat table pages on as you scroll', async (page) => {
@@ -4744,6 +4793,9 @@ async function main() {
 
     return done.join(', ');
   });
+
+  await journey(phone, 'a tap on a message time on a node page opens its packet (#387)',
+    (page) => nodeMessageOpensPacket(page, 'tap'));
 
   await journey(phone, 'a wide comparison table keeps its first column on a phone (#274)', async (page) => {
     /*

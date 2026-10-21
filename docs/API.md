@@ -564,7 +564,13 @@ replaces many. Fields:
   `noise_floor` is the **measured** noise floor in dBm, not the theoretical
   one the coverage map uses.
 - `activity` — `packet_count` and a count for each port number.
-- `messages` — `count` and the newest messages this node sent.
+- `messages` — `count` and the newest messages this node sent. Each
+  message has `packet_id`, `from_node`, `from_name`, `body`, `channel`,
+  `to_node`, `to_name`, `emoji` and `seen_at`. `packet_id` and
+  `from_node` identify the packet, so the page links the time of a
+  message to `#packet/{from_node}/{packet_id}` (#387). `packet_id` is
+  null for a message stored without one, and the page then shows the
+  time with no link.
 - `graph` — the mesh-graph URLs for this node.
 
 Query parameter: `hours` — the time window. Default 24.

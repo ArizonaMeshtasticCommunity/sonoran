@@ -270,7 +270,14 @@ def _bands(rows: Sequence[Any]) -> list[dict[str, object]]:
 async def _messages(
     session: AsyncSession, node_num: int, since: datetime, limit: int
 ) -> dict[str, object]:
-    """Return the messages that one node sent in the selected window."""
+    """Return the messages that one node sent in the selected window.
+
+    Each message carries `packet_id` and `from_node`, the two halves of
+    its packet's identity (AGENTS.md 9.1). The page draws the time of a
+    message as a link to that packet, as the chat page does (#387).
+    `packet_id` is the Meshtastic ID, never the row ID, and it is null
+    for a row stored without one.
+    """
     total = await session.scalar(
         select(func.count())
         .select_from(TextMessage)
@@ -284,11 +291,14 @@ async def _messages(
             .limit(limit)
         )
     ).all()
-    names = await resolve_names(session, (row.to_node_num for row in rows))
+    names = await resolve_names(session, [node_num, *(row.to_node_num for row in rows)])
     return {
         "count": total or 0,
         "recent": [
             {
+                "packet_id": row.packet_id,
+                "from_node": format_node_id(row.from_node_num),
+                "from_name": name_of(names, row.from_node_num),
                 "body": row.body,
                 "channel": row.channel,
                 "to_node": format_node_id(row.to_node_num),
