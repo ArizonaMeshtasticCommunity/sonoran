@@ -45,7 +45,7 @@ start only when you ask for their profile:
 | `timescaledb` | TimescaleDB (PostgreSQL) storage | internal |
 | `migrate` | Runs the Alembic migrations once, then exits | — |
 | `ingest` | Reads MQTT, decodes, and writes packets | — |
-| `api` | The JSON API and the static web UI | **8000** |
+| `web` | The JSON API and the static web UI | **8000** |
 | `jobs` | Scheduled work: snapshots, coverage, calibration, gaps, read models | — |
 | `mesh-graph` | The upstream mesh-graph traceroute engine | **8080** |
 | `backup` | A daily dump of the database, kept in rotation | — |

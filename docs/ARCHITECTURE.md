@@ -25,7 +25,7 @@ console script in `pyproject.toml`:
 | Service | Console script and entry point | Database role |
 |---------|--------------------------------|---------------|
 | ingest | `sonoran-ingest`, `sonoran.ingest.pipeline:run` | `azmsh_ingest`: INSERT and UPDATE only |
-| api | `sonoran-api`, `sonoran.api.app:run` | `azmsh_api`: SELECT only |
+| web | `sonoran-api`, `sonoran.api.app:run` | `azmsh_api`: SELECT only |
 | jobs | `sonoran-jobs`, `sonoran.jobs.scheduler:run` | `azmsh_jobs`: SELECT, and DELETE then INSERT on the job output tables (AGENTS.md 4) |
 | rf-ingest (profile `rf`) | `sonoran-rf-ingest`, `sonoran.rf.ingest:run` | the ingest role, plus SELECT on `rf_trust` (AGENTS.md 9.29) |
 | contrib (profile `contrib`) | `sonoran-contrib`, `sonoran.contrib.service:run` | the jobs role: SELECT, INSERT, UPDATE, DELETE on the `contrib_` tables, SELECT and INSERT on `local_stats` (#178) |
@@ -35,13 +35,22 @@ The other four are the database, a one-off step, and two images that are not the
 | Service | What it is |
 |---------|------------|
 | timescaledb | The database, the `timescale/timescaledb-ha:pg17` image. Its data is the `tsdb_data` volume at `/home/postgres/pgdata`. |
-| migrate | The Sonoran image running `alembic upgrade head` once, as the superuser. api, ingest, jobs, rf-ingest and contrib wait until it exits with 0. |
+| migrate | The Sonoran image running `alembic upgrade head` once, as the superuser. web, ingest, jobs, rf-ingest and contrib wait until it exits with 0. |
 | mesh-graph | The upstream traceroute engine, an image pinned by digest. It reads the broker itself and keeps its own SQLite file in the `meshgraph_data` volume. Nothing waits for it. |
 | backup | `tools/backup.Dockerfile`: the database image with `tools/db_backup_scheduled.sh`. It dumps the database once a day as the superuser, into `BACKUP_HOST_DIR`. See `docs/DATABASE.md` 9.1. |
 
-The api and jobs services share three volumes: `terrain_cache`,
+The web and jobs services share three volumes: `terrain_cache`,
 `landcover_cache` and `coverage_cache`. The jobs service writes the
-coverage tiles and the api serves them.
+coverage tiles and the web service serves them.
+
+The backend services are on their own network, `sonoran-internal`.
+Only `web` is also on the default network, where a reverse proxy can
+reach it. The database is on `sonoran-internal` only, so two stacks on
+one host cannot reach each other's database by name. A service that
+uses the database must join `sonoran-internal`;
+`tests/unit/test_compose_networks.py` checks this. The network is not
+`internal`: ingest, rf-ingest, contrib and mesh-graph read a broker
+outside the stack, and jobs fetches terrain and land cover.
 
 The jobs process runs these tasks (`jobs/scheduler.py::build_tasks`):
 `snapshot` once a UTC day, `coverage` (calibration, coverage and the

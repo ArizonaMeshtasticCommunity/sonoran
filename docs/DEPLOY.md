@@ -40,7 +40,7 @@ logs, backups and common faults), see `docs/OPERATIONS.md`.
    `<project>-<service>-1`. The project is the name of the directory
    that holds `docker-compose.yml`, unless `COMPOSE_PROJECT_NAME` sets
    it. The commands in this file use `sonoran`. A clone in a directory
-   named `sonoran` has `sonoran-api`. `docker compose images`
+   named `sonoran` has `sonoran-web`. `docker compose images`
    shows the names.
 
 4. Take a snapshot of what the live API answers:
@@ -155,12 +155,12 @@ Contributors are off until you turn them on. The design is
    `contrib` service receives the password (ARCHITECTURE.md 2.1).
 4. **The migration.** `docker compose run --rm migrate </dev/null`
    applies `i178`.
-5. **The services.** Rebuild `api`, which has the node page panel and
+5. **The services.** Rebuild `web`, which has the node page panel and
    the RF layer. Then start the dispatcher:
 
    ```bash
-   docker compose build api contrib
-   docker compose up -d --no-deps api
+   docker compose build web contrib
+   docker compose up -d --no-deps web
    docker compose --profile contrib up -d --no-deps contrib
    ```
 
@@ -209,8 +209,8 @@ migration's `downgrade` before you roll back past one.
 
 ## 7. Stop a server by its port
 
-Never use `pkill -f sonoran-api` (the process inside the `web` container) or a pattern like it. It stops every
-server that matches, the ones of other people included, and it can
+Never use `pkill -f sonoran-api` or a pattern like it. (`sonoran-api`
+is the process inside the `web` container.) It stops every server that matches, the ones of other people included, and it can
 also match the shell that runs it. Stop one server by its process ID,
 found from its port.
 
@@ -245,7 +245,7 @@ it.
    Copy the radio facts of any entry in `config/nodes.yaml` into this
    file as well. The setting names one file, and this one replaces it.
 
-2. Mount it read-only into `jobs` and `api` in
+2. Mount it read-only into `jobs` and `web` in
    `docker-compose.override.yml`, and point the setting at it:
 
    ```yaml
@@ -255,7 +255,7 @@ it.
          - ../sonoran-local/nodes.yaml:/etc/sonoran/nodes.yaml:ro
        environment:
          RADIO_OVERRIDES_PATH: /etc/sonoran/nodes.yaml
-     api:
+     web:
        volumes:
          - ../sonoran-local/nodes.yaml:/etc/sonoran/nodes.yaml:ro
        environment:
@@ -266,7 +266,7 @@ it.
    reads only the radio facts, for the node page. No page shows the
    position from this file.
 
-3. Recreate the two services: `docker compose up -d --no-deps jobs api`.
+3. Recreate the two services: `docker compose up -d --no-deps jobs web`.
    Read the `jobs` log. It says `read radio overrides for N nodes`, and
    it names every entry that it refused, with the reason.
 
@@ -288,7 +288,7 @@ The signal floor needs margin tiles beside the colour tiles. Only the
 coverage job writes them, so a run made before this change has none.
 No migration is necessary, and the database does not change.
 
-1. Rebuild `api` and `jobs` (section 3). Do not restart `jobs` while a
+1. Rebuild `web` and `jobs` (section 3). Do not restart `jobs` while a
    coverage run is in progress.
 2. Until the next coverage run, the page draws the old run's colour
    tiles as before. The "Signal floor" control is disabled and says
@@ -307,19 +307,89 @@ A run's tiles take about 1.7 times the disk they took before, and the
 render step takes about 1.3 times as long. See `docs/COVERAGE.md`
 6.1.2.
 
-Roll back: the older `api` and `jobs` ignore the `margin` directories
+Roll back: the older `web` and `jobs` ignore the `margin` directories
 and the `margin_tiles` field in the manifest. Nothing has to be
 removed. The two runs the cache keeps are pruned as usual.
 
-## 10. Upgrade notes
+## 10. Upgrade notes: the `api` service is now `web`
 
-If you are upgrading an existing deployment:
+This change renames the `api` service to `web`, and it puts the
+backend services on their own network, `sonoran-internal`. A deployment
+that ran an older `docker-compose.yml` needs these steps one time. Do
+them in this order. No migration is in this change.
 
-1. **Service Rename:** The `api` service is now called `web`. You must update any `docker-compose.override.yml` files, deployment scripts, health alerters (which watch container names), or reverse proxies that reference `api` or `sonoran-api-1`. The first rollback across this rename must start the old `api` service and remove `web` (`docker compose rm -sf web`).
-2. **Mesh-Graph Config:** The `mesh-graph` configuration file moved from the repository root to `config/mesh-graph.config.toml`. Move any local copies to the new path.
-3. **Disabling Mesh-Graph:** The `mesh-graph` service is enabled by default. If you use a custom build or an external instance (e.g. on Coolify), you can disable the included service by adding the following to your `docker-compose.override.yml`:
-   ```yaml
-   services:
-     mesh-graph:
-       profiles: ["off"]
-   ```
+### 10.1 Before you deploy
+
+1. Keep a copy of the override:
+   `cp docker-compose.override.yml docker-compose.override.yml.before-web`.
+2. In `docker-compose.override.yml`, rename the `api:` block to `web:`.
+   If you do not, Compose stops with
+   `service "api" has neither an image nor a build context specified`.
+3. Find all other things that name the old service or container: a
+   deploy script, a health alerter, a monitor, a reverse proxy. The
+   container `sonoran-api-1` is now `sonoran-web-1`. The process inside
+   it is still `sonoran-api`.
+4. If you keep your own `mesh-graph.config.toml` at the root of the
+   clone, move it to `config/mesh-graph.config.toml`. mesh-graph now
+   reads it from there.
+5. Check the files: `docker compose config -q` gives no output, and
+   `docker compose config --services` lists `web` and not `api`.
+6. Tag the running image with its **old** name:
+   `docker tag sonoran-api:latest sonoran-api:rollback-<old-sha>`.
+
+### 10.2 Deploy
+
+```bash
+docker compose build web jobs ingest
+docker rm -f sonoran-api-1      # the old container still holds port 8000
+docker compose up -d            # every service, not --no-deps
+```
+
+- **Remove the old container first.** Compose does not stop a
+  container whose service is no longer in the file. It keeps port 8000,
+  `web` cannot start, and the site keeps the old code with no error
+  that you can easily see.
+- **Start every service, one time.** Each service moves to the new
+  network, and the database moves with them. A service on the new
+  network cannot reach a database container that is still on the old
+  one. So `--no-deps` is wrong for this one deploy.
+- This restarts the database and ingest. Ingest misses packets for
+  those seconds. Do not deploy during a coverage run (section 3).
+
+### 10.3 Check it
+
+1. `docker compose ps` lists `web`, and no `api`.
+2. `docker inspect -f '{{.State.Health.Status}} {{.RestartCount}}' sonoran-web-1`
+   says `healthy 0`.
+3. `docker network inspect sonoran_sonoran-internal -f '{{range .Containers}}{{.Name}} {{end}}'`
+   names `timescaledb`, `web`, `ingest`, `jobs`, `mesh-graph` and
+   `backup`, and also `rf-ingest` and `contrib` if you run them.
+4. `docker compose logs --since 10m mesh-graph` has no
+   `No such file or directory`. Its restart count is 0.
+5. Compare the API with the snapshot (section 4).
+6. If you set `FORWARDED_ALLOW_IPS`, check that the rate limit still
+   sees each reader's own address and not one address for all.
+
+### 10.4 Roll back across the rename
+
+The old commit has an `api` service and no `sonoran-internal`.
+
+```bash
+git checkout --detach <old-sha>
+cp docker-compose.override.yml.before-web docker-compose.override.yml
+docker rm -f sonoran-web-1
+docker tag sonoran-api:rollback-<old-sha> sonoran-api:latest
+docker compose up -d
+docker network rm sonoran_sonoran-internal   # optional, now unused
+```
+
+### 10.5 Leave out the bundled mesh-graph
+
+`mesh-graph` starts by default. If you use another mesh-graph (for
+example on Coolify), turn this one off in `docker-compose.override.yml`:
+
+```yaml
+services:
+  mesh-graph:
+    profiles: ["off"]
+```
