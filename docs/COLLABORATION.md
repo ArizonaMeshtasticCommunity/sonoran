@@ -255,6 +255,18 @@ deploy, read the deployed commit from the box, and look at the page.
   that fits to the pixel on a Mac wraps in CI.
 - Some tests need Linux (`/proc`, GNU `date`). They skip on a Mac and run
   in CI.
+- CI seeds a new database for each run, so the seed's last 24 hours end
+  now. A local database that was seeded hours ago has no recent traffic.
+  A journey that "passes" on it can fail in CI, where the seed's own
+  packets fill the window. This happened in #389: a journey selected
+  text in "the last row", and in CI that row was a seed packet.
+- Before the last e2e run, start from what CI starts from: a new, empty
+  database, then `alembic upgrade head`, `tools/dev/seed.py` and
+  `sonoran-gaps-once`, and an empty coverage cache. Seeding again over an
+  old database is not the same. On 2026-10-21 it gave three failures (the
+  gaps siting, reachability and statistics journeys) that a new database,
+  made the CI way, did not give.
+- Make a journey serve or find its own rows, never "the last one".
 
 ### 6.10 Two migrations from one head
 
