@@ -2232,6 +2232,8 @@ function ensureMap() {
     // The backlog and the lag change every frame, so they are written
     // from the loop rather than once per fetch.
     onStats: liveCounters,
+    // The feed follows the lines, row by row, as each one starts (#386).
+    onRelease: () => paintTrafficFeed(),
   });
   mapState.live.setFamilyFilter(hiddenFamilies);
   /*
@@ -2813,7 +2815,16 @@ let mapPresetLabel = '';
  * not a gateway is invisible to this database. See AGENTS.md 9.5.1.
  */
 function trafficRow(packet) {
-  return el('li', {},
+  /*
+   * The row wears its packet's family, as the map draws it (#386): the
+   * same colour token on the row's edge, and the same shape beside the
+   * packet type. A relayed line on the map takes this colour too. A flat
+   * line takes the colour of its signal instead, and the row's SNR cell
+   * is coloured the same way. The packet type is always written as well,
+   * so nothing here rests on colour alone.
+   */
+  const family = SonoranLive.familyKey(packet.portnum);
+  return el('li', { dataset: { family } },
     el('div', {}, nodeChip(packet.from),
       /*
        * How many packets this row stands for, when a run of them from
@@ -2838,11 +2849,27 @@ function trafficRow(packet) {
       // The packet itself, so the whole record is one click away. The map
       // marks are canvas and carry no tooltip, so this is the route in.
       el('a', {
-        class: 'linky',
+        class: 'linky pkt-kind',
         href: packetHref(packet),
-        text: portnumLabel(packet.portnum),
-      }),
+      }, familyMark(family), portnumLabel(packet.portnum)),
       el('span', { text: clock(packet.time) })));
+}
+
+/**
+ * A packet family's mark in CSS: the map's shape, in the map's colour.
+ *
+ * Not a canvas like `familySwatch`. A canvas keeps the colour it was
+ * painted with, and the feed's rows outlive a change of theme. Here the
+ * colour is the same `--pkt-*` token the map reads, so it follows the
+ * theme by itself. Decorative: the label beside it says the same thing.
+ */
+function familyMark(key) {
+  const family = SonoranLive.FAMILIES[key] || SonoranLive.FAMILIES.OTHER;
+  return el('span', {
+    class: `pkt-mark ${family.shape}`,
+    'aria-hidden': 'true',
+    dataset: { family: key },
+  });
 }
 
 /* --- The feed under load ---------------------------------------- */
@@ -2936,6 +2963,47 @@ function updateFeed(list, rows, emptyText) {
   }
   for (const item of existing.values()) item.remove();
   while (list.children.length > FEED_ROWS) list.lastChild.remove();
+}
+
+/**
+ * Draw the feed and the table from the packets the map has drawn (#386).
+ *
+ * Will: "the box for Live traffic only updates in chunks and leads to
+ * like 5 or 6 things happening". The cause was the timing, not the
+ * data. The poll fetches fifteen seconds of traffic at once. The map
+ * spreads that batch over the next fifteen seconds (`enqueue` in
+ * map-live.js), so its lines start one at a time. The list took the
+ * whole batch at fetch time, so five or six rows arrived together, each
+ * up to fifteen seconds before its line.
+ *
+ * So a packet still waiting in the map's queue is not listed yet. The
+ * engine calls this each frame that releases packets, so a row arrives
+ * in the same frame as its line. A paused map holds the feed with it.
+ * A packet the map can never draw (its kind is hidden, or the backlog
+ * was skipped) is not in the queue, so it is listed at once.
+ */
+function paintTrafficFeed() {
+  const empties = mapState.feedEmpty;
+  if (!empties) return;
+  const page = $('[data-page="map"]');
+  if (!page || !$('[data-traffic-feed]', page)) return;
+  const shown = mapState.lastPackets || [];
+  const pending = mapState.live ? mapState.live.pendingKeys() : new Set();
+  const drawn = pending.size ? shown.filter((packet) => !pending.has(packet.key)) : shown;
+  const waiting = shown.length && !drawn.length
+    ? 'The newest packets are on their way to the map.' : empties;
+  const newest = coalesceFeed(drawn.slice().reverse()).slice(0, FEED_ROWS);
+  updateFeed($('[data-traffic-feed]', page), newest, waiting);
+  // The table is rebuilt only when its rows change, so a frame that
+  // released nothing new for it does not throw away its scroll position.
+  const tableRows = drawn.slice().reverse().slice(0, FEED_ROWS);
+  const signature = tableRows
+    .map((row) => `${row.key}:${row.gateway_count}:${row.upload_count}`).join(',');
+  const table = $('[data-traffic-table]', page);
+  if (table && table.dataset.rows !== signature) {
+    table.dataset.rows = signature;
+    replace(table, tableRows.length ? trafficTable(tableRows) : empty(waiting));
+  }
 }
 
 /** "3 gateways, 5 uploads", with the singulars right. */
@@ -3382,6 +3450,8 @@ function installWatchMode(map) {
       if (!mapState.live) return;
       const held = mapState.live.skipToLive();
       if (mapState.live.isPaused()) mapState.live.setPaused(false);
+      // Nothing waits for those lines now, so the feed lists them.
+      paintTrafficFeed();
       SonoranWatch.status({
         pause: held ? `skipped to live, gave up ${count(held)} buffered packets` : '',
       });
@@ -3436,6 +3506,7 @@ function installWatchMode(map) {
       return;
     }
     const held = mapState.live.discardQueue();
+    paintTrafficFeed();
     /*
      * And say what happened, rather than showing stale content under a
      * stale "Updated HH:MM" with no warning at all. A tab hidden for
@@ -3727,12 +3798,8 @@ PAGES.map = async (page) => {
      * rather than replaced, so a viewer reading a row halfway down the
      * watch panel keeps their place across a refresh.
      */
-    const newest = coalesceFeed(shown.slice().reverse()).slice(0, FEED_ROWS);
-    updateFeed($('[data-traffic-feed]', page), newest, nothing);
-    replace($('[data-traffic-table]', page),
-      shown.length
-        ? trafficTable(shown.slice().reverse().slice(0, FEED_ROWS))
-        : empty(nothing));
+    mapState.feedEmpty = nothing;
+    paintTrafficFeed();
     /*
      * The rate chart, raw. The window's row cap is named under it rather
      * than left to be inferred from a short chart, because a row limit
@@ -3752,9 +3819,11 @@ PAGES.map = async (page) => {
     mapState.live.clear();
     mapState.trafficPrimed = false;
     mapState.lastPackets = [];
+    mapState.feedEmpty = null;
     $('[data-traffic-summary]', page).textContent = 'The traffic layer is off.';
     replace($('[data-traffic-feed]', page));
     replace($('[data-traffic-table]', page));
+    delete $('[data-traffic-table]', page).dataset.rows;
     updateWatchStatus(page, [], null);
   }
 

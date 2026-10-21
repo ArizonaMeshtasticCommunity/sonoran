@@ -1745,6 +1745,39 @@ body.watch-mode { overflow: hidden; }
 .pkt-swatch { width: 16px; height: 16px; margin-right: .35rem; vertical-align: middle; }
 
 /*
+ * A packet family's mark in CSS, for rows that outlive a theme change
+ * (#386). Same tokens as the map, so a feed row and its line agree in
+ * both themes. Shape and colour are both redundant with the text label
+ * beside the mark, so it is hidden from a screen reader.
+ */
+[data-family="POSITION_APP"] { --pkt: var(--pkt-position); }
+[data-family="NODEINFO_APP"] { --pkt: var(--pkt-nodeinfo); }
+[data-family="TELEMETRY_APP"] { --pkt: var(--pkt-telemetry); }
+[data-family="TEXT_MESSAGE_APP"] { --pkt: var(--pkt-text); }
+[data-family="TRACEROUTE_APP"] { --pkt: var(--pkt-trace); }
+[data-family="ROUTING_APP"] { --pkt: var(--pkt-routing); }
+[data-family="OTHER"] { --pkt: var(--pkt-other); }
+.pkt-mark {
+  display: inline-block; box-sizing: border-box; flex: none;
+  width: .7rem; height: .7rem; margin-right: .3rem; vertical-align: middle;
+  color: var(--pkt, var(--muted));
+}
+.pkt-mark.disc { background: currentColor; border-radius: 50%; }
+.pkt-mark.ring { border: 2px solid currentColor; border-radius: 50%; }
+.pkt-mark.square { background: currentColor; width: .6rem; height: .6rem; }
+.pkt-mark.capsule { background: currentColor; width: .85rem; height: .32rem; border-radius: .16rem; }
+.pkt-mark.diamond { border: 2px solid currentColor; width: .55rem; height: .55rem; transform: rotate(45deg); }
+.pkt-mark.cross {
+  background:
+    linear-gradient(currentColor, currentColor) center / 100% 2px no-repeat,
+    linear-gradient(currentColor, currentColor) center / 2px 100% no-repeat;
+}
+.pkt-mark.tick { background: currentColor; width: .2rem; height: .55rem; }
+.pkt-kind { display: inline-flex; align-items: center; }
+/* The row's edge carries its family's colour, as its line on the map does. */
+[data-traffic-feed] > li[data-family] { border-left: 3px solid var(--pkt, var(--line)); }
+
+/*
  * The packet kind filter on the live map.
  *
  * A disclosure, because seven chips in the controls row would crowd out

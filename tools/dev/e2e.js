@@ -2264,6 +2264,116 @@ async function main() {
       + `zoom radius ${radii.before} -> ${radii.after}; gone node closed its bubble`;
   });
 
+  await journey(context, 'the live traffic feed follows the lines on the map (#386)', async (page) => {
+    /*
+     * Will: "the box for Live traffic only updates in chunks and leads to
+     * like 5 or 6 things happening". The poll fetches fifteen seconds of
+     * traffic at once and the map spreads it over the next fifteen, so
+     * the lines start one at a time. The feed took the whole batch at
+     * fetch time. Here one poll carries four packets three seconds
+     * apart, and the rows must arrive about three seconds apart too,
+     * as their lines do. The old feed listed all four in one step.
+     *
+     * Then the colour: each row wears its family's colour token on its
+     * edge and on its mark, in both themes, and still says its packet
+     * type in words, so nothing rests on colour alone.
+     *
+     * The traffic is served through a route, so the shared database is
+     * never written. The packets are made from two nodes the map has
+     * placed, so each one has a line to draw.
+     */
+    let extra = null;
+    await page.route(/\/api\/map\/traffic(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (extra) body.events = [...body.events, ...extra];
+      return route.fulfill({ response, json: body });
+    });
+    await open(page, 'map', 4000);
+    must(await waitFor(page, () => mapState.trafficPrimed === true
+      && window.SonoranMap.marks instanceof Map && window.SonoranMap.marks.size >= 2, 30000),
+    'the map did not draw its first traffic and two nodes');
+    const KINDS = [
+      ['POSITION_APP', 'pkt-position'], ['TELEMETRY_APP', 'pkt-telemetry'],
+      ['TEXT_MESSAGE_APP', 'pkt-text'], ['NODEINFO_APP', 'pkt-nodeinfo'],
+    ];
+    extra = await page.evaluate((kinds) => {
+      const [a, b] = [...window.SonoranMap.marks.entries()];
+      const end = (id, mark) => {
+        const at = mark.marker.getLatLng();
+        return { node_id: id, display_name: `Pacing ${id}`, lat: at.lat, lon: at.lng };
+      };
+      const from = end(a[0], a[1]);
+      const gateway = end(b[0], b[1]);
+      const start = Date.now() - 12000;
+      return kinds.map(([portnum], index) => ({
+        time: new Date(start + index * 3000).toISOString(),
+        packet_id: 3860001 + index,
+        channel: 'azmsh', mqtt_topic: 'msh/e2e', snr: null, rssi: null,
+        hop_limit: 2, hop_start: 3, hops_taken: 1, direct: false,
+        portnum, from, gateway, has_line: true,
+      }));
+    }, KINDS);
+    const keys = extra.map((event) => `${event.from.node_id}/${event.packet_id}`);
+    const listed = () => page.evaluate((wanted) => {
+      const rows = [...document.querySelectorAll('[data-traffic-feed] > li[data-key]')];
+      return wanted.map((key) => rows.some((row) => row.dataset.key === key));
+    }, keys);
+
+    // One poll, through the call the Live timer makes.
+    const polledAt = Date.now();
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
+      await render('map');
+    });
+    const seenAt = keys.map(() => null);
+    while (Date.now() - polledAt < 16000 && seenAt.some((at) => at == null)) {
+      const now = await listed();
+      now.forEach((on, index) => { if (on && seenAt[index] == null) seenAt[index] = Date.now() - polledAt; });
+      await page.waitForTimeout(200);
+    }
+    must(seenAt.every((at) => at != null), `not every packet reached the feed: ${JSON.stringify(seenAt)}`);
+    for (let index = 1; index < seenAt.length; index += 1) {
+      must(seenAt[index] >= seenAt[index - 1],
+        `the feed listed the packets out of order: ${JSON.stringify(seenAt)}`);
+    }
+    const spread = seenAt[seenAt.length - 1] - seenAt[0];
+    // Nine seconds apart on the map. A feed that took the batch at once
+    // shows a spread of one sample, 200 ms or so.
+    must(spread >= 6000, `the four rows arrived in one chunk, ${spread} ms apart from first to last`);
+
+    const colours = async () => page.evaluate((pairs) => pairs.map(([family, token]) => {
+      const row = document.querySelector(`[data-traffic-feed] > li[data-family="${family}"]`);
+      if (!row) return { family, missing: true };
+      const probe = document.createElement('span');
+      probe.style.color = `var(--${token})`;
+      document.body.append(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      const mark = row.querySelector('.pkt-mark');
+      return {
+        family,
+        want,
+        edge: getComputedStyle(row).borderLeftColor,
+        mark: mark ? getComputedStyle(mark).color : null,
+        text: row.querySelector('.pkt-kind') ? row.querySelector('.pkt-kind').textContent.trim() : '',
+      };
+    }), KINDS);
+    const report = [];
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((mode) => applyTheme(mode), theme);
+      await page.waitForTimeout(200);
+      for (const got of await colours()) {
+        must(!got.missing, `${theme}: no feed row for ${got.family}`);
+        must(got.edge === got.want, `${theme}: the ${got.family} row edge is ${got.edge}, its lines are ${got.want}`);
+        must(got.mark === got.want, `${theme}: the ${got.family} mark is ${got.mark}, its lines are ${got.want}`);
+        must(got.text.length > 2, `${theme}: the ${got.family} row does not say its type in words`);
+      }
+      report.push(`${theme} ${(await colours()).map((got) => got.want).join(' ')}`);
+    }
+    return `rows at ${seenAt.join('/')} ms after one poll (spread ${spread} ms); colours ${report.join('; ')}`;
+  });
+
   await journey(context, 'a mouse keeps the exact dot target (#266)', async (page) => {
     // The control for the phone journey: the wider target is for touch.
     await open(page, 'map', 3000);

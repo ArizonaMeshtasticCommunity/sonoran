@@ -658,6 +658,27 @@ display therefore runs about one interval behind live and says so. The
 status line also prints "drawing N of M packets" whenever the pool
 refuses anything, because the eye cannot count marks.
 
+The **Live traffic** list under the map follows the same replay
+(#386). Before, the list took the whole poll at fetch time, so five or
+six rows arrived together, each up to fifteen seconds before its line.
+Now the engine calls `onRelease` in each frame that releases packets,
+and `paintTrafficFeed` in `app.js` leaves out every packet that
+`pendingKeys()` says is still waiting. So a row arrives in the same
+frame as its line. A paused map holds the list too. A packet that
+leaves the queue in another way (its kind is hidden, the backlog is
+skipped, the queue cap drops it) is listed at once, because nothing
+waits for it.
+
+Each row wears its packet family: the family's `--pkt-*` token on the
+row's left edge and on a CSS mark of the family's shape, beside the
+packet type in words. These are the tokens the map reads, so the row
+and its relayed line have the same colour in both themes. A flat
+(direct) line takes the colour of its signal, and the row's SNR cell
+has that colour. The mark is CSS, not a canvas like `familySwatch`,
+because a canvas keeps the colour it was painted with after a theme
+change. The text is always there, so the row does not rest on colour
+alone (WCAG 1.4.1).
+
 `app.js` caches `api/graph/channels` for ten minutes and
 `api/map/nodes` for two. Both were refetched on every map refresh,
 four times a minute per open tab, and the channel list runs three

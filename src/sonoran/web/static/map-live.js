@@ -793,6 +793,15 @@ const SonoranLive = (() => {
     };
 
     const onStats = options.onStats || null;
+    /*
+     * Told which packets a frame released, in the order they were drawn
+     * (#386). The feed under the map lists a packet when its line starts,
+     * not when the poll fetched it. See `enqueue`: a batch is spread over
+     * the poll interval, so a list that took the whole batch at fetch time
+     * showed five or six rows at once, up to fifteen seconds before their
+     * lines. That is the "chunks" in the report.
+     */
+    const onRelease = options.onRelease || null;
     let lastStatsAt = 0;
     let frame = null;
     let running = false;
@@ -1774,6 +1783,7 @@ const SonoranLive = (() => {
       // burst cannot be spent in one frame.
       const now = Date.now();
       let released = 0;
+      const releasedPackets = [];
       while (queue.length && queue[0].at <= now && released < MAX_RELEASE_PER_FRAME) {
         const item = queue.shift();
         released += 1;
@@ -1785,6 +1795,10 @@ const SonoranLive = (() => {
         // changed. It is not a drop: the viewer asked not to see it.
         if (!shows(item.packet)) continue;
         rateWindow.push(started);
+        // Told whether or not it found room. A packet the pool refused is
+        // counted as dropped from the picture, and the feed is where its
+        // numbers can still be read.
+        releasedPackets.push(item.packet);
         const ok = admitPacket(item.packet);
         if (ok) {
           stats.drawn += 1;
@@ -1795,6 +1809,8 @@ const SonoranLive = (() => {
           stats.droppedThisMinute += 1;
         }
       }
+
+      if (onRelease && releasedPackets.length) onRelease(releasedPackets);
 
       /*
        * The rate the ladder reads is measured over the last few seconds
@@ -1887,6 +1903,20 @@ const SonoranLive = (() => {
         stats.arcsDropped = 0;
       },
       counts: publicCounts,
+      /**
+       * The keys of the packets still waiting for their release time.
+       *
+       * The feed leaves these out, so it never lists a packet before
+       * its line is on the map (#386). The queue is the one record of
+       * what is still to come. A packet that leaves it any other way --
+       * the cap, the filter, `skipToLive` -- is then listed at once,
+       * because nothing is waiting for it any more.
+       */
+      pendingKeys() {
+        const keys = new Set();
+        for (const item of queue) if (item.packet) keys.add(item.packet.key);
+        return keys;
+      },
       setFamilyFilter,
       setReduced(value) {
         if (reduced === value) return;
