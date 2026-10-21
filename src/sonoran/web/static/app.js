@@ -12038,11 +12038,26 @@ function optionDiffers(control) {
   return false;
 }
 
+/*
+ * A page that knows its own settings can say how many changed.
+ *
+ * Coverage (#334) counts settings and not controls: three hidden roles
+ * are one filter in force, and a badge of 3 would make one choice look
+ * like three. It writes the number on the panel as
+ * `data-options-changed`, and that number wins. Every other page has no
+ * such attribute and is counted control by control, as before.
+ */
+function optionsChanged(panel) {
+  const own = Number(panel.dataset.optionsChanged);
+  if (panel.dataset.optionsChanged != null && Number.isInteger(own) && own >= 0) return own;
+  return $$('select, input, button[aria-pressed]', panel)
+    .filter((control) => !control.closest('[hidden]') && optionDiffers(control)).length;
+}
+
 function drawOptionCount(button) {
   const panel = document.getElementById(button.getAttribute('aria-controls'));
   if (!panel) return;
-  const changed = $$('select, input, button[aria-pressed]', panel)
-    .filter((control) => !control.closest('[hidden]') && optionDiffers(control)).length;
+  const changed = optionsChanged(panel);
   const badge = $('[data-options-count]', button);
   if (badge) {
     badge.textContent = changed ? String(changed) : '';
@@ -12082,7 +12097,10 @@ function wireOptions() {
     panel.addEventListener('change', redraw);
     panel.addEventListener('click', redraw);
     new MutationObserver(redraw).observe(panel, {
-      subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed', 'hidden'],
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['aria-pressed', 'hidden', 'data-options-changed'],
     });
     drawOptionCount(button);
   }

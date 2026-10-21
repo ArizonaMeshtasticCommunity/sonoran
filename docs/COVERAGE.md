@@ -227,6 +227,81 @@ from hot pink at the receiver limit to bright blue at 30 dB of margin.
 The terrain map does not use that ramp. The edge and the direction of
 improvement therefore remain visible over roads, desert, and forest.
 
+#### 6.1.1 The settings panel (#334)
+
+One **Settings** button, with a gear, is at the top right of the page
+head. Every choice about the map is in the panel under it. A badge on
+the button shows how many settings differ from the default. It counts
+settings, not controls: three hidden roles are one setting.
+
+The defaults are the map that Logan and Tyler asked for in #315.
+
+| Setting | Default | Kept where |
+|---------|---------|------------|
+| Map source: "Routers and repeaters" or "Also nodes that repeat" | Routers and repeaters (the run's first map) | The address |
+| Include approximate positions | Off | The address |
+| Layer: usable, downlink or uplink | Usable | The address |
+| Show: map, nodes, signal strength | All on | This visit only |
+| Signal opacity | 100 % | This browser |
+| Node markers by role | Every role shown | This browser |
+| Last heard: any time, 24 h or 7 d | Any time | This browser |
+| Hide moving nodes | Off | This browser |
+| Show uncertainty circles | Off | This browser |
+
+**Reset to default** puts every setting back, and writes a plain
+`#coverage` address.
+
+The map choices change what the map is, so they go in the address:
+`#coverage?set=extended&approx=1&layer=downlink`. Only a value that
+differs from the default is written. A link therefore shows the same
+map to the next reader, and a plain `#coverage` link is always the
+precise map. The map choices are not stored in the browser. If they
+were, one plain link would show the approximate map to one reader and
+the precise map to another. Inside one visit, a plain `#coverage` from
+the menu keeps the map that the visit chose.
+
+The display filters change only what this browser draws over the map.
+They are stored for each viewer in `localStorage` under
+`sonoran.coverage.settings`, and never reach the address or the server.
+The opacity that older pages stored under
+`sonoran.coverage.signalOpacity` is still read once. A browser that
+refuses storage gets the defaults, and the panel still works for the
+visit.
+
+- **Include approximate positions** selects the `_approximate` map of
+  the chosen source (9.1.2.1.1). When the run has no such map, because
+  `COVERAGE_INCLUDE_APPROXIMATE` is off, the toggle is disabled and says
+  "Not computed on this server. An operator can turn it on with
+  COVERAGE_INCLUDE_APPROXIMATE." The page never draws the precise map
+  under the approximate name, or the reverse. A link with `approx=1`
+  opened on such a server draws the precise map, says so, and corrects
+  the address.
+- **Node markers by role** offers one chip for each role of the nodes
+  the map on show was predicted from. A hidden role stays offered, so
+  the filter can be undone where it was made.
+- **Hide moving nodes** hides the Tracker and TAK tracker roles. The
+  page has no measure of movement, only the role, and the panel says
+  so. A node of another role can move and this filter cannot see it.
+  The two roles are already left out of every map (`sonoran/roles.py`),
+  so the filter changes markers only on a diagnostic map.
+- **Show uncertainty circles** draws a circle around each site that the
+  run predicted from a rounded position. The radius is the site's
+  `position_deviation_m` in the manifest. The centre is the node's
+  position from `/api/map/nodes`, because the manifest does not write
+  positions. An operator position is exact and gets no circle. A circle
+  is drawn only for a node whose marker is drawn.
+
+The legend and the line above the figures name the map on show, for
+example "Routers and repeaters · rounded positions included". The tiles
+of the precise map and the approximate map look the same, so these
+words are the only thing that tells them apart. The approximate map is
+named in the warning colour.
+
+The rules are pure functions in `web/static/coverage-settings.js`.
+`tests/unit/js/coverage_settings_cases.mjs` runs them under node. The
+public embed has no settings panel and no approximate option
+(`test_the_public_embed_has_no_settings_and_no_approximate_option`).
+
 ## 7. Clutter
 
 ITM treats both ends of a path as if they stood in open country. The
@@ -688,9 +763,9 @@ ones down to `COVERAGE_APPROXIMATE_MIN_BITS`. Off by default.
   because the job keeps no result for one site after it has been added
   to the map (`_predict`). With the setting off, the cost is what it was.
 
-The dashboard's site-set picker lists it like any other set. A later
-change adds a settings panel to the coverage page, whose first toggle
-is this one.
+The dashboard does not list it as a map source. The "Include
+approximate positions" toggle in the coverage settings panel selects
+it, and is disabled when the run has none. See 6.1.1.
 
 ### 9.1.2.2 Predicting from the nodes that repeat
 

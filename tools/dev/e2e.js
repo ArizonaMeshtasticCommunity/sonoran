@@ -340,6 +340,122 @@ async function tableFitsAt(page, find, label) {
   return out.join(' ');
 }
 
+/*
+ * A published coverage run, served through routes (#334).
+ *
+ * The seeded instance has no coverage run, because the job runs the
+ * engine for minutes, and a page with no run hides its settings. So the
+ * settings journeys serve a small manifest of their own. `approximate`
+ * adds the `infrastructure_approximate` map, which is what a server with
+ * COVERAGE_INCLUDE_APPROXIMATE on publishes. The tiles are one clear
+ * pixel and the nodes are three routers, one of them rounded.
+ */
+const STUB_STAMP = '20261008T000000Z';
+const CLEAR_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  'base64',
+);
+
+function stubManifest({ approximate }) {
+  const box = [33.0, -112.6, 33.9, -111.6];
+  const site = (id, extra = {}) => ({
+    node_id: id,
+    display_name: `Site ${id}`,
+    used: true,
+    eirp_dbm: 30,
+    antenna_height_m: 10,
+    clutter_height_m: 0,
+    calibrated: false,
+    position_deviation_m: null,
+    position_source: 'reported',
+    ...extra,
+  });
+  const preset = (nodes) => ({
+    preset: 'MediumFast',
+    site_count: nodes.length,
+    candidate_count: 3,
+    sensitivity_dbm: -136,
+    usable_area_km2: 120,
+    downlink_area_km2: 240,
+    data_bounds: box,
+    excluded_by_role: {},
+    nodes,
+  });
+  const precise = preset([site('!e2e00001'), site('!e2e00002')]);
+  const rounded = preset([
+    site('!e2e00001'),
+    site('!e2e00002'),
+    site('!e2e00003', { position_deviation_m: 1500 }),
+  ]);
+  const roles = ['REPEATER', 'ROUTER', 'ROUTER_LATE'];
+  const sets = [{
+    key: 'infrastructure', label: 'Routers and repeaters', site_roles: roles,
+    is_diagnostic: false, presets: [precise], data_bounds: box,
+    site_precision: 'precise', approximate: false,
+  }];
+  if (approximate) {
+    sets.push({
+      key: 'infrastructure_approximate',
+      label: 'Routers and repeaters, rounded positions included',
+      site_roles: roles, is_diagnostic: false, presets: [rounded], data_bounds: box,
+      site_precision: 'approximate', approximate: true,
+    });
+  }
+  return {
+    available: true,
+    stamp: STUB_STAMP,
+    layers: [
+      { key: 'usable', label: 'Usable both ways' },
+      { key: 'downlink', label: 'Node heard here' },
+      { key: 'uplink', label: 'Here heard by a node' },
+    ],
+    active_hours: 168,
+    tile_size: 256,
+    min_zoom: 6,
+    max_zoom: 11,
+    bounds: box,
+    data_bounds: box,
+    ramp_span_db: 30,
+    generated_at: new Date().toISOString(),
+    seconds: 12,
+    site_roles: roles,
+    is_diagnostic: false,
+    rx_height_m: 1.5,
+    rx_gain_dbi: 2,
+    handheld_tx_power_dbm: 22,
+    radius_km: 40,
+    has_terrain: true,
+    has_landcover: false,
+    missing_terrain_tiles: [],
+    coarse_sites: [],
+    presets: [precise],
+    site_sets: sets,
+  };
+}
+
+async function stubCoverage(page, { approximate = false } = {}) {
+  const heard = new Date().toISOString();
+  const node = (id, lat, lon, role) => ({
+    node_id: id, display_name: `Site ${id}`, lat, lon, role, last_heard: heard, is_mqtt_gateway: false,
+  });
+  await page.route(/\/api\/coverage(\?|$)/, (route) => route.fulfill({ json: stubManifest({ approximate }) }));
+  await page.route(/\/api\/coverage\/calibration(\?|$)/, (route) => route.fulfill({ json: { available: false, nodes: [] } }));
+  await page.route(/\/api\/coverage\/tiles\//, (route) => route.fulfill({ contentType: 'image/png', body: CLEAR_PNG }));
+  await page.route(/\/api\/map\/nodes(\?|$)/, (route) => route.fulfill({
+    json: [
+      node('!e2e00001', 33.45, -112.07, 'ROUTER'),
+      node('!e2e00002', 33.30, -111.90, 'REPEATER'),
+      node('!e2e00003', 33.60, -112.30, 'ROUTER_LATE'),
+    ],
+  }));
+}
+
+/* The tile URL template of the signal layer on show, or null. */
+const COVERAGE_TILE_URL = () => {
+  const state = window.SonoranCoverageState;
+  return state && state.tiles ? state.tiles._url : null;
+};
+
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
@@ -1520,6 +1636,8 @@ async function main() {
     const presets = page.locator('[data-preset-switch] [role="radio"]');
     const count = await presets.count();
     must(count > 0, 'a run is published but the menu offers no preset');
+    // The layer is in the settings panel now (#334).
+    await page.locator('[data-coverage-options]').click();
     const layers = await layer.locator('option').count();
     must(layers >= 2, `a run is published but the layer drop-down holds ${layers} options`);
     const second = await layer.locator('option').nth(1).getAttribute('value');
@@ -1619,6 +1737,171 @@ async function main() {
     await button.click();
     must(await panel.isHidden(), 'a second press did not close the panel');
     return 'opens, counts 1 then 2, clears, closes';
+  });
+
+  await journey(context, 'coverage settings: the gear opens the panel and the layer moves the tiles (#334)', async (page) => {
+    await stubCoverage(page);
+    await open(page, 'coverage', 2500);
+    const button = page.locator('[data-coverage-options]');
+    const panel = page.locator('#coverage-options');
+    must(await button.isVisible(), 'no settings button with a run published');
+    must((await button.locator('use').getAttribute('href')) === '#i-settings', 'the button has no gear');
+    must(await panel.isHidden(), 'the settings panel starts open');
+    must(await page.locator('.page[data-page="coverage"] .page-head [data-coverage-layers]').count() === 0,
+      'the layer is still in the head');
+    await button.click();
+    must(await panel.isVisible(), 'the gear did not open the panel');
+    must((await button.getAttribute('aria-expanded')) === 'true', 'the button did not say it opened');
+    const before = await valueOf(page, COVERAGE_TILE_URL);
+    must(before && before.includes(`/${STUB_STAMP}/MediumFast/infrastructure/usable/`),
+      `the default tiles are ${before}`);
+    await page.locator('[data-coverage-layers]').selectOption('downlink');
+    await page.waitForTimeout(400);
+    const after = await valueOf(page, COVERAGE_TILE_URL);
+    must(after && after.includes('/infrastructure/downlink/'), `after choosing the downlink the tiles are ${after}`);
+    const hash = await page.evaluate(() => location.hash);
+    must(hash === '#coverage?layer=downlink', `the address says ${hash}`);
+    must((await button.getAttribute('aria-label')) === 'Settings, 1 changed',
+      `the button says "${await button.getAttribute('aria-label')}"`);
+    /*
+     * The seeded run, like this stub, has no approximate map. The toggle
+     * must be off, disabled, and say why, rather than offer a map that
+     * was never computed.
+     */
+    const box = page.locator('[data-coverage-approx]');
+    must(await box.isDisabled(), 'the approximate toggle is enabled with no approximate map');
+    must(!(await box.isChecked()), 'the approximate toggle starts on');
+    const said = (await page.locator('[data-coverage-approx-note]').textContent()).trim();
+    must(said === 'Not computed on this server. An operator can turn it on with COVERAGE_INCLUDE_APPROXIMATE.',
+      `the toggle says "${said}"`);
+    const which = (await page.locator('[data-coverage-which]').textContent()).trim();
+    must(which.includes('precise positions only'), `the stats line says "${which}"`);
+    return `${before.split('/api/')[1].split('{')[0]} -> downlink; approximate disabled and says why`;
+  });
+
+  await journey(context, 'coverage settings: the approximate toggle picks the approximate map (#334)', async (page) => {
+    await stubCoverage(page, { approximate: true });
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    const box = page.locator('[data-coverage-approx]');
+    must(await box.isEnabled(), 'the run has an approximate map and the toggle is disabled');
+    must(!(await box.isChecked()), 'the approximate map is on by default');
+    await box.check();
+    await page.waitForTimeout(500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/MediumFast/infrastructure_approximate/usable/'), `the tiles are ${url}`);
+    const hash = await page.evaluate(() => location.hash);
+    must(hash === '#coverage?approx=1', `the address says ${hash}`);
+    const legend = (await page.locator('[data-coverage-legend-map]').textContent()).trim();
+    must(legend === 'Routers and repeaters · rounded positions included', `the legend says "${legend}"`);
+    const which = (await page.locator('[data-coverage-which]').textContent()).trim();
+    must(which.includes('rounded positions included'), `the stats line says "${which}"`);
+    // The rounded site gets a circle as wide as its rounding.
+    await page.locator('[data-coverage-circles]').check();
+    const radii = await valueOf(page, () => {
+      const state = window.SonoranCoverageState;
+      const circles = state.nodes.getLayers().filter((layer) => layer.options.className === 'coverage-uncertainty');
+      return circles.length ? circles.map((layer) => layer.getRadius()) : null;
+    });
+    must(radii && radii.length === 1 && radii[0] === 1500, `the uncertainty circles are ${JSON.stringify(radii)}`);
+    return 'infrastructure_approximate drawn and named; one 1500 m circle';
+  });
+
+  await journey(context, 'coverage settings: Reset returns every control to default (#334)', async (page) => {
+    await stubCoverage(page, { approximate: true });
+    await open(page, 'coverage', 2500);
+    const button = page.locator('[data-coverage-options]');
+    const badge = page.locator('[data-page="coverage"] [data-options-count]');
+    await button.click();
+    await page.locator('[data-coverage-layers]').selectOption('uplink');
+    await page.locator('[data-coverage-approx]').check();
+    await page.waitForTimeout(400);
+    await page.locator('[data-coverage-heard]').selectOption('24h');
+    await page.locator('[data-coverage-moving]').check();
+    await page.locator('[data-coverage-circles]').check();
+    const chip = page.locator('[data-coverage-roles] button[data-role="ROUTER"]');
+    await waitFor(page, () => document.querySelector('[data-coverage-roles] button[data-role="ROUTER"]'), 10000);
+    await chip.click();
+    await page.locator('[data-coverage-opacity]').fill('50');
+    await page.waitForTimeout(400);
+    const changed = (await badge.textContent()).trim();
+    must(changed === '7', `seven settings changed and the badge says "${changed}"`);
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(600);
+    const got = await page.evaluate(() => ({
+      layer: document.querySelector('[data-coverage-layers]').value,
+      approx: document.querySelector('[data-coverage-approx]').checked,
+      heard: document.querySelector('[data-coverage-heard]').value,
+      moving: document.querySelector('[data-coverage-moving]').checked,
+      circles: document.querySelector('[data-coverage-circles]').checked,
+      opacity: document.querySelector('[data-coverage-opacity]').value,
+      unpressed: [...document.querySelectorAll('[data-coverage-roles] button')]
+        .filter((chip) => chip.getAttribute('aria-pressed') !== 'true').length,
+      hash: location.hash,
+      tiles: window.SonoranCoverageState.tiles && window.SonoranCoverageState.tiles._url,
+    }));
+    const wrong = [];
+    if (got.layer !== 'usable') wrong.push(`layer ${got.layer}`);
+    if (got.approx) wrong.push('approximate on');
+    if (got.heard !== 'any') wrong.push(`heard ${got.heard}`);
+    if (got.moving) wrong.push('moving hidden');
+    if (got.circles) wrong.push('circles on');
+    if (got.opacity !== '100') wrong.push(`opacity ${got.opacity}`);
+    if (got.unpressed) wrong.push(`${got.unpressed} roles still hidden`);
+    if (got.hash !== '#coverage') wrong.push(`address ${got.hash}`);
+    if (!got.tiles || !got.tiles.includes('/infrastructure/usable/')) wrong.push(`tiles ${got.tiles}`);
+    must(!wrong.length, `after Reset: ${wrong.join(', ')}`);
+    must(await badge.isHidden(), 'after Reset the badge still shows');
+    must((await button.getAttribute('aria-label')) === 'Settings', `after Reset the button says "${await button.getAttribute('aria-label')}"`);
+    return '7 changed, Reset puts every one back, badge 0';
+  });
+
+  await journey(context, 'coverage settings: an approximate link never fakes the map (#334)', async (page) => {
+    // A link from a server that computes the approximate map, opened on
+    // one that does not. The precise map is drawn, and named as such.
+    await stubCoverage(page);
+    await open(page, 'coverage?approx=1', 2500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/MediumFast/infrastructure/usable/'), `the tiles are ${url}`);
+    const got = await page.evaluate(() => ({
+      checked: document.querySelector('[data-coverage-approx]').checked,
+      legend: document.querySelector('[data-coverage-legend-map]').textContent.trim(),
+      hash: location.hash,
+    }));
+    must(!got.checked, 'the toggle is on over a map that was never computed');
+    must(got.legend === 'Routers and repeaters · precise positions only', `the legend says "${got.legend}"`);
+    must(got.hash === '#coverage', `the address still says ${got.hash}`);
+    return 'precise tiles, precise words, and the address corrected';
+  });
+
+  await journey(context, 'coverage settings: a link restores the layer (#334)', async (page) => {
+    await stubCoverage(page);
+    // The hash is in the first `goto` (AGENTS.md 9.33).
+    await open(page, 'coverage?layer=downlink', 2500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/infrastructure/downlink/'), `a link to the downlink drew ${url}`);
+    const chosen = await page.evaluate(() => document.querySelector('[data-coverage-layers]').value);
+    must(chosen === 'downlink', `the layer control says ${chosen}`);
+    // A display filter is this viewer's own and survives a reload; the
+    // map choice comes only from the address.
+    await page.locator('[data-coverage-options]').click();
+    await page.locator('[data-coverage-heard]').selectOption('7d');
+    /*
+     * A fresh load of a plain link, by way of a blank page: from one
+     * hash to another is not a load (AGENTS.md 9.33), and inside one
+     * visit a plain `#coverage` keeps the map that visit chose.
+     */
+    await page.waitForTimeout(500);
+    await page.goto('about:blank');
+    await page.goto(`${BASE}/#coverage`, { waitUntil: 'load' });
+    await page.waitForTimeout(2500);
+    const back = await page.evaluate(() => ({
+      heard: document.querySelector('[data-coverage-heard]').value,
+      layer: document.querySelector('[data-coverage-layers]').value,
+    }));
+    must(back.heard === '7d', `the saved filter came back as ${back.heard}`);
+    must(back.layer === 'usable', `a plain link drew the ${back.layer} layer`);
+    return 'downlink from the address; the filter kept, the plain link precise and usable';
   });
 
   await journey(context, 'the embed snippet can be got at', async (page) => {
@@ -2925,6 +3208,19 @@ async function main() {
     await page.waitForTimeout(300);
     must(await width() <= 80, 'with storage refused the button did nothing');
     return 'starts expanded, and collapses for the visit';
+  });
+  await journey(nostore, 'coverage settings work with storage refused (#334)', async (page) => {
+    await stubCoverage(page);
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    await page.locator('[data-coverage-heard]').selectOption('24h');
+    await page.locator('[data-coverage-layers]').selectOption('uplink');
+    await page.waitForTimeout(400);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/infrastructure/uplink/'), `with storage refused the tiles are ${url}`);
+    const changed = (await page.locator('[data-page="coverage"] [data-options-count]').textContent()).trim();
+    must(changed === '2', `with storage refused the badge says "${changed}"`);
+    return 'the panel works for the visit';
   });
   await nostore.close();
 
@@ -4532,6 +4828,57 @@ async function main() {
       `opening the date range scrolls the page sideways: ${measured.scrollWidth}/${measured.clientWidth}`,
     );
     return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
+  });
+
+  await journey(narrow, 'coverage settings fit a 320 px phone, at finger size (#334)', async (page) => {
+    await stubCoverage(page, { approximate: true });
+    await open(page, 'coverage', 2500);
+    // Letters as wide as the CI runner's fonts draw them (AGENTS.md 9.31).
+    await page.addStyleTag({ content: '.page[data-page="coverage"] * { letter-spacing: .12em !important; }' });
+    const button = page.locator('[data-coverage-options]');
+    must(await button.isVisible(), 'no settings button on a phone');
+    // At the top right: on the title's row, at the head's right edge.
+    const place = await page.evaluate(() => {
+      const head = document.querySelector('.page[data-page="coverage"] .page-head');
+      const title = head.querySelector('h2').getBoundingClientRect();
+      const gear = document.querySelector('[data-coverage-options]').getBoundingClientRect();
+      return { row: gear.top < title.bottom, gap: Math.round(head.getBoundingClientRect().right - gear.right) };
+    });
+    must(place.row && place.gap <= 2, `the button is not at the top right (${JSON.stringify(place)})`);
+    await button.tap();
+    await waitFor(page, () => document.querySelector('[data-coverage-roles] button'), 10000);
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const panel = document.querySelector('#coverage-options');
+      const box = panel.getBoundingClientRect();
+      const small = [];
+      const out = [];
+      const targets = [
+        ...panel.querySelectorAll('button, select, input[type="range"]'),
+        ...[...panel.querySelectorAll('input[type="checkbox"]')].map((input) => input.closest('label')),
+      ];
+      for (const target of targets) {
+        const rect = target.getBoundingClientRect();
+        if (!rect.width) continue;
+        const name = target.dataset.role || target.textContent.trim().slice(0, 24) || target.outerHTML.slice(0, 40);
+        if (rect.height < 43.5) small.push(`${name} ${Math.round(rect.height)}px`);
+        if (rect.right > box.right + 1 || rect.left < box.left - 1) out.push(name);
+      }
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+        right: Math.round(box.right),
+        small,
+        out,
+      };
+    });
+    must(got.coarse, 'the phone context does not match (pointer: coarse)');
+    must(got.scroll <= got.client, `the page scrolls sideways at 320 px: ${got.scroll} in ${got.client}`);
+    must(got.right <= got.client, `the panel ends at ${got.right} px of ${got.client}`);
+    must(!got.out.length, `controls leave the panel: ${got.out.join(', ')}`);
+    must(!got.small.length, `targets under 44 px: ${got.small.join(', ')}`);
+    return `fits, ${got.scroll}/${got.client}, every target at least 44 px`;
   });
 
   await journey(narrow, 'page-head controls fold behind a button on a phone (#275)', async (page) => {

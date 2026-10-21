@@ -360,6 +360,8 @@ const parts = [
   // app.js runs the router and the first tile is built.
   '<script>window.__sonoranPatchLeaflet();</script>',
   `<script>${read('vendor/echarts.min.js')}</script>`,
+  // The settings rules before the page that applies them (#334).
+  `<script>${read('coverage-settings.js')}</script>`,
   `<script>${read('coverage.js')}</script>`,
   `<script>${read('app.js')}</script>`,
 ];

@@ -3176,7 +3176,8 @@ div.check { cursor: default; }
   letter-spacing: .06em;
   margin-right: .15rem;
 }
-.coverage-view-controls button {
+.coverage-view-controls button,
+.coverage-role-chips button {
   font: inherit;
   font-size: .78rem;
   padding: .3rem .65rem;
@@ -3186,18 +3187,22 @@ div.check { cursor: default; }
   color: var(--muted);
   cursor: pointer;
 }
-.coverage-view-controls button:hover { border-color: var(--accent-soft); color: var(--text); }
-.coverage-view-controls button[aria-pressed="true"] {
+.coverage-view-controls button:hover,
+.coverage-role-chips button:hover { border-color: var(--accent-soft); color: var(--text); }
+.coverage-view-controls button[aria-pressed="true"],
+.coverage-role-chips button[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--text);
   background: var(--panel-2);
 }
-.coverage-view-controls button[aria-pressed="true"]::before {
+.coverage-view-controls button[aria-pressed="true"]::before,
+.coverage-role-chips button[aria-pressed="true"]::before {
   content: "✓";
   color: var(--accent);
   margin-right: .35rem;
 }
-.coverage-view-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.coverage-view-controls button:focus-visible,
+.coverage-role-chips button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /*
  * The layer pills were here (`.coverage-layers button`). The layer is a
@@ -3225,6 +3230,17 @@ div.check { cursor: default; }
   color: var(--muted);
   margin-bottom: .4rem;
 }
+/* Which map the legend describes (#334). The approximate map is in the
+   warning colour, and it says so in words as well: never colour alone. */
+.coverage-legend-map {
+  display: block;
+  font-size: max(.68rem, var(--text-floor, 0px));
+  color: var(--text);
+  margin: -.2rem 0 .4rem;
+}
+.coverage-legend-map.warn { color: var(--warn); font-weight: 650; }
+.coverage-which { margin: 0 0 .6rem; font-size: .85rem; color: var(--muted); }
+.coverage-which.warn { color: var(--warn); font-weight: 600; }
 /* The stops are the ramp in coverage/render.py. Keep the two the same. */
 .coverage-ramp {
   height: .65rem;
@@ -3348,6 +3364,59 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 /* The coverage controls carried margins for their old rows above the map. */
 .options-panel .coverage-view-controls,
 .options-panel .coverage-opacity { margin: 0; }
+
+/*
+ * The coverage settings panel (#334): three groups and a reset. Each
+ * group is a column that wraps under the one before it on a narrow
+ * screen, so the panel has no fixed width to overflow at 320 px.
+ */
+.options-panel.coverage-settings { align-items: flex-start; gap: .9rem 1.5rem; }
+.coverage-settings-group {
+  flex: 1 1 15rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .5rem;
+}
+.coverage-settings-group > legend {
+  padding: 0;
+  margin-bottom: .45rem;
+  font-size: max(.76rem, var(--text-floor, 0px));
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+/* The group's legend says "Show"; the toggles' own label would say it twice. */
+.coverage-settings .coverage-view-controls::before { content: none; }
+.coverage-settings .coverage-pick { flex-wrap: wrap; max-width: 100%; }
+.coverage-settings select { max-width: 100%; min-width: 0; }
+.coverage-check {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.coverage-check input { accent-color: var(--accent); margin: 0; flex: none; }
+.coverage-check:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+.coverage-setting-note { margin: -.3rem 0 0; font-size: max(.76rem, var(--text-floor, 0px)); color: var(--muted); max-width: 32rem; }
+.coverage-role-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.coverage-settings-actions { flex: 1 1 100%; display: flex; justify-content: flex-end; }
+.coverage-settings-button { display: inline-flex; align-items: center; }
+/* The head holds one button, so on a phone it stays on the title row,
+   at the right, where Will asked for it. Other dense heads give their
+   controls a row of their own below 40rem. */
+@media (max-width: 40rem) {
+  .page-head.dense.coverage-head .controls { flex-basis: auto; margin-left: auto; }
+  /* The title's 10rem basis left no room for the button beside it with
+     the CI runner's wider fonts (AGENTS.md 9.31). The heading is one
+     word, so it takes what the button leaves. */
+  .page-head.dense.fit.coverage-head > div:first-child { flex-basis: 0; }
+}
 
 /*
  * Folding on a phone (#275). See `wireFolds` and `foldSub` in app.js.

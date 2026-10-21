@@ -348,17 +348,24 @@ def test_the_graph_head_keeps_four_controls_and_options_holds_the_rest() -> None
         assert moved in panel, f"{moved} is not in the Options panel"
 
 
-def test_the_coverage_layer_is_one_drop_down_in_the_head() -> None:
-    """Will approved: the three layer pills become one drop-down."""
+def test_the_coverage_layer_is_one_drop_down_in_the_settings_panel() -> None:
+    """Will approved: the three layer pills become one drop-down (#299).
+
+    Then Will asked for one settings button at the top right, with every
+    choice behind it (#334). The layer is still one select, and the head
+    keeps only the button. `test_coverage_settings.py` pins the rest.
+    """
     html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
     head = _page_head(html, "coverage")
-    assert re.search(r"<select data-coverage-layers\b", head), (
-        "the layer is not a select in the head"
-    )
     assert "data-options-open" in head
+    assert "data-coverage-layers" not in head, "the layer is still in the head"
     panel = html[html.index('id="coverage-options"') :]
-    assert "data-coverage-views" in panel[: panel.index("</label>")]
-    assert "data-coverage-opacity" in panel[: panel.index("</label>")]
+    panel = panel[: panel.index('<div class="map-shell">')]
+    assert re.search(r"<select data-coverage-layers\b", panel), (
+        "the layer is not a select in the settings panel"
+    )
+    assert "data-coverage-views" in panel
+    assert "data-coverage-opacity" in panel
 
 
 # ------------------------------------------------- phones fold the head (#275)
