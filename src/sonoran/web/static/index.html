@@ -384,6 +384,15 @@
               there records the three ways inferring it got a page wrong.
             -->
             <p class="preset-scope" data-preset-scope hidden></p>
+            <!--
+              Several presets are chosen on the Settings page (#383), whose
+              link is the next row down. Not an option of the select above:
+              an arrow key on a closed select changes its value and fires
+              `change`, so an option that navigated went off while a
+              keyboard reader passed it. Not a second link either: one
+              route to Settings is a rule (Will, "there is a duplicate
+              settings button", `test_there_is_exactly_one_route_to_the_settings_page`).
+            -->
           </div>
 
           <!--

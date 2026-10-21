@@ -4349,6 +4349,29 @@ async function main() {
       `the map does not say Short Turbo is empty: "${shown.legend.slice(-120)}"`);
     await page.evaluate(() => window.SonoranPreset.setMany(['MediumFast', 'LongFast']));
 
+    // Arrowing through the menu's "More" select must not leave the page.
+    // On a closed select an arrow key changes the value and fires
+    // `change`, so an option that navigates went off on the way past.
+    // Chromium on macOS opens the list on an arrow key instead, so the
+    // real keys are pressed AND the Linux and Windows sequence -- one
+    // value and one `change` per step -- is played on the element.
+    await page.locator('[data-preset-more]').focus();
+    const steps = await page.locator('[data-preset-more] option').count();
+    for (let step = 0; step < steps; step += 1) await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => {
+      const select = document.querySelector('[data-preset-more]');
+      for (let index = 0; index < select.options.length; index += 1) {
+        const live = document.querySelector('[data-preset-more]');
+        live.selectedIndex = index;
+        live.dispatchEvent(new Event('change'));
+      }
+    });
+    await page.waitForTimeout(300);
+    const after = await page.evaluate(() => location.hash);
+    must(after === '#map', `arrowing through the More select went to ${after}`);
+    await page.evaluate(() => window.SonoranPreset.setMany(['MediumFast', 'LongFast']));
+
     // The last preset cannot be cleared.
     await open(page, 'settings', 800);
     await tick('MediumFast');

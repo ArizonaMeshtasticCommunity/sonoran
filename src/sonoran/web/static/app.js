@@ -11689,10 +11689,6 @@ function presetInitials(name) {
   return (words[0] || '').slice(0, 2);
 }
 
-/* The "More" option that opens the Settings page's preset boxes. Not a
-   preset name: a name never starts with '#'. */
-const PRESET_SEVERAL = '#several';
-
 /* How many presets the switch shows as buttons. The rest go in the
    "More presets" select, because a switch slot is too narrow for a
    third name. */
@@ -11793,20 +11789,12 @@ function wirePresetSwitch() {
         text: several ? `${count(SonoranPreset.selected().length)} presets` : 'More',
       }),
       el('option', { value: SonoranPreset.ALL, text: 'All' }),
-      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })),
-      // Several at once are chosen on the Settings page, where there is
-      // room for a box per preset (#383).
-      el('option', { value: PRESET_SEVERAL, text: 'Choose several\u2026' }));
+      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
     more.value = pinned || several ? '' : current;
   };
 
   if (more) {
     more.addEventListener('change', () => {
-      if (more.value === PRESET_SEVERAL) {
-        draw();
-        location.hash = '#settings';
-        return;
-      }
       if (more.value && SonoranPreset.set(more.value)) draw();
     });
   }
