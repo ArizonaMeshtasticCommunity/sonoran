@@ -153,3 +153,63 @@ def test_an_untagged_topic_channel_message_stays_on_the_default_preset(tmp_path:
     sql = statements[0]
     assert "ELSE %(" in sql, "an untagged topic channel has no preset to fall back to"
     assert PRESET_NAMES == [preset.name for preset in PRESETS], "a preset is missing"
+
+
+# --- Several presets in one request (#383) ----------------------------
+
+MANY = "MediumFast,LongFast"
+
+
+@pytest.mark.parametrize("path", [path.replace("LongFast", MANY) for path in LIST_PAGES])
+def test_every_list_page_takes_several_presets(path: str, tmp_path: Any) -> None:
+    """Will: select multiple presets. Each list page keeps rows on any of them."""
+    tagged = _filtering(recorded_sql(path, tmp_path))
+    assert tagged, f"{path} never filtered by preset"
+    for sql in tagged:
+        assert "coalesce(" in sql, f"{path} has no fallback for untagged rows:\n{sql}"
+        assert ") IN (" in sql, f"{path} did not ask for both presets:\n{sql}"
+        assert "'MediumFast'" in sql and "'LongFast'" in sql
+
+
+def test_one_preset_still_runs_one_equality(tmp_path: Any) -> None:
+    """A single preset must not change its SQL because lists exist."""
+    sql = _filtering(recorded_sql("/api/packets?preset=LongFast", tmp_path))[0]
+    assert "coalesce(packet.modem_preset, packet.channel) = %(" in sql
+    assert ") IN (" not in sql
+
+
+def test_a_repeated_preset_is_one_preset(tmp_path: Any) -> None:
+    sql = _filtering(recorded_sql("/api/packets?preset=LongFast,longfast", tmp_path))[0]
+    assert "coalesce(packet.modem_preset, packet.channel) = %(" in sql
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/packets?preset=LongFast,azmsh",
+        "/api/chat?preset=MediumFast,nope",
+        "/api/chat/overview?preset=LongFast,",
+        "/api/stats/portnums?preset=,MediumFast",
+        "/api/nodes?preset=LongFast,Weather",
+        "/api/nodes/facets?preset=MediumFast,,LongFast",
+    ],
+)
+def test_one_bad_name_in_a_list_refuses_the_request(path: str, tmp_path: Any) -> None:
+    app = create_app(Settings(_env_file=None, coverage_cache_dir=str(tmp_path)))
+    session = RecordingSession()
+
+    async def _session() -> Any:
+        yield session
+
+    app.dependency_overrides[get_session] = _session
+    response = TestClient(app).get(path)
+    assert response.status_code == 422
+    assert not session.statements, "a refused list must not reach the database"
+    assert "modem preset" in response.text
+
+
+def test_the_portnum_cache_keeps_one_preset_apart_from_two(tmp_path: Any) -> None:
+    one = recorded_sql("/api/stats/portnums?hours=7&preset=MediumFast", tmp_path)
+    two = recorded_sql(f"/api/stats/portnums?hours=7&preset={MANY}", tmp_path)
+    assert one and two, "two presets were answered from the one-preset cache entry"
+    assert ") IN (" in "".join(two)

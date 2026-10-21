@@ -1764,7 +1764,7 @@ PAGES.dashboard = async (page) => {
    * in the heading.
    */
   const feedChannel = $('[data-recent-chat-channel]', page);
-  if (feedChannel) feedChannel.textContent = menuPreset() ? SonoranLabels.presetLabel(menuPreset()) : '';
+  if (feedChannel) feedChannel.textContent = menuPresetWords();
   replace($('[data-recent-chat]', page), messages
     ? (messages.length
         ? messages.map((message) => messageItem(message))
@@ -1772,7 +1772,7 @@ PAGES.dashboard = async (page) => {
     : [failure(new Error('Cannot load messages.'))]);
 
   const portnumChart = $('[data-portnum-chart]', page);
-  const preset = menuPreset();
+  const preset = menuPresetWords();
   if (!portnums) {
     chartEmpty(portnumChart, 'Cannot load the packet types.');
   } else if (!portnums.length) {
@@ -2716,9 +2716,21 @@ const channelCache = { at: 0, value: null };
  */
 function menuPreset() {
   // "All presets" is no filter: every request built from this leaves
-  // `preset` off, and the server answers for every preset.
+  // `preset` off, and the server answers for every preset. With several
+  // chosen (#383) it is every name with commas between them, which the
+  // list endpoints read as "any of these" (docs/API.md 1.2).
   if (!window.SonoranPreset || SonoranPreset.isAll()) return '';
-  return SonoranPreset.current();
+  return SonoranPreset.query ? SonoranPreset.query() : SonoranPreset.current();
+}
+
+/**
+ * The menu's presets in words, for a sentence: "Medium Fast", or
+ * "Medium Fast and Long Fast", or "" for every preset.
+ */
+function menuPresetWords() {
+  const names = menuPreset().split(',').filter(Boolean).map((name) => SonoranLabels.presetLabel(name));
+  if (names.length < 2) return names[0] || '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /** The same, ready to append to a query that already has one parameter. */
@@ -8854,7 +8866,7 @@ PAGES.chat = async (page) => {
   const shown = data.sections;
   if (!shown.length) {
     return replace(body, empty(menuPreset()
-      ? `No channels on ${SonoranLabels.presetLabel(menuPreset())} have stored messages.`
+      ? `No channels on ${menuPresetWords()} have stored messages.`
       : 'No channels have stored messages. Text storage may be off.'));
   }
 
@@ -9430,7 +9442,7 @@ PAGES.firehose = async (page) => {
    * from a type that never runs on the preset they are looking at.
    */
   const nothing = portnum || preset || firehoseFilter.hours
-    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${preset ? ` on ${preset}` : ''}`
+    ? `No ${portnum ? `${portnumLabel(portnum)} ` : ''}packets${preset ? ` on ${menuPresetWords()}` : ''}`
       + `${firehoseFilter.hours ? ` in the ${windowWord.toLowerCase()}` : ' at any time'}. `
       + 'The mesh may be quiet, or this may not be traffic that runs here.'
     : 'No packets match the filter.';
@@ -11145,6 +11157,8 @@ if (!POPOVER) {
 const PRESET_PAGES = new Set([
   'dashboard', 'nodes', 'chat', 'map', 'graph', 'coverage', 'planner',
   'gaps', 'firehose', 'stats',
+  // The page where several presets are chosen (#383).
+  'settings',
 ]);
 
 /*
@@ -11157,7 +11171,7 @@ const PRESET_PAGES = new Set([
  * preset has nothing left to narrow.
  */
 const PRESET_FREE_PAGES = new Set([
-  'traceroutes', 'meshnet', 'rf', 'config', 'settings',
+  'traceroutes', 'meshnet', 'rf', 'config',
   'node', 'packet', 'link', 'traceroute',
 ]);
 
@@ -11167,6 +11181,15 @@ const PRESET_FREE_PAGES = new Set([
  * so under "All" they draw the deployment's default (`single()`).
  */
 const ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps']);
+
+/*
+ * Pages that draw links, so they draw ONE preset when several are
+ * chosen (#383): a line between two presets cannot exist (AGENTS.md
+ * 9.7). "All presets" still draws everything here, as Logan asked for
+ * (#370); a choice of several is a narrower question, and these pages
+ * answer it for one preset and say which.
+ */
+const LINK_PRESET_PAGES = new Set(['map', 'graph']);
 
 /** True when the menu's preset changes what this page shows. */
 function presetAppliesTo(name) {
@@ -11190,8 +11213,11 @@ function drawPresetScope(name) {
   const applies = presetAppliesTo(name);
   // Under "All presets" a page that draws one preset says which one it
   // drew, so the reader does not take one mesh for the whole state.
-  const one = applies && ONE_PRESET_PAGES.has(name)
-    && window.SonoranPreset && SonoranPreset.isAll();
+  const store = window.SonoranPreset;
+  const several = Boolean(store && store.isSeveral && store.isSeveral());
+  const one = applies && Boolean(store)
+    && ((ONE_PRESET_PAGES.has(name) && (store.isAll() || several))
+      || (LINK_PRESET_PAGES.has(name) && several));
   note.hidden = applies && !one;
   note.textContent = one
     ? `Shows ${SonoranLabels.presetLabel(SonoranPreset.single())} only. This page draws one preset.`
@@ -11449,7 +11475,52 @@ PAGES.settings = async (page) => {
   for (const group of $$('[data-setting]', page)) {
     drawSettingChoice(group);
   }
+  drawPresetBoxes(page);
 };
+
+/*
+ * A box for each modem preset, and one for all of them (#383).
+ *
+ * Checkboxes, not the radio group the other settings use: here the
+ * reader may choose more than one. Ticking a box adds that preset and
+ * clearing it takes it out; the last one cannot be cleared, because no
+ * preset at all is a site with nothing on any page. "All presets" ticks
+ * every box. The menu's buttons still choose one preset alone.
+ */
+function drawPresetBoxes(page) {
+  const holder = $('[data-preset-boxes]', page);
+  if (!holder || !window.SonoranPreset) return;
+  const note = $('[data-preset-boxes-note]', page);
+  const all = SonoranPreset.isAll();
+  const chosen = new Set(SonoranPreset.selected());
+  // A redraw replaces the boxes; keep the keyboard on the one in use.
+  const focused = document.activeElement && holder.contains(document.activeElement)
+    ? document.activeElement.value : null;
+  const box = (value, text, checked, onchange, extra = '') => {
+    const input = el('input', { type: 'checkbox', value, onchange });
+    input.checked = checked;
+    return el('label', { class: `preset-box${checked ? ' checked' : ''}${extra}` },
+      input, el('span', { text }));
+  };
+  replace(holder,
+    box(SonoranPreset.ALL, 'All presets', all, (event) => {
+      if (event.target.checked) SonoranPreset.set(SonoranPreset.ALL);
+      else SonoranPreset.set(SonoranPreset.single());
+      drawPresetBoxes(page);
+    }, ' all'),
+    SonoranPreset.options().map((name) => box(name, SonoranLabels.presetLabel(name),
+      all || chosen.has(name), () => {
+        const changed = SonoranPreset.toggle(name);
+        if (note) {
+          note.textContent = changed ? '' : 'At least one preset stays chosen.';
+        }
+        drawPresetBoxes(page);
+      })));
+  if (focused) {
+    const again = [...holder.querySelectorAll('input')].find((input) => input.value === focused);
+    if (again) again.focus();
+  }
+}
 
 function drawSettingChoice(group) {
   const name = group.dataset.setting;
@@ -11527,6 +11598,10 @@ function presetInitials(name) {
   return (words[0] || '').slice(0, 2);
 }
 
+/* The "More" option that opens the Settings page's preset boxes. Not a
+   preset name: a name never starts with '#'. */
+const PRESET_SEVERAL = '#several';
+
 /* How many presets the switch shows as buttons. The rest go in the
    "More presets" select, because a switch slot is too narrow for a
    third name. */
@@ -11554,7 +11629,10 @@ function wirePresetSwitch() {
   const more = $('[data-preset-more]');
 
   const draw = () => {
-    const current = SonoranPreset.current();
+    // With several chosen (#383) no single button is the choice, so none
+    // is lit, and the select names how many are chosen.
+    const several = Boolean(SonoranPreset.isSeveral && SonoranPreset.isSeveral());
+    const current = several ? null : SonoranPreset.current();
     const offered = SonoranPreset.options();
     const options = presetSwitchSlots(offered);
     const extras = offered.filter((name) => !options.includes(name));
@@ -11619,14 +11697,25 @@ function wirePresetSwitch() {
     replace(more,
       // "More", not "More presets": on a phone the select shares the
       // switch's row. Its accessible name says the rest.
-      el('option', { value: '', text: 'More' }),
+      el('option', {
+        value: '',
+        text: several ? `${count(SonoranPreset.selected().length)} presets` : 'More',
+      }),
       el('option', { value: SonoranPreset.ALL, text: 'All' }),
-      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })));
-    more.value = pinned ? '' : current;
+      extras.map((name) => el('option', { value: name, text: SonoranLabels.presetLabel(name) })),
+      // Several at once are chosen on the Settings page, where there is
+      // room for a box per preset (#383).
+      el('option', { value: PRESET_SEVERAL, text: 'Choose several\u2026' }));
+    more.value = pinned || several ? '' : current;
   };
 
   if (more) {
     more.addEventListener('change', () => {
+      if (more.value === PRESET_SEVERAL) {
+        draw();
+        location.hash = '#settings';
+        return;
+      }
       if (more.value && SonoranPreset.set(more.value)) draw();
     });
   }

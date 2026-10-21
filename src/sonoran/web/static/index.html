@@ -2336,6 +2336,25 @@
               <div class="settings-choice" role="radiogroup" aria-label="Appearance"
                    data-setting="theme"></div>
             </div>
+
+            <!--
+              Every modem preset, and several at once (#383). The menu's
+              switch keeps the two this mesh runs for one tap; this is where
+              there is room for a box per preset. It changes what the data
+              IS, not how it is written, so the store is `preset.js`, not
+              `settings.js`. Built by app.js from `SonoranPreset.options`.
+              The sentence says the one thing a box cannot: the pages that
+              draw links or coverage still draw one preset (AGENTS.md 9.7).
+            -->
+            <div class="panel settings-presets">
+              <h3 id="settings-presets-label">Modem presets</h3>
+              <p class="sub">The pages show what was heard on the presets you choose. The map,
+                the graph, coverage, gaps and the planner draw one of them at a time, because
+                nodes on different presets cannot hear each other.</p>
+              <div class="preset-boxes" role="group" aria-labelledby="settings-presets-label"
+                   data-preset-boxes></div>
+              <p class="preset-boxes-note" data-preset-boxes-note></p>
+            </div>
           </div>
         </section>
       </main>

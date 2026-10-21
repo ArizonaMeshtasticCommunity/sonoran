@@ -397,6 +397,27 @@ def _check_pages(client: TestClient) -> None:
     facets = client.get("/api/nodes/facets?preset=MediumFast")
     assert facets.status_code == 200
 
+    # Several presets at once (#383): the union of the two, and nothing
+    # else. The untagged LongFast row comes with LongFast.
+    both = bodies("/api/chat?preset=MediumFast,LongFast&limit=500")
+    assert {"on long", "on medium", "from before"} <= both
+    assert bodies("/api/chat?preset=LongFast,ShortTurbo&limit=500") == long_chat
+    both_keys = {
+        row["packet_key"]
+        for row in client.get("/api/packets?preset=MediumFast,LongFast&limit=500").json()
+    }
+    assert {f"{SENDER}:400", f"{SENDER}:401", f"{QUIET}:402"} <= both_keys
+    both_nodes = {
+        row["node_id"] for row in client.get("/api/nodes?preset=MediumFast,LongFast").json()
+    }
+    assert both_nodes == long_nodes | medium_nodes
+    both_overview = client.get("/api/chat/overview?hours=2&preset=LongFast,MediumFast").json()
+    azmsh_both = [s for s in both_overview["sections"] if s["channel"] == "azmsh"]
+    assert azmsh_both and {m["body"] for m in azmsh_both[0]["messages"]} >= {
+        "on long",
+        "on medium",
+    }
+
 
 def _preset_schema(engine: Any) -> tuple[set[tuple[str, str]], dict[str, bool]]:
     with engine.connect() as connection:

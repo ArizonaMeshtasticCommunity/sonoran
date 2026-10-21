@@ -1592,3 +1592,40 @@ stored before the migration.
 relayer id, or a measured narrowing (same preset, heard recently, in
 range of both ends) that leaves one candidate for most uploads. The
 per-upload column is the data that measurement needs.
+
+## 2026-10-21 — every preset can be chosen, and several at once (#383)
+
+**Decided by Barry, for Will.** Will asked, in #383, for every preset
+to be selectable, for a choice of several, and for Medium Fast alone
+as the default. Tyler's question in #232, where the preset control
+lives, is still open and is not decided here. The menu's switch stays
+where it is.
+
+**What changed.**
+
+- The menu offers every preset the server knows (`KNOWN` in
+  `radio/presets.py`, which covers every value of
+  `Config.LoRaConfig.ModemPreset`), not only the presets with traffic.
+  The two this mesh runs stay as buttons. The rest are in "More".
+  `tests/unit/test_preset_choices.py` keeps the browser's list and the
+  server's the same.
+- Several presets are chosen on the Settings page, with a box for each.
+  "Choose several" in the menu's "More" opens it. The menu's buttons
+  still choose one preset alone.
+- The list endpoints take `preset=MediumFast,LongFast` (`docs/API.md`
+  1.2). That is a GET parameter only. One name runs the SQL it ran
+  before.
+- The map and the graph draw one preset when several are chosen, and
+  the note under the switch says which. Coverage, gaps and the planner
+  already did that under "All". "All" still draws every preset on the
+  map and the graph, as decided in #370. A choice of several is
+  narrower, and a line between two presets cannot exist (AGENTS.md 9.7).
+- The choice is stored as before under `sonoran.preset`, with commas
+  between names. An older stored value, one name or `*`, still loads.
+
+**What a reader can now do that they could not.** Choose a preset with
+no traffic on it yet. The old store refused a preset the server had
+not listed, so a stored `ShortTurbo` fell back to the default. Every
+firmware preset is now always on offer, so only a name that is no
+preset at all is refused. Four cases in `preset_store_cases.mjs`
+changed for this reason, and each says so beside it.

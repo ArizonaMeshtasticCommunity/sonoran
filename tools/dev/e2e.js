@@ -3853,6 +3853,117 @@ async function main() {
   });
 
   /*
+   * Every preset, and several at once (#383). Will: "Add all of the
+   * other presets for people to select ... select multiple presets as
+   * well ... Make MediumFast the default solo selected."
+   *
+   * The positive control for "both azmsh check-ins" is the two #313
+   * journeys above: on one preset the other's message is absent. A
+   * context of its own, because the choice is kept in localStorage.
+   */
+  const several = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(several, 'every preset can be chosen, and several at once (#383)', async (page) => {
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/(packets|chat\/overview|nodes|map\/nodes)\?/.test(request.url())) asked.push(new URL(request.url()));
+    });
+    const last = (path) => [...asked].reverse().find((url) => url.pathname.endsWith(path));
+    const switchState = () => page.evaluate(() => ({
+      checked: [...document.querySelectorAll('[data-preset-switch] [role="radio"]')]
+        .filter((button) => button.getAttribute('aria-checked') === 'true')
+        .map((button) => button.querySelector('.nav-label').textContent.trim()),
+      more: (() => {
+        const select = document.querySelector('[data-preset-more]');
+        return select.options[select.selectedIndex].textContent;
+      })(),
+    }));
+    const boxes = () => page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('[data-preset-boxes] input')]
+        .map((input) => [input.value, input.checked])));
+    const tick = async (value) => {
+      await page.locator(`[data-preset-boxes] input[value="${value}"]`).click();
+      await waitFor(page, () => !loading, 10000, 100);
+    };
+
+    // Will: "Make MediumFast the default solo selected."
+    await open(page, 'settings', 800);
+    let got = await boxes();
+    const ticked = Object.keys(got).filter((name) => got[name]);
+    must(ticked.join() === 'MediumFast', `a fresh browser starts on ${ticked.join(', ')}`);
+    let state = await switchState();
+    must(state.checked.join() === 'Medium Fast', `the menu lights ${state.checked.join(', ') || 'nothing'}`);
+
+    // "Add all of the other presets for people to select."
+    for (const name of ['LongFast', 'LongSlow', 'LongMod', 'LongTurbo', 'MediumFast', 'MediumSlow',
+      'ShortFast', 'ShortSlow', 'ShortTurbo']) {
+      must(name in got, `${name} cannot be chosen on the Settings page`);
+    }
+    const offered = Object.keys(got).length - 1;
+
+    // "... select multiple presets as well."
+    await tick('LongFast');
+    got = await boxes();
+    must(got.MediumFast && got.LongFast && !got.ShortFast, `ticking Long Fast left ${JSON.stringify(got)}`);
+    state = await switchState();
+    must(state.checked.length === 0 && state.more === '2 presets',
+      `the menu does not say two are chosen: ${JSON.stringify(state)}`);
+    const kept = await page.evaluate(() => localStorage.getItem('sonoran.preset'));
+    must(kept === 'MediumFast,LongFast', `the choice was kept as ${kept}`);
+
+    // The positive control is the #313 journeys: on one preset the other
+    // preset's azmsh message is absent. Here both are present.
+    await open(page, 'firehose', 3000);
+    const firehose = last('/api/packets');
+    must(firehose && firehose.searchParams.get('preset') === 'MediumFast,LongFast',
+      `the firehose did not ask for both presets: ${firehose}`);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('[data-firehose-table] tbody tr')]
+      .map((row) => row.textContent).join('\n'));
+    must(rows.includes(LONG_BODY) && rows.includes(MEDIUM_BODY),
+      'the firehose on both presets does not list both azmsh check-ins');
+
+    // A page that draws links draws one preset, and says which.
+    await open(page, 'map', 3000);
+    const map = last('/api/map/nodes');
+    must(map && map.searchParams.get('channel') === 'MediumFast',
+      `the map did not draw Medium Fast alone: ${map}`);
+    const note = await page.evaluate(() => {
+      const scope = document.querySelector('[data-preset-scope]');
+      return scope.hidden ? '' : scope.textContent;
+    });
+    must(/Shows Medium Fast only/.test(note), `the map does not say what it drew: "${note}"`);
+
+    // The last preset cannot be cleared.
+    await open(page, 'settings', 800);
+    await tick('MediumFast');
+    await tick('LongFast');
+    got = await boxes();
+    must(got.LongFast && !got.MediumFast, `clearing the last preset left ${JSON.stringify(got)}`);
+    const refusal = await page.locator('[data-preset-boxes-note]').textContent();
+    must(/At least one preset/.test(refusal), `no word on why the last box stays: "${refusal}"`);
+
+    // A button in the menu chooses one preset alone again.
+    await tick('ShortFast');
+    await page.locator('[data-preset-switch] [role="radio"]', { hasText: 'Medium Fast' }).click();
+    await waitFor(page, () => !loading, 10000, 100);
+    got = await boxes();
+    const alone = Object.keys(got).filter((name) => got[name]);
+    must(alone.join() === 'MediumFast', `the Medium Fast button left ${alone.join(', ')}`);
+
+    // An old stored value, one name, still loads.
+    // A reload, not a `goto`: the page is on #settings already, and a
+    // second `goto` to it does not load again (AGENTS.md 9.33).
+    await page.evaluate(() => localStorage.setItem('sonoran.preset', 'LongFast'));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(800);
+    got = await boxes();
+    const old = Object.keys(got).filter((name) => got[name]);
+    must(old.join() === 'LongFast', `an old stored "LongFast" loaded as ${old.join(', ')}`);
+    return `${offered} presets offered, Medium Fast alone by default, two chosen reach the firehose `
+      + 'as one preset=, the map draws one and says so, the last box stays, an old value loads';
+  });
+  await several.close();
+
+  /*
    * An iPad on its side (#267). 1112 px is wider than every phone
    * breakpoint, so this is the device that proves touch sizing follows
    * the pointer and not the width. `hasTouch` makes Chromium match

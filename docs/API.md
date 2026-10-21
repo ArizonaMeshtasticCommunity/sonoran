@@ -96,9 +96,23 @@ The name is matched without regard to case or separators, so `longfast`
 and `LONG_FAST` work. A name that is not a preset, such as `azmsh`,
 returns 422 rather than an empty list.
 
+`preset` can name several presets, with a comma between the names
+(#383): `preset=MediumFast,LongFast` keeps the rows carried on either.
+One name runs the same equality as before. Two or more run
+
+    coalesce(modem_preset, channel) IN (:presets)
+
+Each name is matched as above, and a repeat counts once. One name that
+is not a preset, or an empty name (`preset=LongFast,`), returns 422 for
+the whole request. The dashboard sends this when a reader chooses
+several presets on the Settings page.
+
 The map, graph, coverage, gaps and leaderboard endpoints do not take
 `preset` yet. They still take `channel`, and the page sends the preset's
-own channel name there.
+own channel name there. They take one channel only. With several presets
+chosen, those pages draw one of them (`SonoranPreset.single()`) and say
+which, because a link between two presets cannot exist (`AGENTS.md`
+9.7).
 
 ### 1.3 Stored long-window answers (#371)
 

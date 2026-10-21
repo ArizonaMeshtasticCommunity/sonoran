@@ -33,7 +33,7 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
-from sonoran.api.preset_scope import preset_filter, require_preset
+from sonoran.api.preset_scope import Presets, preset_filter, require_presets
 from sonoran.api.schemas import NodeSummary
 from sonoran.api.sightings import direct as direct_sighting
 from sonoran.api.sightings import sightings
@@ -457,7 +457,7 @@ def _apply_node_filters(
     licensed: bool | None = None,
     first_seen_hours: int | None = None,
     quiet_hours: int | None = None,
-    preset: str | None = None,
+    preset: Presets | None = None,
 ) -> Select[Any]:
     """Apply the documented node list filters to a statement.
 
@@ -544,8 +544,9 @@ class NodeListParams:
     active_hours: int | None
     before: datetime | None
     channel: str | None
-    # The menu's modem preset, already checked by `require_preset` (#313).
-    preset: str | None
+    # The menu's modem presets, already checked by `require_presets`
+    # (#313, several since #383).
+    preset: Presets | None
     position: str | None
     licensed: bool | None
     first_seen_hours: int | None
@@ -588,7 +589,7 @@ def node_list_params(
         active_hours=active_hours,
         before=before,
         channel=channel,
-        preset=require_preset(preset),
+        preset=require_presets(preset),
         position=position,
         licensed=licensed,
         first_seen_hours=first_seen_hours,
@@ -841,7 +842,7 @@ async def node_facets(
     `preset` is the menu's modem preset. It is never lifted: it says
     which mesh is being counted, not one more filter to compare.
     """
-    menu_preset = require_preset(preset)
+    menu_preset = require_presets(preset)
 
     async def counts(column: Any, lifted: str) -> list[dict[str, object]]:
         # Each facet is counted with its own filter lifted and the rest

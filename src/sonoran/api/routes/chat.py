@@ -19,7 +19,7 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.api.preset_scope import preset_filter, require_preset
+from sonoran.api.preset_scope import Presets, preset_filter, require_presets
 from sonoran.db.models import Packet, PacketSeen, TextMessage
 from sonoran.radio.presets import PRESETS
 
@@ -425,7 +425,7 @@ async def _as_messages(
 
 def _on_preset(
     statement: Select[Any],
-    preset: str | None,
+    preset: Presets | None,
     since: datetime | None,
     default_preset: str,
 ) -> Select[Any]:
@@ -524,10 +524,11 @@ async def chat(
     signal, and whether an acknowledgement was asked for. See
     `_metrics_for`.
 
-    Set `preset` to keep the messages carried on one modem preset. It
-    works beside `channel`. See `api/preset_scope.py`.
+    Set `preset` to keep the messages carried on one modem preset, or on
+    any of several (`preset=MediumFast,LongFast`). It works beside
+    `channel`. See `api/preset_scope.py`.
     """
-    wanted = require_preset(preset)
+    wanted = require_presets(preset)
     statement = select(TextMessage).order_by(TextMessage.seen_at.desc()).limit(limit)
     statement = _apply_filters(statement, channel, from_node, since, before)
     statement = _on_preset(statement, wanted, since, str(request.app.state.settings.default_preset))
@@ -569,7 +570,7 @@ async def overview(
     topic channel such as `azmsh` then lists only its messages on that
     preset, and a channel with none on it has no section (#313).
     """
-    wanted = require_preset(preset)
+    wanted = require_presets(preset)
     since = datetime.now(UTC) - timedelta(hours=hours)
     core = tuple(request.app.state.settings.core_channels)
     default = str(request.app.state.settings.default_preset)
