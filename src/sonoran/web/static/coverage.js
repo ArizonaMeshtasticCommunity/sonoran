@@ -571,8 +571,11 @@
      */
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
+    const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
+    /* The run's own layers, then the heatmap. The heatmap is not a
+       layer of the run: its tiles come from the activity_heatmap job. */
     const layers = [
-      { key: 'usable', label: 'Simulated coverage' },
+      ...(state.summary.layers || []),
       { key: HEATMAP_LAYER, label: 'Actual coverage (based on heard positions)' },
     ];
     replace(
@@ -580,10 +583,8 @@
       layers.map((layer) =>
         el('option', { value: layer.key, text: layer.label })),
     );
-    if (!layers.some((l) => l.key === state.layer)) {
-      state.layer = 'usable';
-    }
     host.value = state.layer;
+    host.title = usableTitle();
   }
 
   function drawViews(page) {
