@@ -32,6 +32,10 @@
    * here would promise reach that a handheld cannot return.
    */
   const DEFAULT_LAYER = 'usable';
+  const HEATMAP_LAYER = 'empirical_heatmap_position';
+  const HEATMAP_NOTE = 'This layer is a record, not a prediction. It shows where nodes were '
+    + 'when the mesh heard their position. No colour does not mean no coverage: '
+    + 'it can mean that no node sent its position from there.';
 
   /*
    * The settings panel (#334). `coverage-settings.js` holds the rules:
@@ -243,7 +247,9 @@
     state.approximate = choice.approximate;
     state.approximateAvailable = choice.approximateAvailable;
     const layers = ((state.summary && state.summary.layers) || []).map((layer) => layer.key);
-    if (layers.length && !layers.includes(state.layer)) state.layer = DEFAULT_LAYER;
+    if (layers.length && state.layer !== HEATMAP_LAYER && !layers.includes(state.layer)) {
+      state.layer = DEFAULT_LAYER;
+    }
     /* A floor needs margin tiles. A run made before them draws its
        colour tiles with no floor, and the control says why. It never
        draws the whole map while it says a floor is in force. */
@@ -383,9 +389,10 @@
      * encodes the braces, and Leaflet then asks for a tile literally
      * named `%7Bz%7D`. Resolve the part before them, then append.
      */
-    const base = api(
-      `api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`,
-    );
+    const isHeatmap = state.layer === HEATMAP_LAYER;
+    const base = isHeatmap
+      ? api('api/map/heatmap/position/')
+      : api(`api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`);
     const bounds = L.latLngBounds(
       [summary.bounds[0], summary.bounds[1]],
       [summary.bounds[2], summary.bounds[3]],
@@ -393,9 +400,10 @@
     /*
      * With a floor, the margin tiles of the same layer, coloured in this
      * browser. With none, the colour tiles as they always were, so the
-     * default map costs the browser no work at all.
+     * default map costs the browser no work at all. The heatmap has no
+     * margin tiles, so a floor does not apply to it.
      */
-    if (state.floor > 0 && state.marginSpec) {
+    if (!isHeatmap && state.floor > 0 && state.marginSpec) {
       state.tiles = marginLayer(`${base}margin/{z}/{x}/{y}.png`, {
         minZoom: 0,
         maxZoom: 19,
@@ -567,13 +575,26 @@
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
     const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
+    /* The run's own layers, then the heatmap. The heatmap is not a
+       layer of the run: its tiles come from the activity_heatmap job. */
+    const layers = [
+      ...(state.summary.layers || []),
+      { key: HEATMAP_LAYER, label: 'Heard positions, last 30 days' },
+    ];
     replace(
       host,
-      (state.summary.layers || []).map((layer) =>
+      layers.map((layer) =>
         el('option', { value: layer.key, text: layer.label })),
     );
     host.value = state.layer;
     host.title = usableTitle();
+    /* A newcomer needs to know that this layer is a record, not a
+       prediction, and what it cannot show. */
+    const note = $('[data-coverage-layer-note]', page);
+    if (note) {
+      note.hidden = state.layer !== HEATMAP_LAYER;
+      note.textContent = note.hidden ? '' : HEATMAP_NOTE;
+    }
   }
 
   function drawViews(page) {
@@ -818,6 +839,15 @@
       return;
     }
     legend.hidden = false;
+    if (state.layer === HEATMAP_LAYER) {
+      $('[data-coverage-legend-title]', legend).textContent = 'How well the mesh heard nodes here';
+      $('[data-coverage-floor]', legend).textContent = 'Less than nearby';
+      $('[data-coverage-ceiling]', legend).textContent = 'Best nearby';
+      const line = $('[data-coverage-legend-floor]', legend);
+      if (line) line.hidden = true;
+      drawWhich(page);
+      return;
+    }
     const floor = preset.sensitivity_dbm;
     const layer = (state.summary.layers || []).find((item) => item.key === state.layer);
     $('[data-coverage-legend-title]', legend).textContent = layer ? layer.label : 'Signal';
@@ -858,6 +888,16 @@
     const preset = summary && presetOf(summary, state.preset);
     if (!preset) {
       replace(host);
+      return;
+    }
+    if (state.layer === HEATMAP_LAYER) {
+      const tile = statTile('30', 'Days included', 'Made again each day');
+      const label = $('.label', tile);
+      label.dataset.hint = 'The heatmap reads the position packets of the last 30 days. '
+        + 'The jobs service makes it again once a day, just after midnight UTC.';
+      label.dataset.label = 'Days included';
+      replace(host, tile);
+      if (typeof revealHints === 'function') revealHints(host);
       return;
     }
     replace(
@@ -960,6 +1000,15 @@
     const sub = $('[data-coverage-sub]', page);
     const summary = state.summary;
     if (!sub || !summary || !summary.available) return;
+    
+    if (state.layer === HEATMAP_LAYER) {
+      sub.textContent = 'Where the mesh heard node positions in the last 30 days. '
+        + 'A stronger colour means more packets. The colour compares each place with '
+        + `the best place within about ${SonoranUnits.distanceFromKm(16)}: blue is the best nearby. `
+        + 'A direct hearing by a gateway counts more than one over many hops.';
+      return;
+    }
+    
     sub.textContent = shownIsDiagnostic()
       ? `Diagnostic view: predicted from ${shownRoles().join(', ') || 'every role'}.`
       : 'Where the mesh reaches, predicted from the routers and repeaters that carry it.';
@@ -984,13 +1033,20 @@
   }
 
   function drawAssumes(page) {
+    const panel = page.querySelector('.coverage-assumes');
     const host = $('[data-coverage-assumes]', page);
     if (!host) return;
     const summary = state.summary;
     if (!summary || !summary.available) {
+      if (panel) panel.hidden = false;
       replace(host, el('p', { text: 'No coverage run has been made yet.' }));
       return;
     }
+    if (state.layer === HEATMAP_LAYER) {
+      if (panel) panel.hidden = true;
+      return;
+    }
+    if (panel) panel.hidden = false;
     const missing = (summary.missing_terrain_tiles || []).length;
     replace(
       host,
@@ -1171,6 +1227,12 @@
     const panel = $('[data-coverage-coarse-panel]', page);
     const host = $('[data-coverage-coarse]', page);
     if (!panel || !host) return;
+    
+    if (state.layer === HEATMAP_LAYER) {
+      panel.hidden = true;
+      return;
+    }
+
     /*
      * Only the preset on screen (#315). The list used to be every
      * preset's, so a LongFast router sat in the MediumFast view, and
@@ -1221,6 +1283,12 @@
   function drawSites(page) {
     const host = $('[data-coverage-sites]', page);
     if (!host) return;
+    
+    if (state.layer === HEATMAP_LAYER) {
+      replace(host, el('p', { class: 'muted', text: 'This layer comes from heard positions, so it has no sites. It shows all gateways and all presets together.' }));
+      return;
+    }
+
     const preset = state.summary && presetOf(state.summary, state.preset);
     const nodes = (preset && preset.nodes) || [];
     if (!nodes.length) {
@@ -1422,6 +1490,11 @@
       drawLayers(page);
       drawTiles();
       drawLegend(page);
+      drawStats(page);
+      drawDiagnosticBanner(page);
+      drawAssumes(page);
+      drawCoarse(page);
+      drawSites(page);
       drawCount(page);
     });
     on('[data-coverage-signal-floor]', 'change', (picker) => {

@@ -1,0 +1,434 @@
+import shutil
+import struct
+import zlib
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import numpy.typing as npt
+from sqlalchemy import select
+
+from sonoran.config import Settings
+from sonoran.coverage import store
+from sonoran.coverage.grid import CELLS_PER_DEGREE, Grid, region_grid
+from sonoran.coverage.render import tile_latitudes, tile_longitudes, tiles_for_grid
+from sonoran.db.models import PacketSeen, PositionMetrics
+from sonoran.logging import get_logger
+from sonoran.positions import is_precise_enough, precise_minimum_bits
+
+logger = get_logger(__name__)
+
+MIN_ALPHA = 40
+MAX_ALPHA = 210
+MAX_PACKETS_OPACITY = 100.0
+
+# The heatmap uses a coarser grid than the terrain (CELLS_PER_DEGREE,
+# about 90 m). On the terrain grid the default region of 8 by 8 degrees
+# is 92 million cells, and the blur needed about 6 GB. The review of
+# PR 344 measured 0.47 GB at 2 degrees, 1.8 GB at 4 and 3.5 GB at 6.
+# 240 cells per degree is about 460 m. That is finer than the smallest
+# blob (the injected block is about 2.8 km across), and the grid has 25
+# times fewer cells. The radii below keep their size in metres.
+HEATMAP_CELLS_PER_DEGREE = 240
+_SCALE = CELLS_PER_DEGREE // HEATMAP_CELLS_PER_DEGREE
+INJECT_RADIUS_CELLS = 15 // _SCALE
+BLUR_RADIUS_CELLS = 15 // _SCALE
+POOL_RADIUS_CELLS = 177 // _SCALE
+
+
+def precision_deviation_m(precision_bits: int) -> float:
+    """Calculate the rough deviation in meters for a given geohash precision."""
+    if precision_bits >= 32:
+        return 0.0
+    return (180.0 / (2**precision_bits)) * 111320.0
+
+
+def _ramp_colour(fraction: npt.NDArray[np.float32]) -> npt.NDArray[np.uint8]:
+    """Map a fraction 0.0-1.0 to the coverage color ramp."""
+    RAMP = np.array(
+        [[255, 45, 85], [255, 122, 0], [255, 230, 0], [0, 217, 139], [0, 168, 255]], dtype=np.uint8
+    )
+
+    stops = len(RAMP) - 1
+    scaled = fraction * stops
+    index = np.clip(np.floor(scaled).astype(int), 0, stops - 1)
+    remainder = (scaled - index)[..., np.newaxis]
+
+    c1 = RAMP[index]
+    c2 = RAMP[index + 1]
+
+    blended = c1 * (1.0 - remainder) + c2 * remainder
+    return blended.astype(np.uint8)
+
+
+def write_png(image: npt.NDArray[np.uint8]) -> bytes:
+    """Write an RGBA array to a PNG stream."""
+    height, width, _ = image.shape
+
+    ihdr = b"IHDR" + struct.pack("!IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    ihdr_crc = struct.pack("!I", zlib.crc32(ihdr) & 0xFFFFFFFF)
+
+    raw = np.empty((height, width * 4 + 1), dtype=np.uint8)
+    raw[:, 0] = 0
+    raw[:, 1:] = image.reshape(height, width * 4)
+
+    idat = b"IDAT" + zlib.compress(raw.tobytes(), level=1)
+    idat_crc = struct.pack("!I", zlib.crc32(idat) & 0xFFFFFFFF)
+
+    iend = b"IEND"
+    iend_crc = struct.pack("!I", zlib.crc32(iend) & 0xFFFFFFFF)
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack("!I", len(ihdr) - 4)
+        + ihdr
+        + ihdr_crc
+        + struct.pack("!I", len(idat) - 4)
+        + idat
+        + idat_crc
+        + b"\x00\x00\x00\x00"
+        + iend
+        + iend_crc
+    )
+
+
+Row = tuple[int, float, float, int | None, int, int, int | None, int | None]
+
+
+def _score_packets(rows: list[Row], minimum_bits: int) -> list[tuple[float, float, float]]:
+    """Score each heard position by the gateways that heard it."""
+    # One packet is (node, packet ID). Packet IDs of different nodes can
+    # be equal (AGENTS.md 9.1).
+    packets: dict[tuple[int, int], tuple[float, float, dict[int, int]]] = {}
+    for node, lat, lon, prec, pkt_id, gw_num, hop_start, hop_limit in rows:
+        if hop_start is None or hop_limit is None:
+            continue
+        # The coverage map's precise rule (#315, docs/DECISIONS.md): a
+        # rounded position is the centre of its cell, not where the radio is.
+        if not is_precise_enough(prec, minimum_bits):
+            continue
+
+        key = (node, pkt_id)
+        if key not in packets:
+            packets[key] = (lat, lon, {})
+
+        hops_used = hop_start - hop_limit
+        gateways = packets[key][2]
+
+        if gw_num not in gateways or hops_used < gateways[gw_num]:
+            gateways[gw_num] = hops_used
+
+    final_data = []
+
+    for lat, lon, gateways in packets.values():
+        if not gateways:
+            continue
+
+        score = 0.0
+        for hops in gateways.values():
+            if hops <= 0:
+                score += 10.0
+            elif hops <= 2:
+                score += 5.0
+            elif hops <= 4:
+                score += 2.0
+            else:
+                score += 1.0
+
+        final_data.append((lat, lon, float(score)))
+
+    return final_data
+
+
+async def _fetch_position_metrics(
+    session: Any, settings: Settings
+) -> list[tuple[float, float, float]]:
+    """Fetch position metrics and calculate the position score for each packet."""
+    since = datetime.now(UTC) - timedelta(days=30)
+
+    query = (
+        select(
+            PositionMetrics.node_num,
+            PositionMetrics.latitude,
+            PositionMetrics.longitude,
+            PositionMetrics.precision_bits,
+            PositionMetrics.packet_id,
+            PacketSeen.gateway_node_num,
+            PacketSeen.hop_start,
+            PacketSeen.hop_limit,
+        )
+        .join(
+            PacketSeen,
+            (PositionMetrics.packet_id == PacketSeen.packet_id)
+            & (PositionMetrics.node_num == PacketSeen.from_node_num),
+        )
+        .where(PositionMetrics.time >= since)
+        # The same window on the observations, so TimescaleDB reads only
+        # the chunks it needs.
+        .where(PacketSeen.seen_at >= since)
+        .where(PositionMetrics.latitude.is_not(None))
+        .where(PositionMetrics.longitude.is_not(None))
+        .where(
+            (PositionMetrics.location_source != "LOC_MANUAL")
+            | PositionMetrics.location_source.is_(None)
+        )
+    )
+
+    result = await session.execute(query)
+    return _score_packets(list(result), precise_minimum_bits(settings.coverage_min_precision_bits))
+
+
+def box_blur(grid: npt.NDArray[np.float32], radius: int) -> npt.NDArray[np.float32]:
+    """Fast 2D box blur using integral images (O(N) independent of radius)."""
+    if radius <= 0:
+        return grid
+
+    # Y-axis blur
+    padded_y = np.pad(grid, ((radius, radius), (0, 0)), mode="edge")
+    integral_y = np.cumsum(padded_y, axis=0)
+    integral_y = np.vstack([np.zeros((1, grid.shape[1]), dtype=integral_y.dtype), integral_y])
+
+    W = 2 * radius + 1
+    out_y = (integral_y[W:] - integral_y[:-W]) / W
+
+    # X-axis blur
+    padded_x = np.pad(out_y, ((0, 0), (radius, radius)), mode="edge")
+    integral_x = np.cumsum(padded_x, axis=1)
+    integral_x = np.hstack([np.zeros((out_y.shape[0], 1), dtype=integral_x.dtype), integral_x])
+
+    out_xy = ((integral_x[:, W:] - integral_x[:, :-W]) / W).astype(np.float32)
+
+    return out_xy
+
+
+def blur_grid(
+    grid: npt.NDArray[np.float32], radius: int = BLUR_RADIUS_CELLS, iterations: int = 3
+) -> npt.NDArray[np.float32]:
+    """Apply multiple passes of a box blur to approximate a Gaussian blur."""
+    out = grid
+    for _ in range(iterations):
+        out = box_blur(out, radius)
+    return out
+
+
+def local_max_pool(
+    grid: npt.NDArray[np.float32], radius_cells: int = POOL_RADIUS_CELLS
+) -> npt.NDArray[np.float32]:
+    """Find the local maximum over a given radius using block downsampling."""
+    block_size = max(1, (radius_cells * 2) // 10)
+
+    h, w = grid.shape
+    pad_h = (block_size - (h % block_size)) % block_size
+    pad_w = (block_size - (w % block_size)) % block_size
+
+    padded = np.pad(grid, ((0, pad_h), (0, pad_w)), mode="constant", constant_values=0)
+    ph, pw = padded.shape
+
+    coarse = padded.reshape(ph // block_size, block_size, pw // block_size, block_size).max(
+        axis=(1, 3)
+    )
+
+    window = 10
+    offset = window // 2
+    coarse_padded = np.pad(coarse, offset, mode="edge")
+    coarse_max = np.zeros_like(coarse)
+
+    for i in range(window):
+        for j in range(window):
+            coarse_max = np.maximum(
+                coarse_max, coarse_padded[i : i + coarse.shape[0], j : j + coarse.shape[1]]
+            )
+
+    upsampled = np.repeat(np.repeat(coarse_max, block_size, axis=0), block_size, axis=1)[:h, :w]
+
+    # Smooth the step-function block edges so colors transition cleanly
+    smoothed = box_blur(upsampled, radius=block_size)
+    smoothed = box_blur(smoothed, radius=block_size)
+
+    return np.maximum(smoothed, 1.0)
+
+
+def _build_grids(
+    settings: Settings, data: list[tuple[float, float, float]]
+) -> tuple[Grid, dict[str, npt.NDArray[np.float32]], npt.NDArray[np.float32]]:
+    """Build the region grids and return normalized grids for each model."""
+    grid = region_grid(
+        settings.terrain_lat_min,
+        settings.terrain_lat_max,
+        settings.terrain_lon_min,
+        settings.terrain_lon_max,
+        cells_per_degree=HEATMAP_CELLS_PER_DEGREE,
+    )
+
+    models = ["position"]
+    score_grids = {m: np.zeros((grid.height, grid.width), dtype=np.float32) for m in models}
+    count_grid = np.zeros((grid.height, grid.width), dtype=np.float32)
+
+    for lat, lon, score in data:
+        row = grid.row_of(lat)
+        col = grid.column_of(lon)
+
+        if row < 0 or row >= grid.height or col < 0 or col >= grid.width:
+            continue
+
+        radius_cells = INJECT_RADIUS_CELLS
+
+        r_start = max(0, row - radius_cells)
+        r_end = min(grid.height, row + radius_cells + 1)
+        c_start = max(0, col - radius_cells)
+        c_end = min(grid.width, col + radius_cells + 1)
+
+        for g_name in models:
+            block = score_grids[g_name][r_start:r_end, c_start:c_end]
+            np.maximum(block, score, out=block)
+
+        block_count = count_grid[r_start:r_end, c_start:c_end]
+        block_count += 1.0
+
+    # Clip count_grid so chatty nodes don't bleed massive opacity through the blur
+    np.clip(count_grid, 0.0, 100.0, out=count_grid)
+
+    relative_grids = {}
+    for g_name in models:
+        raw_s = score_grids[g_name]
+        # Weight the score by the count mass so they spread identically
+        weighted_s = raw_s * count_grid
+        score_grids[g_name] = blur_grid(weighted_s)
+
+    count_grid = blur_grid(count_grid)
+
+    for g_name in models:
+        blurred_s = score_grids[g_name]
+
+        # Normalize by the exact same grid that controls opacity.
+        # This prevents color dropoff (blue halos) where the opacity
+        # outlasts a weaker binary mask.
+        s_grid = np.divide(
+            blurred_s, count_grid, out=np.zeros_like(blurred_s), where=count_grid > 0.001
+        )
+
+        local_potential = local_max_pool(s_grid)
+        relative = np.divide(
+            s_grid, local_potential, out=np.zeros_like(s_grid), where=local_potential > 0.001
+        )
+        relative_grids[g_name] = np.clip(relative, 0.0, 1.0)
+
+    return grid, relative_grids, count_grid
+
+
+def sample_heatmap_tile(
+    rel_grid: npt.NDArray[np.float32], count_grid: npt.NDArray[np.float32], grid: Grid, tile
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    """Sample the grids for a specific web mercator tile."""
+    latitudes = tile_latitudes(tile)
+    longitudes = tile_longitudes(tile)
+
+    rows = np.floor((grid.north - latitudes) * grid.cells_per_degree).astype(np.int64)
+    columns = np.floor((longitudes - grid.west) * grid.cells_per_degree).astype(np.int64)
+
+    inside_rows = (rows >= 0) & (rows < grid.height)
+    inside_columns = (columns >= 0) & (columns < grid.width)
+
+    safe_rows = np.clip(rows, 0, grid.height - 1)
+    safe_columns = np.clip(columns, 0, grid.width - 1)
+
+    patch_rel = rel_grid[safe_rows[:, None], safe_columns[None, :]]
+    patch_count = count_grid[safe_rows[:, None], safe_columns[None, :]]
+    inside = inside_rows[:, None] & inside_columns[None, :]
+
+    return (
+        np.where(inside, patch_rel, 0.0).astype(np.float32),
+        np.where(inside, patch_count, 0.0).astype(np.float32),
+    )
+
+
+def _render_tile(
+    rel_score: npt.NDArray[np.float32], count: npt.NDArray[np.float32]
+) -> npt.NDArray[np.uint8]:
+    """Render a patch of relative score and count into an RGBA tile."""
+    height, width = rel_score.shape
+    image = np.zeros((height, width, 4), dtype=np.uint8)
+
+    active = count > 0.01
+    if not active.any():
+        return image
+
+    image[..., :3] = _ramp_colour(rel_score)
+
+    alpha_high = MIN_ALPHA + np.clip(
+        (count - 1.0) / max(1.0, MAX_PACKETS_OPACITY - 1.0), 0.0, 1.0
+    ) * (MAX_ALPHA - MIN_ALPHA)
+    alpha_low = count * MIN_ALPHA
+    alpha = np.where(count >= 1.0, alpha_high, alpha_low)
+
+    image[..., 3] = np.where(active, alpha.astype(np.uint8), 0)
+    return image
+
+
+async def run_once(session: Any, settings: Settings) -> None:
+    """Entry point for the scheduled job."""
+    start = datetime.now(UTC)
+
+    data = await _fetch_position_metrics(session, settings)
+    if not data:
+        logger.info("activity heatmap: no data found in the last 30 days")
+        return
+
+    grid, relative_grids, count_grid = _build_grids(settings, data)
+
+    cache_dir = Path(settings.coverage_cache_dir)
+    preset = "all"
+    site_set = "all"
+    written = 0
+
+    for layer in relative_grids.keys():
+        layer_dir = cache_dir / preset / site_set / f"empirical_heatmap_{layer}"
+        if layer_dir.exists():
+            shutil.rmtree(layer_dir, ignore_errors=True)
+
+    for layer, rel_grid in relative_grids.items():
+        layer_name = f"empirical_heatmap_{layer}"
+        for zoom in range(settings.coverage_min_zoom, settings.coverage_max_zoom + 1):
+            for tile in tiles_for_grid(grid, zoom):
+                patch_rel, patch_count = sample_heatmap_tile(rel_grid, count_grid, grid, tile)
+                image = _render_tile(patch_rel, patch_count)
+                if not image[..., 3].any():
+                    continue
+                store.write_tile(
+                    cache_dir,
+                    preset,
+                    site_set,
+                    layer_name,
+                    tile.zoom,
+                    tile.x,
+                    tile.y,
+                    write_png(image),
+                )
+                written += 1
+
+    took = (datetime.now(UTC) - start).total_seconds()
+    logger.info("activity heatmap: wrote %s tiles for position model in %.1fs", written, took)
+
+
+def run() -> None:
+    """Console script entry point for running once manually."""
+    import asyncio
+
+    from sonoran.config import get_settings
+    from sonoran.db.session import make_engine, make_session_factory
+    from sonoran.logging import configure_logging
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+
+    async def main() -> None:
+        try:
+            async with factory() as session:
+                await run_once(session, settings)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(main())

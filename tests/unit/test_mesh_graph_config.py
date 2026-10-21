@@ -22,7 +22,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "docker-compose.yml"
-CONFIG = ROOT / "mesh-graph.config.toml"
+CONFIG = ROOT / "config" / "mesh-graph.config.toml"
+# Where the compose file mounts it inside the container.
+INPUT = "/config/mesh-graph.config.toml"
 OUTPUT = "/tmp/config.toml"
 LOGIN = {
     "MQTT_HOST": "broker.example",
@@ -43,7 +45,7 @@ def _awk_command() -> str:
     script = command[0].replace("$$", "$")
     awk, separator, _ = script.partition(" && mesh-graph ")
     assert separator, "the command no longer starts mesh-graph after the awk step"
-    assert f"/config.toml > {OUTPUT}" in awk
+    assert f"{INPUT} > {OUTPUT}" in awk
     return awk
 
 
@@ -52,7 +54,7 @@ def _write_config(tmp_path: Path, **environment: str) -> str:
     source.write_text(CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
     target = tmp_path / "out.toml"
     awk = _awk_command().replace(f"> {OUTPUT}", f"> '{target}'")
-    awk = awk.replace("/config.toml", f"'{source}'", 1)
+    awk = awk.replace(INPUT, f"'{source}'", 1)
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **LOGIN, **environment}
     subprocess.run(["sh", "-c", awk], env=env, check=True, timeout=30)
     return target.read_text(encoding="utf-8")

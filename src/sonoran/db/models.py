@@ -446,6 +446,7 @@ class PositionMetrics(Base):
     ground_track: Mapped[int | None] = mapped_column(Integer)
     precision_bits: Mapped[int | None] = mapped_column(Integer)
     sats_in_view: Mapped[int | None] = mapped_column(Integer)
+    location_source: Mapped[str | None] = mapped_column(Text)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (

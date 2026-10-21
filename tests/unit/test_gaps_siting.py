@@ -605,6 +605,7 @@ def test_the_siting_half_is_never_registered_as_a_peer_task() -> None:
     # stand beside coverage (read-models steps aside on its own, #371).
     assert [task.name for task in tasks] == [
         "snapshot",
+        "activity_heatmap",
         "coverage",
         "gaps",
         "rf-rollup",
