@@ -494,6 +494,9 @@
                 summary again to close it. The menu is a popover now: it
                 opens over the map, takes no room in the row, and closes
                 on Escape, on a tap outside, on Done, or on the button.
+                Done wears the `.toggle` look and carries `data-no-refresh`,
+                so the shared toggle handler neither marks it pressed nor
+                fetches the map again: it only closes the menu.
               -->
               <div class="family-filter" data-family-filter>
                 <button type="button" class="family-toggle" data-family-toggle
@@ -502,7 +505,7 @@
                   <div class="family-chips" data-family-chips role="group" aria-label="Packet Types to draw"></div>
                   <div class="family-menu-foot">
                     <button type="button" class="linky" data-family-all>Show all</button>
-                    <button type="button" class="toggle" data-family-done>Done</button>
+                    <button type="button" class="toggle" data-family-done data-no-refresh>Done</button>
                   </div>
                 </div>
               </div>

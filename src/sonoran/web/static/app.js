@@ -2509,7 +2509,9 @@ function familyFilterChanged() {
   keepHiddenFamilies();
   paintFamilyFilter();
   if (mapState.live) mapState.live.setFamilyFilter(hiddenFamilies);
-  if (currentPage === 'map') render('map');
+  // Through `navigateRender`: a second tick while the first redraw is
+  // still loading runs after it, rather than being dropped by `render`.
+  if (currentPage === 'map') navigateRender('map');
 }
 
 /**

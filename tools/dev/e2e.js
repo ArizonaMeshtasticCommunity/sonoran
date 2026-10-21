@@ -590,6 +590,13 @@ async function familyMenuWalk(page, { watch }) {
     await page.locator('[aria-label="Watch mode"]').first().click();
     await page.waitForTimeout(1500);
   }
+  // Live off, so no timer refresh can land inside a measurement below.
+  await page.locator('[data-page="map"] [data-live]').click();
+  must(await waitFor(page, () => !loading, 20000, 100), 'the map did not settle after Live went off');
+  let mapRequests = 0;
+  page.on('request', (request) => {
+    if (/\/api\/map\//.test(request.url())) mapRequests += 1;
+  });
   const before = await layout();
   await toggle.click();
   await page.waitForTimeout(300);
@@ -644,9 +651,17 @@ async function familyMenuWalk(page, { watch }) {
   const reset = await menuState();
   must(reset.summary === 'Packet Types: all' && reset.boxes.every((box) => box.checked),
     'Show all did not show every kind');
+  must(await waitFor(page, () => !loading, 20000, 100), 'the map did not settle after Show all');
+  const requestsBeforeDone = mapRequests;
   await page.locator('[data-family-done]').click();
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(1000);
   const done = await menuState();
+  // Done only closes the menu. The shared `.toggle` handler would mark it
+  // pressed and fetch the whole map again.
+  must(!(await page.locator('[data-family-done]').evaluate((button) => button.hasAttribute('aria-pressed'))),
+    'Done carries aria-pressed, so it reads as a toggle');
+  must(mapRequests === requestsBeforeDone,
+    `Done asked the API for the map again (${mapRequests - requestsBeforeDone} requests)`);
   must(!done.open, 'Done did not close the menu');
   must(await page.evaluate(() => document.activeElement
     && document.activeElement.matches('[data-family-toggle]')), 'Done did not give focus back to the button');
@@ -2769,6 +2784,65 @@ async function main() {
 
   await journey(context, 'the packet type menu opens over the map, not into the head (#385)',
     (page) => familyMenuWalk(page, { watch: false }));
+  await journey(context, 'the packet type menu works from the keyboard alone (#385)', async (page) => {
+    /*
+     * Open, tick two kinds quickly, and close, with keys only. Each tick
+     * redraws the map, and the second tick lands while the first redraw
+     * may still be loading. `render` returns at once while another runs,
+     * so a tick must ask through `navigateRender`, which runs the redraw
+     * after the one in flight rather than dropping it. The list is then
+     * checked against the last choice, with Live off so only the ticks
+     * can redraw it.
+     */
+    await page.route(/\/api\/map\/traffic(\?|$)/, async (route) => {
+      // Slow enough that the second tick lands inside the first redraw.
+      await new Promise((done) => setTimeout(done, 700));
+      return route.continue();
+    });
+    await open(page, 'map', 4000);
+    await page.locator('[data-page="map"] [data-live]').click();
+    must(await waitFor(page, () => !loading, 20000, 100), 'the map did not settle after Live went off');
+    await page.locator('[data-family-toggle]').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    must(await page.evaluate(() => document.querySelector('[data-family-menu]').getBoundingClientRect().width > 0),
+      'Enter on the button did not open the menu');
+    await page.keyboard.press('Tab');
+    must(await page.evaluate(() => document.activeElement.matches('input[data-family="POSITION_APP"]')),
+      'Tab from the button did not reach the first checkbox');
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Space');
+    const settled = await waitFor(page, () => !loading && !pendingRender, 20000, 100);
+    must(settled, 'the map did not settle after the ticks');
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => ({
+      hidden: [...hiddenFamilies].sort().join(),
+      summary: document.querySelector('[data-family-summary]').textContent.trim(),
+      listed: (mapState.lastPackets || []).map((packet) => SonoranLive.familyKey(packet.portnum)),
+      line: document.querySelector('[data-traffic-summary]').textContent,
+    }));
+    must(got.hidden === 'POSITION_APP,TELEMETRY_APP', `the keys hid ${got.hidden}`);
+    must(got.summary === 'Packet Types: 5 of 7', `the button says "${got.summary}"`);
+    must(!got.listed.some((key) => key === 'POSITION_APP' || key === 'TELEMETRY_APP'),
+      `the list still holds a hidden kind: ${[...new Set(got.listed)].join(', ')}`);
+    must(/of the chosen types/.test(got.line), `the traffic line does not say it is filtered: "${got.line}"`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    must(await page.evaluate(() => document.querySelector('[data-family-menu]').getBoundingClientRect().width === 0),
+      'Escape did not close the menu');
+    // Put the choice back the same way, for the journeys after this one.
+    await page.locator('[data-family-toggle]').focus();
+    await page.keyboard.press('Enter');
+    for (let step = 0; step < 10; step += 1) {
+      if (await page.evaluate(() => document.activeElement.matches('[data-family-all]'))) break;
+      await page.keyboard.press('Tab');
+    }
+    await page.keyboard.press('Enter');
+    must(await waitFor(page, () => hiddenFamilies.size === 0, 5000, 100), 'Show all from the keyboard did not reset');
+    return `Enter opens, Tab reaches the boxes, two ticks hide ${got.hidden}, Escape closes, Show all resets`;
+  });
   await journey(context, 'the packet type menu works in watch mode (#385)',
     (page) => familyMenuWalk(page, { watch: true }));
   /*

@@ -89,3 +89,20 @@ def test_the_menu_fits_the_narrowest_screen() -> None:
     assert "width: min(16rem, calc(100vw - 1rem));" in rule.group(1)
     place = _function(_read("app.js"), "placeMenu")
     assert "wide - panel.offsetWidth - gutter" in place
+
+
+def test_done_only_closes_the_menu() -> None:
+    """Done wears the `.toggle` look. Without `data-no-refresh` the shared
+    toggle handler marks it pressed and fetches the whole map again."""
+    controls = _map_controls()
+    done = controls[controls.index("data-family-done") - 60 :]
+    done = done[: done.index(">Done</button>")]
+    assert "data-no-refresh" in done
+
+
+def test_a_tick_during_a_redraw_is_not_dropped() -> None:
+    """`render` returns at once while another render is loading.
+    `navigateRender` runs the redraw after the one in flight."""
+    body = _function(_read("app.js"), "familyFilterChanged")
+    assert "navigateRender('map')" in body
+    assert "render('map')" not in body.replace("navigateRender('map')", "")
