@@ -24,6 +24,10 @@ If you work with an AI coding agent, also read
   3A.2.
 - **Check the project board.** An issue on the Roadmap board is not
   started until its status is `Ready`. See `AGENTS.md` 9.28.
+- **Write for a Meshtastic newcomer.** A change to what a reader sees
+  uses plain labels, puts a glossary tooltip on each technical word, and
+  keeps advanced options behind "Advanced". See `AGENTS.md` 3B and
+  [`docs/NEWCOMER.md`](docs/NEWCOMER.md).
 
 ## 2. Set up
 
@@ -117,6 +121,8 @@ Fill in every section of the template
 - **Summary**: what changed and why.
 - **Basis**: the source of each new number, or "No new numbers".
 - **Red evidence**: the new tests and their failing output on `main`.
+- **Newcomer check**: for a change a reader sees, the five checks and a
+  screenshot at phone width (`docs/NEWCOMER.md` §5).
 - **Release notes**: one to three lines for the people who use the site.
 - **Issues**: the issues this pull request completes or works towards.
 - **Thanks**: the @handles of the people who reported, tested or
