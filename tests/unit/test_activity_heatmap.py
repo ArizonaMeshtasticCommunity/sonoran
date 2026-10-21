@@ -1,5 +1,6 @@
 """Unit tests for the empirical activity heatmap."""
 
+import asyncio
 from pathlib import Path
 
 import numpy as np
@@ -7,7 +8,13 @@ from fastapi.testclient import TestClient
 
 from sonoran.api.app import create_app
 from sonoran.config import Settings
-from sonoran.jobs.activity_heatmap import _build_grids, _render_tile, box_blur
+from sonoran.jobs.activity_heatmap import (
+    _build_grids,
+    _render_tile,
+    _score_packets,
+    box_blur,
+    run_once,
+)
 
 
 def test_box_blur_spreads_mass() -> None:
@@ -30,8 +37,8 @@ def test_build_grids_normalizes_within_unit_interval() -> None:
         terrain_lon_max=-111.0,
     )
     data = [
-        (33.5, -111.5, 32, 10.0),
-        (33.6, -111.4, 32, 5.0),
+        (33.5, -111.5, 10.0),
+        (33.6, -111.4, 5.0),
     ]
     grid, relative_grids, count_grid = _build_grids(settings, data)
     assert "position" in relative_grids
@@ -76,3 +83,72 @@ def test_heatmap_tile_endpoint_routing(tmp_path: Path) -> None:
     res_ok = client.get("/api/map/heatmap/position/10/100/100.png")
     assert res_ok.status_code == 200
     assert res_ok.content == fake_png
+
+
+# --- review fixes: identity, precision, memory, and the served path ----
+
+
+def _row(node: int, packet: int, gateway: int, hops: int, precision: int | None = None) -> tuple:
+    """One joined row: a position and one gateway's observation of it."""
+    return (node, 33.5, -111.5, precision, packet, gateway, 3, 3 - hops)
+
+
+def test_two_nodes_with_the_same_packet_id_are_two_points() -> None:
+    """A packet is (node, packet ID), never the packet ID alone (AGENTS.md 9.1)."""
+    rows = [_row(1, 42, gateway=9, hops=0), _row(2, 42, gateway=9, hops=0)]
+    assert len(_score_packets(rows, minimum_bits=16)) == 2
+
+
+def test_a_rounded_position_is_left_out() -> None:
+    """The heatmap follows the coverage map's precise rule (#315).
+
+    A position rounded to 13 bits sits at the centre of a cell about
+    2.4 km across. A blob there shows activity where there may be no radio.
+    """
+    rows = [
+        _row(1, 1, gateway=9, hops=0, precision=13),
+        _row(2, 2, gateway=9, hops=0, precision=16),
+        _row(3, 3, gateway=9, hops=0, precision=None),
+    ]
+    assert len(_score_packets(rows, minimum_bits=16)) == 2
+    assert len(_score_packets(rows, minimum_bits=0)) == 3
+
+
+def test_each_gateway_counts_once_at_its_fewest_hops() -> None:
+    rows = [
+        _row(1, 7, gateway=9, hops=3),
+        _row(1, 7, gateway=9, hops=0),
+        _row(1, 7, gateway=8, hops=3),
+    ]
+    [(_lat, _lon, score)] = _score_packets(rows, minimum_bits=16)
+    assert score == 10.0 + 2.0
+
+
+class _Rows:
+    def __init__(self, rows: list[tuple]) -> None:
+        self.rows = rows
+
+    async def execute(self, _query: object) -> list[tuple]:
+        return self.rows
+
+
+def test_the_job_writes_the_tiles_the_route_serves(tmp_path: Path) -> None:
+    """Would be caught: a job and a route that disagree on the path."""
+    settings = Settings(
+        _env_file=None,
+        coverage_cache_dir=str(tmp_path),
+        terrain_lat_min=33,
+        terrain_lat_max=33,
+        terrain_lon_min=-112,
+        terrain_lon_max=-112,
+        coverage_min_zoom=8,
+        coverage_max_zoom=8,
+    )
+    asyncio.run(run_once(_Rows([_row(1, 1, gateway=9, hops=0)]), settings))
+    written = sorted(tmp_path.rglob("*.png"))
+    assert written, "the job wrote no tile"
+    z, x, y = written[0].parts[-3], written[0].parts[-2], written[0].stem
+    client = TestClient(create_app(settings))
+    response = client.get(f"/api/map/heatmap/position/{z}/{x}/{y}.png")
+    assert response.status_code == 200
+    assert response.content == written[0].read_bytes()

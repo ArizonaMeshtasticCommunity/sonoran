@@ -15,6 +15,7 @@ from sonoran.coverage.grid import Grid, region_grid
 from sonoran.coverage.render import tile_latitudes, tile_longitudes, tiles_for_grid
 from sonoran.db.models import PacketSeen, PositionMetrics
 from sonoran.logging import get_logger
+from sonoran.positions import is_precise_enough, precise_minimum_bits
 
 logger = get_logger(__name__)
 
@@ -79,53 +80,35 @@ def write_png(image: npt.NDArray[np.uint8]) -> bytes:
     )
 
 
-async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int, float]]:
-    """Fetch position metrics and calculate the position score for each packet."""
-    since = datetime.now(UTC) - timedelta(days=30)
+Row = tuple[int, float, float, int | None, int, int, int | None, int | None]
 
-    query = (
-        select(
-            PositionMetrics.latitude,
-            PositionMetrics.longitude,
-            PositionMetrics.precision_bits,
-            PositionMetrics.packet_id,
-            PacketSeen.gateway_node_num,
-            PacketSeen.hop_start,
-            PacketSeen.hop_limit,
-        )
-        .join(
-            PacketSeen,
-            (PositionMetrics.packet_id == PacketSeen.packet_id)
-            & (PositionMetrics.node_num == PacketSeen.from_node_num),
-        )
-        .where(PositionMetrics.time >= since)
-        .where(PositionMetrics.latitude.is_not(None))
-        .where(PositionMetrics.longitude.is_not(None))
-        .where(
-            (PositionMetrics.location_source != "LOC_MANUAL")
-            | PositionMetrics.location_source.is_(None)
-        )
-    )
 
-    result = await session.execute(query)
-
-    packets: dict[int, tuple[float, float, int, int, dict[int, int]]] = {}
-    for lat, lon, prec, pkt_id, gw_num, hop_start, hop_limit in result:
+def _score_packets(rows: list[Row], minimum_bits: int) -> list[tuple[float, float, float]]:
+    """Score each heard position by the gateways that heard it."""
+    # One packet is (node, packet ID). Packet IDs of different nodes can
+    # be equal (AGENTS.md 9.1).
+    packets: dict[tuple[int, int], tuple[float, float, dict[int, int]]] = {}
+    for node, lat, lon, prec, pkt_id, gw_num, hop_start, hop_limit in rows:
         if hop_start is None or hop_limit is None:
             continue
+        # The coverage map's precise rule (#315, docs/DECISIONS.md): a
+        # rounded position is the centre of its cell, not where the radio is.
+        if not is_precise_enough(prec, minimum_bits):
+            continue
 
-        if pkt_id not in packets:
-            packets[pkt_id] = (lat, lon, prec, hop_start, {})
+        key = (node, pkt_id)
+        if key not in packets:
+            packets[key] = (lat, lon, {})
 
         hops_used = hop_start - hop_limit
-        gateways = packets[pkt_id][4]
+        gateways = packets[key][2]
 
         if gw_num not in gateways or hops_used < gateways[gw_num]:
             gateways[gw_num] = hops_used
 
     final_data = []
 
-    for _, (lat, lon, prec, _hop_start, gateways) in packets.items():
+    for lat, lon, gateways in packets.values():
         if not gateways:
             continue
 
@@ -140,9 +123,47 @@ async def _fetch_position_metrics(session: Any) -> list[tuple[float, float, int,
             else:
                 score += 1.0
 
-        final_data.append((lat, lon, prec, float(score)))
+        final_data.append((lat, lon, float(score)))
 
     return final_data
+
+
+async def _fetch_position_metrics(
+    session: Any, settings: Settings
+) -> list[tuple[float, float, float]]:
+    """Fetch position metrics and calculate the position score for each packet."""
+    since = datetime.now(UTC) - timedelta(days=30)
+
+    query = (
+        select(
+            PositionMetrics.node_num,
+            PositionMetrics.latitude,
+            PositionMetrics.longitude,
+            PositionMetrics.precision_bits,
+            PositionMetrics.packet_id,
+            PacketSeen.gateway_node_num,
+            PacketSeen.hop_start,
+            PacketSeen.hop_limit,
+        )
+        .join(
+            PacketSeen,
+            (PositionMetrics.packet_id == PacketSeen.packet_id)
+            & (PositionMetrics.node_num == PacketSeen.from_node_num),
+        )
+        .where(PositionMetrics.time >= since)
+        # The same window on the observations, so TimescaleDB reads only
+        # the chunks it needs.
+        .where(PacketSeen.seen_at >= since)
+        .where(PositionMetrics.latitude.is_not(None))
+        .where(PositionMetrics.longitude.is_not(None))
+        .where(
+            (PositionMetrics.location_source != "LOC_MANUAL")
+            | PositionMetrics.location_source.is_(None)
+        )
+    )
+
+    result = await session.execute(query)
+    return _score_packets(list(result), precise_minimum_bits(settings.coverage_min_precision_bits))
 
 
 def box_blur(grid: npt.NDArray[np.float32], radius: int) -> npt.NDArray[np.float32]:
@@ -216,7 +237,7 @@ def local_max_pool(
 
 
 def _build_grids(
-    settings: Settings, data: list[tuple[float, float, int, float]]
+    settings: Settings, data: list[tuple[float, float, float]]
 ) -> tuple[Grid, dict[str, npt.NDArray[np.float32]], npt.NDArray[np.float32]]:
     """Build the region grids and return normalized grids for each model."""
     grid = region_grid(
@@ -230,7 +251,7 @@ def _build_grids(
     score_grids = {m: np.zeros((grid.height, grid.width), dtype=np.float32) for m in models}
     count_grid = np.zeros((grid.height, grid.width), dtype=np.float32)
 
-    for lat, lon, _prec, score in data:
+    for lat, lon, score in data:
         row = grid.row_of(lat)
         col = grid.column_of(lon)
 
@@ -335,7 +356,7 @@ async def run_once(session: Any, settings: Settings) -> None:
     """Entry point for the scheduled job."""
     start = datetime.now(UTC)
 
-    data = await _fetch_position_metrics(session)
+    data = await _fetch_position_metrics(session, settings)
     if not data:
         logger.info("activity heatmap: no data found in the last 30 days")
         return
