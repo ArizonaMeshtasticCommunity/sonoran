@@ -1004,8 +1004,8 @@
     if (state.layer === HEATMAP_LAYER) {
       sub.textContent = 'Where the mesh heard node positions in the last 30 days. '
         + 'A stronger colour means more packets. The colour compares each place with '
-        + 'the best place within about 16 km: blue is the best nearby. A direct hearing '
-        + 'by a gateway counts more than one over many hops.';
+        + `the best place within about ${SonoranUnits.distanceFromKm(16)}: blue is the best nearby. `
+        + 'A direct hearing by a gateway counts more than one over many hops.';
       return;
     }
     
