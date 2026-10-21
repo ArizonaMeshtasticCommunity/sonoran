@@ -3,6 +3,11 @@
 This document is the master plan for Sonoran, the azmsh.net Meshtastic dashboard.
 It uses ASD-STE100 Simplified Technical English.
 
+Written on 2026-08-02. The purpose, the decisions and the requirements
+still apply. Section 5 shows the first layout of the code and is now
+history: `docs/ARCHITECTURE.md` describes the current modules and
+services. Open work is in the GitHub issues and in `docs/ISSUES.md`.
+
 ## 1. Purpose
 
 The azmsh.net project runs two applications today:

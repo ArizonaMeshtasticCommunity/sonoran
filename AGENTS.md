@@ -1351,5 +1351,6 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new
   node would help, and what neither of those can say
-- `docs/REVIEW.md` — code review findings, and which are still open
+- `docs/archive/` — old session notes and reviews, kept for their
+  history only. Do not take current state from them
 - `docs/RELEASING.md` — how to publish a release, and what it costs in CI

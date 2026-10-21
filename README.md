@@ -246,7 +246,7 @@ The coverage planner reads terrain tiles. Fill the local cache once with
 | [docs/QA.md](docs/QA.md) | The QA process |
 | [docs/ISSUES.md](docs/ISSUES.md) | Open issues and what is wanted next |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | Research on the source tools and the protocol |
-| [docs/REVIEW.md](docs/REVIEW.md) | Code review findings and their state |
+| [docs/archive/](docs/archive/) | Old session notes and reviews, kept for their history |
 | [AGENTS.md](AGENTS.md) | The rules for people and agents who change the code |
 
 ## 📄 Licence
