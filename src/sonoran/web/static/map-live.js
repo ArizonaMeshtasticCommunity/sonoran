@@ -908,7 +908,14 @@ const SonoranLive = (() => {
       rung = RUNG_FULL;
       overSeconds = 0;
       underSeconds = 0;
-      paused = false;
+      /*
+       * The pause is kept. A preset change clears the engine, and watch
+       * mode can be paused at that moment with its status line saying so.
+       * Un-pausing here started the replay under a "paused" label, and
+       * the feed was no longer held with the map. The pause starts again
+       * from now, so a resume shifts nothing that came after the clear.
+       */
+      if (paused) pausedAt = performance.now();
       stats.lagMs = null;
       stats.arcsDropped = 0;
       stats.perSecond = 0;
@@ -1989,7 +1996,11 @@ const SonoranLive = (() => {
       /** Leaving the map page cancels the loop and empties the pool. */
       setPageActive(value) {
         pageActive = value;
-        if (!value) clear();
+        if (!value) {
+          // Leaving the page is not a pause. The next visit starts live.
+          paused = false;
+          clear();
+        }
       },
       /** Throw away a buffer that is no longer about now. */
       discardQueue() {

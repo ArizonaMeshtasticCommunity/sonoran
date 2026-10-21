@@ -164,6 +164,39 @@ function upload(id, offset, portnum = 'POSITION_APP') {
   live.clear();
 }
 
+/* --- Case 4: clearing a paused map keeps it paused ----------------- */
+/*
+ * A preset change clears the engine. Watch mode can be paused at that
+ * moment, and its status line still says so. A `clear()` that also
+ * un-paused would start the replay under a "paused" label, and the feed
+ * would no longer be held with the map.
+ */
+{
+  frames = [];
+  const released = [];
+  const live = SonoranLive.create(map, { onRelease: (packets) => released.push(...packets) });
+  live.setPaused(true);
+  live.clear();
+  ok('a clear keeps a paused map paused', live.isPaused() === true);
+  live.push(SonoranLive.aggregate([upload(31, 0), upload(32, 4000)]), 15000);
+  clock += 20000;
+  frame();
+  ok('a cleared paused map releases nothing', released.length === 0, `released ${released.length}`);
+  ok('a cleared paused map keeps its packets waiting', live.pendingKeys().size === 2,
+    `pending ${live.pendingKeys().size}`);
+  live.setPaused(false);
+  frame();
+  ok('resumed after a clear, the first packet is released', released.length === 1, `released ${released.length}`);
+  clock += 5000;
+  frame();
+  ok('resumed after a clear, the second follows in its time', released.length === 2, `released ${released.length}`);
+  // Leaving the map page is not a pause: the next visit starts live.
+  live.setPaused(true);
+  live.setPageActive(false);
+  ok('leaving the page lets go of the pause', live.isPaused() === false);
+  live.clear();
+}
+
 Date.now = realNow;
 if (failed) {
   console.error(`${failed} case(s) failed`);

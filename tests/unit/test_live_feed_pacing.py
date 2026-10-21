@@ -117,3 +117,17 @@ def test_a_feed_row_wears_its_family_and_says_it_in_words() -> None:
         # The same token the map reads for that family.
         assert f'[data-family="{key}"] {{ --pkt: var(--pkt-{token}); }}' in css
         assert f"token: 'pkt-{token}'" in MODULE.read_text(encoding="utf-8")
+
+
+def test_a_clear_that_lets_go_of_the_pause_would_be_caught() -> None:
+    """A preset change clears the engine while watch mode may be paused.
+
+    The old `clear()` set `paused = false`, so the replay ran on under a
+    "paused" label and the feed was no longer held with the map.
+    """
+    done = _broken(
+        "if (paused) pausedAt = performance.now();",
+        "paused = false;",
+    )
+    assert done.returncode != 0
+    assert "a clear keeps a paused map paused" in done.stderr
