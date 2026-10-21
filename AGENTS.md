@@ -3,6 +3,9 @@
 This file gives rules to AI coding agents that work on this project.
 Follow these rules at all times.
 
+To pick up work that someone else started, to leave a hand-off, or to
+record what you learned, read `docs/COLLABORATION.md` as well.
+
 ## 1. Project summary
 
 This project is Sonoran, the azmsh.net Meshtastic dashboard.
@@ -1357,3 +1360,5 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/archive/` — old session notes and reviews, kept for their
   history only. Do not take current state from them
 - `docs/RELEASING.md` — how to publish a release, and what it costs in CI
+- `docs/COLLABORATION.md` — how people and agents hand work to each other,
+  leave notes, record lessons, and avoid the known hand-off mistakes
