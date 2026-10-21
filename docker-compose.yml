@@ -78,7 +78,23 @@ x-no-contrib-mqtt: &no-contrib-mqtt
 
 services:
   timescaledb:
-    image: timescale/timescaledb-ha:pg17
+    # Pinned by digest, the image that CI tests.
+    #
+    # `pg17` is a moving tag. It changed 6 times in 14 days, and a pull
+    # takes whatever was pushed last, with no record of which build
+    # runs the database. The tag is kept so a reader can see what it
+    # tracks. The digest is what Docker pulls. It is the multi-arch index
+    # (amd64 and arm64), and it is the same digest as the CI database
+    # (.github/workflows/ci.yml, tests/integration/conftest.py) and
+    # tools/backup.Dockerfile. test_ci_database_image.py holds them to
+    # one value. Update all of them together, in their own commit.
+    #
+    # Before you deploy an older digest than the one a database has run,
+    # check the extension version. This image holds TimescaleDB 2.30.2
+    # and every older 2.x release, and it cannot load a newer one:
+    #
+    #   SELECT extversion FROM pg_extension WHERE extname = 'timescaledb';
+    image: timescale/timescaledb-ha:pg17@sha256:e77fc7a0395b63a89d27b8b5043abcc7e8120576429ea9a470977d4bed3d0261
     restart: unless-stopped
     logging: *logging
     networks:
@@ -360,7 +376,45 @@ services:
     # `broker` in config/mesh-graph.config.toml is replaced by MQTT_HOST, so
     # the host and port come from the environment like the ingest's do,
     # and are not a second copy of the broker address that can disagree.
-    command: ["awk -v host=\"$$MQTT_HOST\" -v port=\"$$MQTT_PORT\" -v user=\"$$MQTT_USERNAME\" -v pass=\"$$MQTT_PASSWORD\" '/^broker[[:space:]]*=/{print \"broker = \\\"\" host \"\\\"\"; next} {print} /^\\[mqtt\\]/{print \"port = \" port; print \"username = \\\"\" user \"\\\"\"; print \"password = \\\"\" pass \"\\\"\"}' /config/mesh-graph.config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both"]
+    #
+    # The values go into TOML basic strings, so `\` and `"` are escaped
+    # first. Without that, a password that holds `"` ends the string
+    # early, and the rest of the password is read as TOML. The values
+    # are read from ENVIRON and not with `awk -v`, because `-v` reads
+    # `\` as the start of an escape and changes the value before awk
+    # sees it. A port that is not a number stops the start, so that
+    # mesh-graph never runs on a file that was written wrong.
+    # tests/unit/test_mesh_graph_config.py runs this program.
+    command:
+      - |-
+        awk '
+          function esc(s,    out, c, i) {
+            out = ""
+            for (i = 1; i <= length(s); i++) {
+              c = substr(s, i, 1)
+              if (c == "\\" || c == "\"") out = out "\\"
+              out = out c
+            }
+            return out
+          }
+          BEGIN {
+            host = esc(ENVIRON["MQTT_HOST"])
+            port = ENVIRON["MQTT_PORT"]
+            user = esc(ENVIRON["MQTT_USERNAME"])
+            pass = esc(ENVIRON["MQTT_PASSWORD"])
+            if (port !~ /^[0-9]+$$/) {
+              print "mesh-graph: MQTT_PORT is not a number" > "/dev/stderr"
+              exit 1
+            }
+          }
+          /^broker[[:space:]]*=/ { print "broker = \"" host "\""; next }
+          { print }
+          /^\[mqtt\]/ {
+            print "port = " port
+            print "username = \"" user "\""
+            print "password = \"" pass "\""
+          }
+        ' /config/mesh-graph.config.toml > /tmp/config.toml && mesh-graph --config /tmp/config.toml --mode both
 
   backup:
     # A daily logical dump of the database, kept in rotation. See

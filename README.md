@@ -181,6 +181,21 @@ them all with a comment on each. The ones you are most likely to change:
 > [!WARNING]
 > Never commit `.env`. It holds secrets.
 
+## 🔒 Deploying publicly
+
+Sonoran has **no authentication**, by design. Everything the API serves,
+it serves to every caller who can reach it, node positions included. Before
+other people can reach a deployment:
+
+1. Put an authenticating reverse proxy in front of it. Keep ports 8000 and
+   8080 on `127.0.0.1`, as `docker-compose.yml` has them.
+2. Serve it over TLS only, and let the proxy send `Strict-Transport-Security`.
+3. Set `FORWARDED_ALLOW_IPS` to the proxy's address.
+4. Then set `API_RATE_LIMIT_ENABLED=true`.
+
+[SECURITY.md](SECURITY.md) says why each step is necessary, and how to report a
+security problem.
+
 ## 🛠️ Development
 
 The project uses [uv](https://docs.astral.sh/uv/). Python 3.13 or newer is required.
@@ -254,6 +269,7 @@ The coverage planner reads terrain tiles. Fill the local cache once with
 | [AGENTS.md](AGENTS.md) | The rules for people and agents who change the code |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, check and send a change |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | The vendored code and data, and their licences |
+| [SECURITY.md](SECURITY.md) | How to report a security problem, and the deployment contract |
 
 ## 📄 Licence
 

@@ -5,12 +5,45 @@ on:
     branches: [main]
   pull_request:
 
+# The token of each job may read the repository and nothing else. No
+# job here writes to GitHub: no release, no comment, no package. A step
+# that is compromised then holds a token that cannot change anything.
+# The Actions cache needs no permission of this token.
+#
+# Each action is pinned by commit, with its release as a comment. A
+# tag such as `v4` can be moved by the owner of the action, and a
+# commit cannot. To update one, read the commit of the new release
+# (`git ls-remote https://github.com/<owner>/<action> refs/tags/<tag>`)
+# and change both halves together. test_ci_workflows.py checks it.
+permissions:
+  contents: read
+
+# No job runs for a pull request from a fork.
+#
+# Every job runs on self-hosted hardware that belongs to a community
+# member (AGENTS.md 6.2), and the jobs can reach Docker there. A pull
+# request from a fork can change any test or the Dockerfile, so it would
+# run its author's code on that machine. Each job therefore runs for a
+# push to main, and for a pull request from a branch of this repository.
+# A maintainer who wants CI on a fork's change reads it, then pushes it
+# to a branch here.
+#
+# This condition is NOT enough on its own. For a pull request, GitHub
+# reads this file from the pull request, so a fork can delete the
+# condition in its own copy. The lock is the repository setting:
+# Actions, "Require approval for all outside collaborators". With it, no
+# workflow of a fork runs until a maintainer approves it. Never approve
+# a fork's run that changes a file in .github/.
+#
+# This needs the agreement of the runner's owner. test_ci_workflows.py
+# checks the condition on each job.
 jobs:
   lint:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
       - run: uv sync --extra dev
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
@@ -20,7 +53,7 @@ jobs:
       # Steps in this job rather than a job of its own: every job here runs
       # on self-hosted hardware, and a new job is a new runner allocation.
       # Pinned to the versions it was proven with; see eslint.config.mjs.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: '22'
       - run: npm install --no-save eslint@9.39.5 globals@15.15.0
@@ -28,14 +61,16 @@ jobs:
 
   typecheck:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
       - run: uv sync --extra dev
       - run: uv run mypy src
 
   test:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       # This job runs the 166 database-backed tests in tests/integration
       # as well as the unit suite, and it starts their container itself
@@ -51,8 +86,8 @@ jobs:
       # start is a failure and not a quiet subtraction of 166 tests.
       SONORAN_REQUIRE_INTEGRATION: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
       - run: uv sync --extra dev
       - run: >-
           uv run pytest
@@ -64,6 +99,7 @@ jobs:
 
   migrations:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     services:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
@@ -143,8 +179,8 @@ jobs:
         run: >-
           echo "DATABASE_URL_MIGRATE=${DATABASE_URL_MIGRATE/localhost:5432/localhost:${{ job.services.timescaledb.ports['5432'] }}}"
           >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
       - run: uv sync --extra dev
       - run: uv run alembic upgrade head
       - run: uv run alembic downgrade -1
@@ -162,6 +198,7 @@ jobs:
   # #83 and is deliberately not this job.
   e2e:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     services:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
@@ -266,9 +303,9 @@ jobs:
             echo "COVERAGE_CACHE_DIR=$RUNNER_TEMP/sonoran-coverage"
             echo "TERRAIN_CACHE_DIR=$RUNNER_TEMP/sonoran-terrain"
           } >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: '22'
       - run: uv sync --extra dev
@@ -303,8 +340,9 @@ jobs:
 
   docker:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       # No setup-buildx-action. It made a new BuildKit container for every
       # job, with an empty cache, and asked it for GPU access, which the
       # runners refuse and it retried without. Docker's built-in builder
