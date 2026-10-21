@@ -55,6 +55,6 @@ def test_its_own_service_takes_it_from_the_env_files(password: str) -> None:
 
 def test_the_api_holds_no_broker_password_at_all() -> None:
     """Would be caught: a denylist that forgot the internet-facing api."""
-    environment = _services()["api"]["environment"]
+    environment = _services()["web"]["environment"]
     for password in OWNER:
         assert environment.get(password) == ""
