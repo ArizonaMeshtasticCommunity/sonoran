@@ -401,3 +401,20 @@ services:
   mesh-graph:
     profiles: ["off"]
 ```
+
+## 11. The heard positions heatmap (PR 344)
+
+1. The migration `pr344` adds one empty, nullable column to
+   `position_metrics`. It is a change to the table definition only, and
+   no row is written. Run `docker compose run --rm migrate </dev/null`.
+2. Rebuild `web`, `ingest` and `jobs` (section 3). Do not restart
+   `jobs` while a coverage run is in progress.
+3. The heatmap is made once a UTC day, and once when `jobs` starts. To
+   make it now: `docker compose exec jobs sonoran-heatmap-once`.
+4. Check it. The `jobs` log says `activity heatmap: wrote N tiles`, and
+   the supervisor logs the job's peak memory. On the coverage page, the
+   layer list has "Heard positions, last 30 days".
+
+Roll back: the older code ignores the column and the tiles. The
+migration's downgrade drops the column and its values. The tiles stay
+on disk until you remove `<COVERAGE_CACHE_DIR>/all/`.

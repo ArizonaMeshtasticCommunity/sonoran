@@ -53,8 +53,10 @@ uses the database must join `sonoran-internal`;
 outside the stack, and jobs fetches terrain and land cover.
 
 The jobs process runs these tasks (`jobs/scheduler.py::build_tasks`):
-`snapshot` once a UTC day, `coverage` (calibration, coverage and the
-siting half on one clock), `gaps`, `rf-rollup` and `read-models`. With
+`snapshot` once a UTC day, `activity_heatmap` once a UTC day
+(`jobs/activity_heatmap.py`, `docs/COVERAGE.md` 13), `coverage`
+(calibration, coverage and the siting half on one clock), `gaps`,
+`rf-rollup` and `read-models`. With
 `JOBS_ISOLATE=true`, the default, each run is a child process with its
 own memory ceiling (`jobs/supervisor.py`).
 
