@@ -16,16 +16,38 @@ It uses ASD-STE100 Simplified Technical English.
 
 ## 2. Process layout
 
-Three processes always run, and two more are optional. All share one
-Python package:
+`docker-compose.yml` defines nine services. Seven start with
+`docker compose up`. Two start only with their profile.
 
-| Process | Module entry point | Database role |
-|---------|-------------------|---------------|
-| ingest | `sonoran.ingest.pipeline:main` | INSERT and UPDATE only |
-| api | `sonoran.api.app:create_app` | SELECT only |
-| jobs | `sonoran.jobs.scheduler:run` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
-| rf-ingest (profile `rf`) | `sonoran.rf.ingest:run` | the ingest role, plus SELECT on `rf_trust` (AGENTS.md 9.29) |
-| contrib (profile `contrib`) | `sonoran.contrib.service:run` | the jobs role: SELECT, INSERT, UPDATE, DELETE on the `contrib_` tables, SELECT and INSERT on `local_stats` (#178) |
+Five of them run this repository's Python package, each from its own
+console script in `pyproject.toml`:
+
+| Service | Console script and entry point | Database role |
+|---------|--------------------------------|---------------|
+| ingest | `sonoran-ingest`, `sonoran.ingest.pipeline:run` | `azmsh_ingest`: INSERT and UPDATE only |
+| api | `sonoran-api`, `sonoran.api.app:run` | `azmsh_api`: SELECT only |
+| jobs | `sonoran-jobs`, `sonoran.jobs.scheduler:run` | `azmsh_jobs`: SELECT, and DELETE then INSERT on the job output tables (AGENTS.md 4) |
+| rf-ingest (profile `rf`) | `sonoran-rf-ingest`, `sonoran.rf.ingest:run` | the ingest role, plus SELECT on `rf_trust` (AGENTS.md 9.29) |
+| contrib (profile `contrib`) | `sonoran-contrib`, `sonoran.contrib.service:run` | the jobs role: SELECT, INSERT, UPDATE, DELETE on the `contrib_` tables, SELECT and INSERT on `local_stats` (#178) |
+
+The other four are the database, a one-off step, and two images that are not the Sonoran package:
+
+| Service | What it is |
+|---------|------------|
+| timescaledb | The database, the `timescale/timescaledb-ha:pg17` image. Its data is the `tsdb_data` volume at `/home/postgres/pgdata`. |
+| migrate | The Sonoran image running `alembic upgrade head` once, as the superuser. api, ingest, jobs, rf-ingest and contrib wait until it exits with 0. |
+| mesh-graph | The upstream traceroute engine, an image pinned by digest. It reads the broker itself and keeps its own SQLite file in the `meshgraph_data` volume. Nothing waits for it. |
+| backup | `tools/backup.Dockerfile`: the database image with `tools/db_backup_scheduled.sh`. It dumps the database once a day as the superuser, into `BACKUP_HOST_DIR`. See `docs/DATABASE.md` 9.1. |
+
+The api and jobs services share three volumes: `terrain_cache`,
+`landcover_cache` and `coverage_cache`. The jobs service writes the
+coverage tiles and the api serves them.
+
+The jobs process runs these tasks (`jobs/scheduler.py::build_tasks`):
+`snapshot` once a UTC day, `coverage` (calibration, coverage and the
+siting half on one clock), `gaps`, `rf-rollup` and `read-models`. With
+`JOBS_ISOLATE=true`, the default, each run is a child process with its
+own memory ceiling (`jobs/supervisor.py`).
 
 The daily snapshot has its own clock. Calibration and coverage share a
 clock because coverage consumes the calibration file. A due calibration
@@ -66,6 +88,8 @@ uses:
 | jobs | `DATABASE_URL_JOBS` |
 | migrate | `DATABASE_URL_MIGRATE` and the three `AZMSH_*_PASSWORD` |
 | mesh-graph | four MQTT variables, and no `.env` at all |
+| timescaledb | `POSTGRES_PASSWORD`, and no `.env` at all |
+| backup | `PGPASSWORD` (the superuser password) and the `BACKUP_*` settings, and no `.env` at all |
 
 The three broker passwords are blanked by their own anchors
 (`x-no-mqtt`, `x-no-rf-mqtt`, `x-no-contrib-mqtt`), merged into every
@@ -196,9 +220,15 @@ Key settings:
 - `GATEWAY_PRESET_CONFLICT_MINUTES` — default 60. A gateway that uploads
   on two different preset-named topics within this many minutes is
   ambiguous, and its other uploads get no modem preset (#313).
-- `RETENTION_DAYS_*` — retention policy overrides. Run the migration service
-  after a value changes.
+- `RETENTION_DAYS_*` — the retention of each data family, in days.
+  Revision 0005 reads them once, when it is first applied, and sets the
+  TimescaleDB policies. A later change does not change the policy of an
+  existing database. Change that by hand as the superuser.
 - `LOG_LEVEL`.
+
+`.env.example` lists every setting, with its default.
+`tests/unit/test_env_example_lists_every_setting.py` fails when a field
+of `Settings` is not in it.
 
 ### 3.2 `mqtt`
 
@@ -391,8 +421,23 @@ channel, Data message metadata, and receive time.
 - Job: serve read-only JSON and static files.
 - FastAPI application factory in `app.py`.
 - `routes/` has one module per route group:
-  `chat.py`, `graph.py`, `map.py`, `nodes.py`, `packets.py`,
+  `chat.py`, `climate.py`, `coverage.py`, `embed.py`, `gaps.py`,
+  `geocode.py`, `graph.py`, `leaderboards.py`, `map.py`,
+  `node_page.py`, `nodes.py`, `packets.py`, `radio.py`, `rf.py`,
   `stats.py`, `terrain.py`, `traceroutes.py`.
+- Helpers beside them, each with one job:
+  - `cache.py`: an answer held for a while, refreshed by one caller at
+    a time.
+  - `conditional.py`: a 304 answer for the long-window views (#371).
+  - `export.py`: the node list as a CSV or JSON file (#350).
+  - `hourly.py`: packet and upload counts from the hourly totals.
+  - `html.py`: values put into a page safely.
+  - `limits.py`: the request budget of each caller (`API_RATE_*`).
+  - `packet_summary.py`: one short line for each packet on a page.
+  - `preset_scope.py`: the `preset=` filter of the list pages (#313).
+  - `sightings.py`: observations with the hop count they started with.
+  - `trace_drawing.py`: a mesh-graph drawing, fetched over the compose
+    network from `MESH_GRAPH_INTERNAL_URL` and recoloured.
 - `schemas.py` has the pydantic response models.
 - `dependencies.py` gives database session access to route handlers.
 - `channels.py` groups channel names into families for the UI.
@@ -482,11 +527,44 @@ coverage job (`coverage/sites.py::engine_params`) and the calibration
 - It reads `rf.schema` for the station and source id rules, so a
   contributor's ids are the registrar's.
 
+### 3.8.3 `landcover`
+
+- Job: say what stands on the ground, and how much signal it takes.
+- `classes.py` holds the land cover classes and the clutter of each.
+- `store.py` reads the land cover pages from `LANDCOVER_CACHE_DIR`.
+  `tools/prefetch_landcover.py` makes them once, with the optional
+  `landcover` extra (rasterio). With no pages, a prediction has no
+  clutter.
+- This module must never touch the database.
+
+### 3.8.4 `rf`
+
+- Job: store what members' `rf-agent` stations publish, and keep one
+  station from taking a shared layer (#324). See
+  `docs/design/rf-map.md` and AGENTS.md 9.29.
+- `schema.py` is the message contract, exported to
+  `docs/rf-message-v1.schema.json`.
+- `ingest.py` is the `sonoran-rf-ingest` process. `guard.py` holds the
+  checks before a point reaches a shared layer. `store.py` writes.
+- `spectrum_sql.py` is the per-bin summary of a swept range, shared by
+  the API and the jobs.
+- `operator.py` (`sonoran-rf-trust`) and `purge.py`
+  (`sonoran-rf-purge`) are operator tools. Run them in the `migrate`
+  service, which holds the owner role.
+
 ### 3.9 `jobs`
 
 - Job: run scheduled maintenance.
-- `retention.py` checks that TimescaleDB retention policies exist and work.
-- `snapshots.py` writes one `daily_snapshot` row per day.
+- Retention is TimescaleDB's own policy on each hypertable, set by the
+  migrations. No job enforces it.
+- `snapshots.py` writes one `daily_snapshot` row per day, and removes
+  `packet_key` rows older than `RETENTION_DAYS_PACKET`, because that
+  plain table has no retention policy.
+- `rf_rollup.py` rolls each finished hour of every swept range up into
+  `rf_spectrum_hour`.
+- `legacy_import.py` imports, once, the JSON files that the jobs wrote
+  before #351 into the empty job output tables.
+- `run_task.py` runs one job once, as a child of the supervisor.
 - `calibrate.py` reads current neighbour reports and writes one computed
   calibration file.
 - `coverage.py` reads that file and publishes one complete static tile
@@ -821,6 +899,18 @@ Terrain is served by this application, so it needs no connect source of
 its own. That is the reason the browser is not sent to the public tile
 host for elevation data.
 
+### 3.11 Small shared modules
+
+- `meshtastic/` holds the Python modules generated from the Meshtastic
+  protobufs at the commit in `proto/UPSTREAM_REV.txt`. Do not edit
+  them. `proto/update.sh` makes them again.
+- `positions.py` decides what counts as a usable position.
+- `roles.py` decides what counts as a piece of mesh infrastructure.
+  See AGENTS.md 9.22.
+- `read_models.py` holds the long-window views that the jobs service
+  builds and the API reads (#371).
+- `logging.py` sets up the logs.
+
 ## 4. Data flow: one packet
 
 ```
@@ -892,4 +982,6 @@ apart. It never goes the other way: `api` does not import `jobs`.
 1. Use structured logs (JSON) through `sonoran.logging`.
 2. One log line per event. Include context fields.
 3. Count these events as metrics: packets received, packets new, packets duplicate, decrypt failures, decode failures, handler failures.
-4. Expose the counters on `/health` for the api process and on stdout for the ingest process.
+4. The ingest process writes its events to stdout. `/health` answers
+   the status and the version only. It does not read the database, so
+   it shows that the API process answers, not that the database does.

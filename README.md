@@ -129,6 +129,8 @@ The first build takes some minutes. Then open the dashboard at
 with code 0 and the others stay up. `docker compose logs -f ingest` shows
 a `stored packet=` line for each packet that arrives. A
 `MQTT connection failed` line means that the broker settings are wrong.
+[docs/OPERATIONS.md](docs/OPERATIONS.md) gives the routine checks and the
+common faults.
 
 ### Run without mesh-graph
 
@@ -243,11 +245,15 @@ The coverage planner reads terrain tiles. Fill the local cache once with
 | [docs/PLANNER.md](docs/PLANNER.md) | The coverage planner and its licence |
 | [docs/COVERAGE.md](docs/COVERAGE.md) | The coverage map, its calibration, and the embed |
 | [docs/APP.md](docs/APP.md) | Installing the app, and what it does with no network |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | How to deploy a commit, check it, and roll it back |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Routine checks, restarts, logs, backup and restore, common faults |
 | [docs/QA.md](docs/QA.md) | The QA process |
-| [docs/ISSUES.md](docs/ISSUES.md) | Open issues and what is wanted next |
+| [docs/ISSUES.md](docs/ISSUES.md) | The long analyses of known gaps. New work is in the GitHub issues |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | Research on the source tools and the protocol |
 | [docs/archive/](docs/archive/) | Old session notes and reviews, kept for their history |
 | [AGENTS.md](AGENTS.md) | The rules for people and agents who change the code |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, check and send a change |
+| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | The vendored code and data, and their licences |
 
 ## 📄 Licence
 

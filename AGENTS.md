@@ -1347,6 +1347,9 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/API.md` — the API specification
 - `docs/APP.md` — the installed app, the service worker, and offline
 - `docs/DEPLOY.md` — how to deploy, check and roll back
+- `docs/OPERATIONS.md` — routine checks, restarts, logs, backup and
+  restore, and the common faults
+- `CONTRIBUTING.md` — the same rules, for an outside contributor
 - `docs/QA.md` — the QA process
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new

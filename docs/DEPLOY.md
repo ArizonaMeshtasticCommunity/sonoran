@@ -7,6 +7,9 @@ Simplified Technical English. See #308.
 No credentials and no host names are in this file. Ask the owner of the
 deployment host for access.
 
+For the day-to-day work on a running deployment (checks, restarts,
+logs, backups and common faults), see `docs/OPERATIONS.md`.
+
 ## 1. The shape of a deployment
 
 - The deployment is a clone of this repository in the home directory of
@@ -32,6 +35,13 @@ deployment host for access.
    ```bash
    docker tag sonoran-api:latest sonoran-api:rollback-<old-sha>
    ```
+
+   Compose names an image `<project>-<service>` and a container
+   `<project>-<service>-1`. The project is the name of the directory
+   that holds `docker-compose.yml`, unless `COMPOSE_PROJECT_NAME` sets
+   it. The commands in this file use `sonoran`. A clone in a directory
+   named `sonoran` has `sonoran-api`. `docker compose images`
+   shows the names.
 
 4. Take a snapshot of what the live API answers:
 
