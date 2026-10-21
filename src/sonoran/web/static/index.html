@@ -459,7 +459,8 @@
               <h3>Busiest nodes (24 h)</h3>
               <div class="table-wrap" data-top-talkers></div>
             </div>
-            <div class="panel">
+            <!-- Part of chat: hidden with it (HIDDEN_SECTIONS). -->
+            <div class="panel" data-section="chat">
               <!--
                 The list is `.messages`, the node page's and the chat's own
                 message styling (#296). As a `.feed` it got none of it: the
@@ -475,6 +476,20 @@
               <div class="chart" data-portnum-chart></div>
             </div>
           </div>
+        </section>
+
+        <!--
+          A part of the site this deployment hides (HIDDEN_SECTIONS). Its
+          address opens this page. Plain words: the reader may be new.
+        -->
+        <section class="page" data-page="unavailable">
+          <div class="page-head">
+            <div>
+              <h2>This part of Sonoran isn't available yet</h2>
+              <p class="sub">It is still being made ready. The rest of Sonoran works as usual.</p>
+            </div>
+          </div>
+          <p class="more-wrap"><a class="more" href="#dashboard">Go to the dashboard</a></p>
         </section>
 
         <!-- Map -->
@@ -2166,7 +2181,7 @@
           <div class="page-head">
             <div>
               <h2>Network statistics</h2>
-              <p class="sub">Traffic, hardware and leaderboards over the range you choose.</p>
+              <p class="sub"><span data-section="leaderboards">Traffic, hardware and leaderboards</span><span data-section-absent="leaderboards" hidden>Traffic and hardware</span> over the range you choose.</p>
             </div>
             <!--
               The range every widget on this page reads (#294). Will: "the
@@ -2213,7 +2228,7 @@
               count is not one of them: on a shared channel the busiest
               node is often the one hurting everybody else.
             -->
-            <div class="leaderboards-wrap">
+            <div class="leaderboards-wrap" data-section="leaderboards">
               <h3 class="section-head">Leaderboards <span class="muted head-note" data-leaderboards-note></span></h3>
               <div class="grid" data-leaderboards></div>
             </div>
@@ -2494,6 +2509,12 @@
     -->
     <script src="static/map-live.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/map-watch.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!--
+      The parts of the site this deployment hides (HIDDEN_SECTIONS).
+      Before tab-bar.js: a hidden page leaves the menu before the phone
+      bar copies it. After the config, which holds the list.
+    -->
+    <script src="static/sections.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!-- The phone's bottom bar (#282), before app.js: the router marks it. -->
     <script src="static/tab-bar.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/app.js?v=__SONORAN_ASSET_VERSION__"></script>

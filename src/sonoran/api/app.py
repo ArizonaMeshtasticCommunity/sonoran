@@ -7,11 +7,12 @@ It connects to the database with the SELECT-only role.
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hashlib import sha256
+from json import dumps, loads
 from pathlib import Path
 from secrets import token_urlsafe
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.middleware.gzip import GZipMiddleware
@@ -41,6 +42,7 @@ from sonoran.api.routes.rf import router as rf_router
 from sonoran.api.routes.stats import router as stats_router
 from sonoran.api.routes.terrain import router as terrain_router
 from sonoran.api.routes.traceroutes import router as traceroutes_router
+from sonoran.api.sections import describe_unknown, gate, resolve
 from sonoran.config import Settings, get_settings
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.embed.sanitise import frame_ancestors, safe_origin
@@ -64,6 +66,35 @@ def _asset_version() -> str:
         digest.update(path.relative_to(STATIC_DIR).as_posix().encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()[:12]
+
+
+def _page_version(files: str, hidden: frozenset[str]) -> str:
+    """Return the version the page and its assets are served under.
+
+    With nothing hidden it is the hash of the files, as it always was.
+    With a hidden list it is a hash of both, because the manifest is
+    served without the hidden pages' shortcuts and is kept for a year
+    under its `?v=`. A new list is then a new address, and an open app
+    shows the update notice, which is true: the page changed.
+    """
+    if not hidden:
+        return files
+    return sha256(f"{files}:{','.join(sorted(hidden))}".encode()).hexdigest()[:12]
+
+
+def _manifest_without(hidden: frozenset[str]) -> bytes:
+    """The app manifest, with no shortcut to a hidden page.
+
+    A shortcut is offered when a reader touches and holds the app icon.
+    Its address is `../#<page>`.
+    """
+    manifest = loads((STATIC_DIR / "manifest.webmanifest").read_text(encoding="utf-8"))
+    manifest["shortcuts"] = [
+        item
+        for item in manifest.get("shortcuts", [])
+        if item.get("url", "").split("#", 1)[-1].split("/")[0].split("?")[0] not in hidden
+    ]
+    return dumps(manifest, indent=2).encode()
 
 
 def _origin(url: str, *, setting: str = "") -> str | None:
@@ -399,6 +430,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
 
+    # The parts of the site this deployment keeps out of view
+    # (`api/sections.py`). Read once: a change needs a restart.
+    hidden, unknown = resolve(settings.hidden_sections)
+    if unknown:
+        logger.warning(
+            "HIDDEN_SECTIONS names ids that are not sections that can be "
+            "hidden, and they are ignored: %s. The ids are in "
+            "docs/OPERATIONS.md.",
+            describe_unknown(unknown),
+        )
+
     app = FastAPI(
         title="Sonoran",
         version=__version__,
@@ -407,9 +449,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=None,
         lifespan=lifespan,
         root_path=settings.web_base_path.rstrip("/"),
+        # One gate for every route: a route of a hidden section answers
+        # 404. It does nothing when nothing is hidden.
+        dependencies=[Depends(gate)],
     )
     app.state.settings = settings
-    app.state.asset_version = _asset_version()
+    app.state.hidden_sections = hidden
+    app.state.asset_version = _page_version(_asset_version(), hidden)
     # The radio overrides are read once. The file is in the repository
     # and ships with the image, so a change to it arrives with a deploy.
     app.state.radio_overrides = load_overrides(settings.radio_overrides_path)
@@ -531,6 +577,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "path": "/embed/coverage",
                 "frameAncestors": list(settings.embed_frame_ancestors),
             },
+            # The parts of the site to keep out of view (`sections.js`).
+            # Written here, so the page knows before it draws anything,
+            # with no request of its own. Only known ids, sorted.
+            "hiddenSections": sorted(hidden),
         }
         html = html.replace("__SONORAN_CONFIG__", as_script_json(config))
         html = html.replace("__SONORAN_ASSET_VERSION__", app.state.asset_version)
@@ -560,6 +610,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="text/javascript",
             headers={"Cache-Control": "no-cache"},
         )
+
+    if hidden:
+        # Registered before the static mount, so it wins over the file.
+        # Only when something is hidden: the default serves the file as
+        # it always did. The cache headers come from the middleware, by
+        # the `?v=`, which carries the hidden list (`_page_version`).
+        manifest = _manifest_without(hidden)
+
+        @app.get("/static/manifest.webmanifest", include_in_schema=False)
+        async def app_manifest() -> Response:
+            return Response(manifest, media_type="application/manifest+json")
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

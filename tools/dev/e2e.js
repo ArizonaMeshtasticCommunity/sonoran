@@ -763,8 +763,173 @@ async function nodeMessageOpensPacket(page, how) {
   return `${how} -> ${href}`;
 }
 
+/*
+ * HIDDEN_SECTIONS: an operator hides parts of the site (`api/sections.py`).
+ *
+ * The other journeys walk a site with everything shown, so they cannot
+ * run against an API that hides something. These run instead, and only
+ * when SONORAN_HIDDEN_SECTIONS is set to the SAME list the API was
+ * started with:
+ *
+ *     HIDDEN_SECTIONS=rf,planner,chat uv run sonoran-api
+ *     SONORAN_HIDDEN_SECTIONS=rf,planner,chat node tools/dev/e2e.js
+ *
+ * With it unset, nothing here runs and the default run is unchanged.
+ */
+const HIDDEN = (process.env.SONORAN_HIDDEN_SECTIONS || '')
+  .split(',').map((name) => name.trim().toLowerCase()).filter(Boolean);
+
+/*
+ * One route for each section, which answers 404 when the section is
+ * hidden. Each one is used by that section alone (`sections.ROUTES`),
+ * so hiding the section closes it. Config check has no route: it runs in
+ * the browser.
+ */
+const HIDDEN_PROBES = {
+  map: 'api/map/traffic?minutes=5',
+  nodes: 'api/nodes/facets',
+  chat: 'api/chat/overview?hours=24',
+  traceroutes: 'api/traceroutes?limit=1',
+  graph: 'api/graph?hours=1',
+  coverage: 'api/coverage',
+  planner: 'api/radio/antennas',
+  gaps: 'api/gaps',
+  meshnet: 'api/chat/tagged?tag=checkin&weeks=1',
+  firehose: 'api/packets?limit=1',
+  rf: 'api/rf/kinds',
+  stats: 'api/stats/daily',
+  leaderboards: 'api/stats/leaderboards',
+};
+
+/* Routes that never close, whatever is hidden. */
+const SHARED_PROBES = ['health', 'api/version', 'api/nodes?limit=1', 'api/stats'];
+
+async function status(page, route) {
+  const response = await page.request.get(`${BASE.replace(/\/$/, '')}/${route}`);
+  return response.status();
+}
+
+/* The pages the menu offers, by their `data-nav` name. */
+async function menuPages(page) {
+  return page.$$eval('#site-nav a[data-nav]', (links) => links.map((link) => link.dataset.nav));
+}
+
+async function hiddenJourneys(browser) {
+  const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
+  const pages = Object.keys(HIDDEN_PROBES).filter((name) => name !== 'leaderboards').concat('config');
+  const hiddenPages = HIDDEN.filter((name) => pages.includes(name));
+
+  await journey(context, 'hidden sections: the page is told the list', async (page) => {
+    await open(page, 'dashboard', 1500);
+    const told = await page.evaluate(() => (window.SONORAN || {}).hiddenSections || null);
+    must(Array.isArray(told), 'the page config has no hiddenSections');
+    const missing = HIDDEN.filter((name) => !told.includes(name));
+    must(!missing.length, `the API was not started with ${missing.join(', ')} hidden (it says ${told.join(', ') || 'nothing'})`);
+    return told.join(', ');
+  });
+
+  await journey(context, 'hidden sections: the menu leaves them out', async (page) => {
+    const asked = [];
+    page.on('request', (request) => asked.push(new URL(request.url()).pathname));
+    await open(page, 'dashboard');
+    const menu = await menuPages(page);
+    const still = hiddenPages.filter((name) => menu.includes(name));
+    must(!still.length, `the menu still offers ${still.join(', ')}`);
+    must(menu.includes('dashboard'), `the menu lost the dashboard: ${menu.join(' ')}`);
+    must(await page.locator('a[data-nav="settings"]').count(), 'the menu lost Settings');
+    // The dashboard asks for nothing a hidden section owns.
+    const closed = HIDDEN.filter((name) => HIDDEN_PROBES[name])
+      .map((name) => `/${HIDDEN_PROBES[name].split('?')[0]}`);
+    const leaked = asked.filter((path) => closed.some((route) => path.endsWith(route)));
+    must(!leaked.length, `the dashboard asked for ${leaked.join(', ')}`);
+    if (HIDDEN.includes('chat')) {
+      must(!(await page.locator('[data-recent-chat]').isVisible()), 'the Latest messages card shows with chat hidden');
+    }
+    return `menu: ${menu.join(' ')}`;
+  });
+
+  await journey(context, 'hidden sections: an old link lands on a page that says so', async (page) => {
+    must(hiddenPages.length, 'no page is hidden, so there is no address to try');
+    const out = [];
+    for (const name of hiddenPages) {
+      // The hash in the first `goto` (AGENTS.md 9.33).
+      await page.goto(`${BASE}/#${name}`, { waitUntil: 'load' });
+      await page.waitForTimeout(1500);
+      const active = await page.$eval('.page.active', (node) => node.dataset.page);
+      must(active === 'unavailable', `#${name} opened "${active}", not the not-available page`);
+      const words = await page.locator('.page.active h2').innerText();
+      must(words === "This part of Sonoran isn't available yet", `#${name} says "${words}"`);
+      out.push(name);
+    }
+    await page.locator('.page.active a[href="#dashboard"]').click();
+    const home = await waitFor(page, () => document.querySelector('.page.active').dataset.page === 'dashboard', 10000, 200);
+    must(home, 'the link on the not-available page does not open the dashboard');
+    return `not available: ${out.join(', ')}`;
+  });
+
+  await journey(context, 'hidden sections: their API answers 404, shared routes still answer', async (page) => {
+    const out = [];
+    for (const name of HIDDEN.filter((id) => HIDDEN_PROBES[id])) {
+      const got = await status(page, HIDDEN_PROBES[name]);
+      must(got === 404, `${name}: ${HIDDEN_PROBES[name]} answered ${got}, not 404`);
+      out.push(`${name} 404`);
+    }
+    // The control: a section that is still shown keeps its route.
+    const shown = Object.keys(HIDDEN_PROBES).find((name) => !HIDDEN.includes(name)
+      && !(name === 'leaderboards' && HIDDEN.includes('stats')));
+    if (shown) {
+      const got = await status(page, HIDDEN_PROBES[shown]);
+      must(got === 200, `${shown} is shown, and ${HIDDEN_PROBES[shown]} answered ${got}`);
+      out.push(`${shown} 200`);
+    }
+    for (const route of SHARED_PROBES) {
+      const got = await status(page, route);
+      must(got === 200, `${route} answered ${got}; a shared route must stay open`);
+    }
+    return out.join(', ');
+  });
+  await context.close();
+
+  const phone = await browser.newContext({
+    viewport: { width: 390, height: 664 }, isMobile: true, hasTouch: true,
+  });
+  await journey(phone, 'hidden sections: the phone bar and More leave them out', async (page) => {
+    await open(page, 'dashboard');
+    const tabs = await page.$$eval('[data-tab-bar] a[data-tab]', (links) => links.map((link) => link.dataset.tab));
+    must(tabs.includes('dashboard'), `the phone bar has no Dashboard: ${tabs.join(' ')}`);
+    const still = hiddenPages.filter((name) => tabs.includes(name));
+    must(!still.length, `the phone bar still offers ${still.join(', ')}`);
+    await page.locator('[data-tab-more]').tap();
+    await page.waitForTimeout(400);
+    const more = await page.$$eval('#site-nav a[data-nav]',
+      (links) => links.filter((link) => link.offsetParent).map((link) => link.dataset.nav));
+    must(more.length > 0, 'More opened no menu');
+    const inMore = hiddenPages.filter((name) => more.includes(name));
+    must(!inMore.length, `More still offers ${inMore.join(', ')}`);
+    return `bar: ${tabs.join(' ')}`;
+  });
+  await phone.close();
+}
+
+function report() {
+  console.log(results.join('\n'));
+  console.log('\nconsole and page errors: ' + (errors.length ? '\n  ' + errors.slice(0, 8).join('\n  ') : 'none'));
+  if (elsewhere.length) {
+    console.log('\nerrors from other hosts (not counted): \n  ' + elsewhere.slice(0, 8).join('\n  '));
+  }
+  const failed = results.filter((line) => line.startsWith('FAIL')).length;
+  console.log(`\n${results.length - failed}/${results.length} journeys passed`);
+  process.exit(failed || errors.length ? 1 : 0);
+}
+
 async function main() {
   const browser = await chromium.launch();
+  if (HIDDEN.length) {
+    await hiddenJourneys(browser);
+    await browser.close();
+    report();
+    return;
+  }
   const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
 
   await journey(context, 'dashboard → a node page', async (page) => {
@@ -6359,15 +6524,7 @@ async function main() {
   await glossaryPhone.close();
 
   await browser.close();
-
-  console.log(results.join('\n'));
-  console.log('\nconsole and page errors: ' + (errors.length ? '\n  ' + errors.slice(0, 8).join('\n  ') : 'none'));
-  if (elsewhere.length) {
-    console.log('\nerrors from other hosts (not counted): \n  ' + elsewhere.slice(0, 8).join('\n  '));
-  }
-  const failed = results.filter((line) => line.startsWith('FAIL')).length;
-  console.log(`\n${results.length - failed}/${results.length} journeys passed`);
-  process.exit(failed || errors.length ? 1 : 0);
+  report();
 }
 
 main();
