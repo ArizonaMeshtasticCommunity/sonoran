@@ -4380,6 +4380,9 @@ async function main() {
     must(got.LongFast && !got.MediumFast, `clearing the last preset left ${JSON.stringify(got)}`);
     const refusal = await page.locator('[data-preset-boxes-note]').textContent();
     must(/At least one preset/.test(refusal), `no word on why the last box stays: "${refusal}"`);
+    // And a screen reader hears it, through the site's one live region.
+    const heard = await page.locator('[data-status-live]').textContent();
+    must(/At least one preset/.test(heard), `the refusal was not announced: "${heard}"`);
 
     // A button in the menu chooses one preset alone again.
     await tick('ShortFast');

@@ -1595,11 +1595,14 @@ per-upload column is the data that measurement needs.
 
 ## 2026-10-21 — every preset can be chosen, and several at once (#383)
 
-**Decided by Barry, for Will.** Will asked, in #383, for every preset
-to be selectable, for a choice of several, and for Medium Fast alone
-as the default. Tyler's question in #232, where the preset control
-lives, is still open and is not decided here. The menu's switch stays
-where it is.
+**Decided for Will (#383).** Will asked, in #383, for every preset to
+be selectable, for a choice of several, and for Medium Fast alone as
+the default. The details below were filled in while building it.
+
+**Still open, for Tyler (#232):** where the preset control lives. It
+is not decided here. The menu's switch stays where it was, and the
+boxes for several presets are on the Settings page because that is
+where there is room for them.
 
 **What changed.**
 
@@ -1610,13 +1613,18 @@ where it is.
   `tests/unit/test_preset_choices.py` keeps the browser's list and the
   server's the same.
 - Several presets are chosen on the Settings page, with a box for each.
-  "Choose several" in the menu's "More" opens it. The menu's buttons
-  still choose one preset alone.
+  The menu's Settings link, under the switch, is the way there. The
+  menu's buttons still choose one preset alone.
+- A choice of several is kept in one fixed order: Medium Fast, Long
+  Fast, then the firmware presets, then any server-only name. The one
+  preset a one-preset page draws is the deployment's default when it
+  is chosen, and otherwise the first in that order.
 - The list endpoints take `preset=MediumFast,LongFast` (`docs/API.md`
   1.2). That is a GET parameter only. One name runs the SQL it ran
   before.
 - The map and the graph draw one preset when several are chosen, and
-  the note under the switch says which. Coverage, gaps and the planner
+  the note under the switch says which. A chosen preset with no traffic
+  here draws an empty map that says no node was heard on it. Coverage, gaps and the planner
   already did that under "All". "All" still draws every preset on the
   map and the graph, as decided in #370. A choice of several is
   narrower, and a line between two presets cannot exist (AGENTS.md 9.7).
@@ -1627,5 +1635,5 @@ where it is.
 no traffic on it yet. The old store refused a preset the server had
 not listed, so a stored `ShortTurbo` fell back to the default. Every
 firmware preset is now always on offer, so only a name that is no
-preset at all is refused. Four cases in `preset_store_cases.mjs`
+preset at all is refused. Six cases in `preset_store_cases.mjs`
 changed for this reason, and each says so beside it.

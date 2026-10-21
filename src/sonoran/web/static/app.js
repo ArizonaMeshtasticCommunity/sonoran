@@ -9509,8 +9509,10 @@ PAGES.firehose = async (page) => {
   const target = $('[data-firehose-table]', page);
   const rows = await get(`api/packets?${params}`).catch((error) => error);
   if (rows instanceof Error) {
-    // 422 here is always the filter, and the bare status tells the
-    // reader nothing they can act on. The test is on the status, which
+    // 422 here is a filter the API refused: the packet type, or the
+    // menu's preset (#383 sends several, and a stored name the server
+    // does not know is refused). The bare status tells the reader
+    // nothing they can act on. The test is on the status, which
     // `requestFailed` still puts in the message ahead of the path.
     // Name the value that was actually sent, not the box.
     //
@@ -9518,9 +9520,16 @@ PAGES.firehose = async (page) => {
     // is a tidied-up guess: `#firehose?type=NOT_A_REAL_APP` put
     // "Not a real" in the box, so the message named something nobody had
     // asked for. Measured on the running page.
-    return replace(target, /422/.test(rows.message || '')
-      ? failure(new Error(`No packet type is called "${portnum}". Try one of the suggestions, or a port number.`))
-      : failure(rows));
+    if (!/422/.test(rows.message || '')) return replace(target, failure(rows));
+    const refused = [];
+    if (portnum) {
+      refused.push(`No packet type is called "${portnum}". Try one of the suggestions, or a port number.`);
+    }
+    if (preset) {
+      refused.push(`${portnum ? 'Or the' : 'The'} server does not know the preset `
+        + `${menuPresetWords()}. Choose another in the menu.`);
+    }
+    return replace(target, failure(new Error(refused.join(' ') || 'The server refused this filter.')));
   }
   /*
    * An empty filtered table names the filter it applied.
@@ -11602,9 +11611,17 @@ function drawPresetBoxes(page) {
     SonoranPreset.options().map((name) => box(name, SonoranLabels.presetLabel(name),
       all || chosen.has(name), () => {
         const changed = SonoranPreset.toggle(name);
-        if (note) {
-          note.textContent = changed ? '' : 'At least one preset stays chosen.';
-        }
+        const why = changed ? '' : 'At least one preset stays chosen.';
+        if (note) note.textContent = why;
+        /*
+         * Said through the site's one live region as well, so a screen
+         * reader hears why the box stayed ticked. Not a second
+         * `aria-live`: one polite region is the rule (#175,
+         * `test_there_is_exactly_one_live_region_and_it_is_polite`).
+         * A refusal changes no preset, so no redraw overwrites it.
+         */
+        const live = $('[data-status-live]');
+        if (live && why) live.textContent = why;
         drawPresetBoxes(page);
       })));
   if (focused) {
