@@ -71,10 +71,11 @@ eq('a saved choice survives a reload',
 // that stopped running it, or a hand-edited value -- would otherwise pin
 // every page to a preset with nothing in it, and the reader would have no
 // way to tell why the whole site was empty.
-// Since #383 that is a name no preset has: every firmware preset stays
-// on offer, so a saved ShortTurbo is a real choice and is kept.
+// Since #383 every firmware preset stays on offer, so a saved ShortTurbo
+// is a real choice and is kept. The case is now a name only the server
+// offered, and has stopped offering: a fresh load has not got it.
 eq('a saved preset that is no longer offered is ignored',
-  load({ saved: 'LongModerate' }).P.current(), 'MediumFast');
+  load({ saved: 'Custom9' }).P.current(), 'MediumFast');
 eq('a saved rubbish value is ignored',
   load({ saved: '{}' }).P.current(), 'MediumFast');
 
@@ -207,6 +208,34 @@ eq('a stored pair with one bad name keeps the good one',
   load({ saved: 'LongFast,Nonsense' }).P.selected(), ['LongFast']);
 eq('a stored list of nothing usable is the default',
   load({ saved: ',,' }).P.selected(), ['MediumFast']);
+
+
+// --- one fixed order, whatever page listed the presets last ----------
+// The map, coverage and gaps each call `setAvailable` with the presets
+// in their own order (by traffic, by run). The preset a one-preset page
+// draws, and the `preset=` the list pages send, must not depend on which
+// of them ran last.
+{
+  const { P } = load();
+  P.setMany(['LongFast', 'ShortFast']);
+  const seen = [];
+  P.onChange((name) => seen.push(name));
+  P.setAvailable(['ShortFast', 'LongFast', 'MediumFast']);
+  const afterCoverage = [P.single(), P.query()];
+  P.setAvailable(['LongFast', 'MediumFast', 'ShortFast']);
+  const afterMap = [P.single(), P.query()];
+  eq('single() and query() do not follow the last list order', afterCoverage, afterMap);
+  eq('the mesh\'s own presets come first: Long Fast before Short Fast', afterMap, ['LongFast', 'LongFast,ShortFast']);
+  eq('a list in a new order is not a change of preset', seen, []);
+}
+{
+  const { P } = load();
+  P.setMany(['ShortFast', 'LongFast']);
+  eq('the order chosen in does not matter either', P.query(), 'LongFast,ShortFast');
+  P.setAvailable(['MediumFast', 'Custom9', 'LongFast']);
+  P.setMany(['Custom9', 'LongFast']);
+  eq('a server-only name sorts after the firmware presets', P.selected(), ['LongFast', 'Custom9']);
+}
 
 if (failed) { console.log(`\n${failed} case(s) failed`); process.exit(1); }
 console.log('\nall cases passed');

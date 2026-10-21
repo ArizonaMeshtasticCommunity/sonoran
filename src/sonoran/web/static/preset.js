@@ -78,6 +78,26 @@ window.SonoranPreset = (function build() {
    */
   const ALL = '*';
 
+  /*
+   * One fixed order for a choice, whatever page listed the presets last.
+   *
+   * The map, coverage and gaps each call `setAvailable` with their own
+   * order (by traffic, by run). A choice read in that order made the
+   * preset a one-preset page draws, and the `preset=` the list pages
+   * send, depend on which of them ran last, and a list that only came
+   * back in a new order announced a change and redrew every page. So a
+   * choice is kept in this order: the two this mesh runs, then the
+   * firmware presets, then any server-only name in alphabetical order.
+   */
+  const CANONICAL = [...new Set([...FALLBACK, ...STANDARD])];
+  function rank(name) {
+    const at = CANONICAL.indexOf(name);
+    return at === -1 ? CANONICAL.length : at;
+  }
+  function inOrder(names) {
+    return [...names].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
+  }
+
   /* The server's list first, in its order, then every other preset. */
   function withStandard(names) {
     return [...new Set([...names, ...STANDARD])];
@@ -124,14 +144,14 @@ window.SonoranPreset = (function build() {
 
   /*
    * A stored or a passed value, as a choice: ALL, or the names in it
-   * that are on offer, in the order of the list on offer. Null when
-   * nothing in it is usable.
+   * that are on offer, in the fixed order above. Null when nothing in it
+   * is usable.
    */
   function parse(value) {
     if (value === ALL) return ALL;
     const names = Array.isArray(value) ? value : String(value ?? '').split(SEPARATOR);
     const wanted = new Set(names.map((name) => String(name ?? '').trim()).filter(Boolean));
-    const usable = available.filter((name) => wanted.has(name));
+    const usable = inOrder(available.filter((name) => wanted.has(name)));
     return usable.length ? usable : null;
   }
 
@@ -161,7 +181,7 @@ window.SonoranPreset = (function build() {
     return defaultChoice();
   }
 
-  /** Every preset chosen, in menu order, or [ALL]. */
+  /** Every preset chosen, in the fixed order, or [ALL]. */
   function selected() {
     const held = choice();
     return held === ALL ? [ALL] : [...held];
@@ -183,9 +203,9 @@ window.SonoranPreset = (function build() {
    *
    * The choice in force when it is one preset. Under "All", or with
    * several chosen, the deployment's default when it is among them, and
-   * otherwise the first chosen. So a coverage map, a gaps list or the
-   * map's links never mix presets that cannot hear each other
-   * (AGENTS.md 9.7).
+   * otherwise the first chosen in the fixed order. So a coverage map, a
+   * gaps list or the map's links never mix presets that cannot hear each
+   * other (AGENTS.md 9.7).
    */
   function single() {
     const held = choice();
