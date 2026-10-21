@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sonoran.db.models import Node, PositionMetrics
 from sonoran.ingest.handlers.clocks import device_time
 from sonoran.ingest.handlers.context import HandlerContext
+from sonoran.meshtastic import mesh_pb2
 from sonoran.positions import clean
 
 
@@ -30,6 +31,21 @@ def _position_time(position: Any, context: HandlerContext) -> datetime:
     )
 
 
+def location_source_name(value: int) -> str | None:
+    """Return the proto name of `Position.location_source`, or None.
+
+    LOC_UNSET (0) means the node did not say, so it is None. A value that
+    our proto copy does not know is None too, never an error on the
+    ingest path.
+    """
+    if not value:
+        return None
+    try:
+        return str(mesh_pb2.Position.LocSource.Name(value))  # type: ignore[attr-defined]
+    except ValueError:
+        return None
+
+
 async def store_position(session: AsyncSession, message: Message, context: HandlerContext) -> None:
     """Store position history and update the latest node position."""
     position: Any = message
@@ -41,15 +57,7 @@ async def store_position(session: AsyncSession, message: Message, context: Handl
         position.latitude_i / 10_000_000 if position.latitude_i else None,
         position.longitude_i / 10_000_000 if position.longitude_i else None,
     )
-
-    try:
-        from sonoran.meshtastic import mesh_pb2
-
-        location_source = mesh_pb2.Position.LocSource.Name(  # type: ignore[attr-defined]
-            position.location_source
-        )
-    except Exception:
-        location_source = None
+    location_source = location_source_name(position.location_source)
 
     values = {
         "node_num": context.from_node_num,
