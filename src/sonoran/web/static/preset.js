@@ -21,8 +21,11 @@
  * `preset=MediumFast,LongFast`. A page that can only draw ONE preset --
  * the map and the graph, which draw links (AGENTS.md 9.7), coverage,
  * gaps, the planner and the leaderboards -- asks `single()` and says
- * under the switch which one it drew. `current()` gives that same one
+ * under its heading which one it drew. `current()` gives that same one
  * preset, so a caller that only knows one name keeps working.
+ *
+ * The Settings page is the only control for this choice (part of #383).
+ * The menu's switch, two buttons and a "More" select, is gone.
  *
  * Deliberately NOT in the address. A preset is a standing preference
  * like the theme, not a property of the page you are linking somebody
@@ -35,12 +38,12 @@ window.SonoranPreset = (function build() {
   const KEY = 'sonoran.preset';
 
   /*
-   * The two this mesh runs, in the order the menu shows them.
+   * The two this mesh runs, first in every list of presets.
    *
    * A starting point, not a limit: `setAvailable` replaces this once the
    * channel list arrives, so a deployment running something else is not
-   * stuck with our two. It exists at all because the menu has to be
-   * usable before any request finishes.
+   * stuck with our two. It exists at all because the Settings page has
+   * to be usable before any request finishes.
    */
   const FALLBACK = ['MediumFast', 'LongFast'];
 
@@ -74,7 +77,7 @@ window.SonoranPreset = (function build() {
    * Not a preset name: `menuPreset()` in app.js turns it into no filter
    * at all, and a page that can only draw one preset (coverage, gaps,
    * the planner, the leaderboards) asks `single()` instead and says so
-   * under the switch. '*' cannot be a channel name the server sends.
+   * under its heading. '*' cannot be a channel name the server sends.
    */
   const ALL = '*';
 
@@ -107,9 +110,6 @@ window.SonoranPreset = (function build() {
   // null, or ALL, or a list of one or more names on offer.
   let chosen = null;
   const listeners = new Set();
-  // Told when the list on offer changes, even when the chosen preset
-  // does not. The menu's switch needs it; a page does not.
-  const listListeners = new Set();
 
   /** The deployment's default, which the reader's choice overrides. */
   function fallbackPreset() {
@@ -250,27 +250,11 @@ window.SonoranPreset = (function build() {
     if (!given.length) return false;
     const names = withStandard(given);
     const before = query();
-    // Compared without order: the channel list sorts by traffic, so the
-    // same presets often come back in a new order, and a redraw then
-    // would take keyboard focus off the switch for nothing.
-    const listed = [...available].sort().join('|') !== [...names].sort().join('|');
     available = names;
     const after = query();
     // Announce only a real change: the reader's preset can move here if
     // the one they had chosen is no longer on offer.
     if (after !== before) announce(current());
-    // A longer list with the same choice redraws only the switch. Before
-    // this, a third preset showed in the menu only after some later
-    // change of preset happened to redraw it.
-    else if (listed) {
-      for (const listener of [...listListeners]) {
-        try {
-          listener(options());
-        } catch (error) {
-          if (window.console) window.console.warn('preset list listener failed', error);
-        }
-      }
-    }
     return after !== before;
   }
 
@@ -364,13 +348,6 @@ window.SonoranPreset = (function build() {
     return () => listeners.delete(fn);
   }
 
-  /** Run `fn` whenever the list on offer changes. Returns an unsubscribe. */
-  function onOptionsChange(fn) {
-    if (typeof fn !== 'function') return () => {};
-    listListeners.add(fn);
-    return () => listListeners.delete(fn);
-  }
-
   /**
    * True when `name` is the preset in force.
    *
@@ -383,7 +360,7 @@ window.SonoranPreset = (function build() {
   }
 
   return {
-    current, options, setAvailable, set, setMany, toggle, onChange, onOptionsChange, matches,
+    current, options, setAvailable, set, setMany, toggle, onChange, matches,
     isAll, isSeveral, single, selected, query, ALL, FALLBACK, STANDARD,
   };
 }());

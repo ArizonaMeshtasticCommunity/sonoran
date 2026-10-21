@@ -279,9 +279,10 @@
     /*
      * The READER'S choice first, then the deployment's default.
      *
-     * `SonoranPreset` holds the menu's global selector. Consulting it
+     * `SonoranPreset` holds the reader's choice, made on the Settings
+     * page (the menu's selector is gone, part of #383). Consulting it
      * here rather than at each call site means every caller of this
-     * helper follows the menu without knowing the menu exists -- which
+     * helper follows the choice without knowing the store exists -- which
      * is how the graph tab strip and the coverage page started obeying
      * it without being rewritten.
      *

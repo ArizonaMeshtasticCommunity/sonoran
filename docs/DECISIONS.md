@@ -1602,7 +1602,8 @@ the default. The details below were filled in while building it.
 **Still open, for Tyler (#232):** where the preset control lives. It
 is not decided here. The menu's switch stays where it was, and the
 boxes for several presets are on the Settings page because that is
-where there is room for them.
+where there is room for them. Will decided it later the same day: see
+the next entry.
 
 **What changed.**
 
@@ -1637,3 +1638,35 @@ not listed, so a stored `ShortTurbo` fell back to the default. Every
 firmware preset is now always on offer, so only a name that is no
 preset at all is refused. Six cases in `preset_store_cases.mjs`
 changed for this reason, and each says so beside it.
+
+## 2026-10-21 — the presets are changed on the Settings page only (part of #383)
+
+**Decided by Will (#383).** In his words: "I don't like this dropdown
+on the sidebar and want it gone and the settings to be the only place
+to change the presets." And: "Getting rid of the MediumFast / LongFast
+slider selector can go as well. The settings page will be where all of
+that lives." This answers where the control lives (#232).
+
+**What changed.**
+
+- The menu has no preset control. The two buttons, the "More" select
+  and the note under them are gone, on a desktop, in the collapsed
+  sidebar and in the phone's More menu.
+- The Settings page's boxes are the only way to change the presets.
+  The choice, its store (`sonoran.preset`), the default (Medium Fast
+  alone), the `preset=` the list pages send and the address links
+  (`#gaps?channel=`, `#map/node/<id>?preset=`) did not change.
+- A page that the preset narrows says so under its heading, with a
+  link to Settings: "Preset: Medium Fast · Change in Settings". A page
+  that draws one preset while several, or all, are chosen says which:
+  "Showing Medium Fast. This page shows one preset at a time." Without
+  the switch, nothing else on these pages said which preset was shown
+  or where to change it (AGENTS.md 3B).
+- No line under "All presets" on a page that shows every preset, and
+  none on a page the preset does not reach. The planner has no line:
+  its own "Modem preset" box names the preset of the prediction, and a
+  reader can change that box without changing the site's choice.
+- Wording that said "in the menu" now says "in Settings".
+
+**What would change it again.** Will or Tyler asking for a quick
+control outside Settings again.

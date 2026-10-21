@@ -1170,9 +1170,6 @@ th { color: var(--muted); font-weight: 600; font-size: max(.75rem, var(--text-fl
  */
 .hint-pop .hint-term a { color: var(--accent); text-decoration: underline; text-underline-offset: .15em; }
 .hint-pop .hint-term strong { color: var(--text); font-weight: 650; }
-/* The menu's "Preset" and its glossary button share a row. */
-.menu-field-head { display: flex; align-items: center; gap: .1rem; }
-.menu-field-head .hint-open { margin-left: 0; }
 /* In a row of word, menu and button, the button follows the word: the
    menu moves to the end, so the "i" never wraps onto a line of its own. */
 .coverage-pick[data-term] > select { order: 1; }
@@ -4162,134 +4159,18 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   box-shadow: 0 0 0 .18rem color-mix(in oklab, var(--bad) 25%, transparent);
 }
 
-/* One labelled group per control, so the label is not a placeholder.
- * `.menu-hint` was here for a line of explanation under the preset
- * switch; Will asked for the sentence to go, so the rule went with it. */
-.menu-field { display: flex; flex-direction: column; gap: .35rem; }
-.menu-field-label {
-  font-size: max(.68rem, var(--text-floor));
-  text-transform: uppercase;
-  letter-spacing: .07em;
-  color: var(--muted);
-}
-
 /*
- * The global preset switch.
- *
- * Two words side by side, the chosen one filled. A segmented control
- * rather than a select: both options are one word, and a select costs a
- * tap to open before the tap that chooses.
- */
-.preset-switch {
-  position: relative;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  padding: .2rem;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: .55rem;
-}
-/*
- * The thumb slides (§3.5). It is one element behind both labels rather
- * than a background on the chosen one, which is what makes the movement
- * readable: a fill that jumps between two words tells you the state
- * changed, a thumb that travels tells you WHICH WAY.
- *
- * `gap` is gone from the track above and that is load-bearing. The thumb
- * is `100% / count` wide and moves by exactly its own width, so any gap
- * between the labels would make it drift further out of line with each
- * position. The labels keep their own padding, so nothing looks tighter.
- *
- * The count and the index come from `wirePresetSwitch`, because CSS
- * cannot count its own children. A missing value falls back to a
- * two-position switch sitting left, which is the common case and never
- * a broken-looking one.
- */
-.preset-switch::before {
-  content: '';
-  position: absolute;
-  top: .2rem;
-  bottom: .2rem;
-  left: .2rem;
-  width: calc((100% - .4rem) / var(--preset-count, 2));
-  border-radius: .4rem;
-  background: var(--accent);
-  transform: translateX(calc(var(--preset-index, 0) * 100%));
-  transition: transform .18s ease;
-}
-/* The chosen preset is in the "More presets" select, so no button is
-   chosen and the thumb has nothing to sit behind. */
-.preset-switch[data-extra]::before { opacity: 0; }
-/*
- * Every preset after the switch's two. A select, because the list is
- * open-ended: firmware 2.8.1 has 17 presets (#363). Filled with the
- * accent while it holds the chosen preset, as the thumb is for a button.
- */
-.preset-more {
-  width: 100%;
-  font: inherit;
-  font-size: .8rem;
-  font-weight: 550;
-  padding: .4rem .5rem;
-  background: var(--panel-2);
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: .55rem;
-  cursor: pointer;
-}
-.preset-more:hover { color: var(--text); }
-.preset-more.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.preset-more option { background: var(--panel); color: var(--text); }
-.preset-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.preset-more[hidden] { display: none; }
-/* Somebody who has asked for less movement gets the state, not the
-   journey. WCAG 2.3.3. */
-@media (prefers-reduced-motion: reduce) {
-  .preset-switch::before { transition: none; }
-}
-.preset-choice {
-  /* Above the thumb, so the label is not painted over by it. */
-  position: relative;
-  z-index: 1;
-  font: inherit;
-  font-size: .8rem;
-  font-weight: 550;
-  padding: .4rem .3rem;
-  border: 1px solid transparent;
-  border-radius: .4rem;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color .12s ease;
-}
-.preset-choice:hover { color: var(--text); }
-.preset-choice.active {
-  /* No background: the thumb behind it is the fill now. Set explicitly
-     rather than left off, so this stays true if `button` ever gains a
-     default background. */
-  background: none;
-  /* Chosen against the accent rather than inherited: `--text` on the
-     orange accent is the same dark-on-dark problem this change is
-     fixing, one control along. */
-  color: #fff;
-}
-/*
- * The "not used on this page" note (#232). Quiet: it explains the control
- * above it rather than competing with it, and it must not read as an error.
+ * The line under a page's heading that names the preset it shows, with a
+ * link to Settings (part of #383). It was a note under the menu's preset
+ * switch, which is gone. Quiet: it explains the page rather than
+ * competing with it, and it must not read as an error.
  */
 .preset-scope {
-  margin: .35rem 0 0;
-  font-size: max(.72rem, var(--text-floor));
+  margin: -.35rem 0 .75rem;
+  font-size: .8rem;
   color: var(--muted);
-  text-align: center;
 }
-
-.preset-choice:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+.preset-scope a { color: var(--accent); text-decoration: underline; text-underline-offset: .15em; }
 
 /*
  * Appearance, readable at last (Will: "It's hard to read the dark on
@@ -4545,8 +4426,6 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 .sidebar-collapse .icon { width: 1.15rem; height: 1.15rem; fill: currentColor; vertical-align: 0; }
 /* `display: grid` above beats the user agent's `[hidden]`. */
 .sidebar-collapse[hidden] { display: none; }
-/* The short preset names exist only for the collapsed rail. */
-.preset-short { display: none; }
 
 @media (min-width: 60.01rem) {
   html[data-sidebar="collapsed"] .sidebar {
@@ -4561,13 +4440,9 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   /* The mark and the wordmark leave the screen, and the h1 stays in the
      tree. The mark carries an inline `display`, so this cannot be
      `display: none` either. */
-  /* The word "Preset" leaves, and its glossary button with it. */
-  html[data-sidebar="collapsed"] .menu-field-head .hint-open { display: none; }
   html[data-sidebar="collapsed"] .brand-mark,
   html[data-sidebar="collapsed"] .brand-text,
-  html[data-sidebar="collapsed"] .sidebar .nav-label,
-  html[data-sidebar="collapsed"] .menu-field-label,
-  html[data-sidebar="collapsed"] .preset-scope {
+  html[data-sidebar="collapsed"] .sidebar .nav-label {
     position: absolute; width: 1px; height: 1px; margin: -1px;
     padding: 0; border: 0; overflow: hidden; clip-path: inset(50%);
     white-space: nowrap;
@@ -4583,23 +4458,6 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
     padding-inline: 0;
     min-height: 2.25rem;
   }
-  /* The preset stays in the rail as its initials, one above the other.
-     Both are still radios with their full names, so the choice is one
-     press and not a menu to open first. */
-  html[data-sidebar="collapsed"] .preset-switch { grid-auto-flow: row; grid-auto-rows: 1fr; }
-  html[data-sidebar="collapsed"] .preset-switch::before {
-    right: .2rem;
-    width: auto;
-    bottom: auto;
-    height: calc((100% - .4rem) / var(--preset-count, 2));
-    transform: translateY(calc(var(--preset-index, 0) * 100%));
-  }
-  html[data-sidebar="collapsed"] .preset-choice { padding-inline: 0; }
-  /* Too narrow for a name. The select keeps its place, and its fill
-     still says when the chosen preset is in it. */
-  html[data-sidebar="collapsed"] .preset-more { padding-inline: .15rem; font-size: max(.65rem, var(--text-floor)); text-overflow: clip; }
-  html[data-sidebar="collapsed"] .preset-short { display: inline; }
-
   /*
    * The label beside the rail, on hover and on keyboard focus.
    *
@@ -4958,33 +4816,11 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
    *
    * The bar takes 56 px off the open menu, and on a 390 x 844 phone that
    * put Settings at 815 px, 27 px under the bar's top at 788: the scroll
-   * #279 took away came back. The word "Preset" now sits beside its
-   * switch instead of above it, and the foot's spacing tightens. Settings
-   * stays under the switch, where Will asked for it, and every target
-   * keeps its 44 px. The note under the switch keeps its own full row.
+   * #279 took away came back. The foot's spacing tightens, and every
+   * target keeps its 44 px. The preset switch that shared this foot is
+   * gone (part of #383).
    */
   .sidebar .menu-foot { gap: .25rem; padding-top: .25rem; }
-  .menu-field { flex-direction: row; flex-wrap: wrap; align-items: center; gap: .25rem .6rem; }
-  .menu-field .preset-switch { flex: 1 1 12rem; padding: .1rem; }
-  .menu-field .preset-switch::before { top: .1rem; bottom: .1rem; left: .1rem; width: calc((100% - .2rem) / var(--preset-count, 2)); }
-  .menu-field .preset-scope { flex: 1 1 100%; }
-  /*
-   * The "More presets" select shares the switch's row. It is always
-   * shown ("All presets" is always a choice), and on its own row it put
-   * Settings at 829 px, under the bar at 788 (#279 again). The word
-   * "Preset" gives up its place to it and stays for screen readers:
-   * the radio group is still labelled by it.
-   */
-  .menu-field #preset-label {
-    position: absolute; width: 1px; height: 1px; overflow: hidden;
-    clip-path: inset(50%); white-space: nowrap;
-  }
-  /* The word gives up its place here, and so does its button: the
-     Settings page explains presets with room to do it (AGENTS.md 3B). */
-  .menu-field-head { display: contents; }
-  .menu-field-head .hint-open { display: none; }
-  .menu-field .preset-switch { flex: 0 0 auto; }
-  .menu-field .preset-more { flex: 1 1 7rem; width: auto; min-width: 0; padding-inline: .3rem; }
   /* The top bar, the page's own padding (1rem above, 1rem below) and
      this bar all come out of one screen. */
   .page.active[data-page="chat"].chat-full {
@@ -4997,13 +4833,4 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 body.watch-mode .tab-bar { display: none; }
 body.watch-mode { --tabbar-h: 0px; }
 
-/*
- * The "More presets" select on a touch screen. Its own font size beats
- * the element rule that keeps every select at 16 px there, and iOS
- * zooms the page into a smaller control when it takes focus. Last in
- * the file, so it also wins over the collapsed rail's size.
- */
-@media (hover: none) {
-  .preset-more,
-  html[data-sidebar="collapsed"] .preset-more { font-size: max(16px, 1em); }
-}
+

@@ -73,7 +73,7 @@ def _code(name: str) -> str:
 def test_the_comment_stripper_works() -> None:
     """Positive control for `_code`."""
     code = _code("app.js")
-    assert "function wirePresetSwitch" in code, "the stripper removed real code"
+    assert "function drawPresetBoxes" in code, "the stripper removed real code"
     assert "Will asked for" not in code, "comment text is leaking through"
 
 
@@ -111,29 +111,77 @@ def test_every_nav_icon_exists() -> None:
 # --- the menu footer ------------------------------------------------
 
 
-def test_the_footer_reads_status_then_preset_then_settings() -> None:
-    """The order somebody asks: connected, which mesh, then everything else.
+def test_the_footer_reads_status_then_settings() -> None:
+    """The order somebody asks: connected, then everything else.
 
-    The theme control used to be the third row; it moved to the settings
-    page on 2026-09-26 and the footer holds a link in its place. One
-    control per value -- a cycle button here AND a chooser on the page
-    would be two ways to set one thing.
+    The preset switch sat between the two until Will asked for it to go
+    (#383): "I don't like this dropdown on the sidebar and want it gone
+    and the settings to be the only place to change the presets." The
+    theme control went the same way on 2026-09-26. One control per
+    value, and that one is on the Settings page.
     """
     html = _html()
     menu = html[html.index('<div class="site-menu"') : html.index("</aside>")]
     assert menu.index("site-nav") < menu.index("menu-foot"), "the nav is below the footer"
     status = menu.index("data-status-text")
-    preset = menu.index("data-preset-switch")
     # `menu-settings-link` rather than `href="#settings"`. It is now the
     # only link with that href, so either would match -- but matching the
     # class is what keeps this case honest if a second one is ever added
     # above the status line, which is the arrangement the href match
     # silently accepted before the nav entry was removed.
     settings = menu.index("menu-settings-link")
-    assert status < preset < settings, f"status={status}, preset={preset}, settings={settings}"
+    assert status < settings, f"status={status}, settings={settings}"
     assert "data-theme-choice" not in menu, (
         "the theme cycle button is back in the menu, so there are two controls for one value"
     )
+
+
+def test_the_menu_has_no_preset_switch() -> None:
+    """Will (#383): the Settings page is the only place to change presets.
+
+    The menu held two buttons, Medium Fast and Long Fast, and a "More"
+    select with every other preset and "All". All of it is gone, from
+    the markup, from the code that built it and from the CSS that drew it.
+    The phone's More tab opens this same menu, so it is gone there too.
+    """
+    html = re.sub(r"<!--.*?-->", "", _html(), flags=re.S)
+    menu = html[html.index('<div class="site-menu"') : html.index("</aside>")]
+    for gone in ("data-preset-switch", "data-preset-more", 'role="radiogroup"', "Preset<"):
+        assert gone not in menu, f"the menu still holds {gone}"
+    code = _code("app.js")
+    for gone in ("wirePresetSwitch", "presetSwitchSlots", "PRESET_SWITCH_SLOTS", "presetInitials"):
+        assert gone not in code, f"app.js still has {gone}, which only built the menu's switch"
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    for gone in (
+        ".preset-switch",
+        ".preset-choice",
+        ".preset-more",
+        ".preset-short",
+        ".menu-field",
+    ):
+        assert gone not in css, f"app.css still styles {gone}, which no longer exists"
+    assert "onOptionsChange" not in _code("preset.js"), (
+        "the store still tells a list listener nobody subscribes to; only the switch used it"
+    )
+
+
+def test_a_preset_chosen_in_settings_still_redraws_the_page() -> None:
+    """The switch's one job that every page needs.
+
+    The switch also subscribed the router to the store: a change of
+    preset redraws the page in view, queued with `navigateRender` so a
+    change made during a slow draw is not lost (#384). With the switch
+    gone that subscription must stay, or a choice on the Settings page
+    would reach the next page only after a reload.
+    """
+    code = _code("app.js")
+    body = code[code.index("function wirePresetFollow") :]
+    body = body[: body.index("\nfunction ")]
+    assert "SonoranPreset.onChange(" in body, "nothing follows a change of preset"
+    assert "navigateRender(currentPage)" in body, "a preset change no longer redraws the page"
+    wire = code[code.index("function wire()") :]
+    wire = wire[: wire.index("\n}")]
+    assert "wirePresetFollow()" in wire, "the subscription is never made"
 
 
 def test_there_is_exactly_one_route_to_the_settings_page() -> None:
@@ -256,26 +304,10 @@ def test_the_controls_can_be_reached_by_keyboard() -> None:
     """A focus ring is not decoration on a control this small."""
     css = (STATIC / "app.css").read_text(encoding="utf-8")
     for selector in (
-        ".preset-choice:focus-visible",
         ".menu-settings-link:focus-visible",
         ".settings-option:focus-visible",
     ):
         assert selector in css, f"{selector} has no focus style"
-
-
-def test_the_preset_switch_is_a_radio_group() -> None:
-    """Two buttons. A select would cost a tap to open first."""
-    html = _html()
-    holder = html[html.index("data-preset-switch") - 200 : html.index("data-preset-switch") + 80]
-    assert 'role="radiogroup"' in holder, holder
-    code = _code("app.js")
-    body = code[code.index("function wirePresetSwitch") :]
-    body = body[: body.index("\nfunction ")]
-    assert "role: 'radio'" in body, "the options are not radios"
-    assert "aria-checked" in body, "nothing says which option is chosen"
-    # Arrow keys move within a radio group; a row of buttons each taking
-    # a tab stop is the usual way this control is got wrong.
-    assert "ArrowRight" in body and "tabindex" in body, "arrow keys do not move between options"
 
 
 # --- one preset for the whole site ----------------------------------
@@ -376,7 +408,7 @@ def test_the_chat_subtitle_says_the_same_thing_in_both_places() -> None:
     reader would only ever see the stale one for an instant -- which is
     the hardest kind of mismatch to notice.
     """
-    phrase = "on the preset chosen in the menu"
+    phrase = "on the presets chosen in Settings"
     assert phrase in _html(), "the markup subtitle was not updated"
     assert phrase in (STATIC / "app.js").read_text(encoding="utf-8"), (
         "the JavaScript subtitle was not updated"
@@ -530,11 +562,11 @@ def test_the_facet_counts_follow_the_same_filters_as_the_rows() -> None:
 
 
 def test_the_filtering_is_silent() -> None:
-    """Will's choice: no per-page notice.
+    """Will's choice: no repeated notice in the nav.
 
-    The menu says which preset is selected. A line on each page repeating
-    it is the wordiness he had just asked to be taken out of the nav --
-    which is also why the preset hint is gone.
+    The nav hint stays gone. The line that names the preset now sits on
+    the page itself (`drawPresetScope`), because the menu no longer says
+    which preset is chosen (#383).
     """
     html = _html()
     assert "data-preset-hint" not in html, "the nav hint is back"
@@ -634,78 +666,6 @@ def test_the_heading_outranks_the_subtitle_when_the_row_is_tight() -> None:
     assert "white-space: nowrap" in heading, "the heading can wrap before the subtitle gives way"
 
 
-def test_the_preset_switch_slides() -> None:
-    """The thumb is one element behind both labels (§3.5).
-
-    A fill on the chosen label tells the reader the state changed; a thumb
-    that travels tells them which way it went. That is the whole reason
-    this is a sliding switch and not a segmented one.
-
-    Measured in a browser after the change: a 207 px track, a 99.3 px
-    thumb, and its centre landing on 54 px then 153 px against active
-    labels centred on 54 px and 153 px.
-    """
-    css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
-    track = css[css.index(".preset-switch {") :]
-    track = track[: track.index("}")]
-    assert "position: relative" in track, (
-        "the track is not a containing block, so an absolutely positioned thumb "
-        "would be placed against the page instead of the switch"
-    )
-    # Load-bearing: the thumb moves by exactly its own width, so a gap
-    # between labels makes it drift further off with each position.
-    assert "gap:" not in track, (
-        f"the track has a gap again; the thumb steps by its own width and will "
-        f"not line up with the later positions: {track!r}"
-    )
-
-    thumb = css[css.index(".preset-switch::before {") :]
-    thumb = thumb[: thumb.index("}")]
-    assert "position: absolute" in thumb, "the thumb is not positioned"
-    assert "var(--preset-count" in thumb, (
-        "the thumb's width does not read the option count, so it is only right "
-        "for whichever number of presets was hardcoded"
-    )
-    assert "var(--preset-index" in thumb, "the thumb does not move with the choice"
-    assert "transform" in thumb, "the thumb is placed, not moved, so it cannot slide"
-
-
-def test_the_slide_can_be_turned_off() -> None:
-    """WCAG 2.3.3: somebody who asked for less movement gets the state."""
-    css = (STATIC / "app.css").read_text(encoding="utf-8")
-    block = re.search(
-        r"@media \(prefers-reduced-motion: reduce\) \{[^}]*\.preset-switch::before[^}]*\}",
-        css,
-        re.S,
-    )
-    assert block, "the thumb animates regardless of prefers-reduced-motion"
-    assert "transition: none" in block.group(0), (
-        f"reduced motion does not stop the transition: {block.group(0)!r}"
-    )
-
-
-def test_the_switch_publishes_what_the_css_cannot_work_out() -> None:
-    """CSS cannot count children or ask which one is active.
-
-    Both custom properties have to be set by `wirePresetSwitch`, and the
-    index has to be clamped: `indexOf` answers -1 for a preset no longer on
-    offer, and -1 parks the thumb a whole position off the left of the
-    track -- visible, wrong, and pointing at nothing.
-    """
-    app = (STATIC / "app.js").read_text(encoding="utf-8")
-    start = app.index("function wirePresetSwitch()")
-    body = app[start : start + 3000]
-    assert "--preset-count" in body, "the option count is never published"
-    assert "--preset-index" in body, "the chosen index is never published"
-    assert "Math.max(0," in body, (
-        "the index is not clamped, so a preset that is no longer offered "
-        "(indexOf -> -1) puts the thumb outside the track"
-    )
-    assert "Math.max(1," in body, (
-        "the count is not floored at 1, so an empty option list divides by zero"
-    )
-
-
 # --- the collapsed sidebar (#300) -----------------------------------
 
 
@@ -745,40 +705,6 @@ def test_a_collapsed_label_leaves_the_screen_but_not_the_tree() -> None:
 # --- more than two presets (#363 made every preset recognisable) ----
 
 
-def test_the_switch_keeps_two_buttons_and_lists_the_rest_in_a_select() -> None:
-    """A third preset squeezed into the switch overflowed its slot.
-
-    Seen live 2026-10-12: with LongTurbo on offer, "Medium Fast" ran past
-    its third of the track and "Long Turbo" was cut off at the edge.
-    """
-    html = _html()
-    menu = html[html.index("data-preset-switch") : html.index("data-preset-scope")]
-    assert "data-preset-more" in menu, "no select for the presets after the first two"
-    code = _code("app.js")
-    body = code[code.index("function wirePresetSwitch") :]
-    body = body[: body.index("\nfunction ")]
-    assert "presetSwitchSlots(offered)" in body, "the buttons are not limited to the slots"
-    assert "data-extra" in body, "the thumb is not hidden when the select holds the preset"
-    css = (STATIC / "app.css").read_text(encoding="utf-8")
-    assert ".preset-switch[data-extra]::before" in css
-    assert ".preset-more:focus-visible" in css, "the select has no focus style"
-
-
-def test_the_buttons_are_chosen_by_a_fixed_rule_not_by_traffic() -> None:
-    """The channel list sorts by traffic, so its first two can change.
-
-    The buttons are the deployment's default, then MediumFast and
-    LongFast, so a busy LongTurbo day does not move LongFast into the
-    select on one page and leave it on the switch on another.
-    """
-    code = _code("app.js")
-    body = code[code.index("function presetSwitchSlots") :]
-    body = body[: body.index("\nfunction ")]
-    assert "defaultPreset" in body
-    assert "SonoranPreset.FALLBACK" in body
-    assert "PRESET_SWITCH_SLOTS" in body
-
-
 # --- "All presets" (Logan, 2026-10-12) ------------------------------
 
 
@@ -793,9 +719,9 @@ def test_all_presets_is_a_choice_and_means_no_filter() -> None:
     assert "SonoranPreset.isAll()" in body and "return ''" in body, (
         "under All the pages would still send one preset"
     )
-    switch = code[code.index("function wirePresetSwitch") :]
-    switch = switch[: switch.index("\nfunction ")]
-    assert "SonoranPreset.ALL" in switch and "text: 'All'" in switch, "All is not offered"
+    boxes = code[code.index("function drawPresetBoxes") :]
+    boxes = boxes[: boxes.index("\nfunction ")]
+    assert "SonoranPreset.ALL" in boxes and "'All presets'" in boxes, "All is not offered"
 
 
 def test_one_preset_pages_draw_the_default_under_all_and_say_so() -> None:
