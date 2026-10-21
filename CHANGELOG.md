@@ -5,6 +5,77 @@ The GitHub Releases page is the source of this file.
 Do not edit it by hand. Run `python tools/release.py changelog`.
 See `docs/RELEASING.md`.
 
+## v2026.10.21 — 2026-10-21
+
+## Highlights
+
+**Live map.** The traffic list below the map now moves in step with the lines on the map: each row appears as its line starts, with the same colour and shape, so the two are easy to match. The packet type picker is a drop-down with checkboxes that opens over the map, also on a phone. Switching presets no longer leaves the old preset's lines on the map.
+
+**Presets.** Every Meshtastic modem preset can be chosen, and several at once on the Settings page. Medium Fast stays the default. Pages that can draw only one preset say which one they show.
+
+**Coverage map.** One Settings button holds the filters, the display options, the which-nodes and layer pickers, and a new signal floor: show only where the signal is at least 0, 5, 10 or 20 dB above what the radio needs. Approximate positions stay off by default.
+
+**Node pages.** A message's time opens that packet.
+
+**Documentation.** A quick start that works from a fresh clone, every setting in `.env.example`, an operations runbook (`docs/OPERATIONS.md`), a contributor guide (`CONTRIBUTING.md`), licence notices for the vendored code, a current architecture document, and `docs/COLLABORATION.md`: how people and AI agents hand work to each other, leave notes and learn from each other's mistakes.
+
+## Upgrade
+
+- No database migration.
+- Rebuild `api` and `jobs` (`docs/DEPLOY.md` §9). The coverage signal floor appears after the next coverage run; until then it is shown as disabled, with the reason. Coverage tiles take about 1.7 times the disk.
+
+## Toward a public release
+
+This is a regular release of the private repository. It is **not** the public release yet; that is the maintainers' decision. A readiness audit of the whole repository and its history found no secrets and a sound application, and these items still stand between this release and a public one. They are tracked in the readiness issue and the security PR:
+
+1. CI runs on a volunteer's self-hosted runners, which fork pull requests could reach in a public repository.
+2. The vendored config checker has no licence yet.
+3. The git history holds personal data (an email address, a machine name, private session links, a real node's position in an old fixture).
+4. A security batch is ready for review by a person: dependency advisories, image hardening, an escaped broker login for mesh-graph, read-only CI tokens, and `SECURITY.md`.
+
+---
+
+5 pull requests merged, 6 issues closed.
+
+#### New features
+
+- The map, presets, coverage settings and node links (Will's queue), and docs for a public release (#389) — done: #334, #383, #384, #385, #386, #387
+  - Coverage map: one Settings button with filters, display options and a signal floor. Approximate positions stay off by default.
+  - Live map: the traffic list now appears in step with the lines on the map, and each row has its line's colour and shape. The packet type picker is a drop-down with checkboxes.
+  - Every modem preset can be chosen, and several at once in Settings.
+  - Switching presets on the map no longer leaves the old preset's lines behind.
+  - On a node page, a message's time opens that packet.
+  - The update notice now says the page was updated, not that a new version came out.
+  - New docs: a quick start that works from a fresh clone, an operations runbook, a contributor guide, and a guide for people and agents who share the work.
+
+#### Fixes
+
+- Old-firmware noise floor note; feat: relay per upload, who heard it last (#378) by @logans-stuff
+  A node's Local stats say when its firmware is too old to measure a noise floor. The packet page shows which node relayed each gateway's copy (as candidates), and "Who heard it" is at the bottom.
+- The Relayed by cell shows names, not [object HTMLButtonElement] (#379) by @logans-stuff
+- Relay candidates follow the firmware: no muted nodes, the sender only at 0 hops (#380) by @logans-stuff
+- Relay candidates are the gateway's direct neighbours, as in the firmware (#381) by @logans-stuff
+
+#### Issues
+
+- Done: #334 Coverage: a settings panel with filters, precise positions by default (Will, 2026-10-08)
+- Done: #383 Move Preset Selector into the Settings menu
+- Done: #384 Switching presets bug on map.
+- Done: #385 Packet type selector on map
+- Done: #386 Live traffic box on map doesn't match the map
+- Done: #387 Messages sent on the node info page should link to the individual packet page
+- Worked on: #182 Sonoran - Noise Floor display (reported by @tylerpieper)
+- Worked on: #382 PWA: "A new version of Sonoran is available" shows when no release was published (seen on Firefox) (reported by @logans-stuff)
+- Worked on: #232 Move some settings to the header maybe? (reported by @tylerpieper)
+
+#### Thank you
+
+- Reported: @tylerpieper, @logans-stuff
+- Code: @logans-stuff
+- Tested and helped: @logans-stuff
+
+**Full changes:** https://github.com/ArizonaMeshtasticCommunity/sonoran/compare/v2026.10.15.2...v2026.10.21
+
 ## v2026.10.15.2 — 2026-10-15
 
 2 pull requests merged.
