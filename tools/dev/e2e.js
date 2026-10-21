@@ -4327,6 +4327,27 @@ async function main() {
       return scope.hidden ? '' : scope.textContent;
     });
     must(/Shows Medium Fast only/.test(note), `the map does not say what it drew: "${note}"`);
+    // Positive control for the quiet preset below: Medium Fast draws dots.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 10000), 'the map drew no Medium Fast node');
+
+    // A preset with no traffic here draws nothing and says so. It used to
+    // keep the old preset's channel: Medium Fast lines under a Short Turbo
+    // switch, and the watch bar said Medium Fast.
+    await page.evaluate(() => window.SonoranPreset.set('ShortTurbo'));
+    await waitFor(page, () => !loading, 10000, 100);
+    await page.waitForTimeout(500);
+    const quiet = last('/api/map/nodes');
+    must(quiet && quiet.searchParams.get('channel') === 'ShortTurbo',
+      `the map did not ask for Short Turbo: ${quiet}`);
+    const shown = await page.evaluate(() => ({
+      dots: window.SonoranMap.marks.size,
+      legend: document.querySelector('[data-map-legend]').textContent,
+    }));
+    must(shown.dots === 0, `${shown.dots} dots under a Short Turbo switch with no Short Turbo traffic`);
+    must(/No node was heard on Short Turbo/.test(shown.legend),
+      `the map does not say Short Turbo is empty: "${shown.legend.slice(-120)}"`);
+    await page.evaluate(() => window.SonoranPreset.setMany(['MediumFast', 'LongFast']));
 
     // The last preset cannot be cleared.
     await open(page, 'settings', 800);

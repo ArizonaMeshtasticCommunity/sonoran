@@ -2812,14 +2812,23 @@ async function linkChannelOptions(page) {
    * here. Worth restoring as a sub-choice WITHIN the preset if anybody
    * misses them.
    */
+  /*
+   * The menu's preset is drawn even when the channel list does not carry
+   * it (#383). Every firmware preset can be chosen now, and most have no
+   * traffic here. Keeping the old channel then drew Medium Fast lines
+   * under a Short Turbo switch, with "Medium Fast" in the watch bar. The
+   * requests for a quiet preset come back empty, and the scope line says
+   * that no node was heard on it.
+   */
+  const menuWanted = window.SonoranPreset && !SonoranPreset.isAll()
+    ? SonoranPreset.current() : '';
   if (mapFocus && mapFocus.preset
       && channels.some((item) => item.channel === mapFocus.preset)) {
     linkChannel = mapFocus.preset;
-  } else if (window.SonoranPreset) {
-    const wanted = SonoranPreset.current();
-    if (channels.some((item) => item.channel === wanted)) linkChannel = wanted;
+  } else if (menuWanted) {
+    linkChannel = menuWanted;
   }
-  if (!channels.some((item) => item.channel === linkChannel)) {
+  if (!menuWanted && !channels.some((item) => item.channel === linkChannel)) {
     linkChannel = channels[0].channel;
   }
 
@@ -3767,7 +3776,10 @@ PAGES.map = async (page) => {
    * than a reader's choice.
    */
   mapNodeScope = channel
-    ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
+    ? (nodes.length
+      ? `${count(nodes.length)} nodes seen on ${channel} in ${LINK_HOURS} h`
+      // A preset with no traffic here (#383): an empty map, said in words.
+      : `No node was heard on ${SonoranLabels.presetLabel(channel)} in ${LINK_HOURS} h.`)
     : `${count(nodes.length)} nodes heard on every preset in ${LINK_HOURS} h`;
 
   // Held so the legend filter can redraw without another request.
