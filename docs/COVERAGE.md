@@ -284,9 +284,13 @@ visit.
 - **Node markers by role** offers one chip for each role of the nodes
   the map on show was predicted from. A hidden role stays offered, so
   the filter can be undone where it was made.
-- **Hide moving nodes** hides the Tracker and TAK tracker roles. The
-  page has no measure of movement, only the role, and the panel says
-  so. A node of another role can move and this filter cannot see it.
+- **Hide moving nodes.** Definition: a moving node is a node whose role
+  is `TRACKER` or `TAK_TRACKER`, and nothing else. This filter hides
+  those two roles. That is our reading of "hide moving nodes" in #334,
+  not a rule Will stated. It is open to him to change. The page has no
+  measure of movement, only the role, and the panel says so. A node of
+  another role can move, for example a client in a car, and this filter
+  does not hide it.
   The two roles are already left out of every map (`sonoran/roles.py`),
   so the filter changes markers only on a diagnostic map.
 - **Show uncertainty circles** draws a circle around each site that the
