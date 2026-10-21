@@ -256,3 +256,8 @@ engine in `src/sonoran/web/static/vendor/splat/` is a build of
 [SPLAT!](https://www.qsl.net/kd2bd/splat.html) under the GPL-3, and the web
 interface uses it, so the whole interface carries the same licence. The full
 text is in [`LICENSE`](LICENSE). See [AGENTS.md](AGENTS.md) 7.1.
+
+The other vendored code and data, with the licence and the version of
+each, are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+The licence of the vendored config checker is not yet granted by its
+authors. That file says what this means.

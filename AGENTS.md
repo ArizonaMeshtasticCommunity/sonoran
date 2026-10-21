@@ -251,6 +251,13 @@ General Public License version 3. The Sonoran web interface uses it and
 therefore carries the same licence. Keep `LICENSE-GPL3` and the
 attribution beside it. See `docs/PLANNER.md` section 6.
 
+Every other vendored component is listed in `THIRD_PARTY_NOTICES.md`,
+with its version and licence. Its licence text is in
+`web/static/vendor/LICENSES/`, copied from upstream at the vendored
+version's tag. When you update a vendored file, update its licence text
+and its row in the same change. The vendored config checker has no
+licence yet (its upstream has none). Do not add one in the copy.
+
 ## 8. Common tasks
 
 ### Add a new packet type handler
