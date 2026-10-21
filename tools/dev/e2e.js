@@ -2721,13 +2721,16 @@ async function main() {
      *
      * The traffic is served through a route: three packets a minute old
      * in the first poll, which the table shows at once, and three new
-     * ones three seconds apart in the next.
+     * ones three seconds apart in the next. Nothing else is served, so the
+     * seed's own traffic cannot change which rows are on screen.
      */
     let events = [];
     await page.route(/\/api\/map\/traffic(\?|$)/, async (route) => {
       const response = await route.fetch();
       const body = await response.json();
-      body.events = [...body.events, ...events];
+      // Only this journey's packets. A fresh seed (CI) has recent traffic
+      // of its own, which would push these past the table's row limit.
+      body.events = [...events];
       return route.fulfill({ response, json: body });
     });
     // The marks are needed before the first poll can carry made packets,
@@ -2750,11 +2753,18 @@ async function main() {
     await page.goto(`${BASE}/#map/watch/traffic/expanded`, { waitUntil: 'load' });
     must(await waitFor(page, () => document.querySelectorAll('[data-traffic-table] tbody tr').length >= 3, 30000),
       'the watch table did not show the first poll');
+    /*
+     * Select inside this journey's own oldest packet, not "the last row".
+     * On a freshly seeded instance (CI) the window also holds the seed's
+     * own traffic, so the last row can be any packet, and its second cell
+     * can be empty.
+     */
     const before = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('[data-traffic-table] tbody tr')];
-      const row = rows[rows.length - 1];
+      const row = rows.find((tr) => (tr.dataset.row || '').includes('3861001'));
+      if (!row) return { rows: rows.length, text: '', missing: true };
       row.__e2eHeld = true;
-      const cell = row.children[1];
+      const cell = [...row.children].find((td) => td.textContent.trim()) || row.children[0];
       const range = document.createRange();
       range.selectNodeContents(cell);
       const selection = getSelection();
@@ -2762,6 +2772,7 @@ async function main() {
       selection.addRange(range);
       return { rows: rows.length, text: selection.toString() };
     });
+    must(!before.missing, 'the journey\'s own packet 3861001 is not in the watch table');
     must(before.text.trim().length > 0, 'nothing was selected in the table');
 
     const start = Date.now();
