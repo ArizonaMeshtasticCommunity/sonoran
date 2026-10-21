@@ -843,6 +843,61 @@ What the page does not claim, because the database does not hold it:
   and whose `error_reason` is `NONE`, but ingest does not store routing
   packets, so only the request is known.
 - The content of a node-info or routing packet.
+
+#### 3.10.2 Times that link, and times that do not yet (#387)
+
+A time that belongs to one packet, one traceroute or one node opens that
+packet, traceroute or node. A hover or a long press still gives the
+exact time, in the link's `title`. Will asked for this on the node page
+in #387, and asked for the whole site to be checked. All functions below
+are in `web/static/app.js`.
+
+Fixed in #387:
+
+- The node page, "Messages sent" (`messagesPanel`, through
+  `messageItem`). `/api/nodes/{id}/detail` now sends `packet_id` and
+  `from_node` with each message, so the time opens the packet. A
+  message stored with no packet ID keeps the popup with the exact time.
+
+Already correct:
+
+- `messageItem`. The chat reading view (`chatReading`), the dashboard
+  feed (`PAGES.dashboard`) and the check-in page use it.
+- The chat table view (`chatTable`).
+- A reply quote opens the message it answers (`replyQuote`).
+- The firehose time (`PAGES.firehose`).
+- The node page packet timeline (`drawTimeline`).
+- The traceroutes list (`PAGES.traceroutes`).
+- The packet link on a traceroute page (`PAGES.traceroute`).
+
+Not linked yet. Each one needs more than a link:
+
+- The node page Device and Weather ages (`devicePanel`,
+  `weatherPanel`). The device reading has `packet_id` in the API. The
+  weather reading needs one. The telemetry tables keep 90 days and
+  `packet` keeps 30 (`DATABASE.md` 6), so a link to an old reading can
+  open "packet not found". Link only a reading younger than the packet
+  retention.
+- The node page Neighbors "Last RX" (`neighborPanel`). The API does not
+  send the report's `packet_id`. `last_rx_time` is the node's own claim
+  about the neighbor, and the report is a different packet. Decide which
+  one the time opens first.
+- The node page "Who hears it" "Last" (`heardByPanel`), the furthest
+  node tiles (`routesPanel`), the node title "heard ... ago"
+  (`loadNodeDetail`) and the dashboard "Recent nodes" "Heard"
+  (`PAGES.dashboard`). Each is a summary of many packets, and the API
+  sends no packet ID for the newest one.
+- The link page Evidence "When" (`PAGES.link`). The "Packet" column of
+  the same row already opens the packet.
+- The chat overview "last ... ago" (`channelSection`). The newest
+  message is the first line under it, and its time links.
+- The live map: the traffic feed time (`trafficRow`), the traffic table
+  time (`trafficTable`), the watch ticker (`updateWatchStatus`), the
+  traceroute feed time (`PAGES.map`) and the node bubble "heard ... ago"
+  (`mapNodePopup`). A row's kind or name already links. The map page
+  has its own owner, so these are left for that work.
+- The graph node tooltip "heard ... ago" (`PAGES.graph`). A tooltip
+  cannot hold a link.
 - Which node relayed it. `relay_node` holds only the last byte of a
   node number (`mesh.proto`), which cannot name a node.
 
