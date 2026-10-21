@@ -131,6 +131,8 @@ ROUTES: dict[str, frozenset[str]] = {
     "/api/coverage/calibration": _COVERAGE,
     "/api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/{zoom}/{x}/{y}.png": _COVERAGE,
     "/api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/margin/{zoom}/{x}/{y}.png": _COVERAGE,
+    # The heard positions layer (#344) is drawn on the coverage page only.
+    "/api/map/heatmap/{model}/{z}/{x}/{y}.png": _COVERAGE,
     "/embed/coverage": _COVERAGE,
     "/api/embed/coverage": _COVERAGE,
     "/api/embed/nodes": _COVERAGE,
