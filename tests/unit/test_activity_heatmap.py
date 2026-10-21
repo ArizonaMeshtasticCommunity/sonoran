@@ -124,6 +124,14 @@ def test_each_gateway_counts_once_at_its_fewest_hops() -> None:
     assert score == 10.0 + 2.0
 
 
+def test_the_default_region_fits_in_a_jobs_ceiling() -> None:
+    """Would be caught: the 90 m terrain grid needed about 6 GB here."""
+    grid, relative, count = _build_grids(Settings(_env_file=None), [(33.5, -111.5, 10.0)])
+    cells = grid.width * grid.height
+    assert cells <= 4_000_000, f"{cells} cells"
+    assert relative["position"].shape == count.shape == (grid.height, grid.width)
+
+
 class _Rows:
     def __init__(self, rows: list[tuple]) -> None:
         self.rows = rows

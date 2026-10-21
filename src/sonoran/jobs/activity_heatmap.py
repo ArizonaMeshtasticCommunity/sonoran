@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from sonoran.config import Settings
 from sonoran.coverage import store
-from sonoran.coverage.grid import Grid, region_grid
+from sonoran.coverage.grid import CELLS_PER_DEGREE, Grid, region_grid
 from sonoran.coverage.render import tile_latitudes, tile_longitudes, tiles_for_grid
 from sonoran.db.models import PacketSeen, PositionMetrics
 from sonoran.logging import get_logger
@@ -22,6 +22,19 @@ logger = get_logger(__name__)
 MIN_ALPHA = 40
 MAX_ALPHA = 210
 MAX_PACKETS_OPACITY = 100.0
+
+# The heatmap uses a coarser grid than the terrain (CELLS_PER_DEGREE,
+# about 90 m). On the terrain grid the default region of 8 by 8 degrees
+# is 92 million cells, and the blur needed about 6 GB. The review of
+# PR 344 measured 0.47 GB at 2 degrees, 1.8 GB at 4 and 3.5 GB at 6.
+# 240 cells per degree is about 460 m. That is finer than the smallest
+# blob (the injected block is about 2.8 km across), and the grid has 25
+# times fewer cells. The radii below keep their size in metres.
+HEATMAP_CELLS_PER_DEGREE = 240
+_SCALE = CELLS_PER_DEGREE // HEATMAP_CELLS_PER_DEGREE
+INJECT_RADIUS_CELLS = 15 // _SCALE
+BLUR_RADIUS_CELLS = 15 // _SCALE
+POOL_RADIUS_CELLS = 177 // _SCALE
 
 
 def precision_deviation_m(precision_bits: int) -> float:
@@ -190,7 +203,7 @@ def box_blur(grid: npt.NDArray[np.float32], radius: int) -> npt.NDArray[np.float
 
 
 def blur_grid(
-    grid: npt.NDArray[np.float32], radius: int = 15, iterations: int = 3
+    grid: npt.NDArray[np.float32], radius: int = BLUR_RADIUS_CELLS, iterations: int = 3
 ) -> npt.NDArray[np.float32]:
     """Apply multiple passes of a box blur to approximate a Gaussian blur."""
     out = grid
@@ -200,7 +213,7 @@ def blur_grid(
 
 
 def local_max_pool(
-    grid: npt.NDArray[np.float32], radius_cells: int = 177
+    grid: npt.NDArray[np.float32], radius_cells: int = POOL_RADIUS_CELLS
 ) -> npt.NDArray[np.float32]:
     """Find the local maximum over a given radius using block downsampling."""
     block_size = max(1, (radius_cells * 2) // 10)
@@ -245,6 +258,7 @@ def _build_grids(
         settings.terrain_lat_max,
         settings.terrain_lon_min,
         settings.terrain_lon_max,
+        cells_per_degree=HEATMAP_CELLS_PER_DEGREE,
     )
 
     models = ["position"]
@@ -258,7 +272,7 @@ def _build_grids(
         if row < 0 or row >= grid.height or col < 0 or col >= grid.width:
             continue
 
-        radius_cells = 15
+        radius_cells = INJECT_RADIUS_CELLS
 
         r_start = max(0, row - radius_cells)
         r_end = min(grid.height, row + radius_cells + 1)
@@ -294,7 +308,7 @@ def _build_grids(
             blurred_s, count_grid, out=np.zeros_like(blurred_s), where=count_grid > 0.001
         )
 
-        local_potential = local_max_pool(s_grid, radius_cells=177)
+        local_potential = local_max_pool(s_grid)
         relative = np.divide(
             s_grid, local_potential, out=np.zeros_like(s_grid), where=local_potential > 0.001
         )
