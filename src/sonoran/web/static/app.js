@@ -3057,21 +3057,87 @@ function paintTrafficFeed() {
   if (!page || !$('[data-traffic-feed]', page)) return;
   const shown = mapState.lastPackets || [];
   const pending = mapState.live ? mapState.live.pendingKeys() : new Set();
-  const drawn = pending.size ? shown.filter((packet) => !pending.has(packet.key)) : shown;
-  const waiting = shown.length && !drawn.length
-    ? 'The newest packets are on their way to the map.' : empties;
-  const newest = coalesceFeed(drawn.slice().reverse()).slice(0, FEED_ROWS);
-  updateFeed($('[data-traffic-feed]', page), newest, waiting);
-  // The table is rebuilt only when its rows change, so a frame that
-  // released nothing new for it does not throw away its scroll position.
-  const tableRows = drawn.slice().reverse().slice(0, FEED_ROWS);
-  const signature = tableRows
-    .map((row) => `${row.key}:${row.gateway_count}:${row.upload_count}`).join(',');
-  const table = $('[data-traffic-table]', page);
-  if (table && table.dataset.rows !== signature) {
-    table.dataset.rows = signature;
-    replace(table, tableRows.length ? trafficTable(tableRows) : empty(waiting));
+  /*
+   * Read from the newest end, and only as far as the panel shows. This
+   * runs in every frame that releases a packet, and the window holds up
+   * to 2000 uploads, so a copy and a reverse of the whole list each
+   * time is work for rows nobody sees. `feed` is cut where a forty-first
+   * row would start, so a run that coalesces is still counted whole.
+   */
+  const feed = [];
+  const plain = [];
+  let rows = 0;
+  // The newest packet of the row being built, which is what
+  // `coalesceFeed` compares a packet with, so the cut falls where its
+  // rows do.
+  let head = null;
+  for (let index = shown.length - 1; index >= 0; index -= 1) {
+    const packet = shown[index];
+    if (pending.has(packet.key)) continue;
+    if (plain.length < FEED_ROWS) plain.push(packet);
+    const joins = head
+      && head.from.node_id === packet.from.node_id
+      && head.portnum === packet.portnum
+      && Math.abs(head.timeMs - packet.timeMs) <= COALESCE_MS;
+    if (!joins) rows += 1;
+    if (rows > FEED_ROWS) {
+      if (plain.length >= FEED_ROWS) break;
+      continue;
+    }
+    if (!joins) head = packet;
+    feed.push(packet);
   }
+  const waiting = shown.length && !plain.length
+    ? 'The newest packets are on their way to the map.' : empties;
+  const newest = coalesceFeed(feed).slice(0, FEED_ROWS);
+  updateFeed($('[data-traffic-feed]', page), newest, waiting);
+  const table = $('[data-traffic-table]', page);
+  if (table) updateTrafficTable(table, plain, waiting);
+}
+
+/**
+ * Update the watch table in place, row by row.
+ *
+ * The list gets a new row each time a line starts, so the table does
+ * too. Rebuilt whole, it lost the reader's scroll position and any text
+ * they had selected every few seconds. Here a row whose packet and
+ * counts did not change is the same element after the update, a new
+ * row is put in where it belongs, and the rest is removed.
+ */
+function updateTrafficTable(holder, rows, emptyText) {
+  const ids = rows.map((row) => `${row.key}:${row.gateway_count}:${row.upload_count}`);
+  const signature = ids.join(',');
+  if (holder.dataset.rows === signature) return;
+  holder.dataset.rows = signature;
+  if (!rows.length) {
+    replace(holder, empty(emptyText));
+    return;
+  }
+  const fresh = trafficTable(rows);
+  const made = [...fresh.querySelectorAll('tbody > tr')];
+  made.forEach((tr, index) => { tr.dataset.row = ids[index]; });
+  const body = holder.querySelector('tbody');
+  if (!body || made.length !== rows.length) {
+    replace(holder, fresh);
+    return;
+  }
+  const existing = new Map();
+  for (const tr of [...body.children]) {
+    if (tr.dataset.row) existing.set(tr.dataset.row, tr);
+    else tr.remove();
+  }
+  let before = body.firstChild;
+  for (const tr of made) {
+    const held = existing.get(tr.dataset.row);
+    if (held) {
+      existing.delete(tr.dataset.row);
+      if (held !== before) body.insertBefore(held, before);
+      else before = held.nextSibling;
+      continue;
+    }
+    body.insertBefore(tr, before);
+  }
+  for (const tr of existing.values()) tr.remove();
 }
 
 /** "3 gateways, 5 uploads", with the singulars right. */

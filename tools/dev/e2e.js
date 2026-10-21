@@ -2695,6 +2695,78 @@ async function main() {
     return `rows at ${seenAt.join('/')} ms after one poll (spread ${spread} ms); colours ${report.join('; ')}`;
   });
 
+  await journey(context, 'the watch traffic table keeps a selection while rows arrive (#386)', async (page) => {
+    /*
+     * The list now takes each packet as its line starts, so the watch
+     * table gets a new row every few seconds rather than once a poll.
+     * Rebuilt whole each time, it threw away the rows a reader was
+     * reading and any text they had selected. A row that did not change
+     * must be the same element after new rows arrive, so the selection
+     * in it holds.
+     *
+     * The traffic is served through a route: three packets a minute old
+     * in the first poll, which the table shows at once, and three new
+     * ones three seconds apart in the next.
+     */
+    let events = [];
+    await page.route(/\/api\/map\/traffic(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.events = [...body.events, ...events];
+      return route.fulfill({ response, json: body });
+    });
+    // The marks are needed before the first poll can carry made packets,
+    // so the first visit only reads two placed nodes.
+    await open(page, 'map', 4000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size >= 2, 30000), 'the map drew fewer than two nodes');
+    const ends = await page.evaluate(() => [...window.SonoranMap.marks.entries()].slice(0, 2).map(([id, mark]) => {
+      const at = mark.marker.getLatLng();
+      return { node_id: id, display_name: `Table ${id}`, lat: at.lat, lon: at.lng };
+    }));
+    const made = (id, msAgo, portnum) => ({
+      time: new Date(Date.now() - msAgo).toISOString(),
+      packet_id: id, channel: 'azmsh', mqtt_topic: 'msh/e2e', snr: null, rssi: null,
+      hop_limit: 2, hop_start: 3, hops_taken: 1, direct: false,
+      portnum, from: ends[0], gateway: ends[1], has_line: true,
+    });
+    events = [made(3861001, 70000, 'POSITION_APP'), made(3861002, 60000, 'TELEMETRY_APP'),
+      made(3861003, 50000, 'NODEINFO_APP')];
+    await page.goto(`${BASE}/#map/watch/traffic/expanded`, { waitUntil: 'load' });
+    must(await waitFor(page, () => document.querySelectorAll('[data-traffic-table] tbody tr').length >= 3, 30000),
+      'the watch table did not show the first poll');
+    const before = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-traffic-table] tbody tr')];
+      const row = rows[rows.length - 1];
+      row.__e2eHeld = true;
+      const cell = row.children[1];
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return { rows: rows.length, text: selection.toString() };
+    });
+    must(before.text.trim().length > 0, 'nothing was selected in the table');
+
+    const start = Date.now();
+    events = [...events, made(3861004, 9000, 'TEXT_MESSAGE_APP'), made(3861005, 6000, 'ROUTING_APP'),
+      made(3861006, 3000, 'TRACEROUTE_APP')];
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
+      await render('map');
+    });
+    must(await waitFor(page, (want) => document.querySelectorAll('[data-traffic-table] tbody tr').length >= want,
+      15000, 250, before.rows + 3), 'the three new packets did not reach the table');
+    const after = await page.evaluate(() => {
+      const held = [...document.querySelectorAll('[data-traffic-table] tbody tr')].find((row) => row.__e2eHeld);
+      return { held: Boolean(held), text: getSelection().toString(), rows: document.querySelectorAll('[data-traffic-table] tbody tr').length };
+    });
+    must(after.held, 'a row that did not change was rebuilt when new rows arrived');
+    must(after.text === before.text, `the selection "${before.text}" became "${after.text}"`);
+    return `${before.rows} -> ${after.rows} rows in ${Date.now() - start} ms; the selected row and its selection held`;
+  });
+
   await journey(context, 'the packet type menu opens over the map, not into the head (#385)',
     (page) => familyMenuWalk(page, { watch: false }));
   await journey(context, 'the packet type menu works in watch mode (#385)',

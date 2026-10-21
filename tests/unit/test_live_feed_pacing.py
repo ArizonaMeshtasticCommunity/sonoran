@@ -92,7 +92,8 @@ def test_the_page_lists_only_what_the_map_has_drawn() -> None:
     body = app[app.index("function paintTrafficFeed()") :]
     body = body[: body.index("\n}\n")]
     assert "mapState.live.pendingKeys()" in body
-    assert "!pending.has(packet.key)" in body
+    assert "if (pending.has(packet.key)) continue;" in body
+    assert "updateTrafficTable(table, plain, waiting)" in body
     assert "onRelease: () => paintTrafficFeed()," in app
 
 
