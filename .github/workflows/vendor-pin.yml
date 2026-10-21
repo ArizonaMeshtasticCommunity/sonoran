@@ -19,11 +19,16 @@ on:
     - cron: '17 6 * * 1'
   workflow_dispatch:
 
+# The checkout token reads the repository and nothing else. Each
+# action is pinned by commit; see ci.yml.
+permissions:
+  contents: read
+
 jobs:
   config-checker:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Compare the pin with upstream
         env:
           # The upstream repository is private, so the checkout token
