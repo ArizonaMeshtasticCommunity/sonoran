@@ -353,6 +353,12 @@ the floor and says "Shown from -126 dBm, 10 dB above the limit". The
 "Usable area" figure is the run's, measured at the limit, and says so
 while a floor is in force.
 
+A fetched tile is not cancelled by the browser when Leaflet drops it,
+as an image is. So each margin tile request has its own abort signal,
+and the layer aborts it on `tileunload`: when the tile is panned out of
+view, or when the floor changes and the layer goes. The journey
+"margin tiles that leave the map stop downloading" pins it.
+
 **The floor is a map choice**, so it goes in the address with the
 layer, counts on the badge, and Reset clears it. It is not stored for
 the viewer. It changes which ground the map calls covered, and a floor

@@ -2247,6 +2247,50 @@ async function main() {
     return out.length ? out : null;
   };
 
+  await journey(context, 'coverage settings: margin tiles that leave the map stop downloading (#334)', async (page) => {
+    /*
+     * A margin tile is fetched, not loaded as an image, so the browser
+     * does not cancel it when Leaflet drops the tile. A reader who pans
+     * or changes the floor used to keep downloading every tile that
+     * was no longer on the map. Here the margin tiles answer slowly,
+     * and the floor changes before they arrive: each request of the
+     * old layer must be aborted.
+     */
+    await stubCoverage(page, { margins: true });
+    let asked = 0;
+    // Registered last, so it is asked first: hold each margin tile.
+    await page.route(/\/api\/coverage\/tiles\/.*\/margin\//, (route) => {
+      asked += 1;
+      setTimeout(() => {
+        route.fulfill({ contentType: 'image/png', body: MARGIN_PNG }).catch(() => {});
+      }, 4000);
+    });
+    const aborted = [];
+    page.on('requestfailed', (request) => {
+      if (request.url().includes('/margin/')) aborted.push(request.failure() && request.failure().errorText);
+    });
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(400);
+    const floor = page.locator('[data-coverage-signal-floor]');
+    await floor.selectOption('10');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return Boolean(state.tiles && String(state.tiles._url).includes('/margin/')
+        && Object.keys(state.tiles._tiles || {}).length);
+    }, 10000), 'a 10 dB floor did not ask for margin tiles');
+    await page.waitForTimeout(500);
+    const first = asked;
+    must(first > 0, 'no margin tile was asked for');
+    // The old layer goes before its tiles arrive.
+    await floor.selectOption('0');
+    await page.waitForTimeout(1500);
+    must(aborted.length >= first,
+      `${first} margin tiles were in flight when the layer went, and ${aborted.length} were aborted`);
+    return `${first} in flight, ${aborted.length} aborted (${[...new Set(aborted)].join(', ')})`;
+  });
+
   await journey(context, 'coverage settings: a 10 dB floor hides the weaker ground, and Reset clears it (#334)', async (page) => {
     await stubCoverage(page, { margins: true });
     await open(page, 'coverage', 2500);

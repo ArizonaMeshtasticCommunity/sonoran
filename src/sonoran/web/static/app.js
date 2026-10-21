@@ -58,12 +58,23 @@ function requestFailed(path, status) {
  *   request can be stranded, and then draws the page again.
  * - A request that has had no answer in 60 s is abandoned. The slowest
  *   real query measured on production took 29 s (#304).
+ * - `apiFetchUntil` is the same request with one more way to end it: a
+ *   signal of the caller's. The coverage margin tiles use it, so a tile
+ *   that leaves the map stops downloading (#334).
  */
 const REQUEST_TIMEOUT_MS = 60000;
 const requestsInFlight = new Set();
 
 function apiFetch(url) {
+  return apiFetchUntil(url, null);
+}
+
+function apiFetchUntil(url, signal) {
   const controller = new AbortController();
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  }
   const timer = setTimeout(
     () => controller.abort(new Error('The server did not answer within a minute.')),
     REQUEST_TIMEOUT_MS,

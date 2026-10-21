@@ -298,11 +298,13 @@
    * API can be on another origin. The bitmap is decoded with no colour
    * conversion, so each grey byte arrives as it was written.
    */
-  async function paintMargin(canvas, url, floor, spec) {
-    const response = await apiFetch(url);
+  async function paintMargin(canvas, url, floor, spec, signal) {
+    const response = await apiFetchUntil(url, signal);
     // A tile that was never written is ground no node reaches.
     if (!response.ok) return;
-    const bitmap = await createImageBitmap(await response.blob(), {
+    const blob = await response.blob();
+    if (signal && signal.aborted) return;
+    const bitmap = await createImageBitmap(blob, {
       premultiplyAlpha: 'none',
       colorSpaceConversion: 'none',
     });
@@ -329,16 +331,29 @@
         initialize(template, settings) {
           this._url = template;
           L.GridLayer.prototype.initialize.call(this, settings);
+          /* A margin tile is fetched, not loaded as an image, so the
+             browser does not cancel it when Leaflet drops the tile.
+             Abort it here, when the tile leaves the map or the layer
+             goes. Otherwise every tile panned away keeps downloading. */
+          this.on('tileunload', (event) => {
+            const controller = event.tile && event.tile.marginRequest;
+            if (controller) controller.abort();
+          });
         },
         createTile(coords, done) {
           const size = this.getTileSize();
           const canvas = document.createElement('canvas');
           canvas.width = size.x;
           canvas.height = size.y;
-          const finish = () => done(null, canvas);
+          const controller = new AbortController();
+          canvas.marginRequest = controller;
+          const finish = () => {
+            canvas.marginRequest = null;
+            if (!controller.signal.aborted) done(null, canvas);
+          };
           paintMargin(canvas, L.Util.template(this._url, coords), this.options.floor,
-            this.options.spec).then(finish, (error) => {
-            console.warn('coverage margin tile failed', error);
+            this.options.spec, controller.signal).then(finish, (error) => {
+            if (!controller.signal.aborted) console.warn('coverage margin tile failed', error);
             finish();
           });
           return canvas;
