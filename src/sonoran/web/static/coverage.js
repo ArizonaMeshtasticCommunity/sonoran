@@ -33,6 +33,9 @@
    */
   const DEFAULT_LAYER = 'usable';
   const HEATMAP_LAYER = 'empirical_heatmap_position';
+  const HEATMAP_NOTE = 'This layer is a record, not a prediction. It shows where nodes were '
+    + 'when the mesh heard their position. No colour does not mean no coverage: '
+    + 'it can mean that no node sent its position from there.';
 
   /*
    * The settings panel (#334). `coverage-settings.js` holds the rules:
@@ -576,7 +579,7 @@
        layer of the run: its tiles come from the activity_heatmap job. */
     const layers = [
       ...(state.summary.layers || []),
-      { key: HEATMAP_LAYER, label: 'Actual coverage (based on heard positions)' },
+      { key: HEATMAP_LAYER, label: 'Heard positions, last 30 days' },
     ];
     replace(
       host,
@@ -585,6 +588,13 @@
     );
     host.value = state.layer;
     host.title = usableTitle();
+    /* A newcomer needs to know that this layer is a record, not a
+       prediction, and what it cannot show. */
+    const note = $('[data-coverage-layer-note]', page);
+    if (note) {
+      note.hidden = state.layer !== HEATMAP_LAYER;
+      note.textContent = note.hidden ? '' : HEATMAP_NOTE;
+    }
   }
 
   function drawViews(page) {
@@ -830,9 +840,9 @@
     }
     legend.hidden = false;
     if (state.layer === HEATMAP_LAYER) {
-      $('[data-coverage-legend-title]', legend).textContent = 'Relative Local Performance';
-      $('[data-coverage-floor]', legend).textContent = '0%';
-      $('[data-coverage-ceiling]', legend).textContent = '100%';
+      $('[data-coverage-legend-title]', legend).textContent = 'How well the mesh heard nodes here';
+      $('[data-coverage-floor]', legend).textContent = 'Less than nearby';
+      $('[data-coverage-ceiling]', legend).textContent = 'Best nearby';
       const line = $('[data-coverage-legend-floor]', legend);
       if (line) line.hidden = true;
       drawWhich(page);
@@ -881,7 +891,13 @@
       return;
     }
     if (state.layer === HEATMAP_LAYER) {
-      replace(host, statTile('30', 'Days included', 'Rolling window'));
+      const tile = statTile('30', 'Days included', 'Made again each day');
+      const label = $('.label', tile);
+      label.dataset.hint = 'The heatmap reads the position packets of the last 30 days. '
+        + 'The jobs service makes it again once a day, just after midnight UTC.';
+      label.dataset.label = 'Days included';
+      replace(host, tile);
+      if (typeof revealHints === 'function') revealHints(host);
       return;
     }
     replace(
@@ -986,13 +1002,16 @@
     if (!sub || !summary || !summary.available) return;
     
     if (state.layer === HEATMAP_LAYER) {
-      sub.textContent = 'Actual radio activity over the last 30 days. Opacity shows volume of position packets; color shows relative mesh penetration (gateways reached), weighted heavily toward direct and short-hop paths.';
+      sub.textContent = 'Where the mesh heard node positions in the last 30 days. '
+        + 'A stronger colour means more packets. The colour compares each place with '
+        + 'the best place within about 16 km: blue is the best nearby. A direct hearing '
+        + 'by a gateway counts more than one over many hops.';
       return;
     }
     
     sub.textContent = shownIsDiagnostic()
       ? `Diagnostic view: predicted from ${shownRoles().join(', ') || 'every role'}.`
-      : 'Simulated coverage of where a handheld node and a router can theoretically exchange data.';
+      : 'Where the mesh reaches, predicted from the routers and repeaters that carry it.';
   }
 
   function diagnosticNotice() {
@@ -1266,7 +1285,7 @@
     if (!host) return;
     
     if (state.layer === HEATMAP_LAYER) {
-      replace(host, el('p', { class: 'muted', text: 'This layer shows historical activity from all gateways, not a specific site set.' }));
+      replace(host, el('p', { class: 'muted', text: 'This layer comes from heard positions, so it has no sites. It shows all gateways and all presets together.' }));
       return;
     }
 
