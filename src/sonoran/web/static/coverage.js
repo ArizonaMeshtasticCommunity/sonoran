@@ -69,6 +69,12 @@
     approximateAvailable: false,
     siteSet: null,
     layer: saved.layer || DEFAULT_LAYER,
+    // The signal floor, in dB above the sensitivity (#334). A map
+    // choice: it comes from the address and is never stored.
+    floor: saved.floor,
+    // How the run's margin tiles are coloured, or null for a run that
+    // has none. See `SETTINGS.marginSpec`.
+    marginSpec: null,
     showMap: true,
     showNodes: true,
     showSignal: true,
@@ -93,6 +99,7 @@
       base: state.base,
       approximate: state.approximate,
       layer: state.layer,
+      floor: state.floor,
       showMap: state.showMap,
       showNodes: state.showNodes,
       showSignal: state.showSignal,
@@ -237,6 +244,11 @@
     state.approximateAvailable = choice.approximateAvailable;
     const layers = ((state.summary && state.summary.layers) || []).map((layer) => layer.key);
     if (layers.length && !layers.includes(state.layer)) state.layer = DEFAULT_LAYER;
+    /* A floor needs margin tiles. A run made before them draws its
+       colour tiles with no floor, and the control says why. It never
+       draws the whole map while it says a floor is in force. */
+    state.marginSpec = SETTINGS.marginSpec(state.summary);
+    state.floor = state.marginSpec ? SETTINGS.floorOf(state.floor) : 0;
   }
 
   /*
@@ -278,6 +290,64 @@
     if (!state.showMap && map.hasLayer(state.baseTiles)) map.removeLayer(state.baseTiles);
   }
 
+  /*
+   * Colour one margin tile into a canvas, above the floor (#334).
+   *
+   * The tile is fetched rather than loaded as an image. A canvas that
+   * has drawn an image from another origin cannot be read back, and the
+   * API can be on another origin. The bitmap is decoded with no colour
+   * conversion, so each grey byte arrives as it was written.
+   */
+  async function paintMargin(canvas, url, floor, spec) {
+    const response = await apiFetch(url);
+    // A tile that was never written is ground no node reaches.
+    if (!response.ok) return;
+    const bitmap = await createImageBitmap(await response.blob(), {
+      premultiplyAlpha: 'none',
+      colorSpaceConversion: 'none',
+    });
+    const width = bitmap.width;
+    const height = bitmap.height;
+    const scratch = document.createElement('canvas');
+    scratch.width = width;
+    scratch.height = height;
+    const reader = scratch.getContext('2d', { willReadFrequently: true });
+    reader.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const grey = reader.getImageData(0, 0, width, height);
+    const colours = SETTINGS.colourMargins(grey.data, floor, spec);
+    canvas.getContext('2d').putImageData(new ImageData(colours, width, height), 0, 0);
+  }
+
+  /* The signal layer when a floor is in force. A Leaflet grid layer
+     that paints each margin tile into a canvas. Made once, on first
+     use, because Leaflet is not there when this file is read. */
+  let MarginLayer = null;
+  function marginLayer(url, options) {
+    if (!MarginLayer) {
+      MarginLayer = L.GridLayer.extend({
+        initialize(template, settings) {
+          this._url = template;
+          L.GridLayer.prototype.initialize.call(this, settings);
+        },
+        createTile(coords, done) {
+          const size = this.getTileSize();
+          const canvas = document.createElement('canvas');
+          canvas.width = size.x;
+          canvas.height = size.y;
+          const finish = () => done(null, canvas);
+          paintMargin(canvas, L.Util.template(this._url, coords), this.options.floor,
+            this.options.spec).then(finish, (error) => {
+            console.warn('coverage margin tile failed', error);
+            finish();
+          });
+          return canvas;
+        },
+      });
+    }
+    return new MarginLayer(url, options);
+  }
+
   function drawTiles() {
     const map = ensureMap();
     if (state.tiles) {
@@ -301,6 +371,29 @@
     const base = api(
       `api/coverage/tiles/${summary.stamp}/${state.preset}/${currentSiteSet()}/${state.layer}/`,
     );
+    const bounds = L.latLngBounds(
+      [summary.bounds[0], summary.bounds[1]],
+      [summary.bounds[2], summary.bounds[3]],
+    );
+    /*
+     * With a floor, the margin tiles of the same layer, coloured in this
+     * browser. With none, the colour tiles as they always were, so the
+     * default map costs the browser no work at all.
+     */
+    if (state.floor > 0 && state.marginSpec) {
+      state.tiles = marginLayer(`${base}margin/{z}/{x}/{y}.png`, {
+        minZoom: 0,
+        maxZoom: 19,
+        minNativeZoom: summary.min_zoom,
+        maxNativeZoom: summary.max_zoom,
+        bounds,
+        opacity: state.signalOpacity,
+        className: 'coverage-tiles',
+        floor: state.floor,
+        spec: state.marginSpec,
+      }).addTo(map);
+      return;
+    }
     state.tiles = L.tileLayer(
       `${base}{z}/{x}/{y}.png`,
       {
@@ -308,10 +401,7 @@
         maxZoom: 19,
         minNativeZoom: summary.min_zoom,
         maxNativeZoom: summary.max_zoom,
-        bounds: L.latLngBounds(
-          [summary.bounds[0], summary.bounds[1]],
-          [summary.bounds[2], summary.bounds[3]],
-        ),
+        bounds,
         opacity: state.signalOpacity,
         // A tile that was never written is ground no node reaches. That
         // is a 404 and it must not log an error for every empty square.
@@ -569,6 +659,35 @@
     }
   }
 
+  // Said where the floor is, when the run has no margin tiles.
+  const NO_MARGINS = 'Not available for this run. It was made before the coverage job wrote '
+    + 'signal margins. The next run will have them.';
+
+  /*
+   * The signal floor control. Disabled, and saying why, when the run
+   * has no margin tiles. It is never left enabled over a floor that
+   * cannot be drawn.
+   */
+  function drawFloor(page) {
+    const picker = $('[data-coverage-signal-floor]', page);
+    const note = $('[data-coverage-signal-floor-note]', page);
+    if (!picker) return;
+    picker.value = String(state.floor);
+    picker.disabled = !state.marginSpec;
+    if (!note) return;
+    if (!state.marginSpec) {
+      note.textContent = NO_MARGINS;
+      note.hidden = false;
+    } else if (state.floor > 0) {
+      note.textContent = `Shows only ground ${SETTINGS.floorWords(state.floor)}. `
+        + 'The rest of the usable coverage is hidden, not lost.';
+      note.hidden = false;
+    } else {
+      note.textContent = '';
+      note.hidden = true;
+    }
+  }
+
   /* The display filters' own controls, in step with the state. */
   function drawFilters(page) {
     const heard = $('[data-coverage-heard]', page);
@@ -616,7 +735,7 @@
    * the words are the only thing that tells them apart.
    */
   function drawWhich(page) {
-    const words = SETTINGS.mapWords(baseLabel(), state.approximate);
+    const words = SETTINGS.mapWords(baseLabel(), state.approximate, state.floor);
     const line = $('[data-coverage-which]', page);
     if (line) {
       line.textContent = `Map shown: ${words}.`;
@@ -682,6 +801,18 @@
     // the tiles it describes. See coverage/render.py.
     const span = Number(state.summary.ramp_span_db) || 0;
     $('[data-coverage-ceiling]', legend).textContent = `${floor + span} dBm`;
+    /* The signal floor (#334). The ramp keeps its colours, because a
+       cell keeps its colour, and the part below the floor is dimmed. */
+    const lowest = state.floor > 0 && span > 0 ? state.floor : 0;
+    const ramp = $('[data-coverage-ramp]', legend);
+    if (ramp) ramp.style.setProperty('--coverage-floor', `${Math.min(100, (lowest / span) * 100)}%`);
+    const line = $('[data-coverage-legend-floor]', legend);
+    if (line) {
+      line.hidden = !lowest;
+      line.textContent = lowest
+        ? `Shown from ${floor + lowest} dBm, ${lowest} dB above the limit`
+        : '';
+    }
     drawWhich(page);
   }
 
@@ -708,7 +839,10 @@
       host,
       statTile(number(preset.site_count), 'Sites predicted from',
         preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
-      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area', 'Both directions'),
+      // The run measured the area at the limit. A floor hides some of
+      // it on the map and does not change the figure, so it says so.
+      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area',
+        state.floor > 0 ? 'Both directions, at the limit' : 'Both directions'),
       statTile(SonoranUnits.areaFromKm2(preset.downlink_area_km2) || '-', 'Heard area', 'One direction only'),
       statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
     );
@@ -1170,6 +1304,7 @@
     drawApproximate(page);
     drawPresets(page);
     drawLayers(page);
+    drawFloor(page);
     drawViews(page);
     drawOpacity(page);
     drawFilters(page);
@@ -1222,6 +1357,7 @@
     state.base = defaultBase();
     state.approximate = start.approximate;
     state.layer = start.layer;
+    state.floor = start.floor;
     state.showMap = start.showMap;
     state.showNodes = start.showNodes;
     state.showSignal = start.showSignal;
@@ -1261,6 +1397,15 @@
       drawLayers(page);
       drawTiles();
       drawLegend(page);
+      drawCount(page);
+    });
+    on('[data-coverage-signal-floor]', 'change', (picker) => {
+      state.floor = state.marginSpec ? SETTINGS.floorOf(picker.value) : 0;
+      writeAddress();
+      drawFloor(page);
+      drawTiles();
+      drawLegend(page);
+      drawStats(page);
       drawCount(page);
     });
     on('[data-coverage-opacity]', 'input', (slider) => {
@@ -1368,6 +1513,7 @@
       state.base = asked.base;
       state.approximate = asked.approximate;
       state.layer = asked.layer;
+      state.floor = asked.floor;
     }
     resolveChoice();
     writeAddress();

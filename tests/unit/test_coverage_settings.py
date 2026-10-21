@@ -136,7 +136,7 @@ def test_the_legend_and_the_stats_say_which_map_is_shown() -> None:
     assert "data-coverage-legend-map" in legend[: legend.index("</div>")]
     assert html.index("data-coverage-which") < html.index("data-coverage-stats")
     block = _read("coverage.js").split("function drawWhich(")[1].split("\n  }\n")[0]
-    assert "SETTINGS.mapWords(baseLabel(), state.approximate)" in block
+    assert "SETTINGS.mapWords(baseLabel(), state.approximate, state.floor)" in block
 
 
 def test_the_map_choices_go_in_the_address_without_a_history_entry() -> None:

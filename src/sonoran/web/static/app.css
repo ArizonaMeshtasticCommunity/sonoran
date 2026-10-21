@@ -3250,6 +3250,23 @@ div.check { cursor: default; }
     #ff2d55 0%, #ff7a00 25%, #ffe600 50%, #00d98b 75%, #00a8ff 100%
   );
 }
+/* The signal floor (#334). The part of the ramp below the floor is not
+   drawn on the map, so the legend dims it. coverage.js sets the width. */
+.coverage-ramp[data-coverage-ramp] { position: relative; overflow: hidden; }
+.coverage-ramp[data-coverage-ramp]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--coverage-floor, 0%);
+  background: var(--panel);
+  opacity: .8;
+}
+.coverage-legend-floor {
+  display: block;
+  font-size: max(.68rem, var(--text-floor, 0px));
+  color: var(--text);
+  margin: .3rem 0 0;
+}
 .coverage-scale {
   display: flex;
   justify-content: space-between;

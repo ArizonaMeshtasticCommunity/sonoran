@@ -891,6 +891,18 @@
               <label class="coverage-pick">Layer
                 <select data-coverage-layers aria-label="Coverage layer"></select>
               </label>
+              <!-- The signal floor (#334). A map choice, so it goes in the
+                   address. Drawn from the run's margin tiles, which the
+                   public embed never reads. -->
+              <label class="coverage-pick">Signal floor
+                <select data-coverage-signal-floor aria-label="Show only where the signal is at least this far above what the radio needs">
+                  <option value="0" selected>0 dB: all usable ground</option>
+                  <option value="5">5 dB above the limit</option>
+                  <option value="10">10 dB above the limit</option>
+                  <option value="20">20 dB above the limit</option>
+                </select>
+              </label>
+              <p class="coverage-setting-note" data-coverage-signal-floor-note hidden></p>
             </fieldset>
 
             <fieldset class="coverage-settings-group">
@@ -941,11 +953,14 @@
               <!-- Which map this is (#334). An approximate map must never
                    be read as the precise one. -->
               <span class="coverage-legend-map" data-coverage-legend-map></span>
-              <div class="coverage-ramp" aria-hidden="true"></div>
+              <!-- The part of the ramp below the signal floor is dimmed
+                   (#334). `--coverage-floor` is set by coverage.js. -->
+              <div class="coverage-ramp" data-coverage-ramp aria-hidden="true"></div>
               <div class="coverage-scale">
                 <span><strong>Weak</strong><small data-coverage-floor></small></span>
                 <span><strong>Strong</strong><small data-coverage-ceiling></small></span>
               </div>
+              <span class="coverage-legend-floor" data-coverage-legend-floor hidden></span>
             </div>
           </div>
 

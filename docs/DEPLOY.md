@@ -270,3 +270,32 @@ The `jobs` log warns while it is there. To also draw the rounded
 positions on a separate, dashboard-only map, set
 `COVERAGE_INCLUDE_APPROXIMATE=true`. That costs one more prediction of
 each map, so it roughly doubles the run.
+
+## 9. The coverage signal floor (#334)
+
+The signal floor needs margin tiles beside the colour tiles. Only the
+coverage job writes them, so a run made before this change has none.
+No migration is necessary, and the database does not change.
+
+1. Rebuild `api` and `jobs` (section 3). Do not restart `jobs` while a
+   coverage run is in progress.
+2. Until the next coverage run, the page draws the old run's colour
+   tiles as before. The "Signal floor" control is disabled and says
+   that the run was made before the coverage job wrote signal margins.
+   This is a working state, not a fault. The public embed does not
+   change.
+3. The floor works from the next coverage run. To make one now, remove
+   `attempts/coverage.txt` in the coverage cache, or run
+   `docker compose exec jobs sonoran-coverage-once`.
+4. Check it. The `jobs` log says `published coverage run`. In the
+   coverage cache, `runs/<stamp>/<preset>/infrastructure/usable/margin/`
+   holds tiles. On the coverage page, open Settings: "Signal floor" is
+   enabled, and 10 dB shows less ground than 0 dB.
+
+A run's tiles take about 1.7 times the disk they took before, and the
+render step takes about 1.3 times as long. See `docs/COVERAGE.md`
+6.1.2.
+
+Roll back: the older `api` and `jobs` ignore the `margin` directories
+and the `margin_tiles` field in the manifest. Nothing has to be
+removed. The two runs the cache keeps are pruned as usual.

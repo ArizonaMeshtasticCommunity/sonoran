@@ -356,7 +356,49 @@ const CLEAR_PNG = Buffer.from(
   'base64',
 );
 
-function stubManifest({ approximate }) {
+/*
+ * A margin tile for the signal floor journeys (#334): 256 grey pixels
+ * square, the west half 5 dB above the limit and the east half 30 dB.
+ * Byte n is n - 1 dB, as `coverage/render.py` writes it.
+ */
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let k = 0; k < 8; k += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function greyPng(width, height, byteAt) {
+  const zlib = require('zlib');
+  const rows = Buffer.alloc((width + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) rows[y * (width + 1) + 1 + x] = byteAt(x, y);
+  }
+  const chunk = (kind, payload) => {
+    const head = Buffer.alloc(4);
+    head.writeUInt32BE(payload.length);
+    const body = Buffer.concat([Buffer.from(kind, 'ascii'), payload]);
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(crc32(body));
+    return Buffer.concat([head, body, tail]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 0, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(rows)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+const MARGIN_PNG = greyPng(256, 256, (x) => (x < 128 ? 6 : 31));
+
+function stubManifest({ approximate, margins = false }) {
   const box = [33.0, -112.6, 33.9, -111.6];
   const site = (id, extra = {}) => ({
     node_id: id,
@@ -430,17 +472,28 @@ function stubManifest({ approximate }) {
     coarse_sites: [],
     presets: [precise],
     site_sets: sets,
+    // A run made since #334 says how its margin tiles are encoded. One
+    // made before has no such field, and cannot draw a signal floor.
+    ...(margins ? {
+      margin_tiles: {
+        encoding: 'margin_db_plus_one',
+        ramp: [[255, 45, 85], [255, 122, 0], [255, 230, 0], [0, 217, 139], [0, 168, 255]],
+        alpha: 235,
+      },
+    } : {}),
   };
 }
 
-async function stubCoverage(page, { approximate = false } = {}) {
+async function stubCoverage(page, { approximate = false, margins = false } = {}) {
   const heard = new Date().toISOString();
   const node = (id, lat, lon, role) => ({
     node_id: id, display_name: `Site ${id}`, lat, lon, role, last_heard: heard, is_mqtt_gateway: false,
   });
-  await page.route(/\/api\/coverage(\?|$)/, (route) => route.fulfill({ json: stubManifest({ approximate }) }));
+  await page.route(/\/api\/coverage(\?|$)/, (route) => route.fulfill({ json: stubManifest({ approximate, margins }) }));
   await page.route(/\/api\/coverage\/calibration(\?|$)/, (route) => route.fulfill({ json: { available: false, nodes: [] } }));
   await page.route(/\/api\/coverage\/tiles\//, (route) => route.fulfill({ contentType: 'image/png', body: CLEAR_PNG }));
+  // Registered later, so it is asked first.
+  await page.route(/\/api\/coverage\/tiles\/.*\/margin\//, (route) => route.fulfill({ contentType: 'image/png', body: MARGIN_PNG }));
   await page.route(/\/api\/map\/nodes(\?|$)/, (route) => route.fulfill({
     json: [
       node('!e2e00001', 33.45, -112.07, 'ROUTER'),
@@ -1902,6 +1955,95 @@ async function main() {
     must(back.heard === '7d', `the saved filter came back as ${back.heard}`);
     must(back.layer === 'usable', `a plain link drew the ${back.layer} layer`);
     return 'downlink from the address; the filter kept, the plain link precise and usable';
+  });
+
+  /* The alpha of a west and an east pixel of each painted margin tile. */
+  const MARGIN_ALPHAS = () => {
+    const state = window.SonoranCoverageState;
+    if (!state || !state.tiles || !state.tiles._tiles) return null;
+    const out = [];
+    for (const tile of Object.values(state.tiles._tiles)) {
+      if (!tile.loaded || !(tile.el instanceof HTMLCanvasElement)) continue;
+      const context = tile.el.getContext('2d');
+      out.push([context.getImageData(10, 10, 1, 1).data[3], context.getImageData(200, 10, 1, 1).data[3]]);
+    }
+    return out.length ? out : null;
+  };
+
+  await journey(context, 'coverage settings: a 10 dB floor hides the weaker ground, and Reset clears it (#334)', async (page) => {
+    await stubCoverage(page, { margins: true });
+    await open(page, 'coverage', 2500);
+    const button = page.locator('[data-coverage-options]');
+    await button.click();
+    // An earlier journey in this context saved a display filter. Start
+    // from the defaults, so the badge counts the floor alone.
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(400);
+    const floor = page.locator('[data-coverage-signal-floor]');
+    must(await floor.isEnabled(), 'the run has margin tiles and the floor is disabled');
+    must((await floor.inputValue()) === '0', `the floor starts at ${await floor.inputValue()}`);
+    const before = await valueOf(page, COVERAGE_TILE_URL);
+    must(before && !before.includes('/margin/'), `with no floor the tiles are ${before}`);
+
+    await floor.selectOption('10');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return Boolean(state.tiles && String(state.tiles._url).includes('/infrastructure/usable/margin/'));
+    }, 10000), 'a 10 dB floor did not switch to the margin tiles');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return Object.values(state.tiles._tiles || {}).some((tile) => tile.loaded);
+    }, 10000), 'no margin tile was painted');
+    const ten = await valueOf(page, MARGIN_ALPHAS);
+    // West is 5 dB: under the floor, clear. East is 30 dB: drawn.
+    must(ten && ten.every(([west, east]) => west === 0 && east === 235),
+      `at 10 dB the west and east alphas are ${JSON.stringify(ten)}`);
+    must((await page.evaluate(() => location.hash)) === '#coverage?floor=10',
+      `the address says ${await page.evaluate(() => location.hash)}`);
+    must((await button.getAttribute('aria-label')) === 'Settings, 1 changed',
+      `the button says "${await button.getAttribute('aria-label')}"`);
+    const said = (await page.locator('[data-coverage-legend-floor]').textContent()).trim();
+    must(said === 'Shown from -126 dBm, 10 dB above the limit', `the legend says "${said}"`);
+    const which = (await page.locator('[data-coverage-legend-map]').textContent()).trim();
+    must(which.endsWith('· 10 dB floor'), `the legend names the map as "${which}"`);
+
+    // 5 dB lets the west half back in: the drawn pixels change.
+    await floor.selectOption('5');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return state.tiles && state.tiles.options.floor === 5
+        && Object.values(state.tiles._tiles || {}).some((tile) => tile.loaded);
+    }, 10000), 'a 5 dB floor drew nothing');
+    const five = await valueOf(page, MARGIN_ALPHAS);
+    must(five && five.every(([west, east]) => west === 235 && east === 235),
+      `at 5 dB the west and east alphas are ${JSON.stringify(five)}`);
+
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(600);
+    const after = await valueOf(page, COVERAGE_TILE_URL);
+    must(after && !after.includes('/margin/'), `after Reset the tiles are ${after}`);
+    must((await floor.inputValue()) === '0', `after Reset the floor is ${await floor.inputValue()}`);
+    must((await page.evaluate(() => location.hash)) === '#coverage', 'after Reset the address keeps a floor');
+    must(await page.locator('[data-coverage-legend-floor]').isHidden(), 'after Reset the legend still names a floor');
+    return '10 dB: west clear, east drawn; 5 dB: both drawn; Reset: colour tiles, #coverage';
+  });
+
+  await journey(context, 'coverage settings: a run with no margin data disables the floor and says why (#334)', async (page) => {
+    // A link with a floor, opened on a run made before margin tiles.
+    await stubCoverage(page);
+    await open(page, 'coverage?floor=10', 2500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/infrastructure/usable/') && !url.includes('/margin/'), `the tiles are ${url}`);
+    await page.locator('[data-coverage-options]').click();
+    const floor = page.locator('[data-coverage-signal-floor]');
+    must(await floor.isDisabled(), 'the floor is enabled on a run with no margin tiles');
+    must((await floor.inputValue()) === '0', `the floor control says ${await floor.inputValue()}`);
+    const said = (await page.locator('[data-coverage-signal-floor-note]').textContent()).trim();
+    must(said === 'Not available for this run. It was made before the coverage job wrote signal margins. '
+      + 'The next run will have them.', `the floor says "${said}"`);
+    must((await page.evaluate(() => location.hash)) === '#coverage', 'the address still names a floor');
+    must(await page.locator('[data-coverage-legend-floor]').isHidden(), 'the legend names a floor it did not draw');
+    return 'colour tiles, the floor disabled with its sentence, the address corrected';
   });
 
   await journey(context, 'the embed snippet can be got at', async (page) => {

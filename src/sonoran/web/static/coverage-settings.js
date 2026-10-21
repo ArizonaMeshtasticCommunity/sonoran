@@ -9,9 +9,10 @@
  * Two kinds of setting live here, and they are kept in two places.
  *
  * 1. The map choices: which nodes the map is predicted from, whether
- *    rounded positions are included, and the layer. They change what
- *    the map IS. They go in the address (`#coverage?set=…&approx=1&
- *    layer=…`), so a link shows the same map to the next reader. They
+ *    rounded positions are included, the layer, and the signal floor.
+ *    They change what the map IS. They go in the address
+ *    (`#coverage?set=…&approx=1&layer=…&floor=…`), so a link shows the
+ *    same map to the next reader. They
  *    are not stored. A plain `#coverage` link must always be the map
  *    Logan and Tyler asked for. If a stored choice could turn it into
  *    the approximate map, one link would show two different maps to
@@ -34,6 +35,15 @@ window.SonoranCoverageSettings = (function build() {
   const DEFAULT_BASE = 'infrastructure';
   const APPROXIMATE_SUFFIX = '_approximate';
   const LAYERS = ['usable', 'downlink', 'uplink'];
+
+  /*
+   * The signal floors the panel offers, in dB above what the radio
+   * needs (#334). Zero is the whole usable map, which is the map the
+   * page has always drawn.
+   */
+  const FLOORS = [0, 5, 10, 20];
+  // The margin tile encoding this page can read. See coverage/render.py.
+  const MARGIN_ENCODING = 'margin_db_plus_one';
 
   // Last heard: the key, and the window in hours. `any` sets no window.
   const HEARD = { any: null, '24h': 24, '7d': 168 };
@@ -58,6 +68,7 @@ window.SonoranCoverageSettings = (function build() {
       base: DEFAULT_BASE,
       approximate: false,
       layer: 'usable',
+      floor: 0,
       showMap: true,
       showNodes: true,
       showSignal: true,
@@ -89,7 +100,7 @@ window.SonoranCoverageSettings = (function build() {
     const d = defaults();
     let count = 0;
     if (settings.base !== defaultBase) count += 1;
-    for (const key of ['approximate', 'layer', 'showMap', 'showNodes', 'showSignal',
+    for (const key of ['approximate', 'layer', 'floor', 'showMap', 'showNodes', 'showSignal',
       'heard', 'hideMoving', 'circles', 'opacity']) {
       if (settings[key] !== d[key]) count += 1;
     }
@@ -159,6 +170,7 @@ window.SonoranCoverageSettings = (function build() {
       base: SET_KEY.test(set) && !set.endsWith(APPROXIMATE_SUFFIX) ? set : DEFAULT_BASE,
       approximate: q.get('approx') === '1',
       layer: LAYERS.includes(layer) ? layer : 'usable',
+      floor: floorOf(q.get('floor')),
     };
   }
 
@@ -168,8 +180,84 @@ window.SonoranCoverageSettings = (function build() {
     if (settings.base && settings.base !== DEFAULT_BASE) q.set('set', settings.base);
     if (settings.approximate) q.set('approx', '1');
     if (settings.layer && settings.layer !== 'usable') q.set('layer', settings.layer);
+    if (floorOf(settings.floor)) q.set('floor', String(floorOf(settings.floor)));
     const text = q.toString();
     return text ? `#coverage?${text}` : '#coverage';
+  }
+
+  /* -------------------------------------------------- signal floor */
+
+  /** A floor the panel offers, or 0. A number typed into a link that
+      the panel does not offer is not a floor anybody chose. */
+  function floorOf(value) {
+    const number = Number(value);
+    return FLOORS.includes(number) ? number : 0;
+  }
+
+  /*
+   * What this run says about its margin tiles, or null.
+   *
+   * A run made before the margin tiles existed has no `margin_tiles`,
+   * and a run with an encoding this page does not know is read the same
+   * way. Either one cannot draw a floor, and the page says so rather
+   * than guessing at its bytes.
+   */
+  function marginSpec(summary) {
+    const spec = summary && summary.margin_tiles;
+    if (!spec || spec.encoding !== MARGIN_ENCODING) return null;
+    const ramp = Array.isArray(spec.ramp) ? spec.ramp : [];
+    const colours = ramp.length >= 2 && ramp.every((stop) => Array.isArray(stop)
+      && stop.length === 3 && stop.every((value) => Number.isInteger(value) && value >= 0 && value <= 255));
+    const alpha = Number(spec.alpha);
+    const span = Number(summary.ramp_span_db);
+    if (!colours || !Number.isInteger(alpha) || alpha < 1 || alpha > 255) return null;
+    if (!Number.isFinite(span) || span <= 0) return null;
+    return { ramp, alpha, span };
+  }
+
+  /*
+   * Colour one margin tile above a floor.
+   *
+   * `pixels` is the RGBA of the grey tile as the canvas decoded it: the
+   * byte is in each of red, green and blue. Byte 0 is no usable
+   * coverage, and byte n is n - 1 dB above the sensitivity. A cell below
+   * the floor is left clear, the same as a cell below the sensitivity.
+   *
+   * The colour is the ramp `coverage/render.py` draws. Each step uses
+   * the precision that numpy uses for it, so at a floor of 0 dB a pixel
+   * is the pixel of the colour tile. `coverage_floor_cases.mjs` pins it
+   * against every margin as Python wrote it.
+   */
+  function colourMargins(pixels, floor, spec) {
+    const out = new Uint8ClampedArray(pixels.length);
+    const f = Math.fround;
+    const last = spec.ramp.length - 1;
+    const lowest = floorOf(floor);
+    for (let i = 0; i < pixels.length; i += 4) {
+      const byte = pixels[i];
+      if (byte === 0) continue;
+      const margin = byte - 1;
+      if (margin < lowest) continue;
+      const fraction = Math.min(Math.max(f(margin / spec.span), 0), 1);
+      const position = f(fraction * last);
+      const lower = Math.floor(position);
+      const upper = Math.min(lower + 1, last);
+      // numpy takes an int32 from a float32 here, which gives a
+      // float64, so the mix is in double precision like plain JavaScript.
+      const weight = position - lower;
+      for (let c = 0; c < 3; c += 1) {
+        const mixed = spec.ramp[lower][c] * (1 - weight) + spec.ramp[upper][c] * weight;
+        out[i + c] = Math.trunc(mixed);
+      }
+      out[i + 3] = spec.alpha;
+    }
+    return out;
+  }
+
+  /** The words for a floor, or '' for none. */
+  function floorWords(floor) {
+    const value = floorOf(floor);
+    return value ? `at least ${value} dB above what the radio needs` : '';
   }
 
   /* ------------------------------------------------------- storage */
@@ -288,12 +376,15 @@ window.SonoranCoverageSettings = (function build() {
   }
 
   /** The words that name the map on show, for the legend and stats. */
-  function mapWords(label, approximate) {
-    return `${label} · ${approximate ? 'rounded positions included' : 'precise positions only'}`;
+  function mapWords(label, approximate, floor = 0) {
+    const words = `${label} · ${approximate ? 'rounded positions included' : 'precise positions only'}`;
+    const value = floorOf(floor);
+    return value ? `${words} · ${value} dB floor` : words;
   }
 
   return {
     LAYERS,
+    FLOORS,
     HEARD,
     MOVING_ROLES,
     defaults,
@@ -310,5 +401,9 @@ window.SonoranCoverageSettings = (function build() {
     rolesPresent,
     uncertaintyCircles,
     mapWords,
+    floorOf,
+    marginSpec,
+    colourMargins,
+    floorWords,
   };
 }());

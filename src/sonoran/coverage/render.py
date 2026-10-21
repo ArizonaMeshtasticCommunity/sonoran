@@ -16,6 +16,20 @@ pins the two together.
 PNG is written here rather than with an imaging library. A tile is a
 plain RGBA raster and the format wants a zlib stream and four chunks, so
 a dependency for it would earn nothing.
+
+Each colour tile has a margin tile beside it (#334). The colour tile
+holds colours only, and a colour cannot be read back as a level without
+loss. The margin tile is one grey byte for each pixel:
+
+    byte 0      no usable coverage here
+    byte n      n - 1 dB above the sensitivity of the preset
+
+The levels are whole dB. The threshold meets them as a whole byte
+through `to_level`, the same byte the colour tile uses, also for a
+preset whose sensitivity is on a half dB (#362). So the margin is a
+whole number and the byte holds it exactly. The dashboard colours a margin
+tile in the browser to draw a signal floor. The public embed never reads
+one. See `docs/COVERAGE.md` 6.1.2.
 """
 
 import math
@@ -80,6 +94,10 @@ COVER_ALPHA = 235
 # the two pages finally agree.
 RAMP_SPAN_DB = 60.0
 
+# The name of the margin tile encoding. A run writes it into its
+# manifest, and the page draws a floor only for an encoding it knows.
+MARGIN_ENCODING = "margin_db_plus_one"
+
 
 @dataclass(frozen=True)
 class TileRef:
@@ -130,6 +148,24 @@ def colour_levels(levels: Levels, threshold_dbm: float) -> npt.NDArray[np.uint8]
     return image
 
 
+def margin_levels(levels: Levels, threshold_dbm: float) -> npt.NDArray[np.uint8]:
+    """Return the margin byte of each cell, for a margin tile.
+
+    Zero where `colour_levels` leaves the cell clear. Elsewhere one more
+    than the dB above the threshold. A level is at most 255 and the
+    threshold byte is at least 1, so the largest margin is 254 dB and
+    its byte is 255. Nothing is clipped.
+    """
+    usable = usable_cells(levels, threshold_dbm)
+    above = levels.astype(np.int16) - to_level(threshold_dbm) + 1
+    return np.where(usable, above, 0).astype(np.uint8)
+
+
+def margin_db(byte: int) -> int | None:
+    """Return the margin a margin tile byte holds, or None for none."""
+    return None if byte == 0 else byte - 1
+
+
 def write_png(image: npt.NDArray[np.uint8]) -> bytes:
     """Return an RGBA image as a PNG file.
 
@@ -137,17 +173,30 @@ def write_png(image: npt.NDArray[np.uint8]) -> bytes:
     pixels, and an end marker. Each row carries a filter byte of zero,
     which means the row is stored as it is.
     """
-    height, width = image.shape[0], image.shape[1]
-    rows = np.concatenate(
-        [np.zeros((height, 1), dtype=np.uint8), image.reshape(height, width * 4)], axis=1
-    )
+    return _png(image.reshape(image.shape[0], image.shape[1] * 4), image.shape[1], 6)
+
+
+def write_grey_png(image: npt.NDArray[np.uint8]) -> bytes:
+    """Return a two-dimensional image of bytes as a grey PNG file.
+
+    A margin tile is written this way. A grey PNG has no colour profile
+    and no alpha, so a browser that decodes it gives back each byte as
+    it was written.
+    """
+    return _png(image, image.shape[1], 0)
+
+
+def _png(rows_of_bytes: npt.NDArray[np.uint8], width: int, colour_type: int) -> bytes:
+    """Return a PNG of eight bit samples, one row of bytes for each row."""
+    height = rows_of_bytes.shape[0]
+    rows = np.concatenate([np.zeros((height, 1), dtype=np.uint8), rows_of_bytes], axis=1)
     body = zlib.compress(rows.tobytes(), level=6)
 
     def chunk(kind: bytes, payload: bytes) -> bytes:
         head = struct.pack(">I", len(payload)) + kind
         return head + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
 
-    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    header = struct.pack(">IIBBBBB", width, height, 8, colour_type, 0, 0, 0)
     return (
         b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", body) + chunk(b"IEND", b"")
     )

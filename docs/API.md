@@ -677,6 +677,21 @@ reader must read a missing `approximate` as false. `presets` and
 `is_diagnostic` at the top level are always the precise infrastructure
 map.
 
+`margin_tiles` says that the run wrote a margin tile beside each colour
+tile (3A.2.1), and how to colour one (#334):
+
+| Field | Meaning |
+|---|---|
+| `encoding` | `margin_db_plus_one`. Byte 0 is no usable coverage. Byte `n` is `n - 1` dB above the sensitivity of the preset |
+| `ramp` | The colour stops of the ramp, weakest first, as `[r, g, b]` |
+| `alpha` | The alpha of a covered pixel, 0 to 255 |
+
+The ramp spans `ramp_span_db` above the sensitivity, as for the colour
+tiles. A run made before #334 has no `margin_tiles`. A reader must read
+that, or an `encoding` it does not know, as "this run cannot draw a
+signal floor", and draw the colour tiles. `/api/embed/coverage` never
+carries this field.
+
 ### 3A.2 `GET /api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`
 
 Returns one coverage tile, 256 pixels square, in the usual web map
@@ -727,6 +742,26 @@ A tile that was never written is ground no node reaches, and returns
 The run stamp is part of the URL. Tiles of one run never change, so
 they carry an immutable `Cache-Control` and an `ETag`. A new run has
 new URLs and cannot reuse a browser's old tiles.
+
+### 3A.2.1 `GET /api/coverage/tiles/{stamp}/{preset}/{site_set}/{layer}/margin/{z}/{x}/{y}.png`
+
+Returns the margin tile of one coverage tile (#334). The dashboard uses
+it to draw a signal floor.
+
+The tile is a grey PNG, 256 pixels square, eight bits for each pixel.
+Byte 0 is no usable coverage. Byte `n` is `n - 1` dB above the
+sensitivity of the preset, so a margin of 0 to 254 dB is held exactly.
+A pixel is 0 exactly where the colour tile is clear. `margin_tiles` in
+3A.1 names this encoding.
+
+The parameters, the checks, the 404 and the cache headers are those of
+3A.2. A run made before #334 has no margin tiles and answers 404 for
+every one; its manifest has no `margin_tiles`, so a page does not ask.
+
+This route is the dashboard's only. The public embed has no margin
+route, and its tile route takes the zoom as a whole number, so it
+cannot name the `margin` directory. 3B.5 does not list this path, and
+a proxy must not open it.
 
 ### 3A.3 `GET /api/coverage/calibration`
 
@@ -1171,7 +1206,8 @@ was the shape of the defect this list exists to prevent. It exposes:
 
 - `/api/coverage/tiles/{stamp}/{preset}/{site_set}/...`, which serves
   the client-node map of the same run to anybody who types `extended`,
-  and a diagnostic run to anybody who guesses a stamp;
+  and a diagnostic run to anybody who guesses a stamp. Its margin tiles
+  (3A.2.1) are under the same prefix;
 - `/api/coverage`, whose `coarse_sites` carry display names with
   rounded positions and whose `presets[].nodes` carry node IDs and long
   names;

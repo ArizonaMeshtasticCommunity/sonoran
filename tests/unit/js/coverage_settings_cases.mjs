@@ -129,10 +129,10 @@ const WITH_APPROXIMATE = [
 // --- the address -------------------------------------------------------
 {
   eq('a plain link is the default map', C.fromHash('#coverage'),
-    { base: 'infrastructure', approximate: false, layer: 'usable' });
+    { base: 'infrastructure', approximate: false, layer: 'usable', floor: 0 });
   eq('a link names its map',
     C.fromHash('#coverage?set=extended&approx=1&layer=downlink'),
-    { base: 'extended', approximate: true, layer: 'downlink' });
+    { base: 'extended', approximate: true, layer: 'downlink', floor: 0 });
   eq('an unknown layer is the default', C.fromHash('#coverage?layer=sideways').layer, 'usable');
   eq('a set name that is not a set name is the default',
     C.fromHash('#coverage?set=..%2Fetc').base, 'infrastructure');
@@ -144,7 +144,7 @@ const WITH_APPROXIMATE = [
     C.toHash({ ...C.defaults(), approximate: true, layer: 'uplink' }), '#coverage?approx=1&layer=uplink');
   const round = { ...C.defaults(), base: 'extended', approximate: true, layer: 'downlink' };
   eq('a written link reads back as the same map', C.fromHash(C.toHash(round)),
-    { base: 'extended', approximate: true, layer: 'downlink' });
+    { base: 'extended', approximate: true, layer: 'downlink', floor: 0 });
   eq('the address says whether it names anything', [C.hashNamesMap('#coverage'),
     C.hashNamesMap('#coverage?layer=uplink')], [false, true]);
   eq('display filters never reach the address',

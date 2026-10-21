@@ -223,7 +223,9 @@ positions with the prediction, or remove the ground and inspect the
 prediction by itself.
 
 No coverage is transparent. Usable coverage is nearly opaque and runs
-from hot pink at the receiver limit to bright blue at 30 dB of margin.
+from hot pink at the receiver limit to bright blue at 60 dB of margin
+(`RAMP_SPAN_DB` in `coverage/render.py`; the run sends it to the page as
+`ramp_span_db`).
 The terrain map does not use that ramp. The edge and the direction of
 improvement therefore remain visible over roads, desert, and forest.
 
@@ -241,6 +243,7 @@ The defaults are the map that Logan and Tyler asked for in #315.
 | Map source: "Routers and repeaters" or "Also nodes that repeat" | Routers and repeaters (the run's first map) | The address |
 | Include approximate positions | Off | The address |
 | Layer: usable, downlink or uplink | Usable | The address |
+| Signal floor: 0, 5, 10 or 20 dB above what the radio needs (6.1.2) | 0 dB | The address |
 | Show: map, nodes, signal strength | All on | This visit only |
 | Signal opacity | 100 % | This browser |
 | Node markers by role | Every role shown | This browser |
@@ -252,7 +255,7 @@ The defaults are the map that Logan and Tyler asked for in #315.
 `#coverage` address.
 
 The map choices change what the map is, so they go in the address:
-`#coverage?set=extended&approx=1&layer=downlink`. Only a value that
+`#coverage?set=extended&approx=1&layer=downlink&floor=10`. Only a value that
 differs from the default is written. A link therefore shows the same
 map to the next reader, and a plain `#coverage` link is always the
 precise map. The map choices are not stored in the browser. If they
@@ -276,6 +279,8 @@ visit.
   under the approximate name, or the reverse. A link with `approx=1`
   opened on such a server draws the precise map, says so, and corrects
   the address.
+- **Signal floor** shows only the ground where the signal is at least
+  that many dB above what the radio needs. See 6.1.2.
 - **Node markers by role** offers one chip for each role of the nodes
   the map on show was predicted from. A hidden role stays offered, so
   the filter can be undone where it was made.
@@ -301,6 +306,95 @@ The rules are pure functions in `web/static/coverage-settings.js`.
 `tests/unit/js/coverage_settings_cases.mjs` runs them under node. The
 public embed has no settings panel and no approximate option
 (`test_the_public_embed_has_no_settings_and_no_approximate_option`).
+
+#### 6.1.2 The signal floor and the margin tiles (#334)
+
+A cell at the receiver limit is reached on a good day. A fade, a wall
+or a pocket takes it away. The signal floor asks a harder question:
+where is the signal at least 5, 10 or 20 dB above what the radio
+needs? The default is 0 dB, which is the map the page always drew.
+
+**The colour tiles cannot answer it.** A colour tile holds colours, and
+a colour cannot be read back as a level without loss. So each colour
+tile has a margin tile beside it:
+
+    {run}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png          colour
+    {run}/{preset}/{site_set}/{layer}/margin/{z}/{x}/{y}.png   margin
+
+A margin tile is a grey PNG, 256 pixels square, one byte for each pixel:
+
+| Byte | Meaning |
+|---|---|
+| 0 | No usable coverage. The colour tile is clear here |
+| `n` | `n - 1` dB above the sensitivity of the preset |
+
+The levels are whole dB. The threshold meets them as a whole byte
+through `to_level` in `coverage/grid.py`, which is the byte the colour
+tile uses. Five presets have a sensitivity on a half dB since #362, for
+example Medium slow at -128.5 dBm, and their margin counts from that
+same rounded byte, so the floor never moves away from the colour ramp.
+The margin is therefore a whole number from 0 to 254 and the byte holds
+it exactly. `margin_levels` in
+`coverage/render.py` writes it from the same sampled cells as the
+colour tile, so the two are empty in the same places. The manifest
+names the encoding, the ramp and the alpha in `margin_tiles`
+(`docs/API.md` 3A.1). The route is 3A.2.1.
+
+**What the page does.** At 0 dB it draws the colour tiles, as before,
+and does no work of its own. Above 0 dB it changes the signal layer to
+a Leaflet grid layer over the margin tiles of the same layer. Each tile
+is fetched, decoded with no colour conversion, and coloured in a
+canvas by `colourMargins` in `coverage-settings.js`. A cell below the
+floor is left clear. A cell at or above it keeps the colour it has on
+the colour tile: the ramp still starts at the sensitivity, and
+`coverage_floor_cases.mjs` checks every margin from 0 to 254 dB against
+the colours Python wrote. The legend dims the part of the ramp below
+the floor and says "Shown from -126 dBm, 10 dB above the limit". The
+"Usable area" figure is the run's, measured at the limit, and says so
+while a floor is in force.
+
+**The floor is a map choice**, so it goes in the address with the
+layer, counts on the badge, and Reset clears it. It is not stored for
+the viewer. It changes which ground the map calls covered, and a floor
+remembered from last week would show a smaller mesh under a plain
+`#coverage` link with nothing on the map to say why.
+
+**A run made before the margin tiles** has no `margin_tiles` in its
+manifest. Two runs are kept, so one can be on disk for a day after an
+upgrade. The page draws its colour tiles, disables the floor, and says
+"Not available for this run. It was made before the coverage job wrote
+signal margins. The next run will have them." A link with `floor=10`
+opened on such a run draws the whole map, says so, and corrects the
+address. The deploy step is `docs/DEPLOY.md` 9.
+
+**The public embed is not changed.** It serves the colour tile of the
+infrastructure map from its own route, which takes the zoom as a whole
+number and so cannot name the `margin` directory. The colour tiles are
+byte for byte what they were
+(`test_the_colour_tiles_are_byte_identical_to_before_the_floor`), the
+embed summary carries no `margin_tiles`, and `embed-coverage.js` never
+asks for a margin tile (`test_no_public_path_serves_a_margin_tile`).
+
+**What it costs.** One more PNG for each colour tile, from cells already
+in memory, with no extra engine run. On a synthetic tile set a margin
+tile is about 0.7 of the size of its colour tile and takes about a
+third of the time to write, so a run's tiles take about 1.7 times the
+disk and the render step about 1.3 times its time. The render step is
+small beside the engine. In the browser, each tile at a floor above 0
+costs one fetch and one pass over 65,536 pixels.
+
+Three other designs were considered and rejected:
+
+- **Encode the margin inside the colour tile**, for example in the
+  alpha channel. One file serves both, but the public tiles change,
+  and the embed must not change.
+- **One colour tile set for each floor.** No work in the browser, but
+  four times the tiles and four times the render step, on a three core
+  box. And a fifth floor would need a new run.
+- **Read the margin back from the colours in the browser.** No server
+  change, but the colours are quantised and premultiplied by the
+  canvas, the ramp is flat above 60 dB, and a change to the palette
+  would move every floor without any test saying so.
 
 ## 7. Clutter
 
