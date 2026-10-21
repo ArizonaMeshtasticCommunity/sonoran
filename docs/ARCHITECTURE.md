@@ -679,6 +679,22 @@ because a canvas keeps the colour it was painted with after a theme
 change. The text is always there, so the row does not rest on colour
 alone (WCAG 1.4.1).
 
+The **packet type menu** in the map's controls row chooses which
+packet families the traffic layer draws (#385). It is a button and a
+drop-down of checkboxes, one for each entry of
+`SonoranLive.FAMILY_ORDER`, with the family's mark and name. Each
+change applies at once. The menu is a popover (`wireHint` with
+`placeMenu`), so it opens in the top layer over the map and takes no
+room in the row. Before, it was a `<details>` that opened a line of
+chips inside the row, which pushed the header down and closed only on
+its own summary. Now Escape, a tap outside, Done or the button close
+it. The top layer also clears the sideways scroll of the watch bar on
+a phone, which clips an ordinary absolute panel. Do not give the
+`.family-menu` rule a `display` value: it wins over the browser's
+`display: none` for a shut popover, and the menu then never closes.
+The choice is kept per browser, as the hidden set, so a family that a
+later build adds is drawn by default.
+
 `app.js` caches `api/graph/channels` for ten minutes and
 `api/map/nodes` for two. Both were refetched on every map refresh,
 four times a minute per open tab, and the channel list runs three

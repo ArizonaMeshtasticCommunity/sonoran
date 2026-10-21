@@ -480,18 +480,32 @@
               </label>
               <button type="button" class="toggle" data-show-traffic aria-pressed="true">Traffic</button>
               <!--
-                Which kinds of packet the traffic layer draws. The chips
+                Which kinds of packet the traffic layer draws. The options
                 are built from SonoranLive.FAMILY_ORDER, so the list here
                 and the shapes on the map cannot disagree. "Other Types"
                 is always one of them, so a filter can never hide traffic
-                we failed to classify without a chip that says so. It sits
-                in this row, so watch mode moves it into its bar with the
-                rest.
+                we failed to classify without an option that says so. It
+                sits in this row, so watch mode moves it into its bar with
+                the rest.
+
+                A button and a drop-down menu of checkboxes (#385). The
+                menu used to open inside this row, as a line of chips, so
+                it pushed the header down, and a reader had to find the
+                summary again to close it. The menu is a popover now: it
+                opens over the map, takes no room in the row, and closes
+                on Escape, on a tap outside, on Done, or on the button.
               -->
-              <details class="family-filter" data-family-filter>
-                <summary data-family-summary>Packet Types: all</summary>
-                <div class="family-chips" data-family-chips role="group" aria-label="Packet Types to draw"></div>
-              </details>
+              <div class="family-filter" data-family-filter>
+                <button type="button" class="family-toggle" data-family-toggle
+                        aria-expanded="false" aria-controls="family-menu"><span data-family-summary>Packet Types: all</span></button>
+                <div class="family-menu" id="family-menu" data-family-menu hidden>
+                  <div class="family-chips" data-family-chips role="group" aria-label="Packet Types to draw"></div>
+                  <div class="family-menu-foot">
+                    <button type="button" class="linky" data-family-all>Show all</button>
+                    <button type="button" class="toggle" data-family-done>Done</button>
+                  </div>
+                </div>
+              </div>
               <button type="button" class="toggle" data-show-traces aria-pressed="true">Live traceroutes</button>
               <button type="button" class="toggle" data-show-links aria-pressed="false">Neighbor links</button>
               <!--

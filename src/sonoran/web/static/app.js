@@ -2403,47 +2403,87 @@ function familyShown(packet) {
 }
 
 /**
- * Build the packet kind chips, once.
+ * Build the packet type menu, once (#385).
  *
- * Each chip is a toggle with the family's own mark on it. "All Types"
- * appears only while something is hidden, as the way back.
+ * One checkbox for each family, with the family's own mark and name.
+ * A checkbox says "shown" or "not shown" by itself, which the old
+ * pressed chips said only by a border and a line through the text.
+ * Every change applies at once, so the map under the open menu changes
+ * while the reader watches. "Show all" is the way back.
  */
 function wireFamilyFilter() {
   const chips = $('[data-family-chips]');
   if (!chips) return;
-  const buttons = SonoranLive.FAMILY_ORDER.map((key) => {
+  const options = SonoranLive.FAMILY_ORDER.map((key) => {
     const family = SonoranLive.FAMILIES[key];
-    return el('button', {
-      type: 'button',
-      class: 'family-chip',
-      'aria-pressed': String(!hiddenFamilies.has(key)),
-      dataset: { family: key },
-      onclick: () => {
-        if (hiddenFamilies.has(key)) hiddenFamilies.delete(key);
-        else hiddenFamilies.add(key);
-        familyFilterChanged();
-      },
-    }, familySwatch(family), family.label);
+    return el('label', { class: 'family-option', dataset: { family: key } },
+      el('input', {
+        type: 'checkbox',
+        checked: !hiddenFamilies.has(key),
+        dataset: { family: key },
+        onchange: (event) => {
+          if (event.target.checked) hiddenFamilies.delete(key);
+          else hiddenFamilies.add(key);
+          familyFilterChanged();
+        },
+      }),
+      familyMark(key),
+      el('span', { text: family.label }));
   });
-  const all = el('button', {
-    type: 'button',
-    class: 'family-chip clear',
-    text: 'All Types',
-    onclick: () => {
+  replace(chips, options);
+  const all = $('[data-family-all]');
+  if (all) {
+    all.addEventListener('click', () => {
       hiddenFamilies.clear();
       familyFilterChanged();
-    },
-  });
-  replace(chips, buttons, all);
+    });
+  }
+  const button = $('[data-family-toggle]');
+  const menu = $('[data-family-menu]');
+  if (button && menu) {
+    if (POPOVER) {
+      menu.setAttribute('popover', 'auto');
+      menu.hidden = false;
+    }
+    wireHint(button, menu, placeMenu);
+    const done = $('[data-family-done]', menu);
+    if (done) {
+      done.addEventListener('click', () => {
+        if (POPOVER) menu.hidePopover();
+        else closeHint();
+        button.focus();
+      });
+    }
+  }
   paintFamilyFilter();
 }
 
+/**
+ * Put the menu under its button, left edges together, on the screen.
+ *
+ * A drop-down reads from its button, so it is not centred as a hint is.
+ * It moves left when the button is near the right edge, and goes above
+ * the button when there is no room below.
+ */
+function placeMenu(button, panel) {
+  const gutter = 8;
+  const rect = button.getBoundingClientRect();
+  const wide = document.documentElement.clientWidth;
+  const tall = document.documentElement.clientHeight;
+  const left = Math.max(gutter, Math.min(rect.left, wide - panel.offsetWidth - gutter));
+  const below = rect.bottom + 4;
+  const top = below + panel.offsetHeight > tall - gutter
+    ? Math.max(gutter, rect.top - panel.offsetHeight - 4) : below;
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+}
+
 function paintFamilyFilter() {
-  for (const button of $$('.family-chip[data-family]')) {
-    button.setAttribute('aria-pressed', String(!hiddenFamilies.has(button.dataset.family)));
+  for (const box of $$('.family-option input[data-family]')) {
+    box.checked = !hiddenFamilies.has(box.dataset.family);
   }
-  const all = $('.family-chip.clear');
-  if (all) all.hidden = hiddenFamilies.size === 0;
+  const all = $('[data-family-all]');
+  if (all) all.disabled = hiddenFamilies.size === 0;
   const total = SonoranLive.FAMILY_ORDER.length;
   const shown = total - hiddenFamilies.size;
   const summary = $('[data-family-summary]');
@@ -10927,7 +10967,7 @@ function fitHint(host, noun, label, hint, exact) {
  * Shared by `fitHint` and `tapTip`, so the popover path and the fallback
  * path cannot drift between the two.
  */
-function wireHint(button, panel) {
+function wireHint(button, panel, place = placeHint) {
   /*
    * The browser drives it where it can. `popovertarget` toggles the
    * panel, closes it on Escape and on a tap outside, and — the part a
@@ -10945,7 +10985,7 @@ function wireHint(button, panel) {
     panel.addEventListener('toggle', (event) => {
       const open = event.newState === 'open';
       button.setAttribute('aria-expanded', String(open));
-      if (open) placeHint(button, panel);
+      if (open) place(button, panel);
     });
   } else {
     button.addEventListener('click', () => {
@@ -10955,7 +10995,7 @@ function wireHint(button, panel) {
       panel.hidden = false;
       button.setAttribute('aria-expanded', 'true');
       openHint = { button, panel };
-      placeHint(button, panel);
+      place(button, panel);
     });
   }
 }
@@ -11033,7 +11073,8 @@ if (!POPOVER) {
     if (event.key === 'Escape') closeHint();
   });
   document.addEventListener('pointerdown', (event) => {
-    if (openHint && !event.target.closest('.hint-pop, .hint-open')) closeHint();
+    if (openHint && !event.target.closest('.hint-pop, .hint-open')
+      && !event.target.closest('.family-menu, .family-toggle')) closeHint();
   });
 }
 

@@ -509,6 +509,136 @@ const COVERAGE_TILE_URL = () => {
   return state && state.tiles ? state.tiles._url : null;
 };
 
+/**
+ * The packet type menu on the map, at one size (#385).
+ *
+ * Will: "it breaks the header by adding another line and it's not
+ * obvious you have to click 'Packet type all ^' to collapse it. Maybe a
+ * drop down menu with checkbox multi select would be better? Make sure
+ * it looks good on mobile."
+ *
+ * So, with letters as wide as CI's Linux fonts draw them: opening the
+ * menu must not move the header or the map by a pixel, the menu must be
+ * on top and on the screen, each kind must be a labelled checkbox that
+ * filters at once, and Escape, a tap outside and Done must each close
+ * it. The old row of chips grew the header on open, so the first
+ * measurement fails it.
+ */
+async function familyMenuWalk(page, { watch }) {
+  await open(page, 'map', 3500);
+  await page.addStyleTag({
+    content: '.page-head *, .family-menu * { letter-spacing: .12em !important; }',
+  });
+  await page.waitForTimeout(200);
+  const toggle = page.locator('[data-page="map"] [data-family-toggle]');
+  must(await toggle.count() === 1, 'the map has no packet type button');
+  const layout = () => page.evaluate(() => {
+    const head = document.querySelector('[data-page="map"] .page-head');
+    const map = document.querySelector('#live-map');
+    return {
+      head: Math.round(head.getBoundingClientRect().height),
+      map: Math.round(map.getBoundingClientRect().top),
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    };
+  });
+  const menuState = () => page.evaluate(() => {
+    const menu = document.querySelector('[data-family-menu]');
+    const box = menu.getBoundingClientRect();
+    const first = menu.querySelector('.family-option');
+    let onTop = false;
+    if (first && box.width > 0) {
+      const r = first.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      onTop = Boolean(hit && menu.contains(hit));
+    }
+    return {
+      open: box.width > 0 && box.height > 0,
+      expanded: document.querySelector('[data-family-toggle]').getAttribute('aria-expanded'),
+      left: box.left,
+      right: box.right,
+      top: box.top,
+      bottom: box.bottom,
+      wide: window.innerWidth,
+      tall: window.innerHeight,
+      onTop,
+      boxes: [...menu.querySelectorAll('input[type="checkbox"]')].map((input) => ({
+        label: input.closest('label') ? input.closest('label').textContent.trim() : '',
+        checked: input.checked,
+      })),
+      summary: document.querySelector('[data-family-summary]').textContent.trim(),
+    };
+  });
+
+  if (watch) {
+    await page.locator('[aria-label="Watch mode"]').first().click();
+    await page.waitForTimeout(1500);
+  }
+  const before = await layout();
+  await toggle.click();
+  await page.waitForTimeout(300);
+  const opened = await menuState();
+  const after = await layout();
+  must(opened.open && opened.expanded === 'true', 'the button did not open the menu');
+  if (!watch) {
+    must(after.head === before.head, `opening the menu grew the header from ${before.head} to ${after.head} px`);
+    must(after.map === before.map, `opening the menu moved the map from ${before.map} to ${after.map} px`);
+  }
+  must(after.scroll <= after.client + 1, `the open menu scrolls the page sideways: ${after.scroll}/${after.client}`);
+  must(opened.left >= 0 && opened.right <= opened.wide && opened.top >= 0 && opened.bottom <= opened.tall,
+    `the menu runs off the screen: ${Math.round(opened.left)}..${Math.round(opened.right)} of ${opened.wide}, `
+    + `${Math.round(opened.top)}..${Math.round(opened.bottom)} of ${opened.tall}`);
+  must(opened.onTop, 'something covers the open menu');
+  must(opened.boxes.length === 7, `the menu holds ${opened.boxes.length} checkboxes, not one per kind`);
+  must(opened.boxes.every((box) => box.label.length > 2 && box.checked),
+    `a checkbox has no name or starts unchecked: ${JSON.stringify(opened.boxes)}`);
+  must(opened.summary === 'Packet Types: all', `the button says "${opened.summary}"`);
+
+  // One kind off: the button counts it and the map is told, and the
+  // menu stays open for the next choice.
+  await page.locator('[data-family-menu] label.family-option[data-family="POSITION_APP"]').click();
+  await page.waitForTimeout(300);
+  const one = await menuState();
+  const hidden = await page.evaluate(() => [...hiddenFamilies]);
+  must(one.open, 'choosing a kind closed the menu');
+  must(one.summary === 'Packet Types: 6 of 7', `after one kind off the button says "${one.summary}"`);
+  must(hidden.join() === 'POSITION_APP', `the map hides ${JSON.stringify(hidden)}`);
+
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const escaped = await menuState();
+  must(!escaped.open && escaped.expanded === 'false', 'Escape did not close the menu');
+  if (watch) {
+    // Escape closes the menu first. It must not also leave watch mode.
+    must(await page.evaluate(() => document.querySelector('[data-map-shell]').classList.contains('watch')),
+      'the Escape that closed the menu also left watch mode');
+  }
+
+  await toggle.click();
+  await page.waitForTimeout(300);
+  must((await menuState()).open, 'the menu did not open a second time');
+  await page.mouse.click(5, Math.round((await menuState()).tall / 2));
+  await page.waitForTimeout(300);
+  must(!(await menuState()).open, 'a tap outside did not close the menu');
+
+  await toggle.click();
+  await page.waitForTimeout(300);
+  await page.locator('[data-family-all]').click();
+  await page.waitForTimeout(300);
+  const reset = await menuState();
+  must(reset.summary === 'Packet Types: all' && reset.boxes.every((box) => box.checked),
+    'Show all did not show every kind');
+  await page.locator('[data-family-done]').click();
+  await page.waitForTimeout(300);
+  const done = await menuState();
+  must(!done.open, 'Done did not close the menu');
+  must(await page.evaluate(() => document.activeElement
+    && document.activeElement.matches('[data-family-toggle]')), 'Done did not give focus back to the button');
+  if (watch) await page.keyboard.press('Escape');
+  return `head ${before.head} px open and shut, menu ${Math.round(opened.left)}..${Math.round(opened.right)}`
+    + ` of ${opened.wide} px; filters, Escape, outside, Show all, Done`;
+}
+
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1050 } });
@@ -2373,6 +2503,11 @@ async function main() {
     }
     return `rows at ${seenAt.join('/')} ms after one poll (spread ${spread} ms); colours ${report.join('; ')}`;
   });
+
+  await journey(context, 'the packet type menu opens over the map, not into the head (#385)',
+    (page) => familyMenuWalk(page, { watch: false }));
+  await journey(context, 'the packet type menu works in watch mode (#385)',
+    (page) => familyMenuWalk(page, { watch: true }));
 
   await journey(context, 'a mouse keeps the exact dot target (#266)', async (page) => {
     // The control for the phone journey: the wider target is for touch.
@@ -4783,6 +4918,9 @@ async function main() {
     return `sheet ${peek} px high, close ${sheet.close.join('x')}, map free above it; `
       + `held through 2 refreshes${more ? ', grabber opens it further' : ''}; Back, close and a gone node all close it`;
   });
+
+  await journey(phone, 'the packet type menu fits a phone and opens over the map (#385)',
+    (page) => familyMenuWalk(page, { watch: false }));
 
   await journey(phone, 'the map page opens at its top (#270)', async (page) => {
     /*
