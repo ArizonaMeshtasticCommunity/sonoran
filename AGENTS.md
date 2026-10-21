@@ -234,6 +234,9 @@ the working agreement with the runner's owner (#308):
    PR that is not a security fix may be merged by its author.
 6. Stop and wait if the owner is working. Look at `gh run list` for
    jobs in progress.
+7. No CI job runs for a pull request from a fork (`ci.yml`). To test a
+   fork's change, read it, then push it to a branch of this repository.
+   Never approve a fork's workflow run that changes `.github/`.
 
 Deploying is in `docs/DEPLOY.md`.
 

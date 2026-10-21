@@ -18,9 +18,29 @@ on:
 permissions:
   contents: read
 
+# No job runs for a pull request from a fork.
+#
+# Every job runs on self-hosted hardware that belongs to a community
+# member (AGENTS.md 6.2), and the jobs can reach Docker there. A pull
+# request from a fork can change any test or the Dockerfile, so it would
+# run its author's code on that machine. Each job therefore runs for a
+# push to main, and for a pull request from a branch of this repository.
+# A maintainer who wants CI on a fork's change reads it, then pushes it
+# to a branch here.
+#
+# This condition is NOT enough on its own. For a pull request, GitHub
+# reads this file from the pull request, so a fork can delete the
+# condition in its own copy. The lock is the repository setting:
+# Actions, "Require approval for all outside collaborators". With it, no
+# workflow of a fork runs until a maintainer approves it. Never approve
+# a fork's run that changes a file in .github/.
+#
+# This needs the agreement of the runner's owner. test_ci_workflows.py
+# checks the condition on each job.
 jobs:
   lint:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
@@ -41,6 +61,7 @@ jobs:
 
   typecheck:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
@@ -49,6 +70,7 @@ jobs:
 
   test:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       # This job runs the 166 database-backed tests in tests/integration
       # as well as the unit suite, and it starts their container itself
@@ -77,6 +99,7 @@ jobs:
 
   migrations:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     services:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
@@ -175,6 +198,7 @@ jobs:
   # #83 and is deliberately not this job.
   e2e:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     services:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
@@ -316,6 +340,7 @@ jobs:
 
   docker:
     runs-on: self-hosted
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       # No setup-buildx-action. It made a new BuildKit container for every
