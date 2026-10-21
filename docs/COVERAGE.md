@@ -45,6 +45,7 @@ use.
 | `positions.py` | Whether a position is precise enough to predict from |
 | `radio/resolve.py` | The effective power, antenna, and height of a node |
 | `coverage/clutter.py` | What the last few metres at each end cost |
+| `climate/koppen.py` | Which ITM radio climate a site predicts on (#239) |
 | `coverage/grid.py` | How a raster maps to the ground |
 | `embed/sanitise.py` | What a public viewer may see |
 
@@ -222,9 +223,188 @@ positions with the prediction, or remove the ground and inspect the
 prediction by itself.
 
 No coverage is transparent. Usable coverage is nearly opaque and runs
-from hot pink at the receiver limit to bright blue at 30 dB of margin.
+from hot pink at the receiver limit to bright blue at 60 dB of margin
+(`RAMP_SPAN_DB` in `coverage/render.py`; the run sends it to the page as
+`ramp_span_db`).
 The terrain map does not use that ramp. The edge and the direction of
 improvement therefore remain visible over roads, desert, and forest.
+
+#### 6.1.1 The settings panel (#334)
+
+One **Settings** button, with a gear, is at the top right of the page
+head. Every choice about the map is in the panel under it. A badge on
+the button shows how many settings differ from the default. It counts
+settings, not controls: three hidden roles are one setting.
+
+The defaults are the map that Logan and Tyler asked for in #315.
+
+| Setting | Default | Kept where |
+|---------|---------|------------|
+| Map source: "Routers and repeaters" or "Also nodes that repeat" | Routers and repeaters (the run's first map) | The address |
+| Include approximate positions | Off | The address |
+| Layer: usable, downlink or uplink | Usable | The address |
+| Signal floor: 0, 5, 10 or 20 dB above what the radio needs (6.1.2) | 0 dB | The address |
+| Show: map, nodes, signal strength | All on | This visit only |
+| Signal opacity | 100 % | This browser |
+| Node markers by role | Every role shown | This browser |
+| Last heard: any time, 24 h or 7 d | Any time | This browser |
+| Hide moving nodes | Off | This browser |
+| Show uncertainty circles | Off | This browser |
+
+**Reset to default** puts every setting back, and writes a plain
+`#coverage` address.
+
+The map choices change what the map is, so they go in the address:
+`#coverage?set=extended&approx=1&layer=downlink&floor=10`. Only a value that
+differs from the default is written. A link therefore shows the same
+map to the next reader, and a plain `#coverage` link is always the
+precise map. The map choices are not stored in the browser. If they
+were, one plain link would show the approximate map to one reader and
+the precise map to another. Inside one visit, a plain `#coverage` from
+the menu keeps the map that the visit chose.
+
+The display filters change only what this browser draws over the map.
+They are stored for each viewer in `localStorage` under
+`sonoran.coverage.settings`, and never reach the address or the server.
+The opacity that older pages stored under
+`sonoran.coverage.signalOpacity` is still read once. A browser that
+refuses storage gets the defaults, and the panel still works for the
+visit.
+
+- **Include approximate positions** selects the `_approximate` map of
+  the chosen source (9.1.2.1.1). When the run has no such map, because
+  `COVERAGE_INCLUDE_APPROXIMATE` is off, the toggle is disabled and says
+  "Not computed on this server. An operator can turn it on with
+  COVERAGE_INCLUDE_APPROXIMATE." The page never draws the precise map
+  under the approximate name, or the reverse. A link with `approx=1`
+  opened on such a server draws the precise map, says so, and corrects
+  the address.
+- **Signal floor** shows only the ground where the signal is at least
+  that many dB above what the radio needs. See 6.1.2.
+- **Node markers by role** offers one chip for each role of the nodes
+  the map on show was predicted from. A hidden role stays offered, so
+  the filter can be undone where it was made.
+- **Hide moving nodes.** Definition: a moving node is a node whose role
+  is `TRACKER` or `TAK_TRACKER`, and nothing else. This filter hides
+  those two roles. That is our reading of "hide moving nodes" in #334,
+  not a rule Will stated. It is open to him to change. The page has no
+  measure of movement, only the role, and the panel says so. A node of
+  another role can move, for example a client in a car, and this filter
+  does not hide it.
+  The two roles are already left out of every map (`sonoran/roles.py`),
+  so the filter changes markers only on a diagnostic map.
+- **Show uncertainty circles** draws a circle around each site that the
+  run predicted from a rounded position. The radius is the site's
+  `position_deviation_m` in the manifest. The centre is the node's
+  position from `/api/map/nodes`, because the manifest does not write
+  positions. An operator position is exact and gets no circle. A circle
+  is drawn only for a node whose marker is drawn.
+
+The legend and the line above the figures name the map on show, for
+example "Routers and repeaters · rounded positions included". The tiles
+of the precise map and the approximate map look the same, so these
+words are the only thing that tells them apart. The approximate map is
+named in the warning colour.
+
+The rules are pure functions in `web/static/coverage-settings.js`.
+`tests/unit/js/coverage_settings_cases.mjs` runs them under node. The
+public embed has no settings panel and no approximate option
+(`test_the_public_embed_has_no_settings_and_no_approximate_option`).
+
+#### 6.1.2 The signal floor and the margin tiles (#334)
+
+A cell at the receiver limit is reached on a good day. A fade, a wall
+or a pocket takes it away. The signal floor asks a harder question:
+where is the signal at least 5, 10 or 20 dB above what the radio
+needs? The default is 0 dB, which is the map the page always drew.
+
+**The colour tiles cannot answer it.** A colour tile holds colours, and
+a colour cannot be read back as a level without loss. So each colour
+tile has a margin tile beside it:
+
+    {run}/{preset}/{site_set}/{layer}/{z}/{x}/{y}.png          colour
+    {run}/{preset}/{site_set}/{layer}/margin/{z}/{x}/{y}.png   margin
+
+A margin tile is a grey PNG, 256 pixels square, one byte for each pixel:
+
+| Byte | Meaning |
+|---|---|
+| 0 | No usable coverage. The colour tile is clear here |
+| `n` | `n - 1` dB above the sensitivity of the preset |
+
+The levels are whole dB. The threshold meets them as a whole byte
+through `to_level` in `coverage/grid.py`, which is the byte the colour
+tile uses. Five presets have a sensitivity on a half dB since #362, for
+example Medium slow at -128.5 dBm, and their margin counts from that
+same rounded byte, so the floor never moves away from the colour ramp.
+The margin is therefore a whole number from 0 to 254 and the byte holds
+it exactly. `margin_levels` in
+`coverage/render.py` writes it from the same sampled cells as the
+colour tile, so the two are empty in the same places. The manifest
+names the encoding, the ramp and the alpha in `margin_tiles`
+(`docs/API.md` 3A.1). The route is 3A.2.1.
+
+**What the page does.** At 0 dB it draws the colour tiles, as before,
+and does no work of its own. Above 0 dB it changes the signal layer to
+a Leaflet grid layer over the margin tiles of the same layer. Each tile
+is fetched, decoded with no colour conversion, and coloured in a
+canvas by `colourMargins` in `coverage-settings.js`. A cell below the
+floor is left clear. A cell at or above it keeps the colour it has on
+the colour tile: the ramp still starts at the sensitivity, and
+`coverage_floor_cases.mjs` checks every margin from 0 to 254 dB against
+the colours Python wrote. The legend dims the part of the ramp below
+the floor and says "Shown from -126 dBm, 10 dB above the limit". The
+"Usable area" figure is the run's, measured at the limit, and says so
+while a floor is in force.
+
+A fetched tile is not cancelled by the browser when Leaflet drops it,
+as an image is. So each margin tile request has its own abort signal,
+and the layer aborts it on `tileunload`: when the tile is panned out of
+view, or when the floor changes and the layer goes. The journey
+"margin tiles that leave the map stop downloading" pins it.
+
+**The floor is a map choice**, so it goes in the address with the
+layer, counts on the badge, and Reset clears it. It is not stored for
+the viewer. It changes which ground the map calls covered, and a floor
+remembered from last week would show a smaller mesh under a plain
+`#coverage` link with nothing on the map to say why.
+
+**A run made before the margin tiles** has no `margin_tiles` in its
+manifest. Two runs are kept, so one can be on disk for a day after an
+upgrade. The page draws its colour tiles, disables the floor, and says
+"Not available for this run. It was made before the coverage job wrote
+signal margins. The next run will have them." A link with `floor=10`
+opened on such a run draws the whole map, says so, and corrects the
+address. The deploy step is `docs/DEPLOY.md` 9.
+
+**The public embed is not changed.** It serves the colour tile of the
+infrastructure map from its own route, which takes the zoom as a whole
+number and so cannot name the `margin` directory. The colour tiles are
+byte for byte what they were
+(`test_the_colour_tiles_are_byte_identical_to_before_the_floor`), the
+embed summary carries no `margin_tiles`, and `embed-coverage.js` never
+asks for a margin tile (`test_no_public_path_serves_a_margin_tile`).
+
+**What it costs.** One more PNG for each colour tile, from cells already
+in memory, with no extra engine run. On a synthetic tile set a margin
+tile is about 0.7 of the size of its colour tile and takes about a
+third of the time to write, so a run's tiles take about 1.7 times the
+disk and the render step about 1.3 times its time. The render step is
+small beside the engine. In the browser, each tile at a floor above 0
+costs one fetch and one pass over 65,536 pixels.
+
+Three other designs were considered and rejected:
+
+- **Encode the margin inside the colour tile**, for example in the
+  alpha channel. One file serves both, but the public tiles change,
+  and the embed must not change.
+- **One colour tile set for each floor.** No work in the browser, but
+  four times the tiles and four times the render step, on a three core
+  box. And a fifth floor would need a new run.
+- **Read the margin back from the colours in the browser.** No server
+  change, but the colours are quantised and premultiplied by the
+  canvas, the ramp is flat above 60 dB, and a change to the palette
+  would move every floor without any test saying so.
 
 ## 7. Clutter
 
@@ -382,9 +562,9 @@ it, because dropping it would give back the unbounded estimate that
 `AGENTS.md` 9.21 exists about.
 
 Three places refuse to apply a pinned offset, and each one is cheap:
-the fit writes zero, `store.calibration_offsets` skips any node the file
+the fit writes zero, `store.offsets_of` skips any node the stored fit
 marks `locked`, and `radio/resolve.py` ignores the offset of a locked
-node whatever it holds. The middle one matters for a file written before
+node whatever it holds. The middle one matters for a fit stored before
 a lock was added.
 
 A model bias is one error over the whole mesh. A value past 20 dB says
@@ -399,7 +579,8 @@ its own guesses.
 
 The job runs on a timer in the jobs process. When calibration is due,
 it finishes before coverage starts. The coverage run then reads the
-new calibration file.
+new calibration from `coverage_calibration` and
+`coverage_calibration_node` (`docs/DATABASE.md` 5B, #351).
 
 To run one by hand, now, instead of waiting for the timer:
 
@@ -590,17 +771,105 @@ different languages and nothing else connects them.
 `COVERAGE_MIN_PRECISION_BITS` may be set to zero by a deployment that
 reads its own broker, where every position arrives at full precision.
 
-**Or lowered on purpose, to draw the backbone that shares only a
-rounded position.** s.azmsh.dev sets 13 (2026-09-29): 31 routers were
-left out at 16, among them Towers 2 near Wickenburg, and the map drew
-nothing west of it. 13 keeps every position of 2.9 km or better and
-still refuses the broker's coarsest. Such a site is predicted from its
-rounded point, so its footprint can sit on the wrong side of a ridge,
-which is the cost above. It is not hidden: each site in
-`presets[].nodes` carries `position_deviation_m`, set only for a
-rounded position, and the page can say the footprint is approximate.
-An operator position in `config/nodes.yaml` is still the fix, and a
-site given one carries no deviation.
+### 9.1.2.1 Precise positions only, and the operator position (#315)
+
+**Every published map predicts from precise positions only.** That is
+16 bits or better, or a position an operator gave.
+
+This reverses part of #318. That change let a host lower
+`COVERAGE_MIN_PRECISION_BITS`, and s.azmsh.dev set 13 on 2026-09-29 to
+draw Towers 2 near Wickenburg. Logan and Tyler then asked for it to
+stop:
+
+- Logan: "computing for something offset to a mountain does not make
+  sense when its on a house just so its seen."
+- Tyler showed Tower Mountain predicted from its rounded point, "deep
+  in a valley", and wrote: "We should only report either fully precise
+  locations or override the map."
+
+Will decided on 2026-10-08 to follow them. See `docs/DECISIONS.md`.
+
+So the rule is a named one, in `sonoran/positions.py`:
+
+| Site precision | Takes | Used by |
+|---|---|---|
+| `precise` | 16 bits or better, or an operator position | Every published map, the public embed, and the calibration fit |
+| `approximate` | Also positions down to `COVERAGE_APPROXIMATE_MIN_BITS` (13) | The extra maps of `COVERAGE_INCLUDE_APPROXIMATE` only |
+
+`COVERAGE_MIN_PRECISION_BITS` may raise the precise floor, or be zero
+for a deployment that reads its own broker. **It may not lower it.** A
+value from 1 to 15 is read as 16, and the job logs a warning that names
+the setting and what to set instead. The value 13 is still in the
+`.env` of the host that followed the #318 deploy notes, and a setting
+that silently kept the old map would keep the decision from taking
+effect.
+
+The calibration fit uses the same floor (`jobs/calibrate.py::read_peers`).
+A fuzzed peer turns a silent link into false evidence, which is the
+failure in `AGENTS.md` 9.21. With 13 on the host it took rounded peers
+too.
+
+**The fix for a known router is an operator position.** Write its
+latitude and longitude in the overrides file, and its antenna height if
+it is known:
+
+```yaml
+nodes:
+  # An example. Use the real ID and the position the owner gives.
+  "!0a51b007":
+    latitude: 33.4484
+    longitude: -112.0740
+    antenna_height_m: 20.0
+    note: "Ridge router. Position from the owner, 2026-10."
+```
+
+The node is then a precise site at that position. The rules for it:
+
+- It places a node and does nothing else. The role test runs first, so
+  a client given a position is still not infrastructure, and is still
+  not on the public map.
+- It is used by the coverage job and the calibration fit only. The map
+  page, the node page and the public node markers still show the
+  position the node reported. The node page shows the antenna height,
+  because that is a radio fact and not a position.
+- The manifest says `position_source: "operator"` for the site. It does
+  not carry the position.
+- Each entry is checked when the file is read. Half a position, a pair
+  that is not a place (such as 0, 0), a value out of range, and an ID
+  that is not `!` and eight hexadecimal digits are refused, each with a
+  log line that names the node. Quote the ID: YAML reads a bare `!` as
+  a tag.
+
+**An operator position is a precise location, and the public tiles show
+it.** The public node markers stay snapped (`embed/sanitise.py`), but a
+footprint has a centre. That is already true for every router that
+shares its full position. Add a position only for a node whose owner
+agrees, and keep a person's house out of the file. `docs/DEPLOY.md` 8
+says how to keep the file on the host, out of the repository.
+
+### 9.1.2.1.1 The approximate map
+
+`COVERAGE_INCLUDE_APPROXIMATE=true` makes a run also predict an
+approximate map of each site set, from the precise sites and the rounded
+ones down to `COVERAGE_APPROXIMATE_MIN_BITS`. Off by default.
+
+- It is its own site set: `infrastructure_approximate`, and
+  `extended_approximate` when `COVERAGE_INCLUDE_CLIENTS` is on. It has
+  its own tiles, and `Manifest.site_sets` marks it `approximate: true`.
+- Each rounded site carries `position_deviation_m`, so a page can say
+  the footprint is approximate, and by how much.
+- The public embed never reads it. The public tile route reads
+  `infrastructure` off the path and nothing else, and the name of an
+  approximate set is never `infrastructure`.
+  `test_the_public_tiles_never_serve_the_approximate_map` pins it.
+- **It costs one more full prediction of each site set.** The
+  approximate map predicts every site again, the precise ones too,
+  because the job keeps no result for one site after it has been added
+  to the map (`_predict`). With the setting off, the cost is what it was.
+
+The dashboard does not list it as a map source. The "Include
+approximate positions" toggle in the coverage settings panel selects
+it, and is disabled when the run has none. See 6.1.1.
 
 ### 9.1.2.2 Predicting from the nodes that repeat
 
@@ -793,6 +1062,14 @@ rather than widened.
 8. The manifest counts every node left out, by role and by the
    coarseness of its position, and the page shows both. A map that
    drops nine nodes in ten must say so.
+9. Each site predicts on the radio climate of its own ground, from the
+   Köppen-Geiger crop in `sonoran/climate/` (#239). The calibration
+   uses the same climate for the same node, so the fit measures the
+   model the map draws. One run has one climate, so a path from a
+   Flagstaff site down into the desert is predicted on continental
+   temperate for its whole length. A site outside the crop predicts on
+   `desert`, which is what every site did before. See
+   `docs/PLANNER.md` 4.3.
 
 ## 12. Coverage gaps
 

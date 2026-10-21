@@ -2,7 +2,7 @@
  * The RF page: what the community's own receivers hear beyond Meshtastic.
  *
  * Aircraft first. Every mark is something one of our stations heard,
- * sent by `rf-agent` and stored by `sonoran-rf-ingest`. Nothing is
+ * sent by `sonoran-contributor` (its RF agent) and stored by `sonoran-rf-ingest`. Nothing is
  * fetched from anywhere else, so an aircraft that is not here was not
  * heard by us. See docs/design/rf-map.md.
  *
@@ -97,6 +97,9 @@
     selectedThing: null,
     kinds: null,
     custom: null,
+    noise: null,
+    // The measured noise floor layer (#182) starts hidden, like mods.
+    noiseShown: false,
     // Which layers are shown, by source key, plus `stations` and `mods`.
     // Member mods start hidden (#324): a reader turns them on.
     shown: { stations: true, mods: false },
@@ -189,6 +192,7 @@
     state.track = L.layerGroup().addTo(map);
     state.stations = L.layerGroup().addTo(map);
     state.aircraft = L.layerGroup().addTo(map);
+    state.noise = L.layerGroup().addTo(map);
     state.map = map;
     return map;
   }
@@ -769,6 +773,18 @@
       });
       target.append(button);
     }
+    // Read from nodes by members' contributors (#178, #182). Off until a
+    // reader turns it on.
+    const noise = el('button', {
+      type: 'button', class: 'toggle', 'aria-pressed': String(state.noiseShown),
+      text: 'Measured noise floor', 'data-option-default': 'false',
+    });
+    noise.addEventListener('click', () => {
+      state.noiseShown = !state.noiseShown;
+      noise.setAttribute('aria-pressed', String(state.noiseShown));
+      loadNoise();
+    });
+    target.append(noise);
   }
 
   /*
@@ -1736,6 +1752,48 @@
     drawMods(page);
   }
 
+  /* --- Measured noise floor (#182) ------------------------------------
+
+     The noise floor each node measured itself, as a contributor read it
+     on request (#178). It is NOT the theoretical floor the coverage map
+     uses, so it is always called "measured". Each mark is the number in
+     dBm, with no colour scale: a scale needs thresholds, and there is no
+     source for one yet (AGENTS.md 3A.2). A node without a reading is not
+     drawn, which means "not measured", never "quiet". */
+  const noiseState = { rows: [], fetchedAt: 0 };
+
+  async function loadNoise() {
+    if (!state.noise) return;
+    state.noise.clearLayers();
+    if (!state.noiseShown) return;
+    if (Date.now() - noiseState.fetchedAt >= BAND_REFRESH_MS) {
+      try {
+        noiseState.rows = (await getJson('api/rf/noise-floor')).body;
+        noiseState.fetchedAt = Date.now();
+      } catch {
+        // Keep what was drawn.
+      }
+    }
+    for (const row of noiseState.rows) {
+      const node = document.createElement('span');
+      node.className = 'rf-noise-mark';
+      node.textContent = `${Number(row.noise_floor_dbm)}`;
+      const icon = new ElementIcon({ element: node, className: 'rf-icon', iconSize: [40, 18], iconAnchor: [20, 9] });
+      state.noise.addLayer(L.marker([row.lat, row.lon], { icon, keyboard: false })
+        .bindTooltip(() => noiseTooltip(row), { direction: 'top' }));
+    }
+  }
+
+  function noiseTooltip(row) {
+    const who = row.measured_by || {};
+    const by = who.display_name || who.location || 'a contributor';
+    return el('div', { class: 'rf-tip' },
+      el('strong', { text: row.long_name || row.short_name || row.node_id }),
+      el('div', { text: `Measured noise floor: ${row.noise_floor_dbm} dBm` }),
+      el('div', { text: `${ago(row.time)}, read by ${by}` }),
+      el('div', { class: 'muted', text: 'Measured by the node itself. Not the floor the coverage map assumes.' }));
+  }
+
   /* --- The table ----------------------------------------------------
 
      Everything on the map, as rows: the decoded fields in words, and
@@ -1953,8 +2011,9 @@
     drawBand(page, stations.body, false);
     loadSweeps(page, stations.body);
     loadMods(page);
+    loadNoise();
     if (!stations.body.length) {
-      summary.textContent = 'No RF station has reported yet. A station runs rf-agent beside its SDR.';
+      summary.textContent = 'No RF station has reported yet. A station runs sonoran-contributor beside its SDR.';
       return;
     }
     const online = stations.body.filter((station) => station.online).length;

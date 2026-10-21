@@ -21,9 +21,11 @@ from starlette.routing import get_route_path
 from starlette.types import Scope
 
 from sonoran import __version__
+from sonoran.api.conditional import ConditionalGetMiddleware
 from sonoran.api.html import as_script_json
 from sonoran.api.limits import Budget, RateLimitMiddleware
 from sonoran.api.routes.chat import router as chat_router
+from sonoran.api.routes.climate import router as climate_router
 from sonoran.api.routes.coverage import router as coverage_router
 from sonoran.api.routes.embed import router as embed_router
 from sonoran.api.routes.gaps import router as gaps_router
@@ -431,6 +433,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tiles=Budget(settings.api_tile_rate_burst, settings.api_tile_rate_per_second),
             user_header=settings.api_rate_user_header,
         )
+    # Tag the long-window answers and answer an unchanged one with 304
+    # (#371). Before the security headers, so a 304 carries them too, and
+    # inside gzip, so the tag is of the uncompressed body.
+    app.add_middleware(ConditionalGetMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     # Compress what is worth compressing.
     #
@@ -470,6 +476,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(stats_router)
     app.include_router(leaderboards_router)
     app.include_router(terrain_router)
+    app.include_router(climate_router)
     app.include_router(traceroutes_router)
     app.include_router(rf_router)
 
@@ -571,4 +578,5 @@ def run() -> None:
         factory=True,
         host=settings.web_host,
         port=settings.web_port,
+        workers=max(settings.web_workers, 1),
     )

@@ -294,7 +294,9 @@
      * on should not need a second script to work.
      */
     const store = window.SonoranPreset;
-    const wanted = (store && store.current())
+    // `single`, not `current`: these callers draw one preset, and under
+    // "All presets" that is the deployment's default.
+    const wanted = (store && (store.single ? store.single() : store.current()))
       || (window.SONORAN && window.SONORAN.defaultPreset)
       || '';
     if (!wanted) return list[0];

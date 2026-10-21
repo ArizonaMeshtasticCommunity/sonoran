@@ -4,7 +4,7 @@ There is no JavaScript test runner here, so these hold the shapes that
 a browser pass measured. Each assertion below failed against the code
 before the change and passes after it. What was measured, and where:
 
-* Against the deployed instance at ``http://203.0.113.10:8200`` with
+* Against a deployed test instance with
   ``app.js`` and ``app.css`` served from this tree. Five charts on the
   node page, three on statistics, one on the dashboard and one on the
   graph page each got a control. Entering took the dashboard chart's

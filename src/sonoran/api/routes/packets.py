@@ -1,21 +1,25 @@
 """Read-only packet endpoints."""
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
 from sonoran.api.packet_summary import summaries, text_of
+from sonoran.api.preset_scope import preset_filter, require_presets
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
     EnvironmentMetrics,
     MeshPacketMetrics,
     NeighborMetrics,
+    Node,
     Packet,
     PacketSeen,
     PositionMetrics,
@@ -93,6 +97,7 @@ async def list_packets(
     from_node: str | None = Query(default=None, alias="from"),
     to_node: str | None = Query(default=None, alias="to"),
     channel: str | None = None,
+    preset: str | None = None,
     since: datetime | None = None,
     before: datetime | None = None,
     limit: int = Query(default=100, ge=1, le=500),
@@ -103,7 +108,12 @@ async def list_packets(
 
     Set `summary=true` to add a one line `summary` of what each packet
     said, read from the decoded tables. See `api/packet_summary.py`.
+
+    Set `preset` to keep the packets carried on one modem preset, or on
+    any of several (`preset=MediumFast,LongFast`). It works beside
+    `channel`. See `api/preset_scope.py`.
     """
+    wanted = require_presets(preset)
     # Pick the page first, count second.
     #
     # This used to group the whole join before applying the limit, so
@@ -132,6 +142,11 @@ async def list_packets(
         picked = picked.where(Packet.to_node_num == require_node_num(to_node))
     if channel:
         picked = picked.where(Packet.channel == channel)
+    if wanted is not None:
+        # The same newest-first scan of the time index as `channel`: the
+        # filter is checked on each row the scan reaches. See the PR for
+        # why there is no index on the tag.
+        picked = picked.where(preset_filter(Packet.modem_preset, Packet.channel, wanted))
     if since:
         picked = picked.where(Packet.first_seen_at >= since)
     if before:
@@ -299,6 +314,7 @@ async def get_packet(
     observations = (
         await session.scalars(
             select(PacketSeen)
+            .options(undefer(PacketSeen.relay_node))
             .where(
                 PacketSeen.from_node_num == packet.from_node_num,
                 PacketSeen.packet_id == packet.packet_id,
@@ -314,6 +330,45 @@ async def get_packet(
             *(item.gateway_node_num for item in observations),
         ],
     )
+    # The nodes each upload's relay byte may name (AGENTS.md 9.20): the
+    # gateway's direct neighbours, the nodes it uploaded at 0 hops. That is
+    # the firmware's own scope for a relay byte (NodeDB::resolveLastByte).
+    relay_bytes = sorted({item.relay_node for item in observations if item.relay_node})
+    # The firmware sends 0xff for a node whose last byte is 0 (NodeDB.h:431).
+    low_bytes = [*relay_bytes, 0] if 0xFF in relay_bytes else relay_bytes
+    neighbours: dict[int, list[tuple[int, str | None, datetime | None, str | None]]] = {}
+    if relay_bytes:
+        gateways = sorted({item.gateway_node_num for item in observations})
+        rows = (
+            await session.execute(
+                select(
+                    PacketSeen.gateway_node_num,
+                    PacketSeen.from_node_num,
+                    func.max(PacketSeen.seen_at),
+                )
+                .where(
+                    PacketSeen.gateway_node_num.in_(gateways),
+                    PacketSeen.seen_at >= packet.first_seen_at - RELAY_WINDOW,
+                    PacketSeen.seen_at <= packet.first_seen_at + RELAY_WINDOW,
+                    PacketSeen.hop_start > 0,
+                    PacketSeen.hop_start == PacketSeen.hop_limit,
+                    PacketSeen.gateway_node_num != PacketSeen.from_node_num,
+                    PacketSeen.from_node_num.op("&")(0xFF).in_(low_bytes),
+                )
+                .group_by(PacketSeen.gateway_node_num, PacketSeen.from_node_num)
+            )
+        ).all()
+        nums = sorted({row[1] for row in rows})
+        roles = dict(
+            (await session.execute(select(Node.node_num, Node.role).where(Node.node_num.in_(nums))))
+            .tuples()
+            .all()
+        )
+        relay_names = await resolve_names(session, nums)
+        for gateway, num, heard in rows:
+            neighbours.setdefault(gateway, []).append(
+                (num, name_of(relay_names, num), heard, roles.get(num))
+            )
     # Whether the packet was sealed with the recipient's public key (PKI)
     # rather than the channel key. Ingest keeps it per upload in
     # `mesh_packet_metrics`, so it is read from there. None when no row
@@ -366,7 +421,103 @@ async def get_packet(
                     and item.gateway_node_num != packet.from_node_num
                 ),
                 "seen_at": item.seen_at,
+                # One byte, resolved among this gateway's direct neighbours
+                # (AGENTS.md 9.20).
+                "relayed_by": relay_candidates(
+                    item.relay_node,
+                    item.gateway_node_num,
+                    neighbours,
+                    sender=packet.from_node_num,
+                    sender_name=name_of(names, packet.from_node_num),
+                    hops_taken=(
+                        None
+                        if packet.hop_start is None or item.hop_limit is None
+                        else packet.hop_start - item.hop_limit
+                    ),
+                ),
             }
             for item in observations
+        ],
+    }
+
+
+# A gateway's direct neighbours are the nodes it uploaded at 0 hops within
+# a day of the packet. The firmware keeps a neighbour for 2 hours
+# (NEXTHOP_NEIGHBOR_FRESH_SECS, MeshTypes.h:51), but Sonoran sees a
+# neighbour only when it sends its own traffic, and many nodes send every
+# few hours. Live, 2026-10-18, 12,645 relayed uploads: one candidate for
+# 79.9 %, none for 6.7 %, at most 6.
+RELAY_WINDOW = timedelta(days=1)
+
+
+def last_byte(num: int) -> int:
+    """The relay byte the firmware sends for a node (getLastByteOfNodeNum, NodeDB.h:431)."""
+    return num & 0xFF or 0xFF
+
+
+# Roles that never rebroadcast (FloodingRouter::isRebroadcaster,
+# FloodingRouter.cpp:154-158, firmware v2.8.1). A node with
+# rebroadcast_mode NONE never does either, but NodeInfo does not say so.
+NEVER_RELAYS = frozenset({"CLIENT_MUTE"})
+
+
+def relay_candidates(
+    byte: int | None,
+    gateway: int,
+    neighbours: Mapping[int, Sequence[tuple[int, str | None, datetime | None, str | None]]],
+    *,
+    sender: int,
+    hops_taken: int | None,
+    sender_name: str | None = None,
+) -> dict[str, object] | None:
+    """The nodes a relay byte may name for one upload, newest first. None without a byte.
+
+    The radio header carries one byte (RadioInterface.h:54). Every send
+    writes the sender's own byte first, and each rebroadcast overwrites it
+    with the relayer's (FloodingRouter.cpp:22, NextHopRouter.cpp:116). The
+    gateway heard that relayer directly, and the firmware itself resolves
+    a byte among direct neighbours only (NodeDB::resolveLastByte,
+    NodeDB.cpp:4179-4182). So the candidates are `neighbours[gateway]`:
+    (node_num, display name, last direct upload, role) for each node the
+    gateway uploaded at 0 hops within RELAY_WINDOW of the packet.
+
+    - no hop: the byte is the sender's, and the sender is the answer
+      (`exact`). The first hop always lowers the hop limit
+      (Router::shouldDecrementHopLimit, Router.cpp:256-258);
+    - a hop or more: never the sender (a node does not relay its own
+      packet) and never a node that does not rebroadcast;
+    - hops unknown: the sender may be the byte; another muted node not.
+    """
+    if byte is None:
+        return None
+    if hops_taken == 0 and last_byte(sender) == byte:
+        return {
+            "byte": f"{byte:02x}",
+            "exact": True,
+            "candidates": [
+                {"node_id": _node_id(sender), "display_name": sender_name or _node_id(sender)}
+            ],
+        }
+
+    def possible(num: int, role: str | None) -> bool:
+        if num == sender:
+            return not hops_taken
+        return role not in NEVER_RELAYS
+
+    found = sorted(
+        (
+            (num, name, heard)
+            for num, name, heard, role in neighbours.get(gateway, ())
+            if last_byte(num) == byte and heard is not None and possible(num, role)
+        ),
+        key=lambda row: row[2],
+        reverse=True,
+    )
+    return {
+        "byte": f"{byte:02x}",
+        "exact": False,
+        "candidates": [
+            {"node_id": _node_id(num), "display_name": name or _node_id(num)}
+            for num, name, _ in found
         ],
     }

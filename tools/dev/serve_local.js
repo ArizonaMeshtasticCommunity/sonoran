@@ -1,8 +1,12 @@
 /*
  * Serve this repo's static tree, with /api proxied to a real instance.
  *
- *     node tools/dev/serve_local.js            # proxies to the dev box
- *     SONORAN_UPSTREAM=... node tools/dev/serve_local.js
+ *     SONORAN_UPSTREAM=http://<host>:<port> node tools/dev/serve_local.js
+ *     node tools/dev/serve_local.js   # proxies to the local preview on :8000
+ *
+ * SONORAN_UPSTREAM is the API to proxy to, for example a test instance
+ * with real data. Without it, the API of `tools/dev/preview.sh` on
+ * 127.0.0.1:8000 is used. PORT sets the port this serves on (8811).
  *
  * Playwright checks in this repo usually intercept `**\/static/*.js` and
  * serve the file from this tree, which works until a change touches
@@ -21,8 +25,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+// The static tree of this checkout, wherever it is cloned.
 const ROOT = path.resolve(__dirname, '..', '..', 'src', 'sonoran', 'web', 'static');
-const UPSTREAM = process.env.SONORAN_UPSTREAM || 'http://203.0.113.10:8200';
+const UPSTREAM = process.env.SONORAN_UPSTREAM || 'http://127.0.0.1:8000';
 const PORT = Number(process.env.PORT || 8811);
 // `.mjs` and `.wasm` are not optional here. The planner's engine is an
 // ES module worker that imports `splat_driver.mjs` and instantiates a

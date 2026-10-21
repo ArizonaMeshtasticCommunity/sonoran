@@ -42,6 +42,7 @@ approximation.
 
 from dataclasses import dataclass
 
+from sonoran.climate import climate_at
 from sonoran.config import Settings
 from sonoran.coverage.clutter import terminal_loss_db
 from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ, EngineParams, erp_watts
@@ -55,6 +56,11 @@ from sonoran.radio.resolve import RadioProfile
 # A stock SX1262 device. It is the common case, and it is the radio
 # somebody walking around actually has.
 HANDHELD_TX_POWER_DBM = 22.0
+
+# Where a site's position came from. The manifest carries it on each
+# site, so the dashboard can say "position set by the operator" (#315).
+POSITION_REPORTED = "reported"
+POSITION_OPERATOR = "operator"
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,9 @@ class Site:
     # a rounded position is drawn around the rounded point, so the page
     # needs this to say the footprint is approximate.
     position_deviation_m: float | None = None
+    # `POSITION_OPERATOR` when the position came from the overrides
+    # file, `POSITION_REPORTED` when the node sent it.
+    position_source: str = POSITION_REPORTED
 
     @property
     def sort_key(self) -> float:
@@ -109,6 +118,7 @@ def make_site(
     profile: RadioProfile,
     preset: ModemPreset,
     position_deviation_m: float | None = None,
+    position_source: str = POSITION_REPORTED,
 ) -> Site:
     """Return a site, with the clutter around it worked out."""
     around = clutter_at(settings, latitude, longitude)
@@ -127,6 +137,7 @@ def make_site(
         clutter_diffracting=diffracting,
         clutter_loss_db=terminal_loss_db(around, height, DEFAULT_FREQUENCY_MHZ, diffracting),
         position_deviation_m=position_deviation_m,
+        position_source=position_source,
     )
 
 
@@ -151,6 +162,10 @@ def engine_params(settings: Settings, site: Site) -> EngineParams:
             profile.cable_loss_db,
         ),
         radius_m=settings.coverage_radius_km * 1000.0,
+        # The climate of the site's own ground, as the planner page uses
+        # it (#239). A site outside the shipped data gets `desert`, which
+        # is what every site got before.
+        radio_climate=climate_at(site.latitude, site.longitude).climate,
         # The engine is given no clutter on purpose.
         #
         # It uses the value by raising the ground, which costs nothing

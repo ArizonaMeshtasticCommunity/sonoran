@@ -3,6 +3,11 @@
 This document is the master plan for Sonoran, the azmsh.net Meshtastic dashboard.
 It uses ASD-STE100 Simplified Technical English.
 
+Written on 2026-08-02. The purpose, the decisions and the requirements
+still apply. Section 5 shows the first layout of the code and is now
+history: `docs/ARCHITECTURE.md` describes the current modules and
+services. Open work is in the GitHub issues and in `docs/ISSUES.md`.
+
 ## 1. Purpose
 
 The azmsh.net project runs two applications today:
@@ -34,7 +39,7 @@ Do not reopen them without a documented reason.
 | D1 | Language | Python 3.13 or newer |
 | D2 | Database | TimescaleDB (PostgreSQL with the TimescaleDB extension) |
 | D3 | API | Read-only JSON API. GET endpoints only. FastAPI |
-| D4 | Frontend | Static files. HTML, HTMX, Alpine.js, Leaflet, ECharts. No build step |
+| D4 | Frontend | Static files. HTML, CSS and JavaScript, Leaflet, ECharts. No build step. (HTMX and Alpine.js were planned here and never used.) |
 | D5 | Deduplication | meshview model. One `packet` row. Many `packet_seen` rows |
 | D6 | Raw data | Store the raw protobuf bytes of every unique packet |
 | D7 | Traceroute graphs | Link to our own `mesh-graph` container. No fork |
@@ -100,7 +105,7 @@ TimescaleDB  (packet, packet_seen, node, metric tables)
 [api service]  FastAPI, GET endpoints only
    |
    v
-[static UI]  HTML + HTMX + Alpine.js + Leaflet + ECharts
+[static UI]  HTML + JavaScript + Leaflet + ECharts
    |
    +-- links and embeds --> [mesh-graph container]
 ```

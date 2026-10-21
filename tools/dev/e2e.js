@@ -241,6 +241,22 @@ async function valueOf(page, read, timeout = 15000, step = 300) {
   }
 }
 
+/*
+ * Read a page value until `good` accepts it, and return the last one
+ * read either way, so a failure can say what it saw. One `evaluate` per
+ * read (AGENTS.md 9.32).
+ */
+async function waitForValue(page, read, arg, good, timeout = 10000) {
+  const until = Date.now() + timeout;
+  let got = null;
+  for (;;) {
+    got = await page.evaluate(read, arg);
+    if (good(got)) return { ok: true, got };
+    if (Date.now() >= until) return { ok: false, got };
+    await page.waitForTimeout(250);
+  }
+}
+
 async function predict(page, start, timeout = 240000) {
   if (start) await start();
   if (!(await waitFor(page, PLANNER_SETTLED, timeout))) {
@@ -338,6 +354,413 @@ async function tableFitsAt(page, find, label) {
     out.push(`${width}:${size.scroll}/${size.client}`);
   }
   return out.join(' ');
+}
+
+/*
+ * A published coverage run, served through routes (#334).
+ *
+ * The seeded instance has no coverage run, because the job runs the
+ * engine for minutes, and a page with no run hides its settings. So the
+ * settings journeys serve a small manifest of their own. `approximate`
+ * adds the `infrastructure_approximate` map, which is what a server with
+ * COVERAGE_INCLUDE_APPROXIMATE on publishes. The tiles are one clear
+ * pixel and the nodes are three routers, one of them rounded.
+ */
+const STUB_STAMP = '20261008T000000Z';
+const CLEAR_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  'base64',
+);
+
+/*
+ * A margin tile for the signal floor journeys (#334): 256 grey pixels
+ * square, the west half 5 dB above the limit and the east half 30 dB.
+ * Byte n is n - 1 dB, as `coverage/render.py` writes it.
+ */
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let k = 0; k < 8; k += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function greyPng(width, height, byteAt) {
+  const zlib = require('zlib');
+  const rows = Buffer.alloc((width + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) rows[y * (width + 1) + 1 + x] = byteAt(x, y);
+  }
+  const chunk = (kind, payload) => {
+    const head = Buffer.alloc(4);
+    head.writeUInt32BE(payload.length);
+    const body = Buffer.concat([Buffer.from(kind, 'ascii'), payload]);
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(crc32(body));
+    return Buffer.concat([head, body, tail]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 0, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(rows)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+const MARGIN_PNG = greyPng(256, 256, (x) => (x < 128 ? 6 : 31));
+
+function stubManifest({ approximate, margins = false }) {
+  const box = [33.0, -112.6, 33.9, -111.6];
+  const site = (id, extra = {}) => ({
+    node_id: id,
+    display_name: `Site ${id}`,
+    used: true,
+    eirp_dbm: 30,
+    antenna_height_m: 10,
+    clutter_height_m: 0,
+    calibrated: false,
+    position_deviation_m: null,
+    position_source: 'reported',
+    ...extra,
+  });
+  const preset = (nodes) => ({
+    preset: 'MediumFast',
+    site_count: nodes.length,
+    candidate_count: 3,
+    sensitivity_dbm: -136,
+    usable_area_km2: 120,
+    downlink_area_km2: 240,
+    data_bounds: box,
+    excluded_by_role: {},
+    nodes,
+  });
+  const precise = preset([site('!e2e00001'), site('!e2e00002')]);
+  const rounded = preset([
+    site('!e2e00001'),
+    site('!e2e00002'),
+    site('!e2e00003', { position_deviation_m: 1500 }),
+  ]);
+  const roles = ['REPEATER', 'ROUTER', 'ROUTER_LATE'];
+  const sets = [{
+    key: 'infrastructure', label: 'Routers and repeaters', site_roles: roles,
+    is_diagnostic: false, presets: [precise], data_bounds: box,
+    site_precision: 'precise', approximate: false,
+  }];
+  if (approximate) {
+    sets.push({
+      key: 'infrastructure_approximate',
+      label: 'Routers and repeaters, rounded positions included',
+      site_roles: roles, is_diagnostic: false, presets: [rounded], data_bounds: box,
+      site_precision: 'approximate', approximate: true,
+    });
+  }
+  return {
+    available: true,
+    stamp: STUB_STAMP,
+    layers: [
+      { key: 'usable', label: 'Usable both ways' },
+      { key: 'downlink', label: 'Node heard here' },
+      { key: 'uplink', label: 'Here heard by a node' },
+    ],
+    active_hours: 168,
+    tile_size: 256,
+    min_zoom: 6,
+    max_zoom: 11,
+    bounds: box,
+    data_bounds: box,
+    ramp_span_db: 30,
+    generated_at: new Date().toISOString(),
+    seconds: 12,
+    site_roles: roles,
+    is_diagnostic: false,
+    rx_height_m: 1.5,
+    rx_gain_dbi: 2,
+    handheld_tx_power_dbm: 22,
+    radius_km: 40,
+    has_terrain: true,
+    has_landcover: false,
+    missing_terrain_tiles: [],
+    coarse_sites: [],
+    presets: [precise],
+    site_sets: sets,
+    // A run made since #334 says how its margin tiles are encoded. One
+    // made before has no such field, and cannot draw a signal floor.
+    ...(margins ? {
+      margin_tiles: {
+        encoding: 'margin_db_plus_one',
+        ramp: [[255, 45, 85], [255, 122, 0], [255, 230, 0], [0, 217, 139], [0, 168, 255]],
+        alpha: 235,
+      },
+    } : {}),
+  };
+}
+
+async function stubCoverage(page, { approximate = false, margins = false } = {}) {
+  const heard = new Date().toISOString();
+  const node = (id, lat, lon, role) => ({
+    node_id: id, display_name: `Site ${id}`, lat, lon, role, last_heard: heard, is_mqtt_gateway: false,
+  });
+  await page.route(/\/api\/coverage(\?|$)/, (route) => route.fulfill({ json: stubManifest({ approximate, margins }) }));
+  await page.route(/\/api\/coverage\/calibration(\?|$)/, (route) => route.fulfill({ json: { available: false, nodes: [] } }));
+  await page.route(/\/api\/coverage\/tiles\//, (route) => route.fulfill({ contentType: 'image/png', body: CLEAR_PNG }));
+  // Registered later, so it is asked first.
+  await page.route(/\/api\/coverage\/tiles\/.*\/margin\//, (route) => route.fulfill({ contentType: 'image/png', body: MARGIN_PNG }));
+  await page.route(/\/api\/map\/nodes(\?|$)/, (route) => route.fulfill({
+    json: [
+      node('!e2e00001', 33.45, -112.07, 'ROUTER'),
+      node('!e2e00002', 33.30, -111.90, 'REPEATER'),
+      node('!e2e00003', 33.60, -112.30, 'ROUTER_LATE'),
+    ],
+  }));
+}
+
+/* The tile URL template of the signal layer on show, or null. */
+const COVERAGE_TILE_URL = () => {
+  const state = window.SonoranCoverageState;
+  return state && state.tiles ? state.tiles._url : null;
+};
+
+/**
+ * The packet type menu on the map, at one size (#385).
+ *
+ * Will: "it breaks the header by adding another line and it's not
+ * obvious you have to click 'Packet type all ^' to collapse it. Maybe a
+ * drop down menu with checkbox multi select would be better? Make sure
+ * it looks good on mobile."
+ *
+ * So, with letters as wide as CI's Linux fonts draw them: opening the
+ * menu must not move the header or the map by a pixel, the menu must be
+ * on top and on the screen, each kind must be a labelled checkbox that
+ * filters at once, and Escape, a tap outside and Done must each close
+ * it. The old row of chips grew the header on open, so the first
+ * measurement fails it.
+ */
+async function familyMenuWalk(page, { watch }) {
+  await open(page, 'map', 3500);
+  await page.addStyleTag({
+    content: '.page-head *, .family-menu * { letter-spacing: .12em !important; }',
+  });
+  await page.waitForTimeout(200);
+  const toggle = page.locator('[data-page="map"] [data-family-toggle]');
+  must(await toggle.count() === 1, 'the map has no packet type button');
+  const layout = () => page.evaluate(() => {
+    const head = document.querySelector('[data-page="map"] .page-head');
+    const map = document.querySelector('#live-map');
+    return {
+      head: Math.round(head.getBoundingClientRect().height),
+      map: Math.round(map.getBoundingClientRect().top),
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    };
+  });
+  const menuState = () => page.evaluate(() => {
+    const menu = document.querySelector('[data-family-menu]');
+    const box = menu.getBoundingClientRect();
+    const first = menu.querySelector('.family-option');
+    let onTop = false;
+    if (first && box.width > 0) {
+      const r = first.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      onTop = Boolean(hit && menu.contains(hit));
+    }
+    return {
+      open: box.width > 0 && box.height > 0,
+      expanded: document.querySelector('[data-family-toggle]').getAttribute('aria-expanded'),
+      left: box.left,
+      right: box.right,
+      top: box.top,
+      bottom: box.bottom,
+      wide: window.innerWidth,
+      tall: window.innerHeight,
+      onTop,
+      boxes: [...menu.querySelectorAll('input[type="checkbox"]')].map((input) => ({
+        label: input.closest('label') ? input.closest('label').textContent.trim() : '',
+        checked: input.checked,
+      })),
+      summary: document.querySelector('[data-family-summary]').textContent.trim(),
+    };
+  });
+
+  if (watch) {
+    await page.locator('[aria-label="Watch mode"]').first().click();
+    await page.waitForTimeout(1500);
+  }
+  // Live off, so no timer refresh can land inside a measurement below.
+  await page.locator('[data-page="map"] [data-live]').click();
+  must(await waitFor(page, () => !loading, 20000, 100), 'the map did not settle after Live went off');
+  let mapRequests = 0;
+  page.on('request', (request) => {
+    if (/\/api\/map\//.test(request.url())) mapRequests += 1;
+  });
+  const before = await layout();
+  await toggle.click();
+  await page.waitForTimeout(300);
+  const opened = await menuState();
+  const after = await layout();
+  must(opened.open && opened.expanded === 'true', 'the button did not open the menu');
+  if (!watch) {
+    must(after.head === before.head, `opening the menu grew the header from ${before.head} to ${after.head} px`);
+    must(after.map === before.map, `opening the menu moved the map from ${before.map} to ${after.map} px`);
+  }
+  must(after.scroll <= after.client + 1, `the open menu scrolls the page sideways: ${after.scroll}/${after.client}`);
+  must(opened.left >= 0 && opened.right <= opened.wide && opened.top >= 0 && opened.bottom <= opened.tall,
+    `the menu runs off the screen: ${Math.round(opened.left)}..${Math.round(opened.right)} of ${opened.wide}, `
+    + `${Math.round(opened.top)}..${Math.round(opened.bottom)} of ${opened.tall}`);
+  must(opened.onTop, 'something covers the open menu');
+  must(opened.boxes.length === 7, `the menu holds ${opened.boxes.length} checkboxes, not one per kind`);
+  must(opened.boxes.every((box) => box.label.length > 2 && box.checked),
+    `a checkbox has no name or starts unchecked: ${JSON.stringify(opened.boxes)}`);
+  must(opened.summary === 'Packet Types: all', `the button says "${opened.summary}"`);
+
+  // One kind off: the button counts it and the map is told, and the
+  // menu stays open for the next choice.
+  await page.locator('[data-family-menu] label.family-option[data-family="POSITION_APP"]').click();
+  await page.waitForTimeout(300);
+  const one = await menuState();
+  const hidden = await page.evaluate(() => [...hiddenFamilies]);
+  must(one.open, 'choosing a kind closed the menu');
+  must(one.summary === 'Packet Types: 6 of 7', `after one kind off the button says "${one.summary}"`);
+  must(hidden.join() === 'POSITION_APP', `the map hides ${JSON.stringify(hidden)}`);
+
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const escaped = await menuState();
+  must(!escaped.open && escaped.expanded === 'false', 'Escape did not close the menu');
+  if (watch) {
+    // Escape closes the menu first. It must not also leave watch mode.
+    must(await page.evaluate(() => document.querySelector('[data-map-shell]').classList.contains('watch')),
+      'the Escape that closed the menu also left watch mode');
+  }
+
+  await toggle.click();
+  await page.waitForTimeout(300);
+  must((await menuState()).open, 'the menu did not open a second time');
+  await page.mouse.click(5, Math.round((await menuState()).tall / 2));
+  await page.waitForTimeout(300);
+  must(!(await menuState()).open, 'a tap outside did not close the menu');
+
+  await toggle.click();
+  await page.waitForTimeout(300);
+  await page.locator('[data-family-all]').click();
+  await page.waitForTimeout(300);
+  const reset = await menuState();
+  must(reset.summary === 'Packet Types: all' && reset.boxes.every((box) => box.checked),
+    'Show all did not show every kind');
+  must(await waitFor(page, () => !loading, 20000, 100), 'the map did not settle after Show all');
+  const requestsBeforeDone = mapRequests;
+  await page.locator('[data-family-done]').click();
+  await page.waitForTimeout(1000);
+  const done = await menuState();
+  // Done only closes the menu. The shared `.toggle` handler would mark it
+  // pressed and fetch the whole map again.
+  must(!(await page.locator('[data-family-done]').evaluate((button) => button.hasAttribute('aria-pressed'))),
+    'Done carries aria-pressed, so it reads as a toggle');
+  must(mapRequests === requestsBeforeDone,
+    `Done asked the API for the map again (${mapRequests - requestsBeforeDone} requests)`);
+  must(!done.open, 'Done did not close the menu');
+  must(await page.evaluate(() => document.activeElement
+    && document.activeElement.matches('[data-family-toggle]')), 'Done did not give focus back to the button');
+  if (watch) await page.keyboard.press('Escape');
+  return `head ${before.head} px open and shut, menu ${Math.round(opened.left)}..${Math.round(opened.right)}`
+    + ` of ${opened.wide} px; filters, Escape, outside, Show all, Done`;
+}
+
+/*
+ * Will, #387: the "16m ago" of a message on a node page opened a popup
+ * with the date. A click, a tap or Enter must open the packet page, as
+ * on the chat page, and a hover still gives the exact time through the
+ * link's title. The node is the sender of the newest stored message
+ * whose packet is known, so the link has a packet to land on. The
+ * positive control is the packet page itself: it must show that packet
+ * ID and not "packet not found".
+ */
+/*
+ * A proxy on this machine in front of BASE, for the update notice journey
+ * (#382). It passes every request through, and adds `extra` to the body
+ * of `/sw.js`, which is what a deploy does to the worker's bytes. The
+ * worker is asked for without compression, so the added line is text.
+ */
+async function workerProxy() {
+  const http = require('http');
+  const target = new URL(BASE);
+  const client = target.protocol === 'https:' ? require('https') : http;
+  const state = { extra: '', served: [] };
+  const server = http.createServer((request, response) => {
+    const worker = /^\/sw\.js(\?|$)/.test(request.url);
+    const headers = { ...request.headers, host: target.host };
+    if (worker) headers['accept-encoding'] = 'identity';
+    const upstream = client.request({
+      protocol: target.protocol, hostname: target.hostname, port: target.port,
+      path: request.url, method: request.method, headers,
+    }, (answer) => {
+      if (!worker) {
+        response.writeHead(answer.statusCode, answer.headers);
+        answer.pipe(response);
+        return;
+      }
+      const chunks = [];
+      answer.on('data', (chunk) => chunks.push(chunk));
+      answer.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8') + state.extra;
+        state.served.push(body);
+        const out = { ...answer.headers };
+        delete out['content-length'];
+        response.writeHead(answer.statusCode, out);
+        response.end(body);
+      });
+    });
+    upstream.on('error', () => response.destroy());
+    request.pipe(upstream);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    served: state.served,
+    change: (extra) => { state.extra = extra; },
+    close: () => new Promise((resolve) => {
+      server.close(resolve);
+      server.closeAllConnections();
+    }),
+  };
+}
+
+async function nodeMessageOpensPacket(page, how) {
+  const chat = await page.request.get(`${BASE}/api/chat?limit=50`).then((r) => r.json());
+  const sent = chat.find((message) => message.packet_id != null);
+  must(sent, 'no stored message has a packet, so there is nothing to link');
+  await page.goto('about:blank');
+  await open(page, `node/${encodeURIComponent(sent.from_node)}`, 500);
+  const panel = '[data-page="node"] .panel:has(h3:has-text("Messages sent"))';
+  const link = page.locator(`${panel} a.when`).first();
+  await link.waitFor({ state: 'attached', timeout: 20000 }).catch(() => {});
+  must(await link.count(), `${how}: a message time on the node page is not a link`);
+  const href = await link.getAttribute('href');
+  const match = /^#packet\/([^/]+)\/(\d+)$/.exec(href || '');
+  must(match && decodeURIComponent(match[1]) === sent.from_node,
+    `${how}: the time links to ${href}, not to a packet of ${sent.from_node}`);
+  const title = (await link.getAttribute('title')) || '';
+  must(/\d:\d\d/.test(title), `${how}: hovering the time no longer gives the exact time ("${title}")`);
+  const name = await page.locator(`${panel} .who .name`).first().innerText();
+  must(name.trim().length > 0, `${how}: the sender button beside the time is empty`);
+  await link.scrollIntoViewIfNeeded();
+  if (how === 'tap') await link.tap();
+  else if (how === 'keyboard') {
+    await link.focus();
+    await page.keyboard.press('Enter');
+  } else await link.click();
+  const id = match[2];
+  const shown = await waitFor(page, (wanted) => {
+    const view = document.querySelector('.page.active');
+    return Boolean(view && view.dataset.page === 'packet' && view.textContent.includes(wanted)
+      && !/packet not found/i.test(view.textContent));
+  }, 15000, 300, id);
+  must(shown, `${how} on the time did not open the packet page of ${id}`);
+  return `${how} -> ${href}`;
 }
 
 async function main() {
@@ -779,6 +1202,72 @@ async function main() {
     return `${before} -> ${narrowed} for "base", 0 for nonsense`;
   });
 
+  await journey(context, 'the nodes export holds what the list shows (#350)', async (page) => {
+    /*
+     * A filter and a sort, then Export -> CSV. The file must hold every
+     * node the list counts, not the page that has loaded, with the
+     * columns the table draws, in the table's order. The server's half
+     * (the file equals the list for seven filter combinations) is
+     * `tests/integration/test_nodes_export.py`.
+     */
+    await open(page, 'nodes');
+    await page.locator('[data-page="nodes"] [data-node-active]').selectOption('');
+    await page.waitForTimeout(2500);
+    await page.click('[data-page="nodes"] th:nth-child(1) .sort-button');
+    await page.waitForTimeout(2500);
+    const said = await page.locator('[data-node-count]').innerText();
+    const total = Number(((said.match(/^([\d,]+) nodes$/) || [])[1] || '').replace(/,/g, ''));
+    must(Number.isFinite(total) && total > 0, `the list gives no total to compare with: "${said}"`);
+    const shownIds = await page.$$eval('[data-page="nodes"] tbody tr code',
+      (cells) => cells.map((cell) => cell.textContent));
+
+    const asked = [];
+    page.on('request', (request) => {
+      if (request.url().includes('api/nodes/export?')) asked.push(new URL(request.url()));
+    });
+    await page.click('[data-page="nodes"] [data-node-export] > summary');
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 60000 }),
+      page.click('[data-page="nodes"] [data-node-export-format="csv"]'),
+    ]);
+    const body = fs.readFileSync(await download.path(), 'utf8');
+    must(/^sonoran-nodes-\d{8}-\d{6}Z\.csv$/.test(download.suggestedFilename()),
+      `the file is called ${download.suggestedFilename()}`);
+
+    // RFC 4180, by hand: a node name can hold a comma, a quote or a line break.
+    const records = [];
+    let row = [''];
+    let quoted = false;
+    const text = body.replace(/^﻿/, '');
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (quoted) {
+        if (char === '"' && text[index + 1] === '"') { row[row.length - 1] += '"'; index += 1; }
+        else if (char === '"') quoted = false;
+        else row[row.length - 1] += char;
+      } else if (char === '"') quoted = true;
+      else if (char === ',') row.push('');
+      else if (char === '\r' && text[index + 1] === '\n') { records.push(row); row = ['']; index += 1; }
+      else row[row.length - 1] += char;
+    }
+    const [header, ...rows] = records;
+    const expected = ['Name', 'Short name', 'Node ID', 'Hardware', 'Role', 'Gateway', 'Position', 'Last heard'];
+    must(header && header.join() === expected.join(), `the header row is ${header && header.join()}`);
+    must(rows.length === total, `the file holds ${rows.length} rows and the list counts ${total}`);
+    const fileIds = rows.slice(0, shownIds.length).map((cells) => cells[2]);
+    must(fileIds.join() === shownIds.join(), 'the file is not in the order the table shows');
+
+    const query = asked[0];
+    must(query, 'no export request was seen');
+    must(query.searchParams.get('sort') === 'name', `the export lost the sort: ${query.search}`);
+    must(!query.searchParams.has('active_hours'), `the export kept the old window: ${query.search}`);
+    must(!query.searchParams.has('limit') && !query.searchParams.has('cursor'),
+      `the export asked for one page: ${query.search}`);
+    const status = await page.locator('[data-node-export-status]').innerText();
+    must(/^Saved /.test(status), `the status says "${status}"`);
+    return `${rows.length} rows = the list's ${total}, sorted by name; "${status}"`;
+  });
+
   await journey(context, 'a column heading reorders the whole list', async (page) => {
     await open(page, 'nodes');
     const summary = () => page.locator('[data-node-count]').innerText();
@@ -885,7 +1374,9 @@ async function main() {
     const first = await state();
     must(first.hidden && first.name === 'Filters',
       `a first visit shows a badge: "${first.text}", named "${first.name}"`);
-    must(asked.length && /[?&]active_hours=24\b/.test(asked[0]) && /[?&]channel=/.test(asked[0]),
+    // The menu's preset travels as `preset=` since #313, never `channel=`.
+    must(asked.length && /[?&]active_hours=24\b/.test(asked[0]) && /[?&]preset=/.test(asked[0])
+      && !/[?&]channel=/.test(asked[0]),
       `the first request lost its window or preset: ${asked[0]}`);
 
     // One panel choice, applied, is one.
@@ -1356,6 +1847,12 @@ async function main() {
     return `${seen.join('; ')}; dashboard ${dash.length} at >= 44x44`;
   });
 
+  await journey(context, 'a message time on a node page opens its packet (#387)', async (page) => {
+    const clicked = await nodeMessageOpensPacket(page, 'click');
+    const keyed = await nodeMessageOpensPacket(page, 'keyboard');
+    return `${clicked}; ${keyed}`;
+  });
+
   await journey(context, 'the chat table pages on as you scroll', async (page) => {
     /*
      * #297. The table view stopped at 100 rows: only the reading view
@@ -1452,6 +1949,8 @@ async function main() {
     const presets = page.locator('[data-preset-switch] [role="radio"]');
     const count = await presets.count();
     must(count > 0, 'a run is published but the menu offers no preset');
+    // The layer is in the settings panel now (#334).
+    await page.locator('[data-coverage-options]').click();
     const layers = await layer.locator('option').count();
     must(layers >= 2, `a run is published but the layer drop-down holds ${layers} options`);
     const second = await layer.locator('option').nth(1).getAttribute('value');
@@ -1551,6 +2050,336 @@ async function main() {
     await button.click();
     must(await panel.isHidden(), 'a second press did not close the panel');
     return 'opens, counts 1 then 2, clears, closes';
+  });
+
+  await journey(context, 'coverage settings: the gear opens the panel and the layer moves the tiles (#334)', async (page) => {
+    await stubCoverage(page);
+    await open(page, 'coverage', 2500);
+    const button = page.locator('[data-coverage-options]');
+    const panel = page.locator('#coverage-options');
+    must(await button.isVisible(), 'no settings button with a run published');
+    must((await button.locator('use').getAttribute('href')) === '#i-settings', 'the button has no gear');
+    must(await panel.isHidden(), 'the settings panel starts open');
+    must(await page.locator('.page[data-page="coverage"] .page-head [data-coverage-layers]').count() === 0,
+      'the layer is still in the head');
+    await button.click();
+    must(await panel.isVisible(), 'the gear did not open the panel');
+    must((await button.getAttribute('aria-expanded')) === 'true', 'the button did not say it opened');
+    const before = await valueOf(page, COVERAGE_TILE_URL);
+    must(before && before.includes(`/${STUB_STAMP}/MediumFast/infrastructure/usable/`),
+      `the default tiles are ${before}`);
+    await page.locator('[data-coverage-layers]').selectOption('downlink');
+    await page.waitForTimeout(400);
+    const after = await valueOf(page, COVERAGE_TILE_URL);
+    must(after && after.includes('/infrastructure/downlink/'), `after choosing the downlink the tiles are ${after}`);
+    const hash = await page.evaluate(() => location.hash);
+    must(hash === '#coverage?layer=downlink', `the address says ${hash}`);
+    must((await button.getAttribute('aria-label')) === 'Settings, 1 changed',
+      `the button says "${await button.getAttribute('aria-label')}"`);
+    /*
+     * The seeded run, like this stub, has no approximate map. The toggle
+     * must be off, disabled, and say why, rather than offer a map that
+     * was never computed.
+     */
+    const box = page.locator('[data-coverage-approx]');
+    must(await box.isDisabled(), 'the approximate toggle is enabled with no approximate map');
+    must(!(await box.isChecked()), 'the approximate toggle starts on');
+    const said = (await page.locator('[data-coverage-approx-note]').textContent()).trim();
+    must(said === 'Not computed on this server. An operator can turn it on with COVERAGE_INCLUDE_APPROXIMATE.',
+      `the toggle says "${said}"`);
+    const which = (await page.locator('[data-coverage-which]').textContent()).trim();
+    must(which.includes('precise positions only'), `the stats line says "${which}"`);
+    return `${before.split('/api/')[1].split('{')[0]} -> downlink; approximate disabled and says why`;
+  });
+
+  await journey(context, 'coverage settings: the approximate toggle picks the approximate map (#334)', async (page) => {
+    await stubCoverage(page, { approximate: true });
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    const box = page.locator('[data-coverage-approx]');
+    must(await box.isEnabled(), 'the run has an approximate map and the toggle is disabled');
+    must(!(await box.isChecked()), 'the approximate map is on by default');
+    await box.check();
+    await page.waitForTimeout(500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/MediumFast/infrastructure_approximate/usable/'), `the tiles are ${url}`);
+    const hash = await page.evaluate(() => location.hash);
+    must(hash === '#coverage?approx=1', `the address says ${hash}`);
+    const legend = (await page.locator('[data-coverage-legend-map]').textContent()).trim();
+    must(legend === 'Routers and repeaters · rounded positions included', `the legend says "${legend}"`);
+    const which = (await page.locator('[data-coverage-which]').textContent()).trim();
+    must(which.includes('rounded positions included'), `the stats line says "${which}"`);
+    // The rounded site gets a circle as wide as its rounding.
+    await page.locator('[data-coverage-circles]').check();
+    const radii = await valueOf(page, () => {
+      const state = window.SonoranCoverageState;
+      const circles = state.nodes.getLayers().filter((layer) => layer.options.className === 'coverage-uncertainty');
+      return circles.length ? circles.map((layer) => layer.getRadius()) : null;
+    });
+    must(radii && radii.length === 1 && radii[0] === 1500, `the uncertainty circles are ${JSON.stringify(radii)}`);
+    return 'infrastructure_approximate drawn and named; one 1500 m circle';
+  });
+
+  await journey(context, 'coverage settings: Reset returns every control to default (#334)', async (page) => {
+    await stubCoverage(page, { approximate: true });
+    await open(page, 'coverage', 2500);
+    const button = page.locator('[data-coverage-options]');
+    const badge = page.locator('[data-page="coverage"] [data-options-count]');
+    await button.click();
+    await page.locator('[data-coverage-layers]').selectOption('uplink');
+    await page.locator('[data-coverage-approx]').check();
+    await page.waitForTimeout(400);
+    await page.locator('[data-coverage-heard]').selectOption('24h');
+    await page.locator('[data-coverage-moving]').check();
+    await page.locator('[data-coverage-circles]').check();
+    const chip = page.locator('[data-coverage-roles] button[data-role="ROUTER"]');
+    await waitFor(page, () => document.querySelector('[data-coverage-roles] button[data-role="ROUTER"]'), 10000);
+    await chip.click();
+    await page.locator('[data-coverage-opacity]').fill('50');
+    await page.waitForTimeout(400);
+    const changed = (await badge.textContent()).trim();
+    must(changed === '7', `seven settings changed and the badge says "${changed}"`);
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(600);
+    const got = await page.evaluate(() => ({
+      layer: document.querySelector('[data-coverage-layers]').value,
+      approx: document.querySelector('[data-coverage-approx]').checked,
+      heard: document.querySelector('[data-coverage-heard]').value,
+      moving: document.querySelector('[data-coverage-moving]').checked,
+      circles: document.querySelector('[data-coverage-circles]').checked,
+      opacity: document.querySelector('[data-coverage-opacity]').value,
+      unpressed: [...document.querySelectorAll('[data-coverage-roles] button')]
+        .filter((chip) => chip.getAttribute('aria-pressed') !== 'true').length,
+      hash: location.hash,
+      tiles: window.SonoranCoverageState.tiles && window.SonoranCoverageState.tiles._url,
+    }));
+    const wrong = [];
+    if (got.layer !== 'usable') wrong.push(`layer ${got.layer}`);
+    if (got.approx) wrong.push('approximate on');
+    if (got.heard !== 'any') wrong.push(`heard ${got.heard}`);
+    if (got.moving) wrong.push('moving hidden');
+    if (got.circles) wrong.push('circles on');
+    if (got.opacity !== '100') wrong.push(`opacity ${got.opacity}`);
+    if (got.unpressed) wrong.push(`${got.unpressed} roles still hidden`);
+    if (got.hash !== '#coverage') wrong.push(`address ${got.hash}`);
+    if (!got.tiles || !got.tiles.includes('/infrastructure/usable/')) wrong.push(`tiles ${got.tiles}`);
+    must(!wrong.length, `after Reset: ${wrong.join(', ')}`);
+    must(await badge.isHidden(), 'after Reset the badge still shows');
+    must((await button.getAttribute('aria-label')) === 'Settings', `after Reset the button says "${await button.getAttribute('aria-label')}"`);
+    return '7 changed, Reset puts every one back, badge 0';
+  });
+
+  await journey(context, 'coverage settings: a role chip keeps the keyboard focus (#334)', async (page) => {
+    /*
+     * The chips are drawn again on a click and again when the node
+     * markers are drawn. A chip drawn again is a new element, so a
+     * keyboard user who pressed Space was left on <body> and had to tab
+     * back from the top. The focus must stay on the same role.
+     */
+    await stubCoverage(page);
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    await waitFor(page, () => document.querySelector('[data-coverage-roles] button[data-role="ROUTER"]'), 10000);
+    await page.locator('[data-coverage-roles] button[data-role="ROUTER"]').focus();
+    const read = () => {
+      const active = document.activeElement;
+      return {
+        role: active && active.dataset ? active.dataset.role || active.tagName : null,
+        pressed: active && active.getAttribute ? active.getAttribute('aria-pressed') : null,
+      };
+    };
+    const seen = [];
+    for (const expected of ['false', 'true']) {
+      await page.keyboard.press('Space');
+      // Wait past the marker redraw, which draws the chips once more.
+      await page.waitForTimeout(1200);
+      const got = await page.evaluate(read);
+      seen.push(`${got.role}:${got.pressed}`);
+      must(got.role === 'ROUTER', `after Space the focus is on ${got.role}, not the Router chip`);
+      must(got.pressed === expected, `after Space the Router chip is aria-pressed ${got.pressed}`);
+    }
+    return `Space twice, focus held: ${seen.join(', ')}`;
+  });
+
+  await journey(context, 'coverage settings: an approximate link never fakes the map (#334)', async (page) => {
+    // A link from a server that computes the approximate map, opened on
+    // one that does not. The precise map is drawn, and named as such.
+    await stubCoverage(page);
+    await open(page, 'coverage?approx=1', 2500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/MediumFast/infrastructure/usable/'), `the tiles are ${url}`);
+    const got = await page.evaluate(() => ({
+      checked: document.querySelector('[data-coverage-approx]').checked,
+      legend: document.querySelector('[data-coverage-legend-map]').textContent.trim(),
+      hash: location.hash,
+    }));
+    must(!got.checked, 'the toggle is on over a map that was never computed');
+    must(got.legend === 'Routers and repeaters · precise positions only', `the legend says "${got.legend}"`);
+    must(got.hash === '#coverage', `the address still says ${got.hash}`);
+    return 'precise tiles, precise words, and the address corrected';
+  });
+
+  await journey(context, 'coverage settings: a link restores the layer (#334)', async (page) => {
+    await stubCoverage(page);
+    // The hash is in the first `goto` (AGENTS.md 9.33).
+    await open(page, 'coverage?layer=downlink', 2500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/infrastructure/downlink/'), `a link to the downlink drew ${url}`);
+    const chosen = await page.evaluate(() => document.querySelector('[data-coverage-layers]').value);
+    must(chosen === 'downlink', `the layer control says ${chosen}`);
+    // A display filter is this viewer's own and survives a reload; the
+    // map choice comes only from the address.
+    await page.locator('[data-coverage-options]').click();
+    await page.locator('[data-coverage-heard]').selectOption('7d');
+    /*
+     * A fresh load of a plain link, by way of a blank page: from one
+     * hash to another is not a load (AGENTS.md 9.33), and inside one
+     * visit a plain `#coverage` keeps the map that visit chose.
+     */
+    await page.waitForTimeout(500);
+    await page.goto('about:blank');
+    await page.goto(`${BASE}/#coverage`, { waitUntil: 'load' });
+    await page.waitForTimeout(2500);
+    const back = await page.evaluate(() => ({
+      heard: document.querySelector('[data-coverage-heard]').value,
+      layer: document.querySelector('[data-coverage-layers]').value,
+    }));
+    must(back.heard === '7d', `the saved filter came back as ${back.heard}`);
+    must(back.layer === 'usable', `a plain link drew the ${back.layer} layer`);
+    return 'downlink from the address; the filter kept, the plain link precise and usable';
+  });
+
+  /* The alpha of a west and an east pixel of each painted margin tile. */
+  const MARGIN_ALPHAS = () => {
+    const state = window.SonoranCoverageState;
+    if (!state || !state.tiles || !state.tiles._tiles) return null;
+    const out = [];
+    for (const tile of Object.values(state.tiles._tiles)) {
+      if (!tile.loaded || !(tile.el instanceof HTMLCanvasElement)) continue;
+      const context = tile.el.getContext('2d');
+      out.push([context.getImageData(10, 10, 1, 1).data[3], context.getImageData(200, 10, 1, 1).data[3]]);
+    }
+    return out.length ? out : null;
+  };
+
+  await journey(context, 'coverage settings: margin tiles that leave the map stop downloading (#334)', async (page) => {
+    /*
+     * A margin tile is fetched, not loaded as an image, so the browser
+     * does not cancel it when Leaflet drops the tile. A reader who pans
+     * or changes the floor used to keep downloading every tile that
+     * was no longer on the map. Here the margin tiles answer slowly,
+     * and the floor changes before they arrive: each request of the
+     * old layer must be aborted.
+     */
+    await stubCoverage(page, { margins: true });
+    let asked = 0;
+    // Registered last, so it is asked first: hold each margin tile.
+    await page.route(/\/api\/coverage\/tiles\/.*\/margin\//, (route) => {
+      asked += 1;
+      setTimeout(() => {
+        route.fulfill({ contentType: 'image/png', body: MARGIN_PNG }).catch(() => {});
+      }, 4000);
+    });
+    const aborted = [];
+    page.on('requestfailed', (request) => {
+      if (request.url().includes('/margin/')) aborted.push(request.failure() && request.failure().errorText);
+    });
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(400);
+    const floor = page.locator('[data-coverage-signal-floor]');
+    await floor.selectOption('10');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return Boolean(state.tiles && String(state.tiles._url).includes('/margin/')
+        && Object.keys(state.tiles._tiles || {}).length);
+    }, 10000), 'a 10 dB floor did not ask for margin tiles');
+    await page.waitForTimeout(500);
+    const first = asked;
+    must(first > 0, 'no margin tile was asked for');
+    // The old layer goes before its tiles arrive.
+    await floor.selectOption('0');
+    await page.waitForTimeout(1500);
+    must(aborted.length >= first,
+      `${first} margin tiles were in flight when the layer went, and ${aborted.length} were aborted`);
+    return `${first} in flight, ${aborted.length} aborted (${[...new Set(aborted)].join(', ')})`;
+  });
+
+  await journey(context, 'coverage settings: a 10 dB floor hides the weaker ground, and Reset clears it (#334)', async (page) => {
+    await stubCoverage(page, { margins: true });
+    await open(page, 'coverage', 2500);
+    const button = page.locator('[data-coverage-options]');
+    await button.click();
+    // An earlier journey in this context saved a display filter. Start
+    // from the defaults, so the badge counts the floor alone.
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(400);
+    const floor = page.locator('[data-coverage-signal-floor]');
+    must(await floor.isEnabled(), 'the run has margin tiles and the floor is disabled');
+    must((await floor.inputValue()) === '0', `the floor starts at ${await floor.inputValue()}`);
+    const before = await valueOf(page, COVERAGE_TILE_URL);
+    must(before && !before.includes('/margin/'), `with no floor the tiles are ${before}`);
+
+    await floor.selectOption('10');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return Boolean(state.tiles && String(state.tiles._url).includes('/infrastructure/usable/margin/'));
+    }, 10000), 'a 10 dB floor did not switch to the margin tiles');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return Object.values(state.tiles._tiles || {}).some((tile) => tile.loaded);
+    }, 10000), 'no margin tile was painted');
+    const ten = await valueOf(page, MARGIN_ALPHAS);
+    // West is 5 dB: under the floor, clear. East is 30 dB: drawn.
+    must(ten && ten.every(([west, east]) => west === 0 && east === 235),
+      `at 10 dB the west and east alphas are ${JSON.stringify(ten)}`);
+    must((await page.evaluate(() => location.hash)) === '#coverage?floor=10',
+      `the address says ${await page.evaluate(() => location.hash)}`);
+    must((await button.getAttribute('aria-label')) === 'Settings, 1 changed',
+      `the button says "${await button.getAttribute('aria-label')}"`);
+    const said = (await page.locator('[data-coverage-legend-floor]').textContent()).trim();
+    must(said === 'Shown from -126 dBm, 10 dB above the limit', `the legend says "${said}"`);
+    const which = (await page.locator('[data-coverage-legend-map]').textContent()).trim();
+    must(which.endsWith('· 10 dB floor'), `the legend names the map as "${which}"`);
+
+    // 5 dB lets the west half back in: the drawn pixels change.
+    await floor.selectOption('5');
+    must(await waitFor(page, () => {
+      const state = window.SonoranCoverageState;
+      return state.tiles && state.tiles.options.floor === 5
+        && Object.values(state.tiles._tiles || {}).some((tile) => tile.loaded);
+    }, 10000), 'a 5 dB floor drew nothing');
+    const five = await valueOf(page, MARGIN_ALPHAS);
+    must(five && five.every(([west, east]) => west === 235 && east === 235),
+      `at 5 dB the west and east alphas are ${JSON.stringify(five)}`);
+
+    await page.locator('[data-coverage-reset]').click();
+    await page.waitForTimeout(600);
+    const after = await valueOf(page, COVERAGE_TILE_URL);
+    must(after && !after.includes('/margin/'), `after Reset the tiles are ${after}`);
+    must((await floor.inputValue()) === '0', `after Reset the floor is ${await floor.inputValue()}`);
+    must((await page.evaluate(() => location.hash)) === '#coverage', 'after Reset the address keeps a floor');
+    must(await page.locator('[data-coverage-legend-floor]').isHidden(), 'after Reset the legend still names a floor');
+    return '10 dB: west clear, east drawn; 5 dB: both drawn; Reset: colour tiles, #coverage';
+  });
+
+  await journey(context, 'coverage settings: a run with no margin data disables the floor and says why (#334)', async (page) => {
+    // A link with a floor, opened on a run made before margin tiles.
+    await stubCoverage(page);
+    await open(page, 'coverage?floor=10', 2500);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/infrastructure/usable/') && !url.includes('/margin/'), `the tiles are ${url}`);
+    await page.locator('[data-coverage-options]').click();
+    const floor = page.locator('[data-coverage-signal-floor]');
+    must(await floor.isDisabled(), 'the floor is enabled on a run with no margin tiles');
+    must((await floor.inputValue()) === '0', `the floor control says ${await floor.inputValue()}`);
+    const said = (await page.locator('[data-coverage-signal-floor-note]').textContent()).trim();
+    must(said === 'Not available for this run. It was made before the coverage job wrote signal margins. '
+      + 'The next run will have them.', `the floor says "${said}"`);
+    must((await page.evaluate(() => location.hash)) === '#coverage', 'the address still names a floor');
+    must(await page.locator('[data-coverage-legend-floor]').isHidden(), 'the legend names a floor it did not draw');
+    return 'colour tiles, the floor disabled with its sentence, the address corrected';
   });
 
   await journey(context, 'the embed snippet can be got at', async (page) => {
@@ -1771,6 +2600,454 @@ async function main() {
       + `zoom radius ${radii.before} -> ${radii.after}; gone node closed its bubble`;
   });
 
+  await journey(context, 'the live traffic feed follows the lines on the map (#386)', async (page) => {
+    /*
+     * Will: "the box for Live traffic only updates in chunks and leads to
+     * like 5 or 6 things happening". The poll fetches fifteen seconds of
+     * traffic at once and the map spreads it over the next fifteen, so
+     * the lines start one at a time. The feed took the whole batch at
+     * fetch time. Here one poll carries four packets three seconds
+     * apart, and the rows must arrive about three seconds apart too,
+     * as their lines do. The old feed listed all four in one step.
+     *
+     * Then the colour: each row wears its family's colour token on its
+     * edge and on its mark, in both themes, and still says its packet
+     * type in words, so nothing rests on colour alone.
+     *
+     * The traffic is served through a route, so the shared database is
+     * never written. The packets are made from two nodes the map has
+     * placed, so each one has a line to draw.
+     */
+    let extra = null;
+    await page.route(/\/api\/map\/traffic(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (extra) body.events = [...body.events, ...extra];
+      return route.fulfill({ response, json: body });
+    });
+    await open(page, 'map', 4000);
+    must(await waitFor(page, () => mapState.trafficPrimed === true
+      && window.SonoranMap.marks instanceof Map && window.SonoranMap.marks.size >= 2, 30000),
+    'the map did not draw its first traffic and two nodes');
+    const KINDS = [
+      ['POSITION_APP', 'pkt-position'], ['TELEMETRY_APP', 'pkt-telemetry'],
+      ['TEXT_MESSAGE_APP', 'pkt-text'], ['NODEINFO_APP', 'pkt-nodeinfo'],
+    ];
+    extra = await page.evaluate((kinds) => {
+      const [a, b] = [...window.SonoranMap.marks.entries()];
+      const end = (id, mark) => {
+        const at = mark.marker.getLatLng();
+        return { node_id: id, display_name: `Pacing ${id}`, lat: at.lat, lon: at.lng };
+      };
+      const from = end(a[0], a[1]);
+      const gateway = end(b[0], b[1]);
+      const start = Date.now() - 12000;
+      return kinds.map(([portnum], index) => ({
+        time: new Date(start + index * 3000).toISOString(),
+        packet_id: 3860001 + index,
+        channel: 'azmsh', mqtt_topic: 'msh/e2e', snr: null, rssi: null,
+        hop_limit: 2, hop_start: 3, hops_taken: 1, direct: false,
+        portnum, from, gateway, has_line: true,
+      }));
+    }, KINDS);
+    const keys = extra.map((event) => `${event.from.node_id}/${event.packet_id}`);
+    const listed = () => page.evaluate((wanted) => {
+      const rows = [...document.querySelectorAll('[data-traffic-feed] > li[data-key]')];
+      return wanted.map((key) => rows.some((row) => row.dataset.key === key));
+    }, keys);
+
+    // One poll, through the call the Live timer makes.
+    const polledAt = Date.now();
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
+      await render('map');
+    });
+    const seenAt = keys.map(() => null);
+    while (Date.now() - polledAt < 16000 && seenAt.some((at) => at == null)) {
+      const now = await listed();
+      now.forEach((on, index) => { if (on && seenAt[index] == null) seenAt[index] = Date.now() - polledAt; });
+      await page.waitForTimeout(200);
+    }
+    must(seenAt.every((at) => at != null), `not every packet reached the feed: ${JSON.stringify(seenAt)}`);
+    for (let index = 1; index < seenAt.length; index += 1) {
+      must(seenAt[index] >= seenAt[index - 1],
+        `the feed listed the packets out of order: ${JSON.stringify(seenAt)}`);
+    }
+    const spread = seenAt[seenAt.length - 1] - seenAt[0];
+    // Nine seconds apart on the map. A feed that took the batch at once
+    // shows a spread of one sample, 200 ms or so.
+    must(spread >= 6000, `the four rows arrived in one chunk, ${spread} ms apart from first to last`);
+
+    const colours = async () => page.evaluate((pairs) => pairs.map(([family, token]) => {
+      const row = document.querySelector(`[data-traffic-feed] > li[data-family="${family}"]`);
+      if (!row) return { family, missing: true };
+      const probe = document.createElement('span');
+      probe.style.color = `var(--${token})`;
+      document.body.append(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      const mark = row.querySelector('.pkt-mark');
+      return {
+        family,
+        want,
+        edge: getComputedStyle(row).borderLeftColor,
+        mark: mark ? getComputedStyle(mark).color : null,
+        text: row.querySelector('.pkt-kind') ? row.querySelector('.pkt-kind').textContent.trim() : '',
+      };
+    }), KINDS);
+    const report = [];
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((mode) => applyTheme(mode), theme);
+      await page.waitForTimeout(200);
+      for (const got of await colours()) {
+        must(!got.missing, `${theme}: no feed row for ${got.family}`);
+        must(got.edge === got.want, `${theme}: the ${got.family} row edge is ${got.edge}, its lines are ${got.want}`);
+        must(got.mark === got.want, `${theme}: the ${got.family} mark is ${got.mark}, its lines are ${got.want}`);
+        must(got.text.length > 2, `${theme}: the ${got.family} row does not say its type in words`);
+      }
+      report.push(`${theme} ${(await colours()).map((got) => got.want).join(' ')}`);
+    }
+    return `rows at ${seenAt.join('/')} ms after one poll (spread ${spread} ms); colours ${report.join('; ')}`;
+  });
+
+  await journey(context, 'the watch traffic table keeps a selection while rows arrive (#386)', async (page) => {
+    /*
+     * The list now takes each packet as its line starts, so the watch
+     * table gets a new row every few seconds rather than once a poll.
+     * Rebuilt whole each time, it threw away the rows a reader was
+     * reading and any text they had selected. A row that did not change
+     * must be the same element after new rows arrive, so the selection
+     * in it holds.
+     *
+     * The traffic is served through a route: three packets a minute old
+     * in the first poll, which the table shows at once, and three new
+     * ones three seconds apart in the next. Nothing else is served, so the
+     * seed's own traffic cannot change which rows are on screen.
+     */
+    let events = [];
+    await page.route(/\/api\/map\/traffic(\?|$)/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      // Only this journey's packets. A fresh seed (CI) has recent traffic
+      // of its own, which would push these past the table's row limit.
+      body.events = [...events];
+      return route.fulfill({ response, json: body });
+    });
+    // The marks are needed before the first poll can carry made packets,
+    // so the first visit only reads two placed nodes.
+    await open(page, 'map', 4000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size >= 2, 30000), 'the map drew fewer than two nodes');
+    const ends = await page.evaluate(() => [...window.SonoranMap.marks.entries()].slice(0, 2).map(([id, mark]) => {
+      const at = mark.marker.getLatLng();
+      return { node_id: id, display_name: `Table ${id}`, lat: at.lat, lon: at.lng };
+    }));
+    const made = (id, msAgo, portnum) => ({
+      time: new Date(Date.now() - msAgo).toISOString(),
+      packet_id: id, channel: 'azmsh', mqtt_topic: 'msh/e2e', snr: null, rssi: null,
+      hop_limit: 2, hop_start: 3, hops_taken: 1, direct: false,
+      portnum, from: ends[0], gateway: ends[1], has_line: true,
+    });
+    events = [made(3861001, 70000, 'POSITION_APP'), made(3861002, 60000, 'TELEMETRY_APP'),
+      made(3861003, 50000, 'NODEINFO_APP')];
+    await page.goto(`${BASE}/#map/watch/traffic/expanded`, { waitUntil: 'load' });
+    must(await waitFor(page, () => document.querySelectorAll('[data-traffic-table] tbody tr').length >= 3, 30000),
+      'the watch table did not show the first poll');
+    /*
+     * Select inside this journey's own oldest packet, not "the last row".
+     * On a freshly seeded instance (CI) the window also holds the seed's
+     * own traffic, so the last row can be any packet, and its second cell
+     * can be empty.
+     */
+    const before = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-traffic-table] tbody tr')];
+      const row = rows.find((tr) => (tr.dataset.row || '').includes('3861001'));
+      if (!row) return { rows: rows.length, text: '', missing: true };
+      row.__e2eHeld = true;
+      const cell = [...row.children].find((td) => td.textContent.trim()) || row.children[0];
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return { rows: rows.length, text: selection.toString() };
+    });
+    must(!before.missing, 'the journey\'s own packet 3861001 is not in the watch table');
+    must(before.text.trim().length > 0, 'nothing was selected in the table');
+
+    const start = Date.now();
+    events = [...events, made(3861004, 9000, 'TEXT_MESSAGE_APP'), made(3861005, 6000, 'ROUTING_APP'),
+      made(3861006, 3000, 'TRACEROUTE_APP')];
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 100));
+      await render('map');
+    });
+    must(await waitFor(page, (want) => document.querySelectorAll('[data-traffic-table] tbody tr').length >= want,
+      15000, 250, before.rows + 3), 'the three new packets did not reach the table');
+    const after = await page.evaluate(() => {
+      const held = [...document.querySelectorAll('[data-traffic-table] tbody tr')].find((row) => row.__e2eHeld);
+      return { held: Boolean(held), text: getSelection().toString(), rows: document.querySelectorAll('[data-traffic-table] tbody tr').length };
+    });
+    must(after.held, 'a row that did not change was rebuilt when new rows arrived');
+    must(after.text === before.text, `the selection "${before.text}" became "${after.text}"`);
+    return `${before.rows} -> ${after.rows} rows in ${Date.now() - start} ms; the selected row and its selection held`;
+  });
+
+  await journey(context, 'the packet type menu opens over the map, not into the head (#385)',
+    (page) => familyMenuWalk(page, { watch: false }));
+  await journey(context, 'the packet type menu works from the keyboard alone (#385)', async (page) => {
+    /*
+     * Open, tick two kinds quickly, and close, with keys only. Each tick
+     * redraws the map, and the second tick lands while the first redraw
+     * may still be loading. `render` returns at once while another runs,
+     * so a tick must ask through `navigateRender`, which runs the redraw
+     * after the one in flight rather than dropping it. The list is then
+     * checked against the last choice, with Live off so only the ticks
+     * can redraw it.
+     */
+    await page.route(/\/api\/map\/traffic(\?|$)/, async (route) => {
+      // Slow enough that the second tick lands inside the first redraw.
+      await new Promise((done) => setTimeout(done, 700));
+      return route.continue();
+    });
+    await open(page, 'map', 4000);
+    await page.locator('[data-page="map"] [data-live]').click();
+    must(await waitFor(page, () => !loading, 20000, 100), 'the map did not settle after Live went off');
+    await page.locator('[data-family-toggle]').focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    must(await page.evaluate(() => document.querySelector('[data-family-menu]').getBoundingClientRect().width > 0),
+      'Enter on the button did not open the menu');
+    await page.keyboard.press('Tab');
+    must(await page.evaluate(() => document.activeElement.matches('input[data-family="POSITION_APP"]')),
+      'Tab from the button did not reach the first checkbox');
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Space');
+    const settled = await waitFor(page, () => !loading && !pendingRender, 20000, 100);
+    must(settled, 'the map did not settle after the ticks');
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => ({
+      hidden: [...hiddenFamilies].sort().join(),
+      summary: document.querySelector('[data-family-summary]').textContent.trim(),
+      listed: (mapState.lastPackets || []).map((packet) => SonoranLive.familyKey(packet.portnum)),
+      line: document.querySelector('[data-traffic-summary]').textContent,
+    }));
+    must(got.hidden === 'POSITION_APP,TELEMETRY_APP', `the keys hid ${got.hidden}`);
+    must(got.summary === 'Packet Types: 5 of 7', `the button says "${got.summary}"`);
+    must(!got.listed.some((key) => key === 'POSITION_APP' || key === 'TELEMETRY_APP'),
+      `the list still holds a hidden kind: ${[...new Set(got.listed)].join(', ')}`);
+    must(/of the chosen types/.test(got.line), `the traffic line does not say it is filtered: "${got.line}"`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    must(await page.evaluate(() => document.querySelector('[data-family-menu]').getBoundingClientRect().width === 0),
+      'Escape did not close the menu');
+    // Put the choice back the same way, for the journeys after this one.
+    await page.locator('[data-family-toggle]').focus();
+    await page.keyboard.press('Enter');
+    for (let step = 0; step < 10; step += 1) {
+      if (await page.evaluate(() => document.activeElement.matches('[data-family-all]'))) break;
+      await page.keyboard.press('Tab');
+    }
+    await page.keyboard.press('Enter');
+    must(await waitFor(page, () => hiddenFamilies.size === 0, 5000, 100), 'Show all from the keyboard did not reset');
+    return `Enter opens, Tab reaches the boxes, two ticks hide ${got.hidden}, Escape closes, Show all resets`;
+  });
+  await journey(context, 'the packet type menu works in watch mode (#385)',
+    (page) => familyMenuWalk(page, { watch: true }));
+  /*
+   * #384, reported by Will: Medium Fast to Long Fast and back left Long
+   * Fast on the map until a reload. Two causes, and this catches each:
+   *
+   * - the live canvas (marks in flight, the replay queue, and each
+   *   node's heat) was never cleared on a switch, so the Long Fast halos
+   *   and rings stayed on the Medium Fast map for more than a minute;
+   * - a switch made while a map draw was in flight was dropped, so the
+   *   old preset's answer was drawn under the new switch, and stayed.
+   *
+   * The seed has no node on a Long Fast topic, so the Long Fast answers
+   * are served through routes: two nodes far from every Medium Fast
+   * node, one link between them, and fresh traffic on each poll. The
+   * positive control asserts that Long Fast IS drawn, dots, line and
+   * live pixels, before "nothing is left" is believed.
+   *
+   * A context of its own, because the chosen preset is kept in
+   * localStorage and must not leak into the journeys that share `context`.
+   */
+  const switching = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
+  await journey(switching, 'switching presets on the map leaves nothing of the old one (#384)', async (page) => {
+    const LF_NODE = { node_id: '!0e2e3841', lat: 36.62, lon: -109.42, name: 'Long Fast only' };
+    const LF_GW = { node_id: '!0e2e3842', lat: 36.18, lon: -109.95, name: 'Long Fast gateway' };
+    const row = (node, gateway) => ({
+      node_id: node.node_id, node_num: parseInt(node.node_id.slice(1), 16),
+      display_name: node.name, short_name: node.name.slice(0, 4), long_name: node.name,
+      lat: node.lat, lon: node.lon, altitude: 1500, last_heard: new Date().toISOString(),
+      hw_model: 'HELTEC_V3', role: 'ROUTER', is_mqtt_gateway: gateway,
+    });
+    const point = (node) => ({ node_id: node.node_id, display_name: node.name, lat: node.lat, lon: node.lon });
+    let packetId = 3840000;
+    const lfEvents = () => {
+      const now = Date.now();
+      return Array.from({ length: 8 }, (_, index) => {
+        packetId += 1;
+        return {
+          time: new Date(now - index * 1500).toISOString(), packet_id: packetId,
+          channel: 'LongFast', mqtt_topic: `msh/US/AZ/2/e/LongFast/${LF_GW.node_id}`,
+          snr: 6, rssi: -90, hop_limit: 3, hop_start: 3, hops_taken: 0, direct: true,
+          portnum: 'TEXT_MESSAGE_APP', from: point(LF_NODE), gateway: point(LF_GW), has_line: true,
+        };
+      }).reverse();
+    };
+    const isLong = (url) => new URL(url).searchParams.get('channel') === 'LongFast';
+    // A slow server, as on the live instance, so a switch can land while
+    // an answer is still on the way. `nodes` delays the Long Fast node
+    // list, `rest` its traffic and links, and `medium` the Medium Fast
+    // traffic and links, so the redraw after a switch back takes long
+    // enough for a wrong picture in between to be seen.
+    const delay = { nodes: 0, rest: 0, medium: 0 };
+    const late = (ms) => new Promise((done) => setTimeout(done, ms));
+    // When each Long Fast request for traffic or links was sent.
+    const longAsked = [];
+    await page.route(/\/api\/map\/nodes\?/, async (route) => {
+      if (!isLong(route.request().url())) return route.continue();
+      await late(delay.nodes);
+      return route.fulfill({ json: [row(LF_NODE, false), row(LF_GW, true)] });
+    });
+    await page.route(/\/api\/map\/traffic\?/, async (route) => {
+      if (!isLong(route.request().url())) {
+        await late(delay.medium);
+        return route.continue();
+      }
+      longAsked.push(Date.now());
+      await late(delay.rest);
+      const events = lfEvents();
+      return route.fulfill({ json: {
+        window_minutes: 15, event_count: events.length, direct_count: events.length,
+        returned_count: events.length, truncated: false, events,
+      } });
+    });
+    await page.route(/\/api\/map\/edges\?/, async (route) => {
+      if (!isLong(route.request().url())) {
+        await late(delay.medium);
+        return route.continue();
+      }
+      longAsked.push(Date.now());
+      await late(delay.rest);
+      return route.fulfill({ json: [{
+        from_node: LF_NODE.node_id, to_node: LF_GW.node_id, snr: 5.5,
+        kind: 'neighbor', channel: 'LongFast', time: new Date().toISOString(),
+      }] });
+    });
+
+    await open(page, 'map', 500);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0 && !loading, 20000), 'the map drew no Medium Fast node');
+    // The Live timer off, so nothing but the switch can redraw the map.
+    // A picture left behind then stays, as it does in a hidden tab.
+    await page.click('[data-page="map"] [data-live]');
+    await page.click('[data-page="map"] [data-show-links]');
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 50));
+      await render('map');
+    });
+
+    /* What of Long Fast is on the map: dots, lines, and painted pixels. */
+    const longFastShown = (nodes) => {
+      const { map, marks, links } = window.SonoranMap;
+      const ids = new Set(nodes.map((node) => node.node_id));
+      const at = (node) => `${node.lat},${node.lon}`;
+      const places = new Set(nodes.map(at));
+      const dots = [...marks.keys()].filter((id) => ids.has(id));
+      const lines = map.hasLayer(links) ? links.getLayers().filter((line) => line.getLatLngs()
+        .some((ll) => places.has(`${ll.lat},${ll.lng}`))).length : 0;
+      const canvas = document.querySelector('[data-page="map"] canvas.live-canvas');
+      const scale = canvas.width / canvas.clientWidth;
+      const context = canvas.getContext('2d');
+      let painted = 0;
+      for (const node of nodes) {
+        const p = map.latLngToContainerPoint([node.lat, node.lon]);
+        const size = Math.round(24 * scale);
+        const x = Math.max(0, Math.round(p.x * scale) - size / 2);
+        const y = Math.max(0, Math.round(p.y * scale) - size / 2);
+        const data = context.getImageData(x, y, size, size).data;
+        for (let index = 3; index < data.length; index += 4) if (data[index] > 0) painted += 1;
+      }
+      return { dots: dots.length, lines, painted };
+    };
+    const nodes = [LF_NODE, LF_GW];
+    const frame = () => page.evaluate((all) => {
+      const { map, marks } = window.SonoranMap;
+      const points = [...marks.values()].map(({ row }) => [row.lat, row.lon]);
+      map.fitBounds([...points, ...all.map((node) => [node.lat, node.lon])], { animate: false, padding: [40, 40] });
+    }, nodes);
+    const choose = (name) => page.evaluate((preset) => window.SonoranPreset.set(preset), name);
+    const settled = () => waitFor(page, () => !loading, 20000, 100);
+
+    // Positive control: on Long Fast the Long Fast dots, line and live
+    // marks ARE drawn. Without this, "nothing left" below proves nothing.
+    must(await choose('LongFast'), 'the switch did not move to Long Fast');
+    await settled();
+    await frame();
+    // One more poll, as the Live timer makes: the first draw of a preset
+    // only records its window, and the next one animates what is new.
+    await page.evaluate(async () => {
+      while (loading) await new Promise((done) => setTimeout(done, 50));
+      await render('map');
+    });
+    const onLong = await waitForValue(page, longFastShown, nodes, (got) => got.dots === 2 && got.lines >= 1 && got.painted > 0);
+    must(onLong.ok, `Long Fast drew too little to test against: ${JSON.stringify(onLong.got)}`);
+
+    // Back to Medium Fast: nothing of Long Fast may stay.
+    must(await choose('MediumFast'), 'the switch did not move back to Medium Fast');
+    await settled();
+    await page.waitForTimeout(1500);
+    const back = await page.evaluate(longFastShown, nodes);
+    must(back.dots === 0 && back.lines === 0 && back.painted === 0,
+      `Long Fast stayed on the Medium Fast map: ${JSON.stringify(back)}`);
+
+    /*
+     * The same trip while Long Fast is still answering, twice: once with
+     * the node list late, once with the traffic and links late. The map
+     * checks for a switch after each of the two waits, and each run lands
+     * the switch back in a different one. While the redraw for Medium
+     * Fast is on the way, the map is read every 50 ms: a Long Fast answer
+     * drawn for even a moment under the Medium Fast switch fails it.
+     */
+    const midDraw = async (label, timing) => {
+      Object.assign(delay, timing);
+      longAsked.length = 0;
+      must(await choose('LongFast'), `${label}: the switch to Long Fast did not move`);
+      await page.waitForTimeout(400);
+      must(await choose('MediumFast'), `${label}: the quick switch back did not move`);
+      const back = Date.now();
+      const worst = { dots: 0, lines: 0, painted: 0 };
+      const until = back + Math.max(timing.nodes, timing.rest) + timing.medium + 1500;
+      while (Date.now() < until) {
+        const got = await page.evaluate(longFastShown, nodes);
+        for (const key of Object.keys(worst)) worst[key] = Math.max(worst[key], got[key]);
+        await page.waitForTimeout(50);
+      }
+      await settled();
+      const preset = await page.evaluate(() => window.SonoranPreset.current());
+      must(preset === 'MediumFast', `${label}: the switch ended on ${preset}`);
+      must(worst.dots === 0 && worst.lines === 0 && worst.painted === 0,
+        `${label}: a Long Fast answer that landed after the switch was drawn: ${JSON.stringify(worst)}`);
+      return longAsked.filter((at) => at > back).length;
+    };
+    // Node list late: the map must not go on to ask for Long Fast traffic
+    // and links once the preset has changed.
+    const asked = await midDraw('node list late', { nodes: 2500, rest: 0, medium: 1500 });
+    must(asked === 0, `node list late: ${asked} Long Fast requests were sent after the switch back`);
+    // Traffic and links late: the node list is in, so only the second
+    // check stands between the late answers and the map.
+    await midDraw('traffic and links late', { nodes: 0, rest: 2500, medium: 1500 });
+    Object.assign(delay, { nodes: 0, rest: 0, medium: 0 });
+    return `on Long Fast ${onLong.got.dots} dots, ${onLong.got.lines} line, ${onLong.got.painted} live px; `
+      + 'none of it after the switch back, or after a switch back mid-draw';
+  });
+  await switching.close();
+
   await journey(context, 'a mouse keeps the exact dot target (#266)', async (page) => {
     // The control for the phone journey: the wider target is for touch.
     await open(page, 'map', 3000);
@@ -1800,10 +3077,37 @@ async function main() {
     const fetched = [];
     page.on('request', (request) => fetched.push(new URL(request.url()).pathname));
     const heavy = /echarts\.min\.js|protobuf\.min\.js|js-yaml\.min\.js|config-check\.js/;
+    /*
+     * Leave a page only when its own render has ended (#354).
+     *
+     * A navigation aborts every request still in flight, and the
+     * collector counts each abort as an error. This waited for
+     * `networkidle`, which is the wrong signal: Playwright fires it once
+     * for each document and then answers at once. The node page asks for
+     * its signal and its packets only after it has drawn the history
+     * charts. A long history can take more than 500 ms to draw, with no
+     * request open, and that is all `networkidle` needs. So the event
+     * fired early, the wait returned at once, and the two requests were
+     * aborted: the exact lines of the issue. The `.catch` also hid a
+     * timeout.
+     *
+     * `loading` is true until a render has awaited every request it
+     * made, and `timelinePaging.busy` covers the one request the packet
+     * timeline makes outside a render. A page that does not settle fails
+     * here and says so.
+     *
+     * The wait is longer than the page's own `REQUEST_TIMEOUT_MS` (60 s).
+     * A request that hangs is then ended by the page itself, and its
+     * abort is reported with its address, which is the true fault. Do not
+     * filter `ERR_ABORTED` to quiet this journey: that hides that abort.
+     */
+    const settle = async (name) => must(await waitFor(page, () => !loading && !timelinePaging.busy, 90000),
+      `#${name} was still loading after 90 s`);
     await open(page, 'nodes', 3000);
     const early = fetched.filter((path) => heavy.test(path));
     must(early.length === 0, `the nodes page fetched ${early.join(', ')}`);
     must(!(await page.evaluate(() => Boolean(window.echarts))), 'echarts is defined on the nodes page');
+    await settle('nodes');
 
     const drew = [];
     for (const name of ['dashboard', 'stats', 'graph']) {
@@ -1818,9 +3122,7 @@ async function main() {
       }
       must(ok, `a cold load of #${name} drew no chart`);
       drew.push(name);
-      // Let the page's other requests land before leaving it, or the
-      // navigation aborts them and each one is counted as an error.
-      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+      await settle(name);
     }
     // The node page draws its charts once its panels arrive.
     const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
@@ -1830,7 +3132,7 @@ async function main() {
     must(await waitFor(page, () => [...document.querySelectorAll('[data-page="node"] canvas')]
       .some((canvas) => canvas.width > 0), 30000), `a cold load of node ${nodes[0].node_id} drew no chart`);
     drew.push('node');
-    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await settle('node');
 
     await page.goto('about:blank');
     await open(page, 'config', 500);
@@ -2172,6 +3474,40 @@ async function main() {
     return `${imperialLink} / ${metricLink}; "${imperialLine}"`;
   });
 
+  await journey(context, 'reachability is answered traceroutes, not hours awake (#293)', async (page) => {
+    /*
+     * Will: "I think uptime hours is an easy metric to achieve." The board
+     * now ranks the share of traceroutes sent to a node that it answered.
+     *
+     * Not patched: the seed sends 12 traceroutes from three nodes to one
+     * router on each preset, with some answers, and CI runs the gaps job
+     * before this. So the title, the percentage and the "N of M answered"
+     * line all come from the real job and the real route.
+     */
+    const reachable = () => {
+      const board = [...document.querySelectorAll('[data-page="stats"] .leaderboard')]
+        .find((panel) => /Most reliably answers traceroutes/.test(panel.querySelector('h3').textContent));
+      if (!board) return null;
+      const value = board.querySelector('.board .value');
+      const detail = board.querySelector('.board .detail');
+      return {
+        value: value ? value.textContent : null,
+        detail: detail ? detail.textContent : null,
+        measure: (board.querySelector('p.muted') || {}).textContent || '',
+      };
+    };
+    await page.goto(`${BASE}/#stats`, { waitUntil: 'load' });
+    must(await waitFor(page, reachable, 30000), 'no board is titled "Most reliably answers traceroutes"');
+    const old = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+      .some((h) => /Most consistently reachable/.test(h.textContent)));
+    must(!old, 'the uptime board is still on the page');
+    const got = await page.evaluate(reachable);
+    must(/traceroutes/.test(got.measure), `the board does not say what it measures: ${got.measure}`);
+    must(got.value !== null && /^\d+(\.\d+)? %$/.test(got.value), `the first row is not a percentage: ${got.value}`);
+    must(/^\d+ of \d+ answered, \d+ senders?$/.test(got.detail || ''), `the detail line reads ${got.detail}`);
+    return `${got.value}, ${got.detail}`;
+  });
+
   await journey(context, 'the statistics range reaches every widget (#294)', async (page) => {
     /*
      * Will: "all the stats, widgets, etc should adjust to them. Default is
@@ -2214,17 +3550,16 @@ async function main() {
     must((await chips()).every((text) => text.startsWith('last 7 d')), 'a chip still names another range');
 
     /*
-     * The gaps-backed boards cannot follow the range, and say so. The link
-     * board does follow it.
+     * Every board follows a quick range (#294, option A): the gaps job
+     * writes the two gaps boards for 24 h, 7 d and 30 d. At 7 d they are the
+     * assessment itself, so this holds from the first run of the job.
      */
-    const boards = await page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
+    const boardChips = () => page.evaluate(() => [...document.querySelectorAll('[data-page="stats"] .leaderboard h3')]
       .map((h) => [h.dataset.label, (h.querySelector('span.muted') || {}).textContent || '']));
+    const boards = await boardChips();
     if (boards.length) {
-      const link = boards.find(([title]) => /Longest reliable link/.test(title));
-      must(link && link[1] === 'last 7 d', `the link board chip reads ${link && link[1]}`);
-      const fixed = boards.filter(([title]) => !/Longest reliable link/.test(title));
-      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
-        `a gaps board does not say it keeps its own window: ${JSON.stringify(fixed)}`);
+      must(boards.every(([, chip]) => chip === 'last 7 d'),
+        `a board does not follow 7 d: ${JSON.stringify(boards)}`);
     }
 
     // A reload keeps it.
@@ -2251,6 +3586,16 @@ async function main() {
     await settled();
     missing = everyWidgetAsked(`since=${day(40)}`);
     must(!missing.length, `these widgets did not follow the dates: ${missing.join(', ')}`);
+    /*
+     * A custom range has no precomputed file. The two gaps boards hold the
+     * job's own window and say so; the link board reads the dates.
+     */
+    const customBoards = await boardChips();
+    if (customBoards.length) {
+      const fixed = customBoards.filter(([title]) => !/Longest reliable link/.test(title));
+      must(fixed.every(([, chip]) => /not the page range/.test(chip)),
+        `a gaps board passes another window off as the dates: ${JSON.stringify(fixed)}`);
+    }
     const capped = await chips();
     must(capped.every((text) => /counted from/.test(text)),
       `a widget does not say retention cuts the range short: ${capped.join(' | ')}`);
@@ -2439,7 +3784,8 @@ async function main() {
     // The settings travel whether or not there is terrain to predict over.
     must(back.site_name === 'Shaw Butte' && back.lat === '33.5905', `the site came back as ${back.lat}`);
     must(back.tx_height === '20' && back.preset === 'LONG_FAST', 'the settings did not come back');
-    must(back.sensitivity === '-139', `the sensitivity came back as ${back.sensitivity}`);
+    // Long fast's sensitivity from the docs' link budget at 22 dBm (#362).
+    must(back.sensitivity === '-131', `the sensitivity came back as ${back.sensitivity}`);
     must(back.tx_power === '30', `an unshared field did not take its default: ${back.tx_power}`);
     if (!run.ran) return `${link.length} characters, settings restored; no prediction here (${run.why})`;
 
@@ -2448,6 +3794,86 @@ async function main() {
     must(sameCount && sameCount[0] === reached[0],
       `the same link reached ${sameCount && sameCount[0]} where the original reached ${reached[0]}`);
     return `${link.length} characters, reached ${reached[0]} in both`;
+  });
+
+  await journey(context, 'a Flagstaff site predicts on continental temperate (#239)', async (page) => {
+    /*
+     * The climate is read from the site's ground. Flagstaff is Köppen Dsb
+     * in the shipped data, which is continental temperate. Advanced must
+     * name it in the menu's "From the site" choice, and a run in Simple
+     * must hand the engine that climate (code 5), not the old desert (4).
+     *
+     * The climate is answered before the terrain is read, so the engine
+     * values are asserted whether or not this instance holds terrain. On
+     * an instance that can predict, the summary must say it too.
+     */
+    await open(page, 'planner', 5000);
+    await advanced(page);
+    await page.fill('[data-planner="lat"]', '35.1983');
+    await page.fill('[data-planner="lon"]', '-111.6513');
+    await page.locator('[data-planner="lon"]').blur();
+    const named = await valueOf(page, () => {
+      const menu = document.querySelector('[data-planner="radio_climate"]');
+      const first = menu && menu.querySelector('option[value="auto"]');
+      return first && first.textContent.includes('Köppen') ? { value: menu.value, text: first.textContent } : null;
+    });
+    must(named, 'the climate menu never named what it found at the site');
+    must(named.value === 'auto', `the menu opened on ${named.value}, not on the site`);
+    must(/Continental temperate/.test(named.text) && /Dsb/.test(named.text),
+      `Advanced offers "${named.text}" for Flagstaff`);
+    const note = await page.locator('[data-planner-climate-note]').textContent();
+    must(/Continental temperate/.test(note), `the note beside the site says "${note}"`);
+
+    await page.click('[data-planner-mode="simple"]');
+    // Simple asks for each picker that is on screen. Take the first real
+    // choice of each, which is what a newcomer does.
+    for (const picker of ['[data-board-type]', '[data-antenna-type="tx"]', '[data-antenna-type="rx"]', '[data-cable-type]']) {
+      const select = page.locator(picker);
+      if (!(await select.isVisible().catch(() => false))) continue;
+      const value = await select.evaluate((element) => {
+        const option = [...element.options].find((item) => item.value !== '');
+        return option ? option.value : null;
+      });
+      if (value !== null) await select.selectOption(value);
+    }
+    const run = await predict(page, () => page.click('[data-planner-run]'));
+    const used = await page.evaluate(() => {
+      const state = window.SonoranPlanner.state;
+      return {
+        climate: state.climate && state.climate.climate,
+        source: state.climate && state.climate.source,
+        code: state.params && state.params.radioClimate,
+      };
+    });
+    must(used.climate === 'continental_temperate' && used.source === 'site',
+      `the Simple run used ${used.climate} (${used.source})`);
+    must(used.code === 5, `the engine was handed climate code ${used.code}, not 5`);
+    const link = new URLSearchParams(page.url().split('?')[1] || '');
+    must(!link.has('radio_climate'), 'a climate read from the site went into the link as if chosen');
+    if (!run.ran) return `engine handed code 5; no prediction here (${run.why})`;
+    const said = await page.locator('[data-planner-climate-used]').textContent();
+    must(/Continental temperate/.test(said) && /Beck/.test(said), `the summary says "${said}"`);
+    return `engine handed code 5, and the summary says so`;
+  });
+
+  await journey(context, 'a planner link made before #239 keeps desert', async (page) => {
+    /*
+     * The issue's own risk: a link made before the climate was read from
+     * the site was made on desert and left it out, because it was the
+     * default. Opened now at Flagstaff it must still predict on desert,
+     * and say why, rather than quietly become continental temperate.
+     */
+    await page.goto(`${BASE}/#planner?v=1&lat=35.1983&lon=-111.6513&radius=5`, { waitUntil: 'load' });
+    const used = await valueOf(page, () => {
+      const state = window.SonoranPlanner && window.SonoranPlanner.state;
+      return state && state.climate ? { climate: state.climate.climate, code: state.params && state.params.radioClimate } : null;
+    }, 30000);
+    must(used, 'the link started no run');
+    must(used.climate === 'desert' && used.code === 4, `the old link ran on ${used.climate} (${used.code})`);
+    const said = await page.locator('[data-planner-shared]').textContent();
+    must(/keeps desert/.test(said), `the page did not say why: "${said}"`);
+    await predict(page, null);
+    return 'kept desert, and said so';
   });
 
   await journey(context, 'a planner link made in feet predicts the same in metres', async (page) => {
@@ -2709,7 +4135,323 @@ async function main() {
     must(await width() <= 80, 'with storage refused the button did nothing');
     return 'starts expanded, and collapses for the visit';
   });
+  await journey(nostore, 'coverage settings work with storage refused (#334)', async (page) => {
+    await stubCoverage(page);
+    await open(page, 'coverage', 2500);
+    await page.locator('[data-coverage-options]').click();
+    await page.locator('[data-coverage-heard]').selectOption('24h');
+    await page.locator('[data-coverage-layers]').selectOption('uplink');
+    await page.waitForTimeout(400);
+    const url = await valueOf(page, COVERAGE_TILE_URL);
+    must(url && url.includes('/infrastructure/uplink/'), `with storage refused the tiles are ${url}`);
+    const changed = (await page.locator('[data-page="coverage"] [data-options-count]').textContent()).trim();
+    must(changed === '2', `with storage refused the badge says "${changed}"`);
+    return 'the panel works for the visit';
+  });
   await nostore.close();
+
+  /*
+   * The update notice (#382). Logan saw "A new version of Sonoran is
+   * available" when no release was published. The notice follows the
+   * bytes of `/sw.js`, which change with every deploy that changes a
+   * static file, so it says the page was updated, not that a release
+   * came out. The issue also asks whether it can show when nothing
+   * changed, and whether Reload makes it go.
+   *
+   * Chromium fetches a worker update in the browser process, where
+   * `page.route` and `context.route` never see it. So the page is loaded
+   * through a small proxy on this machine that can add a line to
+   * `/sw.js`, which is what a deploy does to it. 127.0.0.1 is a secure
+   * context, so the worker registers over plain HTTP.
+   *
+   * Negative and positive in one run: with the same bytes, three update
+   * checks and reloads show nothing; with changed bytes, the notice
+   * shows. Then Reload must reload the page and the notice must not come
+   * back, on that page or a new one.
+   */
+  const updates = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const proxy = await workerProxy();
+  await journey(updates, 'the update notice shows only for a changed worker, and goes after Reload (#382)', async (page) => {
+    const notices = () => page.evaluate(() => [...document.querySelectorAll('.app-notice p')]
+      .map((item) => item.textContent).filter((text) => !/offline/i.test(text)));
+    const check = () => page.evaluate(() => navigator.serviceWorker.getRegistration()
+      .then((registration) => registration && registration.update()).then(() => true, () => false));
+    await page.goto(`${proxy.url}/#dashboard`, { waitUntil: 'load' });
+    const ready = await page.evaluate(() => Promise.race([
+      navigator.serviceWorker.ready.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 15000)),
+    ]));
+    must(ready, 'the service worker never became active, so nothing here was measured');
+    for (let round = 0; round < 3; round += 1) {
+      await check();
+      await page.waitForTimeout(800);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForTimeout(800);
+    }
+    const quiet = await notices();
+    must(quiet.length === 0, `with an unchanged worker the page says "${quiet.join(' ')}"`);
+    const served = new Set(proxy.served);
+    must(proxy.served.length >= 4 && served.size === 1,
+      `the worker was fetched ${proxy.served.length} times with ${served.size} different bodies`);
+
+    proxy.change('\n// a deploy\n');
+    await check();
+    must(await waitFor(page, () => document.querySelectorAll('.app-notice button').length > 0, 10000),
+      'a changed worker showed no notice, so the quiet run above proves nothing');
+    const said = (await notices()).join(' ');
+    must(/updated/i.test(said) && !/version/i.test(said),
+      `the notice says "${said}", which reads like a release`);
+
+    const reloaded = page.waitForNavigation({ timeout: 10000 }).then(() => true, () => false);
+    await page.locator('.app-notice button').first().click();
+    must(await reloaded, 'Reload did not reload the page');
+    await page.waitForTimeout(1500);
+    for (let round = 0; round < 2; round += 1) {
+      await check();
+      await page.waitForTimeout(800);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForTimeout(800);
+    }
+    const after = await notices();
+    must(after.length === 0, `after Reload the page still says "${after.join(' ')}"`);
+    const fresh = await updates.newPage();
+    await fresh.goto(`${proxy.url}/#nodes`, { waitUntil: 'load' });
+    await fresh.waitForTimeout(2000);
+    const other = await fresh.evaluate(() => document.querySelectorAll('.app-notice button').length);
+    await fresh.close();
+    must(other === 0, 'a new tab after Reload shows the notice again');
+    return `quiet over ${proxy.served.length} identical fetches; "${said}"; gone after Reload and in a new tab`;
+  });
+  await updates.close();
+  await proxy.close();
+
+  /*
+   * azmsh runs on both presets (#313). Ingest tags each packet with the
+   * preset that carried it, and the seed writes one azmsh message on each
+   * (`tools/dev/README.md`). The old filter was the topic channel, so it
+   * showed neither message on either preset, and the chat page put azmsh
+   * on the default preset only.
+   *
+   * A context of its own, because the chosen preset is kept in
+   * localStorage and must not leak into the journeys that share `context`.
+   */
+  const LONG_BODY = 'Long Fast check-in on azmsh.';
+  const MEDIUM_BODY = 'Medium Fast check-in on azmsh.';
+  const azmshText = (page) => page.evaluate(() => {
+    const link = [...document.querySelectorAll('[data-page="chat"] a.title[href^="#chat/"]')]
+      .find((anchor) => anchor.getAttribute('href') === '#chat/azmsh');
+    const panel = link ? link.closest('.panel') : null;
+    return panel ? panel.textContent : null;
+  });
+  const longFast = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await longFast.addInitScript(() => {
+    if (!window.sessionStorage.getItem('e2e-313')) {
+      window.sessionStorage.setItem('e2e-313', '1');
+      window.localStorage.setItem('sonoran.preset', 'LongFast');
+    }
+  });
+  await journey(longFast, 'azmsh on Long Fast shows the azmsh traffic Long Fast carried (#313)', async (page) => {
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/(packets|chat)(\/overview)?\?/.test(request.url())) asked.push(new URL(request.url()));
+    });
+    await open(page, 'chat', 500);
+    must(await waitFor(page, () => Boolean(document.querySelector(
+      '[data-page="chat"] [data-chat-body] .panel, [data-page="chat"] [data-chat-body] .empty')), 15000),
+    'the chat overview never drew');
+    const panel = await azmshText(page);
+    must(panel !== null, 'there is no azmsh section on Long Fast');
+    must(panel.includes(LONG_BODY), 'the azmsh message carried on Long Fast is missing');
+    must(!panel.includes(MEDIUM_BODY), 'an azmsh message carried on Medium Fast shows on Long Fast');
+
+    await open(page, 'firehose', 3000);
+    const firehose = asked.filter((url) => url.pathname.endsWith('/api/packets'));
+    must(firehose.length, 'the firehose asked for nothing');
+    const last = firehose[firehose.length - 1].searchParams;
+    must(last.get('preset') === 'LongFast' && !last.has('channel'),
+      `the firehose did not ask for Long Fast by preset: ${last}`);
+    const overview = asked.find((url) => url.pathname.endsWith('/api/chat/overview'));
+    must(overview && overview.searchParams.get('preset') === 'LongFast',
+      `the chat overview did not name the preset: ${overview}`);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('[data-firehose-table] tbody tr')]
+      .map((row) => row.textContent));
+    must(rows.some((text) => text.includes(LONG_BODY)),
+      'the firehose on Long Fast does not list the Long Fast azmsh packet');
+    must(!rows.some((text) => text.includes(MEDIUM_BODY)),
+      'the firehose on Long Fast lists the Medium Fast azmsh packet');
+    return `azmsh on Long Fast holds its own message only; firehose asked ${last}`;
+  });
+  await longFast.close();
+
+  await journey(context, 'azmsh on Medium Fast leaves out what Long Fast carried (#313)', async (page) => {
+    await open(page, 'chat', 500);
+    must(await waitFor(page, () => Boolean(document.querySelector(
+      '[data-page="chat"] [data-chat-body] .panel, [data-page="chat"] [data-chat-body] .empty')), 15000),
+    'the chat overview never drew');
+    const panel = await azmshText(page);
+    must(panel !== null, 'there is no azmsh section on Medium Fast');
+    must(panel.includes(MEDIUM_BODY), 'the azmsh message carried on Medium Fast is missing');
+    must(!panel.includes(LONG_BODY), 'an azmsh message carried on Long Fast shows on Medium Fast');
+    return 'azmsh on Medium Fast holds its own message only';
+  });
+
+  /*
+   * Every preset, and several at once (#383). Will: "Add all of the
+   * other presets for people to select ... select multiple presets as
+   * well ... Make MediumFast the default solo selected."
+   *
+   * The positive control for "both azmsh check-ins" is the two #313
+   * journeys above: on one preset the other's message is absent. A
+   * context of its own, because the choice is kept in localStorage.
+   */
+  const several = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(several, 'every preset can be chosen, and several at once (#383)', async (page) => {
+    const asked = [];
+    page.on('request', (request) => {
+      if (/\/api\/(packets|chat\/overview|nodes|map\/nodes)\?/.test(request.url())) asked.push(new URL(request.url()));
+    });
+    const last = (path) => [...asked].reverse().find((url) => url.pathname.endsWith(path));
+    const switchState = () => page.evaluate(() => ({
+      checked: [...document.querySelectorAll('[data-preset-switch] [role="radio"]')]
+        .filter((button) => button.getAttribute('aria-checked') === 'true')
+        .map((button) => button.querySelector('.nav-label').textContent.trim()),
+      more: (() => {
+        const select = document.querySelector('[data-preset-more]');
+        return select.options[select.selectedIndex].textContent;
+      })(),
+    }));
+    const boxes = () => page.evaluate(() => Object.fromEntries(
+      [...document.querySelectorAll('[data-preset-boxes] input')]
+        .map((input) => [input.value, input.checked])));
+    const tick = async (value) => {
+      await page.locator(`[data-preset-boxes] input[value="${value}"]`).click();
+      await waitFor(page, () => !loading, 10000, 100);
+    };
+
+    // Will: "Make MediumFast the default solo selected."
+    await open(page, 'settings', 800);
+    let got = await boxes();
+    const ticked = Object.keys(got).filter((name) => got[name]);
+    must(ticked.join() === 'MediumFast', `a fresh browser starts on ${ticked.join(', ')}`);
+    let state = await switchState();
+    must(state.checked.join() === 'Medium Fast', `the menu lights ${state.checked.join(', ') || 'nothing'}`);
+
+    // "Add all of the other presets for people to select."
+    for (const name of ['LongFast', 'LongSlow', 'LongMod', 'LongTurbo', 'MediumFast', 'MediumSlow',
+      'ShortFast', 'ShortSlow', 'ShortTurbo']) {
+      must(name in got, `${name} cannot be chosen on the Settings page`);
+    }
+    const offered = Object.keys(got).length - 1;
+
+    // "... select multiple presets as well."
+    await tick('LongFast');
+    got = await boxes();
+    must(got.MediumFast && got.LongFast && !got.ShortFast, `ticking Long Fast left ${JSON.stringify(got)}`);
+    state = await switchState();
+    must(state.checked.length === 0 && state.more === '2 presets',
+      `the menu does not say two are chosen: ${JSON.stringify(state)}`);
+    const kept = await page.evaluate(() => localStorage.getItem('sonoran.preset'));
+    must(kept === 'MediumFast,LongFast', `the choice was kept as ${kept}`);
+
+    // The positive control is the #313 journeys: on one preset the other
+    // preset's azmsh message is absent. Here both are present.
+    await open(page, 'firehose', 3000);
+    const firehose = last('/api/packets');
+    must(firehose && firehose.searchParams.get('preset') === 'MediumFast,LongFast',
+      `the firehose did not ask for both presets: ${firehose}`);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('[data-firehose-table] tbody tr')]
+      .map((row) => row.textContent).join('\n'));
+    must(rows.includes(LONG_BODY) && rows.includes(MEDIUM_BODY),
+      'the firehose on both presets does not list both azmsh check-ins');
+
+    // A page that draws links draws one preset, and says which.
+    await open(page, 'map', 3000);
+    const map = last('/api/map/nodes');
+    must(map && map.searchParams.get('channel') === 'MediumFast',
+      `the map did not draw Medium Fast alone: ${map}`);
+    const note = await page.evaluate(() => {
+      const scope = document.querySelector('[data-preset-scope]');
+      return scope.hidden ? '' : scope.textContent;
+    });
+    must(/Shows Medium Fast only/.test(note), `the map does not say what it drew: "${note}"`);
+    // Positive control for the quiet preset below: Medium Fast draws dots.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0, 10000), 'the map drew no Medium Fast node');
+
+    // A preset with no traffic here draws nothing and says so. It used to
+    // keep the old preset's channel: Medium Fast lines under a Short Turbo
+    // switch, and the watch bar said Medium Fast.
+    await page.evaluate(() => window.SonoranPreset.set('ShortTurbo'));
+    await waitFor(page, () => !loading, 10000, 100);
+    await page.waitForTimeout(500);
+    const quiet = last('/api/map/nodes');
+    must(quiet && quiet.searchParams.get('channel') === 'ShortTurbo',
+      `the map did not ask for Short Turbo: ${quiet}`);
+    const shown = await page.evaluate(() => ({
+      dots: window.SonoranMap.marks.size,
+      legend: document.querySelector('[data-map-legend]').textContent,
+    }));
+    must(shown.dots === 0, `${shown.dots} dots under a Short Turbo switch with no Short Turbo traffic`);
+    must(/No node was heard on Short Turbo/.test(shown.legend),
+      `the map does not say Short Turbo is empty: "${shown.legend.slice(-120)}"`);
+    await page.evaluate(() => window.SonoranPreset.setMany(['MediumFast', 'LongFast']));
+
+    // Arrowing through the menu's "More" select must not leave the page.
+    // On a closed select an arrow key changes the value and fires
+    // `change`, so an option that navigates went off on the way past.
+    // Chromium on macOS opens the list on an arrow key instead, so the
+    // real keys are pressed AND the Linux and Windows sequence -- one
+    // value and one `change` per step -- is played on the element.
+    await page.locator('[data-preset-more]').focus();
+    const steps = await page.locator('[data-preset-more] option').count();
+    for (let step = 0; step < steps; step += 1) await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => {
+      const select = document.querySelector('[data-preset-more]');
+      for (let index = 0; index < select.options.length; index += 1) {
+        const live = document.querySelector('[data-preset-more]');
+        live.selectedIndex = index;
+        live.dispatchEvent(new Event('change'));
+      }
+    });
+    await page.waitForTimeout(300);
+    const after = await page.evaluate(() => location.hash);
+    must(after === '#map', `arrowing through the More select went to ${after}`);
+    await page.evaluate(() => window.SonoranPreset.setMany(['MediumFast', 'LongFast']));
+
+    // The last preset cannot be cleared.
+    await open(page, 'settings', 800);
+    await tick('MediumFast');
+    await tick('LongFast');
+    got = await boxes();
+    must(got.LongFast && !got.MediumFast, `clearing the last preset left ${JSON.stringify(got)}`);
+    const refusal = await page.locator('[data-preset-boxes-note]').textContent();
+    must(/At least one preset/.test(refusal), `no word on why the last box stays: "${refusal}"`);
+    // And a screen reader hears it, through the site's one live region.
+    const heard = await page.locator('[data-status-live]').textContent();
+    must(/At least one preset/.test(heard), `the refusal was not announced: "${heard}"`);
+
+    // A button in the menu chooses one preset alone again.
+    await tick('ShortFast');
+    await page.locator('[data-preset-switch] [role="radio"]', { hasText: 'Medium Fast' }).click();
+    await waitFor(page, () => !loading, 10000, 100);
+    got = await boxes();
+    const alone = Object.keys(got).filter((name) => got[name]);
+    must(alone.join() === 'MediumFast', `the Medium Fast button left ${alone.join(', ')}`);
+
+    // An old stored value, one name, still loads.
+    // A reload, not a `goto`: the page is on #settings already, and a
+    // second `goto` to it does not load again (AGENTS.md 9.33).
+    await page.evaluate(() => localStorage.setItem('sonoran.preset', 'LongFast'));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(800);
+    got = await boxes();
+    const old = Object.keys(got).filter((name) => got[name]);
+    must(old.join() === 'LongFast', `an old stored "LongFast" loaded as ${old.join(', ')}`);
+    return `${offered} presets offered, Medium Fast alone by default, two chosen reach the firehose `
+      + 'as one preset=, the map draws one and says so, the last box stays, an old value loads';
+  });
+  await several.close();
 
   /*
    * An iPad on its side (#267). 1112 px is wider than every phone
@@ -2911,12 +4653,16 @@ async function main() {
         const box = document.querySelector(selector).getBoundingClientRect();
         return box.height ? Math.round(box.bottom) : null;
       };
+      // What can be seen ends at the bottom bar on a phone (#282), not at
+      // the foot of the screen: a link under the bar is not on the screen.
+      const bar = document.querySelector('[data-tab-bar]');
+      const barTop = bar && !bar.hidden ? bar.getBoundingClientRect().top : Infinity;
       return {
         scrolled: document.querySelector('.sidebar').scrollTop + window.scrollY,
         preset: bottom('.preset-switch'),
         settings: bottom('.menu-settings-link'),
         link: Math.round(document.querySelector('#site-nav a').getBoundingClientRect().height),
-        height: window.innerHeight,
+        height: Math.round(Math.min(window.innerHeight, barTop)),
       };
     });
     must(got.scrolled === 0, `the drawer opened scrolled by ${got.scrolled} px`);
@@ -2926,6 +4672,251 @@ async function main() {
     return `preset ends at ${got.preset}, Settings at ${got.settings} of ${got.height}`;
   });
   await tall.close();
+
+  /*
+   * The bottom bar on a phone (#282). Will chose the set on 2026-10-08:
+   * Map, Nodes, Chat and Dashboard, then More, which opens the menu.
+   *
+   * Measured with the CI runner's wider fonts imitated (AGENTS.md 9.31),
+   * because five labels share 390 px and "Dashboard" is the widest.
+   * Every page here is in the first `goto` (AGENTS.md 9.33).
+   */
+  const BAR = () => {
+    const bar = document.querySelector('[data-tab-bar]');
+    if (!bar || bar.hidden || getComputedStyle(bar).display === 'none') return null;
+    const box = bar.getBoundingClientRect();
+    return {
+      top: Math.round(box.top),
+      bottom: Math.round(box.bottom),
+      name: bar.getAttribute('aria-label') || '',
+      sideways: bar.scrollWidth > bar.clientWidth,
+      items: [...bar.querySelectorAll('a, button')].map((item) => {
+        const r = item.getBoundingClientRect();
+        return {
+          text: item.textContent.trim(),
+          tag: item.tagName,
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          current: item.getAttribute('aria-current'),
+        };
+      }),
+    };
+  };
+  const SPREAD = '* { letter-spacing: .12em !important; }';
+
+  await journey(phone, 'the bottom bar holds four pages and More, each finger-sized (#282)', async (page) => {
+    await open(page, 'firehose', 2500);
+    await page.addStyleTag({ content: SPREAD });
+    await page.waitForTimeout(300);
+    const bar = await page.evaluate(BAR);
+    must(bar, 'there is no bottom bar on a 390 px touch screen');
+    must(bar.name.length > 0, 'the bar is a nav with no name, beside the menu that has one');
+    must(bar.bottom === page.viewportSize().height, `the bar ends at ${bar.bottom}, not at the foot of the screen`);
+    const words = bar.items.map((item) => item.text);
+    must(words.join() === 'Map,Nodes,Chat,Dashboard,More', `the bar holds ${JSON.stringify(words)}`);
+    must(bar.items.slice(0, 4).every((item) => item.tag === 'A'), 'a page in the bar is not a link');
+    must(bar.items[4].tag === 'BUTTON', 'More is not a button');
+    for (const item of bar.items) {
+      must(item.w >= 44 && item.h >= 44, `${item.text} is ${item.w} x ${item.h}, under 44 x 44`);
+    }
+    must(!bar.sideways, 'the five labels push the bar sideways with the wider fonts');
+    must(bar.items.every((item) => !item.current), 'the firehose lights a tab, and it is not one');
+
+    // A tap on Nodes goes there and marks it, and only it.
+    await page.locator('[data-tab-bar] a[data-tab="nodes"]').tap();
+    await page.waitForTimeout(1500);
+    must(/#nodes$/.test(page.url()), `Nodes did not navigate (${page.url()})`);
+    const after = await page.evaluate(BAR);
+    const lit = after.items.filter((item) => item.current);
+    must(lit.length === 1 && lit[0].text === 'Nodes' && lit[0].current === 'page',
+      `after a tap on Nodes the bar marks ${JSON.stringify(lit)}`);
+    return `${words.join(' · ')}, smallest ${Math.min(...bar.items.map((i) => Math.min(i.w, i.h)))} px; Nodes navigates and is marked`;
+  });
+
+  await journey(phone, 'More opens the one page list, clear of the bar (#282)', async (page) => {
+    await open(page, 'dashboard', 2500);
+    const more = page.locator('[data-tab-bar] [data-tab-more]');
+    must((await more.getAttribute('aria-controls')) === 'site-menu', 'More does not open the site menu');
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await more.tap();
+    await page.waitForTimeout(300);
+    must((await more.getAttribute('aria-expanded')) === 'true', 'More did not open the menu');
+    must(await page.locator('#site-nav').isVisible(), 'the page list is not on the screen');
+    // One list: the menu holds every page, and the bar's links are copies, not a second list.
+    const links = await page.locator('#site-nav a').count();
+    const pages = await page.locator('main .page').count();
+    must(links >= 10 && links <= pages, `the menu holds ${links} links for ${pages} pages`);
+    must(await page.locator('[data-tab-bar] [data-nav]').count() === 0,
+      'a bar link carries data-nav, so the router counts it as a second menu entry');
+    // The top button tells the same story.
+    must((await page.locator('[data-nav-toggle]').getAttribute('aria-expanded')) === 'true',
+      'the top menu button says the menu is closed while it is open');
+    // The open menu ends at the bar, so Settings can always be brought above it.
+    const top = (await page.evaluate(BAR)).top;
+    await page.locator('.menu-settings-link').scrollIntoViewIfNeeded();
+    const settings = await page.locator('.menu-settings-link').boundingBox();
+    must(settings && settings.y + settings.height <= top + 1,
+      `with the menu open, Settings ends at ${settings && Math.round(settings.y + settings.height)}, under the bar at ${top}`);
+    // Escape closes it and gives the focus back to More.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    must((await more.getAttribute('aria-expanded')) === 'false', 'Escape did not close the menu');
+    must(await page.evaluate(() => document.activeElement && document.activeElement.matches('[data-tab-more]')),
+      'Escape left the focus somewhere other than More');
+    // A page chosen from the menu closes it and lights no tab.
+    await more.tap();
+    await page.waitForTimeout(250);
+    await page.locator('#site-nav a[data-nav="stats"]').tap();
+    await page.waitForTimeout(1500);
+    must((await more.getAttribute('aria-expanded')) === 'false', 'the menu stayed open after a page was chosen');
+    must((await page.evaluate(BAR)).items.every((item) => !item.current), 'Statistics lights a tab');
+    return `${links} links in the menu, Settings ends at ${Math.round(settings.y + settings.height)} above the bar at ${top}`;
+  });
+
+  await journey(phone, 'a deep link lights the closest tab, or none (#282)', async (page) => {
+    // A real node and a real packet, from the API, so neither page is an error page.
+    const nodes = await (await page.request.get(`${BASE}/api/map/nodes`)).json();
+    must(nodes.length > 0, 'no node to open');
+    const node = `#node/${encodeURIComponent(nodes[0].node_id)}`;
+    const packets = await (await page.request.get(`${BASE}/api/packets?limit=1&summary=true`)).json();
+    must(packets.length > 0, 'no packet to open');
+    // A summary row carries `packet_key` ("<from_num>:<packet_id>"), as the firehose reads it.
+    const packet = `#packet/${encodeURIComponent(packets[0].from_node)}/${packets[0].packet_key.split(':')[1]}`;
+    const lit = async (hash) => {
+      const fresh = await page.context().newPage();
+      await fresh.goto(`${BASE}/${hash}`, { waitUntil: 'load' });
+      await fresh.waitForTimeout(1500);
+      const items = (await fresh.evaluate(BAR)).items.filter((item) => item.current);
+      await fresh.close();
+      return items.map((item) => `${item.text}=${item.current}`).join();
+    };
+    const onNode = await lit(node);
+    must(onNode === 'Nodes=true', `${node} lights ${onNode || 'nothing'}, not Nodes as "true"`);
+    const onPacket = await lit(packet);
+    must(onPacket === '', `${packet} lights ${onPacket}; a packet belongs to no tab`);
+    const onChannel = await lit('#chat/LongFast');
+    must(onChannel === 'Chat=page', `a chat channel lights ${onChannel || 'nothing'}, not Chat`);
+    return `${node} lights Nodes (aria-current=true), a channel lights Chat, ${packet} lights none`;
+  });
+
+  await journey(phone, 'watch mode covers the bottom bar (#282)', async (page) => {
+    /*
+     * Watch mode fills the screen with the map and puts its panel at the
+     * foot, so the bar must not sit on top of it. Asked of the screen
+     * itself: what a finger at the bottom edge would touch.
+     */
+    await open(page, 'map', 4000);
+    await page.locator('[aria-label="Watch mode"]').first().tap();
+    await page.waitForTimeout(2000);
+    const got = await page.evaluate(() => {
+      const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight - 10);
+      return {
+        watching: document.body.classList.contains('watch-mode') || Boolean(document.fullscreenElement),
+        onBar: Boolean(hit && hit.closest('[data-tab-bar]')),
+      };
+    });
+    must(got.watching, 'watch mode did not open, so this proves nothing');
+    must(!got.onBar, 'the bottom bar sits on top of watch mode');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1000);
+    return 'the foot of the screen is the watch view, not the bar';
+  });
+
+  await journey(phone, 'no page ends under the bottom bar (#282)', async (page) => {
+    /*
+     * Scroll to the end and read the page's own bottom edge against the
+     * bar's top. The page's box ends at its last row, so a page whose
+     * last row hides under the bar fails here whatever that row is.
+     */
+    const out = [];
+    for (const name of ['dashboard', 'nodes', 'firehose', 'chat', 'map', 'stats', 'settings']) {
+      const fresh = await page.context().newPage();
+      await fresh.goto(`${BASE}/#${name}`, { waitUntil: 'load' });
+      await fresh.addStyleTag({ content: SPREAD });
+      await fresh.waitForTimeout(3500);
+      const got = await fresh.evaluate(async () => {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        await new Promise((done) => setTimeout(done, 300));
+        const bar = document.querySelector('[data-tab-bar]').getBoundingClientRect();
+        const pageBox = document.querySelector('.page.active').getBoundingClientRect();
+        const scroller = document.querySelector('.page.active .chat-scroll');
+        return {
+          end: Math.round(pageBox.bottom),
+          chat: scroller ? Math.round(scroller.getBoundingClientRect().bottom) : null,
+          top: Math.round(bar.top),
+          long: document.documentElement.scrollHeight > window.innerHeight,
+        };
+      });
+      await fresh.close();
+      must(got.end <= got.top + 1, `#${name} ends at ${got.end}, under the bar at ${got.top}`);
+      if (got.chat !== null) must(got.chat <= got.top + 1, `the chat column ends at ${got.chat}, under the bar at ${got.top}`);
+      out.push(`${name}:${got.end}/${got.top}`);
+    }
+    return out.join(' ');
+  });
+
+  await journey(phone, 'the node sheet and the offline notice stand on the bar (#282)', async (page) => {
+    await open(page, 'map', 2500);
+    const got = await page.evaluate(async () => {
+      // The offline notice (#331) is made by pwa.js on the browser's own event.
+      window.dispatchEvent(new Event('offline'));
+      await new Promise((done) => setTimeout(done, 300));
+      const notices = [...document.querySelectorAll('.app-notice')].map((n) => Math.round(n.getBoundingClientRect().bottom));
+      window.dispatchEvent(new Event('online'));
+      return { notices, top: Math.round(document.querySelector('[data-tab-bar]').getBoundingClientRect().top) };
+    });
+    must(got.notices.length > 0, 'no offline notice appeared, so this proves nothing');
+    must(Math.max(...got.notices) <= got.top, `an app notice ends at ${Math.max(...got.notices)}, under the bar at ${got.top}`);
+    // The node sheet, opened through its own interface on the first node drawn.
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map && window.SonoranMap.marks.size > 0, 20000),
+      'the map drew no nodes');
+    const sheet = await page.evaluate(async () => {
+      const { marks } = window.SonoranMap;
+      const entry = [...marks.values()][0];
+      entry.marker.fire('click');
+      await new Promise((done) => setTimeout(done, 400));
+      const node = document.querySelector('.node-sheet');
+      if (!node || node.hidden) return null;
+      return {
+        bottom: Math.round(node.getBoundingClientRect().bottom),
+        top: Math.round(document.querySelector('[data-tab-bar]').getBoundingClientRect().top),
+      };
+    });
+    must(sheet, 'a node opened no sheet');
+    must(sheet.bottom <= sheet.top + 1, `the node sheet ends at ${sheet.bottom}, under the bar at ${sheet.top}`);
+    return `notice ends ${Math.max(...got.notices)}, sheet ends ${sheet.bottom}, bar at ${got.top}`;
+  });
+
+  /*
+   * The other half: the bar is for a phone held upright only. A mouse
+   * at desktop width, a narrow window with a mouse, an iPad in portrait
+   * and an iPhone SE on its side (568 px wide, under 40rem, and 320 px
+   * tall) keep the layout they had, with no bar and no space kept for one.
+   */
+  for (const [label, options] of [
+    ['a mouse at 1440 px', { viewport: { width: 1440, height: 900 } }],
+    ['a mouse at 390 px', { viewport: { width: 390, height: 844 } }],
+    ['an iPad in portrait', { viewport: { width: 834, height: 1112 }, isMobile: true, hasTouch: true }],
+    ['a small phone on its side', { viewport: { width: 568, height: 320 }, isMobile: true, hasTouch: true }],
+  ]) {
+    const other = await browser.newContext(options);
+    await journey(other, `${label} has no bottom bar (#282)`, async (page) => {
+      await open(page, 'dashboard', 2000);
+      const got = await page.evaluate(() => ({
+        bar: Boolean(document.querySelector('[data-tab-bar]')),
+        shown: (() => {
+          const bar = document.querySelector('[data-tab-bar]');
+          return Boolean(bar) && getComputedStyle(bar).display !== 'none' && bar.getBoundingClientRect().height > 0;
+        })(),
+        kept: getComputedStyle(document.documentElement).getPropertyValue('--tabbar-h').trim(),
+      }));
+      must(got.bar, 'the bar is missing from the markup, so this proves nothing');
+      must(!got.shown, `the bottom bar is drawn for ${label}`);
+      must(got.kept === '0px', `${label} keeps ${got.kept} for a bar it does not draw`);
+      return `no bar, --tabbar-h ${got.kept}`;
+    });
+    await other.close();
+  }
 
   await journey(phone, 'the fixed-size controls are finger-sized on touch (#268)', async (page) => {
     /*
@@ -3244,6 +5235,9 @@ async function main() {
     return done.join(', ');
   });
 
+  await journey(phone, 'a tap on a message time on a node page opens its packet (#387)',
+    (page) => nodeMessageOpensPacket(page, 'tap'));
+
   await journey(phone, 'a wide comparison table keeps its first column on a phone (#274)', async (page) => {
     /*
      * The traceroutes table had 57% of its width off to the side at
@@ -3488,18 +5482,34 @@ async function main() {
      * without writing to a shared database. `render('firehose')` is the
      * call the Live timer makes; Live is switched off so no timer poll
      * lands in the middle.
+     *
+     * The real rows are read ONCE, from the first answer, and every poll
+     * is built from that copy (#354). The stub used to build its packets
+     * from `rows[0]` of each answer. When the newest real row changed
+     * between polls -- a tie on `first_seen_at`, or a packet the seed
+     * added -- the "same" made packets took a new node in their keys,
+     * and every one of them counted as new: "9 new" where 4 was right.
+     * A real packet that arrived between polls counted as new as well.
+     * Now the count depends on `extra` alone.
      */
     let extra = 0;
+    let base = null;
     await page.route(/\/api\/packets\?/, async (route) => {
       const response = await route.fetch();
       const rows = await response.json();
-      if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+      if (!base) {
+        if (!Array.isArray(rows) || !rows.length) return route.fulfill({ response });
+        base = { rows, node: rows[0].packet_key.split(':')[0], at: Date.now() };
+      }
       const made = [];
       for (let n = extra; n > 0; n -= 1) {
-        const [node] = rows[0].packet_key.split(':');
-        made.push({ ...rows[0], packet_key: `${node}:${990000000 + n}`, first_seen_at: new Date().toISOString() });
+        made.push({
+          ...base.rows[0],
+          packet_key: `${base.node}:${990000000 + n}`,
+          first_seen_at: new Date(base.at + n * 1000).toISOString(),
+        });
       }
-      return route.fulfill({ response, json: [...made, ...rows].slice(0, rows.length) });
+      return route.fulfill({ response, json: [...made, ...base.rows].slice(0, base.rows.length) });
     });
     await open(page, 'firehose', 1000);
     must(await waitFor(page, () => document.querySelectorAll('[data-firehose-table] tbody tr').length > 20, 30000),
@@ -3683,6 +5693,9 @@ async function main() {
     return `sheet ${peek} px high, close ${sheet.close.join('x')}, map free above it; `
       + `held through 2 refreshes${more ? ', grabber opens it further' : ''}; Back, close and a gone node all close it`;
   });
+
+  await journey(phone, 'the packet type menu fits a phone and opens over the map (#385)',
+    (page) => familyMenuWalk(page, { watch: false }));
 
   await journey(phone, 'the map page opens at its top (#270)', async (page) => {
     /*
@@ -3913,6 +5926,28 @@ async function main() {
   });
 
   /*
+   * The other half of #283: a mouse keeps 15 px at a phone's width. The
+   * rule is keyed on the pointer, and a narrow desktop window is not a
+   * phone. Without this, a rule keyed on the width would pass the touch
+   * journey below as well.
+   */
+  await journey(context, 'a mouse keeps 15 px body text at any width (#283)', async (page) => {
+    const sizes = [];
+    for (const width of [390, 1500]) {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page, 'nodes', 2000);
+      const got = await page.evaluate(() => ({
+        coarse: matchMedia('(pointer: coarse)').matches,
+        body: getComputedStyle(document.body).fontSize,
+      }));
+      must(!got.coarse, 'this context reports a coarse pointer, so it cannot stand for a mouse');
+      must(got.body === '15px', `at ${width} px with a mouse the body is ${got.body}`);
+      sizes.push(`${width}:${got.body}`);
+    }
+    return sizes.join(' ');
+  });
+
+  /*
    * 320 CSS px, which is WCAG 2.2 SC 1.4.10 Reflow: content must not
    * need scrolling in two dimensions there. It is also 1280 px at the
    * 400 percent zoom the criterion is derived from.
@@ -3958,6 +5993,57 @@ async function main() {
       `opening the date range scrolls the page sideways: ${measured.scrollWidth}/${measured.clientWidth}`,
     );
     return `opened at 320px, ${measured.scrollWidth}/${measured.clientWidth}`;
+  });
+
+  await journey(narrow, 'coverage settings fit a 320 px phone, at finger size (#334)', async (page) => {
+    await stubCoverage(page, { approximate: true });
+    await open(page, 'coverage', 2500);
+    // Letters as wide as the CI runner's fonts draw them (AGENTS.md 9.31).
+    await page.addStyleTag({ content: '.page[data-page="coverage"] * { letter-spacing: .12em !important; }' });
+    const button = page.locator('[data-coverage-options]');
+    must(await button.isVisible(), 'no settings button on a phone');
+    // At the top right: on the title's row, at the head's right edge.
+    const place = await page.evaluate(() => {
+      const head = document.querySelector('.page[data-page="coverage"] .page-head');
+      const title = head.querySelector('h2').getBoundingClientRect();
+      const gear = document.querySelector('[data-coverage-options]').getBoundingClientRect();
+      return { row: gear.top < title.bottom, gap: Math.round(head.getBoundingClientRect().right - gear.right) };
+    });
+    must(place.row && place.gap <= 2, `the button is not at the top right (${JSON.stringify(place)})`);
+    await button.tap();
+    await waitFor(page, () => document.querySelector('[data-coverage-roles] button'), 10000);
+    await page.waitForTimeout(300);
+    const got = await page.evaluate(() => {
+      const panel = document.querySelector('#coverage-options');
+      const box = panel.getBoundingClientRect();
+      const small = [];
+      const out = [];
+      const targets = [
+        ...panel.querySelectorAll('button, select, input[type="range"]'),
+        ...[...panel.querySelectorAll('input[type="checkbox"]')].map((input) => input.closest('label')),
+      ];
+      for (const target of targets) {
+        const rect = target.getBoundingClientRect();
+        if (!rect.width) continue;
+        const name = target.dataset.role || target.textContent.trim().slice(0, 24) || target.outerHTML.slice(0, 40);
+        if (rect.height < 43.5) small.push(`${name} ${Math.round(rect.height)}px`);
+        if (rect.right > box.right + 1 || rect.left < box.left - 1) out.push(name);
+      }
+      return {
+        coarse: matchMedia('(pointer: coarse)').matches,
+        scroll: document.documentElement.scrollWidth,
+        client: document.documentElement.clientWidth,
+        right: Math.round(box.right),
+        small,
+        out,
+      };
+    });
+    must(got.coarse, 'the phone context does not match (pointer: coarse)');
+    must(got.scroll <= got.client, `the page scrolls sideways at 320 px: ${got.scroll} in ${got.client}`);
+    must(got.right <= got.client, `the panel ends at ${got.right} px of ${got.client}`);
+    must(!got.out.length, `controls leave the panel: ${got.out.join(', ')}`);
+    must(!got.small.length, `targets under 44 px: ${got.small.join(', ')}`);
+    return `fits, ${got.scroll}/${got.client}, every target at least 44 px`;
   });
 
   await journey(narrow, 'page-head controls fold behind a button on a phone (#275)', async (page) => {
@@ -4009,7 +6095,8 @@ async function main() {
     await hint.tap();
     await page.waitForTimeout(250);
     const said = await page.locator(`#${await hint.getAttribute('aria-controls')}`).innerText();
-    must(/rf-agent beside an SDR/.test(said), 'the ? does not hold the whole description');
+    // The last words of the description, not the product name in them, which changed (#178).
+    must(/beside an SDR\./.test(said), 'the ? does not hold the whole description');
     await page.keyboard.press('Escape');
 
     await page.setViewportSize({ width: 1024, height: 768 });
@@ -4080,6 +6167,70 @@ async function main() {
     }
     must(bad.length === 0, `scrolls in two dimensions: ${bad.join(', ')}`);
     return 'all 14 pages, no sideways document scroll';
+  });
+
+  /*
+   * #283. On a touch screen the body is 16 px and no text is under
+   * .78 rem (12.48 px). Keyed on the pointer, so this context is a touch
+   * one at every width, the iPad's 834 included.
+   *
+   * The pages are the ones with the widest tables, so a larger font that
+   * pushes the document sideways shows here first. Letters are 0.05em
+   * wider, as in the Who hears it journey, because CI's Linux fonts are
+   * wider than a Mac's. The sticky bar (#271) must still be at the top
+   * after a scroll, and `--bar-h` must still be its height, or the
+   * things that stick under it (#280, #286) hide behind it.
+   */
+  await journey(narrow, 'body text is 16 px on a touch screen, and nothing scrolls sideways (#283)', async (page) => {
+    const bad = [];
+    const facts = [];
+    for (const width of [320, 390, 834]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const name of ['dashboard', 'nodes', 'firehose', 'stats', 'gaps', 'chat']) {
+        await open(page, name, 2500);
+        await page.addStyleTag({ content: '* { letter-spacing: .05em !important; }' });
+        await page.waitForTimeout(200);
+        await page.evaluate(() => window.scrollTo(0, 1200));
+        await page.waitForTimeout(200);
+        const got = await page.evaluate(() => {
+          let smallest = 99;
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const parent = node.parentElement;
+            if (!node.textContent.trim() || !parent || !parent.getClientRects().length) continue;
+            // A chart's SVG labels are sized by the chart, not by this rule.
+            if (parent.closest('svg')) continue;
+            smallest = Math.min(smallest, parseFloat(getComputedStyle(parent).fontSize));
+          }
+          const fields = [...document.querySelectorAll('.page.active input, .page.active select, .page.active textarea')]
+            .filter((field) => field.getClientRects().length && field.type !== 'checkbox' && field.type !== 'radio')
+            .map((field) => parseFloat(getComputedStyle(field).fontSize));
+          const bar = document.querySelector('.sidebar').getBoundingClientRect();
+          return {
+            body: getComputedStyle(document.body).fontSize,
+            smallest,
+            field: fields.length ? Math.min(...fields) : null,
+            scroll: document.documentElement.scrollWidth,
+            client: document.documentElement.clientWidth,
+            barTop: bar.top,
+            barHeight: Math.ceil(bar.height),
+            barVar: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')),
+            scrolled: window.scrollY,
+          };
+        });
+        const at = `${name} at ${width} px`;
+        if (got.body !== '16px') bad.push(`${at}: the body is ${got.body}`);
+        if (got.smallest < 12.4) bad.push(`${at}: text at ${got.smallest} px`);
+        if (got.field !== null && got.field < 16) bad.push(`${at}: a form field at ${got.field} px`);
+        if (got.scroll > got.client + 1) bad.push(`${at}: the page scrolls sideways, ${got.scroll}/${got.client}`);
+        if (got.scrolled > 0 && Math.abs(got.barTop) > 1) bad.push(`${at}: the bar scrolled away (top ${got.barTop})`);
+        if (Math.abs(got.barVar - got.barHeight) > 1) bad.push(`${at}: --bar-h is ${got.barVar}, the bar is ${got.barHeight}`);
+        if (width === 320) facts.push(`${name} ${got.scroll}/${got.client}`);
+      }
+    }
+    await page.setViewportSize({ width: 320, height: 640 });
+    must(bad.length === 0, bad.join('; '));
+    return `16 px body, no text under 12.5 px, at 320/390/834; at 320: ${facts.join(', ')}`;
   });
   await journey(narrow, 'the firehose reads as cards on a phone (#273)', async (page) => {
     /*

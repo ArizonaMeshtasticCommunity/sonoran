@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # Web server.
     web_host: str = "0.0.0.0"
     web_port: int = 8000
+    # API worker processes (#371). One process has one event loop, and a
+    # view computed while somebody waits holds up every other request in
+    # it. With the long views read from the jobs' tables, requests are
+    # reads, and a bigger box can run several workers. Each worker holds
+    # its own short caches and its own request budget (`API_RATE_*` is
+    # per worker), so the real limit grows with the count. Keep 1 on a
+    # small box.
+    web_workers: int = 1
     web_base_path: str = ""
     web_api_base_url: str = ""
 
@@ -103,6 +111,14 @@ class Settings(BaseSettings):
     # what a deployment with a small database or a spare core can
     # afford.
     stats_cache_seconds: float = 30.0
+    # The longest any Statistics or graph answer is held (#371). The hold
+    # grows with the window: a share of 1/720 of it, so a day is held 2
+    # minutes and 3 days or more 5 minutes. A rolling window then misses
+    # at most 1/720 of what it covers at its newest edge, and says where
+    # it ends (`window_end`). A fixed range that ended in the past cannot
+    # change, and is held this long. `stats_cache_seconds` stays the
+    # shortest hold, and 0 still turns every hold off.
+    stats_cache_max_seconds: float = 300.0
 
     # How long one node's links and routes are held (#304).
     #
@@ -283,8 +299,6 @@ class Settings(BaseSettings):
     # sites are taken first. It is a guard against a run that never
     # ends, not a limit anybody should want to reach.
     coverage_max_nodes: int = 600
-    # The receiver the map assumes: a handheld with a stock antenna,
-    # held about a metre and a half above the ground.
     # How coarse a position may be and still anchor a prediction, in
     # bits. Zero turns the test off. See `sonoran/positions.py`.
     #
@@ -293,7 +307,29 @@ class Settings(BaseSettings):
     # the backbone reports 13 bits, which is 2.9 km, so most of it will
     # need a position in `config/nodes.yaml` to be a site at all. The
     # manifest counts what was left out for this reason.
+    #
+    # This may raise the floor. It may not lower it: a value from 1 to
+    # 15 is read as 16, and the job logs a warning (#315). Every
+    # published map predicts from precise positions only. To see the
+    # rounded ones as well, use COVERAGE_INCLUDE_APPROXIMATE below.
     coverage_min_precision_bits: int = 16
+    # Also publish an approximate map of each site set, which takes
+    # positions rounded down to COVERAGE_APPROXIMATE_MIN_BITS too.
+    #
+    # Off by default, and the cost is why: each approximate map is one
+    # more full prediction of its site set. With this off, a run costs
+    # what it did before.
+    #
+    # The approximate map is its own site set, with its own tiles, and
+    # the manifest marks it `approximate`. The precise infrastructure
+    # map stays the default view and the only map the public embed
+    # serves, whatever this is set to. See `AGENTS.md` 9.25 and 9.27.
+    coverage_include_approximate: bool = False
+    # The coarsest position the approximate map takes, in bits. 13 is
+    # 2.9 km. Zero takes every position, however rounded.
+    coverage_approximate_min_bits: int = 13
+    # The receiver the map assumes: a handheld with a stock antenna,
+    # held about a metre and a half above the ground.
     coverage_rx_height_m: float = 1.5
     coverage_rx_gain_dbi: float = 2.15
     # Which roles a run may predict from, as a comma separated list.
@@ -374,6 +410,28 @@ class Settings(BaseSettings):
     # Every threshold below is a starting point, not a measurement.
     # `docs/design/coverage-gaps.md` 11.1 names the six figures to take
     # off live data before any of them is trusted.
+    # Read models (#371): the jobs service builds the views that cover
+    # hours or days (graph, longest-link board, broadcast rates, the
+    # coverage page's node list) and the API reads the stored answer. A
+    # stored answer older than three of its build intervals is not used:
+    # the API computes the view live, as it did before.
+    read_models_enabled: bool = True
+    read_models_interval_minutes: int = 10
+    # 30-day windows are built on every this many runs, not on each one.
+    read_models_long_every: int = 3
+
+    # The jobs supervisor (#371, `sonoran/jobs/supervisor.py`). Each run
+    # is its own process with its own memory ceiling, and runs overlap
+    # when they fit in the container's memory. False runs every job inside
+    # the jobs process, as before, with no ceilings.
+    jobs_isolate: bool = True
+    # Ceilings in MB, `name=MB` separated by commas, over the defaults
+    # (coverage 800, calibration 400, gaps 400, read-models 400,
+    # rf-rollup 250, snapshot 250). A job over its ceiling is stopped.
+    jobs_memory_limits: str = ""
+    # The memory the jobs may use together, in MB. 0 reads the
+    # container's own limit and keeps the supervisor's share out of it.
+    jobs_memory_budget_mb: float = 0.0
     gaps_enabled: bool = True
     # How often the per node assessment is rebuilt. The signals are
     # only SQL, so freshness is cheap. The job runs on its own clock
@@ -401,19 +459,6 @@ class Settings(BaseSettings):
     # as mobile, in kilometres. A mobile node is still listed, because a
     # handheld that cannot get out is a real problem for its owner.
     gaps_mobile_spread_km: float = 1.0
-    # A sole gateway that receives a node at least this strongly, in
-    # dBm, is close to it, and `sole_observer` stops calling that a
-    # fault. At 915 MHz a path loss of 90 dB is about 0.8 km in free
-    # space, so -60 dBm from the 30 dBm the US band allows bounds the
-    # distance to about a kilometre with plain antennas, and to a few
-    # kilometres with high gain ones. Measured on the live mesh, pairs
-    # that share a site read -1 to -58 dBm, and single links that
-    # really are marginal read -90 to -128. See `docs/GAPS.md` 4.4.
-    gaps_sole_gateway_close_rssi_dbm: float = -60.0
-    # How many direct readings that median needs. One loud packet is
-    # not a site.
-    gaps_sole_gateway_min_readings: int = 5
-
     # The siting half. It answers "where would one new node help the
     # most people", and it is the only part of this feature that runs
     # the coverage engine.
@@ -438,7 +483,6 @@ class Settings(BaseSettings):
     # How far around a cluster to look for ground, in kilometres.
     gaps_search_radius_km: float = 15.0
     # How far a candidate must stand above the median of the kilometre
-    # around it, in metres. The highest cell of a plain is not a site.
     gaps_min_prominence_m: float = 40.0
     # The closest two candidates may stand, in kilometres. Without it
     # one ridge fills every slot with sixty cells of itself.
@@ -485,6 +529,17 @@ class Settings(BaseSettings):
     rf_mqtt_password: str = ""
     rf_mqtt_use_tls: bool = False
     rf_topics: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["rf/v1/#"])
+    # Contributors (#178, docs/design/contributors.md). `sonoran-contrib`
+    # holds the only broker login that may publish jobs. An empty host
+    # means the RF broker above, which is the one contributors reach.
+    contrib_mqtt_host: str = ""
+    contrib_mqtt_port: int = 1883
+    contrib_mqtt_username: str = ""
+    contrib_mqtt_password: str = ""
+    contrib_mqtt_use_tls: bool = False
+    # How often `sonoran-contrib` expires, plans and clears jobs. It is
+    # how soon a due target or a failed job is acted on, not a measure.
+    contrib_tick_seconds: int = 60
     # One track point per thing per this many seconds, across every
     # station. The design's capacity arithmetic assumes 20 (5.4).
     rf_bucket_seconds: int = 20
@@ -498,6 +553,12 @@ class Settings(BaseSettings):
     #: should not be recorded against the node. See
     #: ingest/handlers/clocks.py.
     mesh_future_slack_seconds: int = 300
+    #: A gateway that uploads on two different preset-named topics
+    #: within this many minutes is ambiguous, and its topic-channel
+    #: uploads get no modem preset until the older one ages out. A
+    #: gateway that was reconfigured once is therefore uncertain for
+    #: this long and no longer (#313). See `ingest/presets.py`.
+    gateway_preset_conflict_minutes: int = Field(default=60, ge=1, le=10080)
     rf_future_slack_seconds: int = 60
     rf_past_slack_seconds: int = 600
     # Things never stored or shown: aircraft on the FAA LADD and PIA

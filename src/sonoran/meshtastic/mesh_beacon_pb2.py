@@ -26,7 +26,7 @@ from sonoran.meshtastic import channel_pb2 as meshtastic_dot_channel__pb2
 from sonoran.meshtastic import config_pb2 as meshtastic_dot_config__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1cmeshtastic/mesh_beacon.proto\x12\nmeshtastic\x1a\x18meshtastic/channel.proto\x1a\x17meshtastic/config.proto\"\xe8\x01\n\nMeshBeacon\x12\x0f\n\x07message\x18\x01 \x01(\t\x12\x32\n\roffer_channel\x18\x02 \x01(\x0b\x32\x1b.meshtastic.ChannelSettings\x12>\n\x0coffer_region\x18\x03 \x01(\x0e\x32(.meshtastic.Config.LoRaConfig.RegionCode\x12\x44\n\x0coffer_preset\x18\x04 \x01(\x0e\x32).meshtastic.Config.LoRaConfig.ModemPresetH\x00\x88\x01\x01\x42\x0f\n\r_offer_presetBf\n\x14org.meshtastic.protoB\x10MeshBeaconProtosZ\"github.com/meshtastic/go/generated\xaa\x02\x14Meshtastic.Protobufs\xba\x02\x00\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1cmeshtastic/mesh_beacon.proto\x12\nmeshtastic\x1a\x18meshtastic/channel.proto\x1a\x17meshtastic/config.proto\"\xa4\x02\n\nMeshBeacon\x12\x0f\n\x07message\x18\x01 \x01(\t\x12\x32\n\roffer_channel\x18\x02 \x01(\x0b\x32\x1b.meshtastic.ChannelSettings\x12>\n\x0coffer_region\x18\x03 \x01(\x0e\x32(.meshtastic.Config.LoRaConfig.RegionCode\x12\x44\n\x0coffer_preset\x18\x04 \x01(\x0e\x32).meshtastic.Config.LoRaConfig.ModemPresetH\x00\x88\x01\x01\x12!\n\x14offer_frequency_slot\x18\x05 \x01(\rH\x01\x88\x01\x01\x42\x0f\n\r_offer_presetB\x17\n\x15_offer_frequency_slotBf\n\x14org.meshtastic.protoB\x10MeshBeaconProtosZ\"github.com/meshtastic/go/generated\xaa\x02\x14Meshtastic.Protobufs\xba\x02\x00\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,5 +35,5 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\024org.meshtastic.protoB\020MeshBeaconProtosZ\"github.com/meshtastic/go/generated\252\002\024Meshtastic.Protobufs\272\002\000'
   _globals['_MESHBEACON']._serialized_start=96
-  _globals['_MESHBEACON']._serialized_end=328
+  _globals['_MESHBEACON']._serialized_end=388
 # @@protoc_insertion_point(module_scope)

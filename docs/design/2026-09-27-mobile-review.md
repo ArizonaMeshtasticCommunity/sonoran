@@ -920,6 +920,8 @@ map-first and full-screen.
 - **Effort:** L. **Risk:** high on iOS 26 Safari, and it depends on item 6.
 - **Needs Will:** which four pages. Suggested: Map, Nodes, Chat, Dashboard.
   Ship item 6 first and decide from how that feels.
+- **Decided (Will, 2026-10-08):** the suggested four, then More. Built in
+  #282. The trigger and the reasons are in the PR and in `tab-bar.js`.
 
 **18. Body text at 16 px on touch screens**
 
@@ -931,6 +933,10 @@ map-first and full-screen.
 - **Effort:** M. **Risk:** medium. Every page gets longer, and every table
   gets wider (which makes items 7–9 more pressing).
 - **Needs Will:** this is a look-and-feel change.
+- **Decided (Will, 2026-10-08):** build it. Built in #283. The body is
+  16 px and the smallest text is .78 rem (12.48 px) under
+  `(pointer: coarse)`. Tables keep their width, because a rem size follows
+  the root and the root stays 16 px. The measurements are in the PR.
 
 **19. Reduced motion for charts and map zoom**
 

@@ -43,6 +43,14 @@ reports, and five traceroutes.
 
 The data is not real. No packet in it crossed a radio.
 
+Each packet carries a modem preset, as ingest gives one (#313). GLND
+is a LongFast gateway and every other gateway is on MediumFast. An
+upload on a preset-named topic is on that preset, and any other upload
+is on its gateway's preset, so azmsh is on both presets. Two azmsh
+messages are written by hand for the preset journeys: "Long Fast
+check-in on azmsh." from PRES through GLND, and "Medium Fast check-in
+on azmsh." from TEMP through SBPK.
+
 The random seed is constant. Two runs give the same data. A screenshot
 after a change is thus different only because of the change.
 

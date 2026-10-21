@@ -3,6 +3,9 @@
 This file gives rules to AI coding agents that work on this project.
 Follow these rules at all times.
 
+To pick up work that someone else started, to leave a hand-off, or to
+record what you learned, read `docs/COLLABORATION.md` as well.
+
 ## 1. Project summary
 
 This project is Sonoran, the azmsh.net Meshtastic dashboard.
@@ -29,7 +32,8 @@ The application does these things:
 - Alembic for database migrations
 - TimescaleDB (PostgreSQL) for storage
 - Protobuf definitions from `buf.build/meshtastic/protobufs`
-- Static frontend: HTML, HTMX, Alpine.js, Leaflet, ECharts
+- Static frontend: plain HTML, CSS and JavaScript (classic scripts and
+  ES modules), with vendored Leaflet and ECharts. No build step
 - numpy for the SRTM elevation transform
 - A vendored WebAssembly build of SPLAT! for coverage prediction (GPL-3)
 - Ruff for lint and format
@@ -46,6 +50,87 @@ All documentation and code comments use ASD-STE100 Simplified Technical English.
 - Do not use slang.
 - Do not use complex grammar.
 
+## 3A. Before you build: a person, a source, a test (#359)
+
+Read this before you start any work. §6 says how to finish a change.
+This section says what you may start, and what a new number must rest on.
+
+### 3A.1 A person must understand the feature first
+
+- A new feature or a new metric starts from an issue that a person wrote.
+- The issue says, in that person's own words:
+  - what the feature measures or does, and why a mesh operator needs it;
+  - where the data comes from (which packet, which field, which table);
+  - what it **cannot** tell us.
+- If the issue does not show this, do not start. Ask the person in the
+  issue, and wait for the answer.
+- "Make X better" or "add a stat for Y" is not enough on its own.
+- A bug fix to existing behaviour needs a clear report, not a full design.
+
+### 3A.2 No metric from thin air
+
+Every number the site shows, and every threshold, weight, floor or score
+behind it, links to a hard source:
+
+- the Meshtastic firmware (`meshtastic/firmware`: a file and line at a tag
+  or commit);
+- the protobufs (`meshtastic/protobufs`: the field);
+- published documentation (for example a Semtech datasheet, an NTIA report
+  or the Meshtastic docs);
+- a measurement on our own data, recorded in `docs/DECISIONS.md` with the
+  query and its result.
+
+Put the link in the code comment beside the constant **and** in the
+matching doc. Do not merge a number with no source. "A reasonable value"
+and "a common rule of thumb" are not sources.
+
+### 3A.3 No new coverage-gaps features for now
+
+Do not add gaps signals, scores, leaderboards or gaps pages until Logan or
+Tyler says otherwise in an issue. Bug fixes to what exists are still fine.
+
+### 3A.4 No tool credit and no session links
+
+- Do not add "Generated with ...", "Co-Authored-By: <a tool or model>" or
+  any other tool or model credit to a commit, a PR, an issue or a comment.
+- **Never paste an agent session link** (for example
+  an agent session link). It points into a private session
+  that can hold file contents, command output, paths and secrets.
+- The author of a PR is the person responsible for it.
+
+### 3A.5 Test-driven development
+
+The tests come from the issue, not from the code. Tests that only prove
+"the code does what the agent decided" prove nothing about the measure.
+
+1. **Tests come from the issue.** Turn each claim of the issue (3A.1)
+   into a test before you write code. Take expected numbers from the
+   issue or from the source (3A.2). Do not invent them.
+2. **Red first.** Write the test, run it, and see it fail for the right
+   reason. Put that failing output in the PR. A test that never failed
+   proves nothing.
+3. **Green.** Write the smallest code that makes the test pass.
+4. **Never change a test to make it pass.** Do not weaken, skip or delete
+   a test to get green. If a test is wrong, say so in the PR, and get the
+   issue author's agreement before you change it.
+5. **Refactor** while the tests stay green.
+6. **Small steps.** One behaviour for each cycle.
+7. **A bug fix starts with a test that reproduces the bug** and fails on
+   `main`.
+8. **Somebody else checks the tests.** A second agent or a person reviews
+   the tests against the issue, separately from the code.
+9. **Prove that a broken version fails.** Add a test that a plausible
+   wrong implementation would fail, as the existing "would be caught"
+   tests do.
+
+Exceptions: documentation, comments, configuration with no logic, and
+visual layout that a test cannot express. For layout, a screenshot before
+and after is the evidence.
+
+Why (sources in #359): small, steady test cycles are what the studies tie
+to better results (Fucci et al., IEEE TSE 2017), and agents are known to
+edit a failing test to match wrong code.
+
 ## 4. Architecture rules
 
 - The `decode` and `crypto` modules must never touch the database.
@@ -53,6 +138,14 @@ All documentation and code comments use ASD-STE100 Simplified Technical English.
 - The API has GET endpoints only. Never add a POST, PUT, or DELETE endpoint.
 - The API database role has SELECT rights only.
 - The ingest database role has INSERT and UPDATE rights only.
+- The jobs database role replaces what it computes (the job output
+  tables, `docs/DATABASE.md` 5B) with DELETE and INSERT in one
+  transaction. It has no UPDATE on them. A job output is a table, not
+  a JSON file, except the coverage tiles and the run manifest (#351).
+- One exception: `sonoran-contrib` runs as the jobs role and UPDATEs the
+  `contrib_` tables (a job's outcome, a contributor's last heartbeat).
+  Those are state, not job outputs. It never UPDATEs `local_stats`: a
+  reading is only inserted (#178, migration i178).
 - Modules talk to each other through small, documented interfaces.
 - Keep functions small. Keep modules small.
 
@@ -81,6 +174,12 @@ A change is complete only when all of these pass:
 9. `npx eslint src/sonoran/web/static` passes. Install it with
    `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
    ignored, and nothing is added to the served frontend.
+10. The PR shows its red step (§3A.5): the new tests, and their failing
+    output on `main` before the change. A change that §3A.5 exempts
+    (documentation, comments, configuration with no logic, or layout)
+    says why instead.
+11. Every new number has its source in the code comment and in the doc
+    (§3A.2), and the PR lists them under "Basis".
 
 `node --check` is not a substitute for item 9. It parses a file and does
 no scope analysis, so a reference to a deleted name passes it and throws
@@ -155,6 +254,13 @@ General Public License version 3. The Sonoran web interface uses it and
 therefore carries the same licence. Keep `LICENSE-GPL3` and the
 attribution beside it. See `docs/PLANNER.md` section 6.
 
+Every other vendored component is listed in `THIRD_PARTY_NOTICES.md`,
+with its version and licence. Its licence text is in
+`web/static/vendor/LICENSES/`, copied from upstream at the vendored
+version's tag. When you update a vendored file, update its licence text
+and its row in the same change. The vendored config checker has no
+licence yet (its upstream has none). Do not add one in the copy.
+
 ## 8. Common tasks
 
 ### Add a new packet type handler
@@ -199,10 +305,11 @@ attribution beside it. See `docs/PLANNER.md` section 6.
 ### Change the database schema
 
 1. Edit the models in `src/sonoran/db/models.py`.
-2. Create a migration: `alembic revision --autogenerate -m "description"`.
-3. Review the generated migration by hand.
-4. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
-5. Update `docs/DATABASE.md`.
+2. Create a migration. Name the revision after its issue: `i` and the issue number, for example `alembic revision --autogenerate -m "description" --rev-id i366`. Do not use sequential numbers like `0018`: two branches pick the same next number. Use the pull request number (`pr344`) when there is no issue.
+3. Rebase on `main` before you push. Set `down_revision` to the current head (`alembic heads`). `tests/unit/test_migrations_head.py` fails when the migrations have two heads.
+4. Review the generated migration by hand.
+5. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
+6. Update `docs/DATABASE.md`.
 
 ## 9. Traps in this project
 
@@ -328,10 +435,67 @@ it sent traffic seen on it, which is a claim about what it was doing
 rather than how it is configured, so a genuine dual-preset node appears
 on both. Live data had 14 of those against 709.
 
-The picker also offers channels that are not presets, such as Weather
-and PKI. Those ride on top of a preset, so filtering the nodes by one
-of them gives the handful that talk there rather than a radio set. The
-map keeps an "Every node" toggle for that reason.
+**The preset of a packet is decided at ingest and stored (#313).**
+`packet_seen.modem_preset`, `packet.modem_preset` and `node.last_preset`
+hold it. The list pages (chat, firehose, dashboard, node list) filter
+with `preset=`, which reads the tag, with a fallback to the topic
+channel for rows written before it. Never estimate a preset at read
+time from a list of gateways: that was PR #349, and it was closed for
+it. The map, graph, coverage and gaps pages still filter by the
+preset's own channel name. Moving them to the tag is the next step.
+
+### 9.7.0 A preset switch must clear the live canvas too (#384)
+
+The map's dots and lines are Leaflet layers, and each draw replaces
+them. The live traffic is not a layer. It is one canvas in
+`map-live.js` that holds marks in flight, a replay queue of up to one
+poll, and each node's heat, which decays with a half-life of 20 s and
+30 s. Nothing cleared it on a preset switch, so after Medium Fast to
+Long Fast and back the Long Fast halos stayed on the Medium Fast map
+for more than a minute.
+
+`render` also returns at once while another draw is in flight. A
+switch made during a slow map draw was dropped, and the old preset's
+answer was drawn under the new switch. With the Live timer off it
+stayed until a reload.
+
+`PAGES.map` now clears the live layer when its channel changes, and
+draws nothing from answers that arrive after the preset changed. The
+switch queues its render with `navigateRender`. The e2e journey
+"switching presets on the map leaves nothing of the old one" holds
+both, and reads the canvas pixels where the old preset's nodes stood.
+
+### 9.7.1 A topic channel is not a preset
+
+`azmsh`, `Weather`, `Traffic` and `PKI` are topic channels. Each rides
+on top of whatever modem preset the gateway is set to, and this mesh
+runs `azmsh` on both MediumFast and LongFast. So a filter on the topic
+channel name, `channel=LongFast`, never shows an azmsh message on any
+preset. That was the bug in #313. The chat page then made it worse: it
+put every topic channel on the default preset in the browser.
+
+What does say which preset carried a packet is the gateway. Firmware
+names an unnamed primary channel after its preset, so a gateway that
+uploads on `.../e/LongFast/!gw` is on LongFast, and its azmsh uploads
+are LongFast too. `ingest/presets.py` holds that rule, and the rules for
+a gateway seen on two presets at once (no vote) and for a packet seen by
+several gateways (majority). Read its docstring before you change it.
+
+Three things to keep:
+
+- **Never call a mesh segment a "radio".** A radio is hardware. Say
+  "modem preset" or "preset", in code, comments, the UI, docs and tests.
+- **MapReports are not stored.** `/2/map/` topics are dropped when the
+  topic is parsed, so a gateway's own statement of its preset is never
+  read. If you add them, note that `MessageToDict` omits an enum at its
+  zero value, and `LONG_FAST` is zero in `Config.LoRaConfig.ModemPreset`:
+  a LongFast report has no preset key at all. Read the field, not the dict.
+- **Ingest still cannot read `packet`.** The majority vote is counted in
+  memory and written with a plain UPDATE on the natural key and the
+  partition column. Revision i313 grants SELECT on those three columns
+  only, because PostgreSQL needs it for the WHERE clause. Do not widen
+  it. `tests/integration/test_ingest_presets.py` runs as `azmsh_ingest`
+  and checks that `modem_preset` and `raw_bytes` stay unreadable.
 
 ### 9.8 mesh-graph keys a trace on the request ID
 
@@ -417,10 +581,15 @@ leaks nothing a path would. Keep the attribution. See `docs/API.md`.
 
 ### 9.10 Channel keys come from settings, not from `.env`
 
-`CHANNEL_KEYS` is usually absent from `.env`, so the built-in default
-public key applies. Any offline script must read keys through
-`get_settings()`. Passing an empty environment variable silently
-decodes nothing.
+Outside Compose, an absent `CHANNEL_KEYS` gives the built-in default
+public key. Under Compose it does not: `docker-compose.yml` gives the
+ingest service `CHANNEL_KEYS: ${CHANNEL_KEYS:-}`, so a `.env` without the
+key passes an empty value, and an empty value is an empty list, not the
+default. Ingest then opens no packet and stores each one with an unknown
+port. So `.env.example` sets the default key, and `.env` must keep it.
+
+Any offline script must read keys through `get_settings()`. Passing an
+empty environment variable silently decodes nothing.
 
 ### 9.11 `packet.payload_json` holds only an allowlist
 
@@ -754,7 +923,9 @@ one.**
       fieldValues(first:12){nodes{... on ProjectV2ItemFieldSingleSelectValue
       {name field{... on ProjectV2FieldCommon{name}}}}}}}}}}'
 
-An issue **absent** from the board is not gated and is fair game.
+An issue **absent** from the board is not gated by the board. It is not
+automatically fair game: it must still meet §3A.1, and a gaps feature is
+paused by §3A.3.
 
 #### The trap: an empty answer that means two different things
 
@@ -1077,8 +1248,32 @@ a true path can be drawn is `/api/map/traceroute-paths`.
 
 `MeshPacket.relay_node` looks like the missing piece and is not. The
 firmware truncates it to one byte, the low byte of the relayer's node
-number, and `mesh_packet_metrics.relay_node_num` stores that byte as it
-arrives. Values run 2 to 255. With 694 nodes active in a day this mesh
+number. `mesh_packet_metrics.relay_node_num` stores it for the first
+upload of a packet, and since migration `pr378` `packet_seen.relay_node`
+stores it for every upload, since each gateway hears its own relay. The
+packet page shows it per gateway as a list of candidates, never as one
+node. That reverses #47's option 3 for the packet page only (Logan,
+2026-10-17, `docs/DECISIONS.md`). Drawing anything from it is still
+declined, and `tests/unit/test_live_map_draws_no_inferred_hop.py` holds
+that.
+
+The candidates follow the firmware (v2.8.1), not the byte alone. The
+firmware resolves a byte only among the receiving node's direct
+neighbours (`NodeDB::resolveLastByte`, `NodeDB.cpp:4179-4182`), so the
+candidates for an upload are the nodes that gateway uploaded at 0 hops
+within a day. Never match the byte against the whole mesh: that listed
+a LongFast-only node on a MediumFast gateway's upload
+(`!8fa02db0/2591142278`). Every send writes the sender's own byte first
+and each rebroadcast overwrites it (`FloodingRouter.cpp:22`,
+`NextHopRouter.cpp:116`), and the first hop always lowers the hop limit
+(`Router.cpp:256-258`). So a 0-hop upload names the sender exactly
+(live, 2026-10-18: 563 of 563). After a hop the relay is never the sender
+and never a `CLIENT_MUTE` node (`FloodingRouter.cpp:154-158`). Byte `ff`
+also stands for a node that ends in `00` (`NodeDB.h:431`). Live,
+2026-10-18, 12,645 relayed uploads: one candidate for 79.9 %, none for
+6.7 %, at most 6.
+
+Values run 2 to 255. With 694 nodes active in a day this mesh
 had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for
 the worst, and only 5.4 percent of relay observations resolving to a
 single node. It also names the last hop alone, never the path. Drawing
@@ -1155,9 +1350,15 @@ forward are in `docs/ISSUES.md` 2.4.2.
 - `docs/API.md` — the API specification
 - `docs/APP.md` — the installed app, the service worker, and offline
 - `docs/DEPLOY.md` — how to deploy, check and roll back
+- `docs/OPERATIONS.md` — routine checks, restarts, logs, backup and
+  restore, and the common faults
+- `CONTRIBUTING.md` — the same rules, for an outside contributor
 - `docs/QA.md` — the QA process
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new
   node would help, and what neither of those can say
-- `docs/REVIEW.md` — code review findings, and which are still open
+- `docs/archive/` — old session notes and reviews, kept for their
+  history only. Do not take current state from them
 - `docs/RELEASING.md` — how to publish a release, and what it costs in CI
+- `docs/COLLABORATION.md` — how people and agents hand work to each other,
+  leave notes, record lessons, and avoid the known hand-off mistakes

@@ -348,17 +348,24 @@ def test_the_graph_head_keeps_four_controls_and_options_holds_the_rest() -> None
         assert moved in panel, f"{moved} is not in the Options panel"
 
 
-def test_the_coverage_layer_is_one_drop_down_in_the_head() -> None:
-    """Will approved: the three layer pills become one drop-down."""
+def test_the_coverage_layer_is_one_drop_down_in_the_settings_panel() -> None:
+    """Will approved: the three layer pills become one drop-down (#299).
+
+    Then Will asked for one settings button at the top right, with every
+    choice behind it (#334). The layer is still one select, and the head
+    keeps only the button. `test_coverage_settings.py` pins the rest.
+    """
     html = re.sub(r"<!--.*?-->", "", _read("index.html"), flags=re.S)
     head = _page_head(html, "coverage")
-    assert re.search(r"<select data-coverage-layers\b", head), (
-        "the layer is not a select in the head"
-    )
     assert "data-options-open" in head
+    assert "data-coverage-layers" not in head, "the layer is still in the head"
     panel = html[html.index('id="coverage-options"') :]
-    assert "data-coverage-views" in panel[: panel.index("</label>")]
-    assert "data-coverage-opacity" in panel[: panel.index("</label>")]
+    panel = panel[: panel.index('<div class="map-shell">')]
+    assert re.search(r"<select data-coverage-layers\b", panel), (
+        "the layer is not a select in the settings panel"
+    )
+    assert "data-coverage-views" in panel
+    assert "data-coverage-opacity" in panel
 
 
 # ------------------------------------------------- phones fold the head (#275)
@@ -390,3 +397,82 @@ def test_the_phone_fold_keeps_live_and_one_control_in_the_head() -> None:
         assert "data-options-open" in head, f"{page} has no button to fold into"
     rf = _page_head(html, "rf")
     assert "data-fold-only" in rf and "data-live" in rf
+
+
+# ------------------------------------------------- text size on touch (#283)
+
+
+def _touch_block(css: str) -> str:
+    """Return the body of the `@media (pointer: coarse)` block that sets the
+    text size. It is found by its custom property, not by its position."""
+    for match in re.finditer(r"@media \(pointer: coarse\) \{\n", css):
+        body = css[match.end() :].split("\n}\n", 1)[0]
+        if "--font-size:" in body:
+            return body
+    raise AssertionError("no (pointer: coarse) block sets --font-size")
+
+
+def test_body_text_is_sixteen_pixels_on_a_touch_screen() -> None:
+    """The body is 15 px with a mouse and 16 px with a finger (#283).
+
+    Keyed on the pointer and not on the width, as the touch targets are
+    (#267): an iPad in landscape is desktop-wide and held at a phone's
+    distance, and a narrow desktop window is not. A `max-width` in the
+    same query would give the change to a narrow mouse window too.
+
+    The size is its own custom property, so the touch rule changes one
+    number and the font family is written once. Leaflet's popups use
+    the same `--font`, so they follow.
+    """
+    css = _read("app.css")
+    root = css[css.index(":root {") :].split("\n}\n", 1)[0]
+    assert "--font-size: 15px;" in root
+    assert "--font: var(--font-size)/1.5 " in root
+    assert re.search(r"body \{[^}]*font: var\(--font\);", css)
+    touch = _touch_block(css)
+    assert re.search(r":root \{[^}]*--font-size: 16px;", touch)
+    # The form-control rule still holds every field at 16 px or more, so
+    # iOS does not zoom a focused field (see the test above).
+    assert "input, select, textarea { font-size: max(16px, 1em); }" in css
+
+
+def test_no_small_text_escapes_the_touch_floor() -> None:
+    """On a touch screen no text in the stylesheet is under 12.5 px (#283).
+
+    The mobile review measured tags at 11.5 px and the filter count at
+    11.2 px. Each small size goes through `max(<size>, var(--text-floor))`.
+    The floor is 0 with a mouse, so a desktop keeps every size it had,
+    and .78 rem (12.48 px) with a finger.
+
+    The check reads every declaration, so a new small size that does not
+    take the floor fails here. A list of selectors would keep a deleted
+    one and miss a new one.
+    """
+    css = _read("app.css")
+    root = css[css.index(":root {") :].split("\n}\n", 1)[0]
+    assert "--text-floor: 0px;" in root
+    assert re.search(r":root \{[^}]*--text-floor: \.78rem;", _touch_block(css))
+
+    floor = 0.78
+    # Every stylesheet the dashboard loads, not only app.css. gaps.css
+    # was missed once, and the Gaps page kept 11.2 px text on a phone.
+    # The vendored Leaflet sheet is not ours to edit.
+    index = _read("index.html")
+    sheets = re.findall(r'href="static/([a-z-]+\.css)', index)
+    assert "app.css" in sheets and "gaps.css" in sheets, sheets
+    for sheet in sheets:
+        bare = [
+            f"{size}rem"
+            for size in re.findall(r"font-size: *(\d*\.\d+|\d+)rem *[;}]", _read(sheet))
+            if float(size) < floor
+        ]
+        assert not bare, f"{sheet}: small sizes without the touch floor: {bare}"
+    floored = re.findall(r"font-size: max\((\d*\.\d+)rem, var\(--text-floor\)\)", css)
+    assert floored, "no size takes the floor, so this test reads nothing"
+    assert all(float(size) < floor for size in floored)
+
+    # Inline styles in the scripts are text too.
+    for name in sorted(p.name for p in STATIC_DIR.glob("*.js")):
+        sizes = re.findall(r"font-size: *(\d*\.\d+)rem", _read(name))
+        small = [size for size in sizes if float(size) < floor]
+        assert not small, f"{name} sets {small} rem inline"

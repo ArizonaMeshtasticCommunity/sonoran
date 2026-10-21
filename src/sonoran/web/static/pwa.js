@@ -2,8 +2,8 @@
  * The installed-app half of the page (#322).
  *
  * 1. Register the service worker (`sw.js`, served from the app root).
- * 2. When a deploy has installed a new worker, say "a new version is
- *    available" and reload only when the reader chooses. A page is never
+ * 2. When a deploy has installed a new worker, say that Sonoran was
+ *    updated, and reload only when the reader chooses. A page is never
  *    swapped in the middle of a session.
  * 3. When the device loses its connection, say so, and mark the page as
  *    not live. Every figure on the page stopped at that moment, and a
@@ -169,10 +169,17 @@
   let updateShown = false;
   let reloading = false;
 
+  /*
+   * The words say that the page changed, not that a release came out
+   * (#382). The worker changes when any static file changes, which is
+   * most deploys, and a release is tagged later, if at all. "A new
+   * version" read like a release. The server knows no release tag, so
+   * the notice names none.
+   */
   function offerUpdate(worker) {
     if (updateShown) return;
     updateShown = true;
-    notice('A new version of Sonoran is available.', {
+    notice('Sonoran was updated. Reload to get the new page.', {
       label: 'Reload',
       run: () => {
         reloading = true;
@@ -182,7 +189,7 @@
   }
 
   // The new worker took over because the reader asked for it. Reload
-  // once, so the page and its scripts are the new version too.
+  // once, so the page and its scripts are the updated ones too.
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (reloading) window.location.reload();
   });

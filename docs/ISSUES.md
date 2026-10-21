@@ -3,6 +3,10 @@
 This file replaces the build phases in `docs/PLAN.md`. The first
 roadmap is complete, so work is tracked here instead.
 
+New work is now tracked in the GitHub issues. This file keeps the
+longer analyses that the code, `AGENTS.md` and the other documents cite
+by section number, so keep its numbering.
+
 Read `AGENTS.md` section 9 before you start. It lists the traps this
 project has already sprung.
 
@@ -558,8 +562,8 @@ correlated subquery, so a wide window over a busy mesh runs one index
 probe per observation. The endpoint is public and the map refreshes it
 every fifteen seconds. A grouped join against the distinct packet keys
 of the window, with the duplicate rows removed first, would answer in
-one pass. This is finding 2.1 in `docs/REVIEW.md`, left open there for a
-benchmarked rewrite.
+one pass. This was finding 2.1 in `docs/archive/REVIEW-2026-08-10.md`, left
+open there for a benchmarked rewrite.
 
 ---
 

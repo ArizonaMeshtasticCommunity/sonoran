@@ -2,17 +2,26 @@
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran import read_models
+from sonoran.api import hourly
 from sonoran.api.cache import KeyedCache, TimedCache
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.api.window import Window, optional_window, retained_from, window_query
+from sonoran.api.preset_scope import Presets, preset_filter, require_presets
+from sonoran.api.window import (
+    Window,
+    cache_seconds,
+    optional_window,
+    retained_from,
+    window_query,
+)
 from sonoran.config import Settings
 from sonoran.db.models import DailySnapshot, DeviceMetrics, Node, Packet, PacketSeen
 from sonoran.decode.portnums import traffic_label
@@ -55,17 +64,23 @@ BROADCAST_INTERVALS: dict[str, int] = {
 # worth asking about. Two is inside the noise of reboots and requests.
 NOTABLE_RATIO = 3.0
 
-# The battery band where a node is most likely stuck in a restart loop.
+# A power loop is several restarts close together (#365): the node boots,
+# fails, boots again, and re-sends its NodeInfo on each boot. Restarts are
+# counted from `uptime_seconds` falling between a node's readings, in our
+# receive order (AGENTS.md 9.4), never inferred from a battery level.
 #
-# Between these two figures a node has enough charge to boot and start
-# transmitting, but not enough to hold the current a transmission draws.
-# It browns out, restarts, announces itself again, and repeats. That is
-# why a node with a low battery can be one of the noisiest on the mesh.
+# There used to be a "brownout band" of 5 to 35 % battery here, and any
+# node in it that restarted once in the window was "maybe power cycling":
+# 24 nodes on the 30 day view, one of them up for 21 days. The band had no
+# firmware, datasheet or measurement behind it (AGENTS.md §3A.2), so the
+# battery is now shown as context only.
 #
-# Below the lower figure the node is usually just flat and silent, which
-# is a different problem and not a loop.
-BROWNOUT_LOW = 5.0
-BROWNOUT_HIGH = 35.0
+# The span is the issue's ("N restarts within 24 h", #365).
+LOOP_SPAN = timedelta(hours=24)
+# Measured on our data, 2026-10-14, 521 nodes over 30 days (docs/DECISIONS.md
+# "#365"): at 4 or more restarts inside 24 h, every node (8 of 8) also sent
+# NodeInfo above its default on that day; at 3, 5 of 14 did; at 2, 15 of 52.
+LOOP_RESTARTS = 4
 
 # Above 100 percent means the node is on mains. That is how the firmware
 # reports a powered device, not a battery charged past full.
@@ -136,11 +151,11 @@ async def stats(
     settings: Settings = request.app.state.settings
     if window is None:
         return dict(
-            await _summary_cache.get(settings.stats_cache_seconds, lambda: _read_summary(session))
+            await _summary_cache.get(cache_seconds(settings, None), lambda: _read_summary(session))
         )
     return await _window_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_window_summary(session, settings, window),
     )
 
@@ -185,18 +200,33 @@ async def _lifetime_nodes(session: AsyncSession) -> dict[str, int]:
 
 
 async def _window_counts(session: AsyncSession, start: datetime, end: datetime) -> dict[str, int]:
-    """Count the packets first seen, and the uploads, in `[start, end)`."""
-    packets = await session.scalar(
-        select(func.count())
-        .select_from(Packet)
-        .where(Packet.first_seen_at >= start, Packet.first_seen_at < end)
-    )
-    uploads = await session.scalar(
-        select(func.count())
-        .select_from(PacketSeen)
-        .where(PacketSeen.seen_at >= start, PacketSeen.seen_at < end)
-    )
-    return {"packet_count": packets or 0, "observation_count": uploads or 0}
+    """Count the packets first seen, and the uploads, in `[start, end)`.
+
+    From the hourly totals, with the partial hour at each end from the
+    raw rows, so the count is exact (#366). It read millions of raw
+    rows, and a 30 day window took 12.7 s.
+    """
+    return {
+        "packet_count": await hourly.count_packets(session, start, end),
+        "observation_count": await hourly.count_uploads(session, start, end),
+    }
+
+
+async def _kept(session: AsyncSession, model: Any, time: Any, count: Any) -> int:
+    """Count every row a raw table still keeps, through the hourly totals.
+
+    From its oldest row to its newest, both included. The totals are
+    kept longer than the raw rows, so the oldest raw row, not the oldest
+    total, is where the count starts. The newest row may be dated in the
+    future by a gateway clock from before AGENTS.md 9.4, and this count
+    has always held every row, so it ends after the newest row.
+    """
+    oldest, newest = (
+        await session.execute(select(func.min(time), func.max(time)).select_from(model))
+    ).one()
+    if oldest is None or newest is None:
+        return 0
+    return int(await count(session, oldest, newest + timedelta(microseconds=1)))
 
 
 async def _read_summary(session: AsyncSession) -> dict[str, int]:
@@ -204,9 +234,10 @@ async def _read_summary(session: AsyncSession) -> dict[str, int]:
     lifetime = await _lifetime_nodes(session)
     return {
         "node_count": lifetime["node_count"],
-        "packet_count": (await session.scalar(select(func.count()).select_from(Packet))) or 0,
-        "observation_count": (await session.scalar(select(func.count()).select_from(PacketSeen)))
-        or 0,
+        "packet_count": await _kept(session, Packet, Packet.first_seen_at, hourly.count_packets),
+        "observation_count": await _kept(
+            session, PacketSeen, PacketSeen.seen_at, hourly.count_uploads
+        ),
         "gateway_count": lifetime["gateway_count"],
     }
 
@@ -228,11 +259,11 @@ async def hardware(
     settings: Settings = request.app.state.settings
     if window is None:
         return await _hardware_cache.get(
-            settings.stats_cache_seconds, lambda: _read_hardware(session)
+            cache_seconds(settings, None), lambda: _read_hardware(session)
         )
     return await _hardware_window_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_hardware(session, window),
     )
 
@@ -247,12 +278,11 @@ async def _read_hardware(
         .order_by(func.count().desc())
     )
     if window is not None:
-        heard = (
-            select(Packet.from_node_num)
-            .where(Packet.first_seen_at >= window.start, Packet.first_seen_at < window.end)
-            .distinct()
+        # The senders of the window from the hourly totals (#371). It read
+        # every raw packet of the window for them: 1.5 s over 30 days.
+        statement = statement.where(
+            Node.node_num.in_(hourly.senders_heard(window.start, window.end))
         )
-        statement = statement.where(Node.node_num.in_(heard))
     return [
         {"hw_model": model, "count": count}
         for model, count in (await session.execute(statement)).all()
@@ -264,6 +294,7 @@ async def portnums(
     request: Request,
     hours: int | None = Query(default=None, ge=1, le=8760),
     channel: str | None = None,
+    preset: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, object]]:
     """Return packet counts grouped by port number, with readable names.
@@ -279,14 +310,20 @@ async def portnums(
     a window it was not holding.
     """
     settings: Settings = request.app.state.settings
-    key = f"{hours or 0}:{channel or ''}"
+    wanted = require_presets(preset)
+    # The preset is part of the key. Without it the dashboard on
+    # LongFast would be answered with the MediumFast counts. Sorted, so
+    # the same presets in another order share one entry (#383).
+    key = f"{hours or 0}:{channel or ''}:{','.join(sorted(wanted or ()))}"
     return await _portnums_cache.get(
-        key, settings.stats_cache_seconds, lambda: _read_portnums(session, hours, channel)
+        key,
+        cache_seconds(settings, hours),
+        lambda: _read_portnums(session, hours, channel, wanted),
     )
 
 
 async def _read_portnums(
-    session: AsyncSession, hours: int | None, channel: str | None
+    session: AsyncSession, hours: int | None, channel: str | None, preset: Presets | None = None
 ) -> list[dict[str, object]]:
     """Group packets by port number, optionally by window and channel."""
     statement = select(
@@ -302,6 +339,8 @@ async def _read_portnums(
         )
     if channel:
         statement = statement.where(Packet.channel == channel)
+    if preset is not None:
+        statement = statement.where(preset_filter(Packet.modem_preset, Packet.channel, preset))
     rows = await session.execute(statement)
     return [
         {
@@ -364,7 +403,7 @@ async def top_talkers(
     settings: Settings = request.app.state.settings
     return await _top_cache.get(
         f"{window.key}:{limit}",
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_top(session, window, limit),
     )
 
@@ -373,19 +412,13 @@ async def _read_top(session: AsyncSession, window: Window, limit: int) -> list[d
     """Count each sender's packets in the window, busiest first."""
     now = window.end
     start = window.start
-    rows = (
-        await session.execute(
-            select(Packet.from_node_num, func.count().label("total"))
-            # Bounded at both ends, like `/activity` and `/broadcast`. It
-            # had a lower bound only, so a packet row dated in the future
-            # counted in every window. See AGENTS.md 9.4.
-            .where(Packet.first_seen_at >= start, Packet.first_seen_at < now)
-            .group_by(Packet.from_node_num)
-            .order_by(func.count().desc())
-            .limit(limit)
-        )
-    ).all()
-    senders = [row.from_node_num for row in rows]
+    # From the hourly totals per sender (#371), with the partial hour at
+    # each end from the raw rows. It counted every raw packet of the
+    # window: 4.7 s over 30 days. Bounded at both ends, like `/activity`
+    # and `/broadcast`: a packet row dated in the future must not count
+    # in every window. See AGENTS.md 9.4.
+    rows = await hourly.top_senders(session, start, now, limit)
+    senders = [node for node, _ in rows]
     air: dict[int, float | None] = {
         node: value
         for node, value in (
@@ -419,12 +452,12 @@ async def _read_top(session: AsyncSession, window: Window, limit: int) -> list[d
     names = await resolve_names(session, senders)
     return [
         {
-            "node_id": format_node_id(row.from_node_num),
-            "display_name": name_of(names, row.from_node_num),
-            "packet_count": row.total,
-            "air_util_tx": _rounded_or_none(air.get(row.from_node_num)),
+            "node_id": format_node_id(node),
+            "display_name": name_of(names, node),
+            "packet_count": total,
+            "air_util_tx": _rounded_or_none(air.get(node)),
         }
-        for row in rows
+        for node, total in rows
     ]
 
 
@@ -463,13 +496,17 @@ class NodeHealth(TypedDict):
     voltage: float | None
     uptime_seconds: int | None
     on_battery: bool
-    #: The battery is in the band where a restart loop is likely.
-    brownout_risk: bool
-    #: The node cannot have been running for the whole window, so it
-    #: restarted inside it.
+    #: Restarts counted in the window: readings whose uptime fell.
+    restarts: int
+    #: The most restarts inside any `LOOP_SPAN` of the window.
+    restarts_24h: int
+    #: NodeInfo sent inside that busiest span, against its default (1.0 is
+    #: the default). None unless `restarts_24h` reaches `LOOP_RESTARTS`.
+    nodeinfo_ratio_24h: float | None
+    #: At least one restart counted in the window.
     restarted: bool
-    #: Restarting and in the brownout band. This node probably needs
-    #: power, not a change of settings.
+    #: `LOOP_RESTARTS` or more restarts inside `LOOP_SPAN`, and NodeInfo
+    #: sent faster than its default inside that same span.
     likely_power_loop: bool
 
 
@@ -480,32 +517,27 @@ async def _node_health(
     window_seconds: int,
     end: datetime | None = None,
 ) -> dict[int, NodeHealth]:
-    """Return the latest battery and uptime of each node.
+    """Return each node's latest battery and uptime, and its counted restarts.
 
-    A node that keeps announcing itself is usually restarting, and a
-    node that keeps restarting usually has a power problem. This reads
-    the evidence for that.
+    A restart is a reading whose `uptime_seconds` is lower than the node's
+    reading before it (#365). The readings are put in our receive order
+    -- the receive time of the packet that carried each one, AGENTS.md
+    9.4 -- and only readings received inside the window count. The first
+    reading of the window has nothing before it, so it is never a restart.
 
-    The longest uptime reported in the window is the useful part. A node
-    that ran the whole window must report an uptime at least as long as
-    the window. A shorter one restarted.
+    A power loop is `LOOP_RESTARTS` or more restarts inside `LOOP_SPAN`
+    while the node sends NodeInfo above its default **in that same span**.
+    A window-long NodeInfo average hides a bad day: one node with 15
+    restarts in a day averaged 0.87x over 30 days and 1.75x on the day.
 
-    The time on these rows comes from the node, not from this process,
-    so a node with a badly wrong clock can fall outside the window. See
-    AGENTS.md 9.4. That loses the node from this report; it never
-    invents a fault.
+    What this cannot tell: a node that restarts and is not heard between
+    two boots shows one restart, not two; a node that sends no device
+    telemetry shows none; and a reading that arrives late from a backlog,
+    after a newer one, reads as a restart if its uptime is lower.
     """
     if not node_nums:
         return {}
 
-    # Bounded at both ends, and this one matters more than a window.
-    #
-    # `DISTINCT ON ... ORDER BY time DESC` picks the reading the node
-    # says is newest, so without an upper bound a node claiming 2036
-    # always wins its own "latest battery" -- and keeps winning it
-    # after the radio has been off for a month. 79 rows across 13 nodes
-    # are dated in the future today. See AGENTS.md 9.4. A window that
-    # ends in the past ends there (#294).
     now = end or datetime.now(UTC)
     latest = (
         await session.execute(
@@ -525,50 +557,160 @@ async def _node_health(
         )
     ).all()
 
-    uptime_rows = (
-        await session.execute(
-            select(DeviceMetrics.node_num, func.max(DeviceMetrics.uptime_seconds))
-            .where(
-                DeviceMetrics.node_num.in_(node_nums),
-                DeviceMetrics.time >= start,
-                DeviceMetrics.time <= now,
-            )
-            .group_by(DeviceMetrics.node_num)
-        )
-    ).all()
-    longest: dict[int, int | None] = {node: uptime for node, uptime in uptime_rows}
+    restarts = await _restart_times(session, node_nums, start, now)
 
     health: dict[int, NodeHealth] = {}
     for node_num, battery, voltage, uptime in latest:
-        on_battery = battery is not None and battery <= ON_MAINS_ABOVE
-        brownout = on_battery and battery is not None and BROWNOUT_LOW <= battery <= BROWNOUT_HIGH
-        best = longest.get(node_num)
-        restarted = best is not None and best < window_seconds
+        times = restarts.get(node_num, [])
+        most, span_start = busiest_span(times, LOOP_SPAN)
+        nodeinfo = None
+        if most >= LOOP_RESTARTS and span_start is not None:
+            nodeinfo = await _nodeinfo_ratio(session, node_num, span_start, now)
         health[node_num] = NodeHealth(
             battery_level=battery,
             voltage=voltage,
             uptime_seconds=uptime,
-            on_battery=on_battery,
-            brownout_risk=brownout,
-            restarted=restarted,
-            likely_power_loop=restarted and brownout,
+            on_battery=battery is not None and battery <= ON_MAINS_ABOVE,
+            restarts=len(times),
+            restarts_24h=most,
+            nodeinfo_ratio_24h=nodeinfo,
+            restarted=bool(times),
+            likely_power_loop=is_power_loop(most, nodeinfo),
         )
     return health
+
+
+async def _nodeinfo_ratio(
+    session: AsyncSession, node_num: int, start: datetime, end: datetime
+) -> float:
+    """NodeInfo the node sent in its busiest span, against its default.
+
+    The span is `LOOP_SPAN` from `start`, cut at the window's `end`: a
+    loop going on now has had only part of a day, and is judged on that
+    part (`nodeinfo_expected`), never on a full day it has not had yet.
+    """
+    stop = min(start + LOOP_SPAN, end)
+    sent = await session.scalar(
+        select(func.count()).where(
+            Packet.from_node_num == node_num,
+            Packet.portnum == portnums_pb2.PortNum.Value("NODEINFO_APP"),  # type: ignore[attr-defined]
+            Packet.first_seen_at >= start,
+            Packet.first_seen_at < stop,
+        )
+    )
+    return round((sent or 0) / nodeinfo_expected(stop - start), 2)
+
+
+def nodeinfo_expected(length: timedelta) -> float:
+    """How many NodeInfo a node sends at its default in `length`, at least one.
+
+    The default is `node_info_broadcast_secs`. At least one, so a span of
+    a few minutes does not turn one NodeInfo into a large ratio.
+    """
+    return max(length.total_seconds() / BROADCAST_INTERVALS["NODEINFO_APP"], 1.0)
+
+
+# How far behind the receive time a reading's own time can be, so the
+# readings of a window are found by the device-time index. One upload on
+# this deployment arrived 19.5 days late (`ingest/handlers/clocks.py`).
+READING_LAG = timedelta(days=20)
+
+
+async def _restart_times(
+    session: AsyncSession, node_nums: list[int], start: datetime, end: datetime
+) -> dict[int, list[datetime]]:
+    """Each node's restarts in `[start, end]`, as the receive times of the readings."""
+    received = Packet.first_seen_at
+    before = (
+        func.lag(DeviceMetrics.uptime_seconds)
+        .over(partition_by=DeviceMetrics.node_num, order_by=(received, DeviceMetrics.id))
+        .label("before")
+    )
+    readings = (
+        select(
+            DeviceMetrics.node_num.label("node"),
+            received.label("at"),
+            DeviceMetrics.uptime_seconds.label("uptime"),
+            before,
+        )
+        # By (node, packet ID), the packet's identity (AGENTS.md 9.1).
+        # Ingest never knows the row id, so `packet_pk` is empty on the
+        # rows it writes: joined on it, live data found 18 of 521 nodes.
+        .join(
+            Packet,
+            and_(
+                Packet.from_node_num == DeviceMetrics.node_num,
+                Packet.packet_id == DeviceMetrics.packet_id,
+                received >= start,
+                received <= end,
+            ),
+        )
+        .where(
+            DeviceMetrics.node_num.in_(node_nums),
+            DeviceMetrics.uptime_seconds.is_not(None),
+            DeviceMetrics.time >= start - READING_LAG,
+            DeviceMetrics.time <= end,
+        )
+        .subquery()
+    )
+    rows = await session.execute(
+        select(readings.c.node, readings.c.at)
+        .where(readings.c.uptime < readings.c.before)
+        .order_by(readings.c.node, readings.c.at)
+    )
+    found: dict[int, list[datetime]] = {}
+    for node, at in rows.all():
+        found.setdefault(int(node), []).append(at)
+    return found
+
+
+def busiest_span(times: list[datetime], span: timedelta) -> tuple[int, datetime | None]:
+    """The most restarts inside any stretch of `span`, and where it starts.
+
+    The stretch starts at its first restart. With no restarts: (0, None).
+    """
+    ordered = sorted(times)
+    most, start, first = 0, None, 0
+    for last, at in enumerate(ordered):
+        while at - ordered[first] >= span:
+            first += 1
+        if last - first + 1 > most:
+            most, start = last - first + 1, ordered[first]
+    return most, start
+
+
+def most_restarts_within(times: list[datetime], span: timedelta) -> int:
+    """The most restarts inside any stretch of `span`."""
+    return busiest_span(times, span)[0]
+
+
+def is_power_loop(restarts_in_span: int, nodeinfo_ratio: float | None) -> bool:
+    """`LOOP_RESTARTS` or more restarts in `LOOP_SPAN`, and NodeInfo above its default.
+
+    A booting node sends its NodeInfo, so a node in a loop sends it more
+    often than `node_info_broadcast_secs` asks. Either part alone is
+    something else: restarts at the default rate are a node somebody
+    reboots; a fast NodeInfo with no restarts is a setting.
+    """
+    return restarts_in_span >= LOOP_RESTARTS and nodeinfo_ratio is not None and nodeinfo_ratio > 1.0
+
+
+def broadcast_order(
+    *, loop: bool, notable: list[str], faster: list[str], packets: int, node: int
+) -> tuple[bool, bool, int, int, int, int]:
+    """Sort key of the broadcast table (#365).
+
+    Counted power loops first, then the rows the table's heading names
+    (`NOTABLE_RATIO` or more), then by how many families are notable and
+    faster than default, then by packets. The node number breaks ties, so
+    a stored ranking and a live one agree.
+    """
+    return (not loop, not notable, -len(notable), -len(faster), -packets, node)
 
 
 #: Above this many hours the activity chart is drawn by day, not by hour.
 #: A 30 day chart by hour has 720 columns, too many to read.
 HOURLY_UP_TO_HOURS = 72
-
-
-def _local_day(column: Any, zone: str) -> Any:
-    """The local midnight that starts the day `column` falls in.
-
-    The day is the mesh's own (`DISPLAY_TIMEZONE`), not UTC. In Arizona
-    a UTC day starts at 5 pm local, so a UTC bucket would put one
-    evening in two days.
-    """
-    return func.timezone(zone, func.date_trunc("day", func.timezone(zone, column)))
 
 
 @router.get("/daily")
@@ -592,7 +734,7 @@ async def daily(
     settings: Settings = request.app.state.settings
     return await _daily_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_daily(session, settings, window),
     )
 
@@ -602,32 +744,17 @@ async def _read_daily(
 ) -> dict[str, object]:
     """Count each local day's packets, uploads and senders."""
     zone = ZoneInfo(settings.display_timezone)
-    day = _local_day(Packet.first_seen_at, settings.display_timezone).label("day")
-    packet_rows = (
-        await session.execute(
-            select(
-                day,
-                func.count().label("packets"),
-                func.count(func.distinct(Packet.from_node_num)).label("nodes"),
-            )
-            .where(Packet.first_seen_at >= window.start, Packet.first_seen_at < window.end)
-            .group_by(day)
-        )
-    ).all()
-    seen_day = _local_day(PacketSeen.seen_at, settings.display_timezone).label("day")
-    upload_rows = (
-        await session.execute(
-            select(seen_day, func.count().label("uploads"))
-            .where(PacketSeen.seen_at >= window.start, PacketSeen.seen_at < window.end)
-            .group_by(seen_day)
-        )
-    ).all()
+    # From the hourly totals, with the partial hour at each end from the
+    # raw rows (#366). It counted every raw row of the window by day.
+    packet_days, upload_days = await hourly.daily_counts(
+        session, settings.display_timezone, window.start, window.end
+    )
 
     def local(moment: datetime) -> date:
         return moment.astimezone(zone).date()
 
-    packets = {local(row.day): (row.packets, row.nodes) for row in packet_rows}
-    uploads = {local(row.day): row.uploads for row in upload_rows}
+    packets = {local(day): counts for day, counts in packet_days.items()}
+    uploads = {local(day): count for day, count in upload_days.items()}
     first = local(max(window.start, retained_from(settings)))
     # The end is exclusive. A window that ends at a local midnight holds
     # nothing of the day that midnight starts, so that day is not listed.
@@ -670,7 +797,7 @@ async def activity(
     settings: Settings = request.app.state.settings
     return await _activity_cache.get(
         window.key,
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_activity(session, settings, window),
     )
 
@@ -679,26 +806,19 @@ async def _read_activity(
     session: AsyncSession, settings: Settings, window: Window
 ) -> dict[str, object]:
     """Group the window's packets by bucket and family."""
-    start, now = window.start, window.end
     by_day = window.hours > HOURLY_UP_TO_HOURS
-    bucket = (
-        _local_day(Packet.first_seen_at, settings.display_timezone)
-        if by_day
-        else func.date_trunc("hour", Packet.first_seen_at)
-    ).label("bucket")
-    rows = (
-        await session.execute(
-            select(bucket, Packet.portnum, Packet.payload_state, func.count().label("total"))
-            # The upper bound is not redundant. `packet.first_seen_at`
-            # holds the gateway's own clock when it sent one, and those
-            # clocks run wrong: rows dated more than a day ahead exist.
-            # Without this the chart grows hours that have not happened.
-            # See docs/ISSUES.md 1.5.
-            .where(Packet.first_seen_at >= start, Packet.first_seen_at < now)
-            .group_by(bucket, Packet.portnum, Packet.payload_state)
-            .order_by(bucket)
-        )
-    ).all()
+    # From the hourly totals by family, with the partial hour at each
+    # end from the raw rows (#368). It grouped every raw packet of the
+    # window: 525 ms of database time for 30 days.
+    #
+    # The window's upper bound still matters. `packet.first_seen_at`
+    # holds the gateway's own clock when it sent one, and those clocks
+    # run wrong: rows dated more than a day ahead exist. Without the
+    # bound the chart grows hours that have not happened. See
+    # docs/ISSUES.md 1.5.
+    rows = await hourly.family_counts(
+        session, settings.display_timezone, window.start, window.end, by_day=by_day
+    )
 
     hours_seen: list[datetime] = []
     seen: set[datetime] = set()
@@ -780,7 +900,9 @@ EMPTY_HEALTH = NodeHealth(
     voltage=None,
     uptime_seconds=None,
     on_battery=False,
-    brownout_risk=False,
+    restarts=0,
+    restarts_24h=0,
+    nodeinfo_ratio_24h=None,
     restarted=False,
     likely_power_loop=False,
 )
@@ -821,7 +943,7 @@ async def broadcast_rates(
     settings: Settings = request.app.state.settings
     return await _broadcast_cache.get(
         f"{window.key}:{limit}",
-        settings.stats_cache_seconds,
+        cache_seconds(settings, window),
         lambda: _read_broadcast(session, settings, window, limit),
     )
 
@@ -829,33 +951,60 @@ async def broadcast_rates(
 async def _read_broadcast(
     session: AsyncSession, settings: Settings, window: Window, limit: int
 ) -> dict[str, object]:
-    """Measure each node's broadcast rates over the window."""
-    now = window.end
-    start = window.start
-    window_seconds = round((now - start).total_seconds())
+    """Measure each node's broadcast rates over the window.
+
+    A rolling window the jobs service builds (#371) is read from its
+    tables while the build is fresh, and states the window it measured.
+    """
+    hours = int(window.key[1:]) if window.key[1:].isdigit() and window.key[0] == "h" else None
+    stored = None
+    if hours in read_models.BROADCAST_HOURS:
+        stored = await read_models.read_broadcast(session, hours)
+    if stored is not None:
+        measured = Window(stored.window_start, stored.window_end, key=window.key)
+        body = await _present_broadcast(session, measured.describe(settings), stored.ranking, limit)
+        return body | {"built_at": stored.built_at}
+    ranking = await broadcast_ranking(session, window.start, window.end)
+    body = await _present_broadcast(session, window.describe(settings), ranking, limit)
+    return body | {"built_at": datetime.now(UTC)}
+
+
+#: One ranked node: number, packets, notable families, families faster
+#: than the default, each family's rate, and the health reading.
+RankedNode = tuple[int, int, list[str], list[str], dict[str, dict[str, object]], dict | None]
+
+
+@dataclass
+class BroadcastRanking:
+    """Every node's broadcast rates over one window, ranked, with no names.
+
+    What the jobs service stores (#371) and what the endpoint presents.
+    """
+
+    nodes: list[RankedNode]
+    notable_count: int
+    power_loop_count: int
+
+
+async def broadcast_ranking(
+    session: AsyncSession, start: datetime, end: datetime
+) -> BroadcastRanking:
+    """Count each node's broadcasts in `[start, end)` and rank the nodes.
+
+    The counts come from the hourly totals per sender and port (#371),
+    with the partial hour at each end from the raw rows. It grouped every
+    raw packet of the window: 1.7 s over 30 days.
+    """
+    window_seconds = round((end - start).total_seconds())
     wanted = {name: portnums_pb2.PortNum.Value(name) for name in BROADCAST_INTERVALS}  # type: ignore[attr-defined]
     by_number = {number: name for name, number in wanted.items()}
 
-    rows = (
-        await session.execute(
-            select(Packet.from_node_num, Packet.portnum, func.count().label("total"))
-            # The upper bound keeps future-dated rows out of the count,
-            # which would otherwise make a node look busier than it is.
-            # See docs/ISSUES.md 1.5.
-            .where(
-                Packet.first_seen_at >= start,
-                Packet.first_seen_at < now,
-                Packet.portnum.in_(wanted.values()),
-            )
-            .group_by(Packet.from_node_num, Packet.portnum)
-        )
-    ).all()
+    rows = await hourly.sender_port_counts(session, start, end, list(wanted.values()))
 
     families: dict[int, dict[str, FamilyRate]] = {}
     for node_num, portnum, total in rows:
         name = by_number[portnum]
         default = BROADCAST_INTERVALS[name]
-        # The average gap between one packet of this family and the next.
         interval = window_seconds / total
         ratio = default / interval
         families.setdefault(node_num, {})[name] = FamilyRate(
@@ -867,46 +1016,66 @@ async def _read_broadcast(
             notable=ratio >= NOTABLE_RATIO,
         )
 
-    names = await resolve_names(session, families)
-    health = await _node_health(session, list(families), start, window_seconds, now)
-    report = [
-        _broadcast_report(node_num, name_of(names, node_num), rates)
-        for node_num, rates in families.items()
-    ]
-
-    # A node in a power loop first: that one needs a hand, not a telling
-    # off. Then the ones worth asking about, then the merely keen, then
-    # by how much traffic they make.
+    health = await _node_health(session, list(families), start, window_seconds, end)
+    report = [_broadcast_report(node_num, "", rates) for node_num, rates in families.items()]
     report.sort(
-        key=lambda item: (
-            not health.get(_node_num_of(item), EMPTY_HEALTH)["likely_power_loop"],
-            -len(item["notable"]),
-            -len(item["faster_than_default"]),
-            -item["packet_count"],
+        key=lambda item: broadcast_order(
+            loop=health.get(_node_num_of(item), EMPTY_HEALTH)["likely_power_loop"],
+            notable=item["notable"],
+            faster=item["faster_than_default"],
+            packets=item["packet_count"],
+            node=_node_num_of(item),
         )
     )
-    return {
-        **window.describe(settings),
-        "intervals": BROADCAST_INTERVALS,
-        "notable_ratio": NOTABLE_RATIO,
-        "brownout_band": [BROWNOUT_LOW, BROWNOUT_HIGH],
-        "node_count": len(report),
-        "notable_count": sum(1 for item in report if item["notable"]),
-        "power_loop_count": sum(
+    return BroadcastRanking(
+        nodes=[
+            (
+                _node_num_of(item),
+                item["packet_count"],
+                item["notable"],
+                item["faster_than_default"],
+                {name: vars(rate) for name, rate in item["families"].items()},
+                cast("dict | None", health.get(_node_num_of(item))),
+            )
+            for item in report
+        ],
+        notable_count=sum(1 for item in report if item["notable"]),
+        power_loop_count=sum(
             1
             for item in report
             if health.get(_node_num_of(item), EMPTY_HEALTH)["likely_power_loop"]
         ),
+    )
+
+
+async def _present_broadcast(
+    session: AsyncSession,
+    described: dict[str, object],
+    ranking: BroadcastRanking,
+    limit: int,
+) -> dict[str, object]:
+    """The endpoint's answer from a ranking: names joined now, `limit` applied."""
+    shown = ranking.nodes[:limit]
+    names = await resolve_names(session, [node for node, *_ in shown])
+    return {
+        **described,
+        "intervals": BROADCAST_INTERVALS,
+        "notable_ratio": NOTABLE_RATIO,
+        "loop_restarts": LOOP_RESTARTS,
+        "loop_hours": round(LOOP_SPAN.total_seconds() / 3600),
+        "node_count": len(ranking.nodes),
+        "notable_count": ranking.notable_count,
+        "power_loop_count": ranking.power_loop_count,
         "nodes": [
             {
-                "node_id": item["node_id"],
-                "display_name": item["display_name"],
-                "packet_count": item["packet_count"],
-                "notable": item["notable"],
-                "faster_than_default": item["faster_than_default"],
-                "families": {name: vars(rate) for name, rate in item["families"].items()},
-                "health": health.get(_node_num_of(item)),
+                "node_id": format_node_id(node),
+                "display_name": name_of(names, node),
+                "packet_count": packets,
+                "notable": notable,
+                "faster_than_default": faster,
+                "families": families,
+                "health": health,
             }
-            for item in report[:limit]
+            for node, packets, notable, faster, families, health in shown
         ],
     }

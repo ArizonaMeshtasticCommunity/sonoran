@@ -3,10 +3,11 @@
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import ColumnElement, Select, and_, func, select, tuple_
+from sqlalchemy import ColumnElement, Select, and_, any_, case, func, literal, select, tuple_
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -18,9 +19,15 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import format_node_id, name_of, resolve_names
+from sonoran.api.preset_scope import Presets, preset_filter, require_presets
 from sonoran.db.models import Packet, PacketSeen, TextMessage
+from sonoran.radio.presets import PRESETS
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# The channel names that name a preset. An untagged message on any other
+# channel is read as the deployment's default preset (#313).
+PRESET_NAMES = [preset.name for preset in PRESETS]
 
 # The tag of the weekly mesh network check-in.
 DEFAULT_TAG = "meshnet"
@@ -416,6 +423,60 @@ async def _as_messages(
     return messages
 
 
+def _on_preset(
+    statement: Select[Any],
+    preset: Presets | None,
+    since: datetime | None,
+    default_preset: str,
+) -> Select[Any]:
+    """Keep the messages carried on one modem preset (#313).
+
+    A message has no preset of its own. Its packet does, so each message
+    reads its packet's tag. The read names the packet's partition column
+    as well as its natural key: ingest stores the message with the
+    packet's own `first_seen_at` as its `seen_at`, so the three columns
+    are the whole of `uq_packet_dedup` and find one row at most. A
+    message with no packet row, or a packet written before the tag,
+    falls back to its topic channel. See `api/preset_scope.py`.
+
+    **An untagged message on a topic channel belongs to the default
+    preset.** That is where the chat page put every topic channel before
+    #313 (`channelsFor` in `preset.js`). Without this, an old `azmsh` or
+    `Weather` message compares `'azmsh' = 'MediumFast'`, and every one of
+    them leaves the page on deploy. A channel named after a preset is
+    still read as that preset. The names come from `PRESETS`, so a mesh
+    on any of the nine presets is covered.
+
+    **A correlated read, never a join.** The same lesson as the count in
+    `routes/packets.py`: a join leaves the planner free to hash every
+    chunk of `packet` before the LIMIT applies, and `packet` is the
+    largest table there is. A correlated read is one probe of the unique
+    index for each message the scan reaches, whatever the planner
+    thinks of the tables. The feed reads newest first and stops at its
+    limit, and the overview reads one week of messages, which is a few
+    thousand rows on this mesh.
+
+    `since` is the caller's own lower bound on `seen_at`. Repeated on
+    the packet side, it lets each probe skip the older chunks. It drops
+    no match, because a match has the same time on both sides.
+    """
+    if preset is None:
+        return statement
+    same = [
+        Packet.from_node_num == TextMessage.from_node_num,
+        Packet.packet_id == TextMessage.packet_id,
+        Packet.first_seen_at == TextMessage.seen_at,
+    ]
+    if since is not None:
+        same.append(Packet.first_seen_at >= since)
+    tag = select(Packet.modem_preset).where(*same).correlate(TextMessage).scalar_subquery()
+    untagged = case(
+        (TextMessage.channel == any_(array(PRESET_NAMES)), TextMessage.channel),
+        else_=literal(default_preset),
+    )
+    return statement.where(preset_filter(tag, untagged, preset))
+
+
 def _apply_filters(
     statement: Select[tuple[TextMessage]],
     channel: str | None,
@@ -440,7 +501,9 @@ def _apply_filters(
 
 @router.get("")
 async def chat(
+    request: Request,
     channel: str | None = None,
+    preset: str | None = None,
     from_node: str | None = Query(default=None, alias="from"),
     q: str | None = None,
     since: datetime | None = None,
@@ -460,9 +523,15 @@ async def chat(
     heard it, how many heard it direct, the fewest hops, the best direct
     signal, and whether an acknowledgement was asked for. See
     `_metrics_for`.
+
+    Set `preset` to keep the messages carried on one modem preset, or on
+    any of several (`preset=MediumFast,LongFast`). It works beside
+    `channel`. See `api/preset_scope.py`.
     """
+    wanted = require_presets(preset)
     statement = select(TextMessage).order_by(TextMessage.seen_at.desc()).limit(limit)
     statement = _apply_filters(statement, channel, from_node, since, before)
+    statement = _on_preset(statement, wanted, since, str(request.app.state.settings.default_preset))
     if not reactions:
         statement = statement.where(TextMessage.emoji.is_(False))
     if q:
@@ -488,6 +557,7 @@ async def overview(
     request: Request,
     hours: int = Query(default=168, ge=1, le=8760),
     per_channel: int = Query(default=25, ge=1, le=200),
+    preset: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     """Return every detected channel with its recent messages.
@@ -495,9 +565,15 @@ async def overview(
     Each channel carries its group. The group is the LoRa modem preset
     when the channel uses a default preset name. The chat page draws one
     section for each channel, below the heading of its group.
+
+    Set `preset` to keep the messages carried on one modem preset. A
+    topic channel such as `azmsh` then lists only its messages on that
+    preset, and a channel with none on it has no section (#313).
     """
+    wanted = require_presets(preset)
     since = datetime.now(UTC) - timedelta(hours=hours)
     core = tuple(request.app.state.settings.core_channels)
+    default = str(request.app.state.settings.default_preset)
     # `count` counts messages the way `/api/chat` lists them: tapbacks
     # left out (#297). It counted every row, so MediumFast said "Open all
     # 1,252 messages" over a channel page that ends at 663 -- the other
@@ -508,11 +584,16 @@ async def overview(
     message_count = func.count().filter(TextMessage.emoji.is_(False))
     counts = (
         await session.execute(
-            select(
-                TextMessage.channel,
-                message_count.label("count"),
-                func.count().filter(TextMessage.emoji.is_(True)).label("reactions"),
-                func.max(TextMessage.seen_at).label("last_seen"),
+            _on_preset(
+                select(
+                    TextMessage.channel,
+                    message_count.label("count"),
+                    func.count().filter(TextMessage.emoji.is_(True)).label("reactions"),
+                    func.max(TextMessage.seen_at).label("last_seen"),
+                ),
+                wanted,
+                since,
+                default,
             )
             .where(TextMessage.seen_at >= since)
             .group_by(TextMessage.channel)
@@ -534,11 +615,16 @@ async def overview(
     # same thing the `IS NULL` branch above used to do for messages
     # that arrived with no channel.
     ranked = (
-        select(
-            TextMessage,
-            func.row_number()
-            .over(partition_by=TextMessage.channel, order_by=TextMessage.seen_at.desc())
-            .label("rank"),
+        _on_preset(
+            select(
+                TextMessage,
+                func.row_number()
+                .over(partition_by=TextMessage.channel, order_by=TextMessage.seen_at.desc())
+                .label("rank"),
+            ),
+            wanted,
+            since,
+            default,
         )
         .where(TextMessage.seen_at >= since, TextMessage.emoji.is_(False))
         .subquery()

@@ -59,16 +59,28 @@ live.
   cannot hold up the pages after it. A request with no answer in a
   minute is ended too.
 
-## 3. A new version
+## 3. After an update
 
-After a deploy, an open app shows "A new version of Sonoran is
-available" and a **Reload** button. Nothing changes until the reader
+After a deploy, an open app shows "Sonoran was updated. Reload to get
+the new page." and a **Reload** button. Nothing changes until the reader
 chooses to reload, so a page never changes in the middle of a session.
-An app that was closed opens on the new version.
+An app that was closed opens on the updated page.
+
+The notice is about the page, not about a release (#382). It shows when
+any file of the page changed, and most deploys change one. A release is
+tagged after the deploy, and several deploys can come before one
+release. The server does not know the release of the running build, so
+the notice names none.
 
 In an installed app there is no browser back button. The node, link,
 packet and traceroute pages have a **Back** button there. In a browser
 tab they do not, because the browser has its own.
+
+On a phone, a bar at the bottom of the screen holds Map, Nodes, Chat
+and Dashboard, and **More**, which opens the full menu (#282). The bar
+is the same in the app and in a browser tab. In the app it fills the
+area of the home indicator, and its words stay above the indicator. The
+offline notice and the update notice show above the bar.
 
 ## 4. For operators
 
@@ -121,7 +133,9 @@ under `/static/`. Under `WEB_BASE_PATH` it is at the base path.
   server. A redirect and an error status pass through as they are.
 - The asset version is written into it, so every deploy changes its
   bytes. The browser then installs the new worker, and `pwa.js` shows
-  the update notice.
+  the update notice. The asset version is a hash of every file under
+  `web/static/`. It is not a release number. A deploy that changes no
+  static file, or a restart, serves the same bytes and shows no notice.
 
 The map tiles are not cached. The OpenStreetMap tile policy forbids
 bulk copies for offline use.
@@ -152,10 +166,20 @@ with no session cookie to a login page on another origin:
 - A deploy while the page was open: the update notice showed, the old
   worker stayed in control until **Reload**, and the page then loaded
   the new version.
+- With the same `/sw.js` (#382, 2026-10-21): three update checks and
+  reloads showed no notice, and every fetch of `/sw.js` gave the same
+  bytes. With changed bytes the notice showed. After **Reload** it did
+  not come back, on the same page or in a new tab. The e2e journey
+  "the update notice shows only for a changed worker" repeats this.
 - In standalone mode, Back went to the earlier page, or to the list
   when there was no earlier page.
+
+Still to check in Firefox, which is where #382 was seen: that the
+notice does not show with an unchanged `/sw.js`, and that **Reload**
+activates the waiting worker (see `about:serviceworkers`).
 
 Still to check on real devices: the install itself on Android and iOS
 against production, the Keycloak login inside an iOS home-screen app,
 and the safe areas and status bar of a notched iPhone in standalone
-mode.
+mode. The safe areas include the bottom bar's space for the home
+indicator (#282). Emulation reads every safe-area inset as 0.

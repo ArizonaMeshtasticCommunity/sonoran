@@ -134,7 +134,42 @@ SITE_SET_LABELS: dict[str, str] = {
 # name appear in a path", which is the question the dashboard tile
 # route asks, and the two are not the same question. Serving a tile is
 # never a reason to widen the first dictionary.
-SITE_SET_KEYS: frozenset[str] = frozenset(SITE_SET_ROLES) | {SITE_SET_DIAGNOSTIC}
+_BASE_SITE_SET_KEYS: frozenset[str] = frozenset(SITE_SET_ROLES) | {SITE_SET_DIAGNOSTIC}
+
+# What is added to a site set's name for its approximate map (#315).
+#
+# A run with `COVERAGE_INCLUDE_APPROXIMATE` also predicts each map from
+# positions rounded to `APPROXIMATE_SITE_PRECISION_BITS`. That is a
+# different answer, so it is a different site set with its own tiles.
+#
+# An underscore and not a hyphen, because the dashboard tile route
+# takes `^[a-z_]{1,32}$`. The name can never be `infrastructure`, and
+# the public tile route reads that name and no other, so the embed
+# cannot serve an approximate map. See `AGENTS.md` 9.25 and 9.27.
+APPROXIMATE_SUFFIX = "_approximate"
+
+
+def approximate_site_set(site_set: str) -> str:
+    """Return the name of the approximate map of one site set."""
+    return f"{site_set}{APPROXIMATE_SUFFIX}"
+
+
+def is_approximate_site_set(site_set: str) -> bool:
+    """Return true when a site set name is an approximate map."""
+    return site_set.endswith(APPROXIMATE_SUFFIX)
+
+
+SITE_SET_KEYS: frozenset[str] = _BASE_SITE_SET_KEYS | {
+    approximate_site_set(key) for key in _BASE_SITE_SET_KEYS
+}
+
+
+def site_set_label(site_set: str) -> str:
+    """Return what a reader is shown for one site set."""
+    if is_approximate_site_set(site_set):
+        base = site_set.removesuffix(APPROXIMATE_SUFFIX)
+        return f"{SITE_SET_LABELS.get(base, base)}, rounded positions included"
+    return SITE_SET_LABELS.get(site_set, site_set)
 
 
 def site_set_roles(site_set: str) -> frozenset[str]:

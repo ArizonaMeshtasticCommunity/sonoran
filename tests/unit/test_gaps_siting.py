@@ -13,11 +13,11 @@ thrown away in silence and nothing downstream can get it back.
 """
 
 import inspect
-import json
 import re
 from pathlib import Path
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from sonoran.api.app import create_app
@@ -28,6 +28,7 @@ from sonoran.gaps.siting import BAD, OK, UNKNOWN, Candidate, DemandPoint
 from sonoran.jobs import gaps_siting, scheduler
 from sonoran.radio.presets import preset_by_key
 from sonoran.terrain.srtm import PAGE_SIZE, page_cell, srtm2sdf_transform
+from tests.unit.job_outputs import JobOutputs
 
 LONG_FAST = preset_by_key("LONG_FAST")
 assert LONG_FAST is not None
@@ -583,7 +584,7 @@ def test_the_siting_half_runs_inside_the_coverage_cycle(monkeypatch) -> None:  #
     async def covered(session: AsyncSession, settings: Settings) -> None:
         calls.append("coverage")
 
-    async def sited(settings: Settings) -> list[str]:
+    async def sited(session: AsyncSession, settings: Settings) -> list[str]:
         calls.append("siting")
         return []
 
@@ -600,8 +601,15 @@ def test_the_siting_half_runs_inside_the_coverage_cycle(monkeypatch) -> None:  #
 def test_the_siting_half_is_never_registered_as_a_peer_task() -> None:
     tasks = scheduler.build_tasks(_settings(coverage_enabled=True, gaps_enabled=True))
 
-    # rf-rollup is plain SQL, no engine, so it may stand beside coverage.
-    assert [task.name for task in tasks] == ["snapshot", "coverage", "gaps", "rf-rollup"]
+    # rf-rollup and read-models are plain SQL, no engine, so they may
+    # stand beside coverage (read-models steps aside on its own, #371).
+    assert [task.name for task in tasks] == [
+        "snapshot",
+        "coverage",
+        "gaps",
+        "rf-rollup",
+        "read-models",
+    ]
 
 
 def test_the_siting_half_can_be_turned_off_on_its_own(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -698,6 +706,11 @@ def test_the_screen_is_never_called_a_prediction() -> None:
 # --------------------------------------------------------------- the API
 
 
+@pytest.fixture(autouse=True)
+def _outputs(job_outputs: JobOutputs) -> None:
+    """Every route test here reads the job outputs from memory (#351)."""
+
+
 def _client(cache: str) -> TestClient:
     return TestClient(create_app(_settings(coverage_cache_dir=cache)))
 
@@ -721,30 +734,29 @@ def test_the_siting_routes_are_get_only(tmp_path: Path) -> None:
                 assert call(path).status_code in (404, 405)
 
 
-def test_the_siting_routes_open_no_database_session() -> None:
-    """They read one written file. `docs/ISSUES.md` 2.9."""
+def test_the_siting_routes_compute_nothing() -> None:
+    """They read the stored answer (#351). `docs/ISSUES.md` 2.9."""
     from sonoran.api.routes import gaps as route
 
     source = inspect.getsource(route)
-    assert "get_session" not in source
-    assert "AsyncSession" not in source
-    assert "select(" not in source
+    for computed in ("site_preset", "siting.", "select("):
+        assert computed not in source, computed
 
 
-def test_the_areas_endpoint_serves_the_written_file_and_nothing_else(tmp_path: Path) -> None:
-    root = tmp_path / "gaps"
-    root.mkdir()
-    (root / "index.json").write_text(json.dumps({"presets": [{"preset": "LongFast"}]}))
-    (root / "siting-LongFast.json").write_text(
-        json.dumps(
-            {
-                "available": True,
-                "preset": "LongFast",
-                "areas": [{"area": 0, "node_count": 4}],
-                "candidates": [{"area": 0, "kind": "ground", "state": "ok"}],
-                "caveats": [],
-            }
-        )
+def test_the_areas_endpoint_serves_the_stored_answer_and_nothing_else(
+    tmp_path: Path, job_outputs: JobOutputs
+) -> None:
+    job_outputs.write_index({"presets": [{"preset": "LongFast"}]})
+    job_outputs.write_preset("LongFast", {"preset": "LongFast", "nodes": []})
+    job_outputs.write_siting(
+        "LongFast",
+        {
+            "available": True,
+            "preset": "LongFast",
+            "areas": [{"area": 0, "node_count": 4}],
+            "candidates": [{"area": 0, "kind": "ground", "state": "ok"}],
+            "caveats": [],
+        },
     )
     with _client(str(tmp_path)) as client:
         areas = client.get("/api/gaps/areas").json()

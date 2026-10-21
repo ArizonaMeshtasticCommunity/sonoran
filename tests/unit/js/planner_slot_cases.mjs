@@ -63,7 +63,7 @@ eq('the sensitivity in DEFAULTS is the one the default preset implies',
 eq('250 kHz divides the band into 104 slots', P.slotsForPreset('MEDIUM_FAST'), 104);
 eq('125 kHz gives 208', P.slotsForPreset('LONG_MODERATE'), 208);
 eq('500 kHz gives 52', P.slotsForPreset('SHORT_TURBO'), 52);
-eq('62.5 kHz gives 416', P.slotsForPreset('VERY_LONG_SLOW'), 416);
+eq('62.5 kHz gives 416', P.slotsForPreset('NARROW_FAST'), 416);
 eq('an unknown preset has no slots', P.slotsForPreset('NOT_A_PRESET'), 0);
 
 // --- the ends of the band -------------------------------------------
@@ -123,12 +123,12 @@ eq('slot 18 at 125 kHz is 904.1875 MHz instead',
  * comparison against `sonoran/radio/channels.py`, which works in integer
  * hertz, that found it.
  */
-eq('the narrowest preset keeps its quarter kilohertz',
-  P.frequencyForSlot('VERY_LONG_SLOW', 1), 902.03125);
+eq('a 62.5 kHz preset keeps its quarter kilohertz',
+  P.frequencyForSlot('NARROW_FAST', 1), 902.03125);
 eq('and reads back as slot 1',
-  P.slotForFrequency('VERY_LONG_SLOW', 902.03125), 1);
+  P.slotForFrequency('NARROW_FAST', 902.03125), 1);
 eq('a reader who types the rounded form still lands on the slot',
-  P.slotForFrequency('VERY_LONG_SLOW', 902.031), 1);
+  P.slotForFrequency('NARROW_FAST', 902.031), 1);
 
 // --- every slot of every preset round-trips -------------------------
 {

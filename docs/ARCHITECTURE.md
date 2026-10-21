@@ -16,13 +16,38 @@ It uses ASD-STE100 Simplified Technical English.
 
 ## 2. Process layout
 
-Three processes share one Python package:
+`docker-compose.yml` defines nine services. Seven start with
+`docker compose up`. Two start only with their profile.
 
-| Process | Module entry point | Database role |
-|---------|-------------------|---------------|
-| ingest | `sonoran.ingest.pipeline:main` | INSERT and UPDATE only |
-| api | `sonoran.api.app:create_app` | SELECT only |
-| jobs | `sonoran.jobs.scheduler:run` | SELECT, INSERT (snapshots), DELETE (retention fallback) |
+Five of them run this repository's Python package, each from its own
+console script in `pyproject.toml`:
+
+| Service | Console script and entry point | Database role |
+|---------|--------------------------------|---------------|
+| ingest | `sonoran-ingest`, `sonoran.ingest.pipeline:run` | `azmsh_ingest`: INSERT and UPDATE only |
+| api | `sonoran-api`, `sonoran.api.app:run` | `azmsh_api`: SELECT only |
+| jobs | `sonoran-jobs`, `sonoran.jobs.scheduler:run` | `azmsh_jobs`: SELECT, and DELETE then INSERT on the job output tables (AGENTS.md 4) |
+| rf-ingest (profile `rf`) | `sonoran-rf-ingest`, `sonoran.rf.ingest:run` | the ingest role, plus SELECT on `rf_trust` (AGENTS.md 9.29) |
+| contrib (profile `contrib`) | `sonoran-contrib`, `sonoran.contrib.service:run` | the jobs role: SELECT, INSERT, UPDATE, DELETE on the `contrib_` tables, SELECT and INSERT on `local_stats` (#178) |
+
+The other four are the database, a one-off step, and two images that are not the Sonoran package:
+
+| Service | What it is |
+|---------|------------|
+| timescaledb | The database, the `timescale/timescaledb-ha:pg17` image. Its data is the `tsdb_data` volume at `/home/postgres/pgdata`. |
+| migrate | The Sonoran image running `alembic upgrade head` once, as the superuser. api, ingest, jobs, rf-ingest and contrib wait until it exits with 0. |
+| mesh-graph | The upstream traceroute engine, an image pinned by digest. It reads the broker itself and keeps its own SQLite file in the `meshgraph_data` volume. Nothing waits for it. |
+| backup | `tools/backup.Dockerfile`: the database image with `tools/db_backup_scheduled.sh`. It dumps the database once a day as the superuser, into `BACKUP_HOST_DIR`. See `docs/DATABASE.md` 9.1. |
+
+The api and jobs services share three volumes: `terrain_cache`,
+`landcover_cache` and `coverage_cache`. The jobs service writes the
+coverage tiles and the api serves them.
+
+The jobs process runs these tasks (`jobs/scheduler.py::build_tasks`):
+`snapshot` once a UTC day, `coverage` (calibration, coverage and the
+siting half on one clock), `gaps`, `rf-rollup` and `read-models`. With
+`JOBS_ISOLATE=true`, the default, each run is a child process with its
+own memory ceiling (`jobs/supervisor.py`).
 
 The daily snapshot has its own clock. Calibration and coverage share a
 clock because coverage consumes the calibration file. A due calibration
@@ -57,10 +82,21 @@ uses:
 | Service | Holds |
 |---------|-------|
 | api | `DATABASE_URL_API` |
-| ingest | `DATABASE_URL` and `CHANNEL_KEYS` |
+| ingest | `DATABASE_URL`, `CHANNEL_KEYS` and `MQTT_PASSWORD` |
+| rf-ingest | `DATABASE_URL` and `RF_MQTT_PASSWORD` |
+| contrib | `DATABASE_URL_JOBS` and `CONTRIB_MQTT_PASSWORD` |
 | jobs | `DATABASE_URL_JOBS` |
 | migrate | `DATABASE_URL_MIGRATE` and the three `AZMSH_*_PASSWORD` |
 | mesh-graph | four MQTT variables, and no `.env` at all |
+| timescaledb | `POSTGRES_PASSWORD`, and no `.env` at all |
+| backup | `PGPASSWORD` (the superuser password) and the `BACKUP_*` settings, and no `.env` at all |
+
+The three broker passwords are blanked by their own anchors
+(`x-no-mqtt`, `x-no-rf-mqtt`, `x-no-contrib-mqtt`), merged into every
+service but the one that logs in with it. That service does not set
+the password in `environment:` at all, because `environment:` beats
+every `env_file` and would replace a password a host gives it in an
+override file. `tests/unit/test_broker_credentials.py` pins this.
 
 **A credential added to `.env` later must be added to
 `x-no-credentials` too**, or it is shared with every service by
@@ -181,9 +217,18 @@ Key settings:
   The dashboard uses browser-relative URLs and local assets only.
   It does not require CDN, tile, canvas, or gateway rewrite support.
 - `STORE_TEXT_MESSAGES` — boolean. Default false until the privacy decision is final.
-- `RETENTION_DAYS_*` — retention policy overrides. Run the migration service
-  after a value changes.
+- `GATEWAY_PRESET_CONFLICT_MINUTES` — default 60. A gateway that uploads
+  on two different preset-named topics within this many minutes is
+  ambiguous, and its other uploads get no modem preset (#313).
+- `RETENTION_DAYS_*` — the retention of each data family, in days.
+  Revision 0005 reads them once, when it is first applied, and sets the
+  TimescaleDB policies. A later change does not change the policy of an
+  existing database. Change that by hand as the superuser.
 - `LOG_LEVEL`.
+
+`.env.example` lists every setting, with its default.
+`tests/unit/test_env_example_lists_every_setting.py` fails when a field
+of `Settings` is not in it.
 
 ### 3.2 `mqtt`
 
@@ -245,9 +290,23 @@ def decode_payload(portnum: int, data: bytes) -> DecodedPayload
   2. Parse the envelope.
   3. Decrypt the payload.
   4. Decode the payload.
-  5. Call `dedup.store_packet`.
-  6. Call the matching handler.
-  7. Handle errors per packet. Log, count, continue.
+  5. Ask `presets.PresetTracker.observe` for the modem preset of this
+     upload (#313).
+  6. Call `dedup.store_packet`. The preset goes on the `packet_seen` row,
+     and on the `packet` row when the packet is new.
+  7. Call `preset_writes.store_vote`. It counts the upload's vote and
+     updates `packet.modem_preset` and `node.last_preset` when the
+     majority changes.
+  8. Call the matching handler.
+  9. Handle errors per packet. Log, count, continue.
+- `presets.py` decides the modem preset of each upload and packet. It
+  holds each gateway's current preset and a short tally of each recent
+  packet's votes, in memory, and touches no database. One tracker lives
+  for the life of the process. At start, `preset_writes.load_gateway_presets`
+  seeds it from `node.uplink_preset`. See `docs/DATABASE.md` 3.4.1.
+- `preset_writes.py` stores what `presets.py` decides, with plain
+  `UPDATE ... WHERE key = ...` statements. It never reads a `packet`
+  row and never uses `ON CONFLICT DO UPDATE` (AGENTS.md 9.1, 9.2).
 - `dedup.py` implements the deduplication contract:
   - Insert into `packet_key` with `ON CONFLICT DO NOTHING`.
     The affected row count says whether the packet is new.
@@ -343,11 +402,12 @@ channel, Data message metadata, and receive time.
 - `signals.py` is the only place that decides what a per node signal
   means. `siting.py` is the only place that decides what a demand
   point, an area, a candidate and the terrain screen mean.
-- `store.py` is where an answer is written and read. Two files for each
-  preset, beside the coverage runs: `{preset}.json` from the per node
-  job and `siting-{preset}.json` from the siting job. They are written
-  by different jobs on different clocks, so one file holding both would
-  always be half stale.
+- `store.py` is where an answer is written and read: the job output
+  tables in `docs/DATABASE.md` 5B (#351). The per node job writes
+  `gaps_run`, `gaps_node` and `gaps_trace_answer`; the siting job writes
+  `gaps_siting` and `gaps_siting_candidate`. They are written by
+  different jobs on different clocks, so each replaces only its own
+  rows. A route reads by key, with its filters and its limit in SQL.
 - Every signal and every candidate has **three** states, and the third
   is `unknown`. It is never served as a zero and never as a pass.
 - `siting.py` reads terrain out of the cache through
@@ -361,8 +421,23 @@ channel, Data message metadata, and receive time.
 - Job: serve read-only JSON and static files.
 - FastAPI application factory in `app.py`.
 - `routes/` has one module per route group:
-  `chat.py`, `graph.py`, `map.py`, `nodes.py`, `packets.py`,
+  `chat.py`, `climate.py`, `coverage.py`, `embed.py`, `gaps.py`,
+  `geocode.py`, `graph.py`, `leaderboards.py`, `map.py`,
+  `node_page.py`, `nodes.py`, `packets.py`, `radio.py`, `rf.py`,
   `stats.py`, `terrain.py`, `traceroutes.py`.
+- Helpers beside them, each with one job:
+  - `cache.py`: an answer held for a while, refreshed by one caller at
+    a time.
+  - `conditional.py`: a 304 answer for the long-window views (#371).
+  - `export.py`: the node list as a CSV or JSON file (#350).
+  - `hourly.py`: packet and upload counts from the hourly totals.
+  - `html.py`: values put into a page safely.
+  - `limits.py`: the request budget of each caller (`API_RATE_*`).
+  - `packet_summary.py`: one short line for each packet on a page.
+  - `preset_scope.py`: the `preset=` filter of the list pages (#313).
+  - `sightings.py`: observations with the hop count they started with.
+  - `trace_drawing.py`: a mesh-graph drawing, fetched over the compose
+    network from `MESH_GRAPH_INTERNAL_URL` and recoloured.
 - `schemas.py` has the pydantic response models.
 - `dependencies.py` gives database session access to route handlers.
 - `channels.py` groups channel names into families for the UI.
@@ -416,11 +491,80 @@ The region is a bounding box in configuration. A tile outside it is
 never fetched and never served, so the endpoint cannot be used as a
 general proxy for the tile source.
 
+### 3.8.1 `climate`
+
+- Job: say which ITM radio climate a place is in (#239).
+- This module must never touch the database.
+- `store.py` reads `koppen_1991_2020.u8.gz`, a 960 x 960 byte crop of
+  the Beck et al. (2023) Köppen-Geiger map. It ships inside the package,
+  so it needs no download, no cache and no setting. Row 0 is north and
+  column 0 is west, which is **not** the order of a terrain page.
+- `koppen.py` holds the Köppen to ITM table, one row for each of the 30
+  classes, with a reason for each. It is the only copy: the planner
+  reads it from `/api/climate/classes`.
+- `climate_at` answers a place. Outside the crop, or where the map has
+  no class, it answers `desert` and marks the answer as not known. It
+  never guesses a class.
+- `PROVENANCE.md` beside the data holds the licence (CC BY 4.0), the
+  attribution and the changes made. `tools/make_climate_crop.py` makes
+  the file again from the published source.
+
+Readers: the planner page (through `api/routes/climate.py`), the
+coverage job (`coverage/sites.py::engine_params`) and the calibration
+(`jobs/calibrate.py::_params`). See `docs/PLANNER.md` 4.3.
+
+### 3.8.2 `contrib`
+
+- Job: give mesh jobs to members' contributors and keep what they bring
+  back (#178). See `docs/design/contributors.md`.
+- `schema.py` is the contract, exported to
+  `docs/contributor-message-v1.schema.json`.
+- `dispatch.py` holds the rules, with no database and no broker: which
+  node, which contributor, and whether a result is accepted.
+- `store.py` reads and writes the `contrib_` tables and `local_stats`.
+- `service.py` is the process: one broker connection, and a tick that
+  expires, plans, publishes and clears jobs.
+- It reads `rf.schema` for the station and source id rules, so a
+  contributor's ids are the registrar's.
+
+### 3.8.3 `landcover`
+
+- Job: say what stands on the ground, and how much signal it takes.
+- `classes.py` holds the land cover classes and the clutter of each.
+- `store.py` reads the land cover pages from `LANDCOVER_CACHE_DIR`.
+  `tools/prefetch_landcover.py` makes them once, with the optional
+  `landcover` extra (rasterio). With no pages, a prediction has no
+  clutter.
+- This module must never touch the database.
+
+### 3.8.4 `rf`
+
+- Job: store what members' `rf-agent` stations publish, and keep one
+  station from taking a shared layer (#324). See
+  `docs/design/rf-map.md` and AGENTS.md 9.29.
+- `schema.py` is the message contract, exported to
+  `docs/rf-message-v1.schema.json`.
+- `ingest.py` is the `sonoran-rf-ingest` process. `guard.py` holds the
+  checks before a point reaches a shared layer. `store.py` writes.
+- `spectrum_sql.py` is the per-bin summary of a swept range, shared by
+  the API and the jobs.
+- `operator.py` (`sonoran-rf-trust`) and `purge.py`
+  (`sonoran-rf-purge`) are operator tools. Run them in the `migrate`
+  service, which holds the owner role.
+
 ### 3.9 `jobs`
 
 - Job: run scheduled maintenance.
-- `retention.py` checks that TimescaleDB retention policies exist and work.
-- `snapshots.py` writes one `daily_snapshot` row per day.
+- Retention is TimescaleDB's own policy on each hypertable, set by the
+  migrations. No job enforces it.
+- `snapshots.py` writes one `daily_snapshot` row per day, and removes
+  `packet_key` rows older than `RETENTION_DAYS_PACKET`, because that
+  plain table has no retention policy.
+- `rf_rollup.py` rolls each finished hour of every swept range up into
+  `rf_spectrum_hour`.
+- `legacy_import.py` imports, once, the JSON files that the jobs wrote
+  before #351 into the empty job output tables.
+- `run_task.py` runs one job once, as a child of the supervisor.
 - `calibrate.py` reads current neighbour reports and writes one computed
   calibration file.
 - `coverage.py` reads that file and publishes one complete static tile
@@ -430,6 +574,18 @@ general proxy for the tile source.
   is only SQL, so it keeps its own clock.
 - `gaps_siting.py` answers "where would one new node help". It runs the
   engine, so it runs **inside** the coverage cycle and never beside it.
+- `read_models.py` builds the long-window views the API reads (#371):
+  link evidence for the graph and the longest-link board, broadcast
+  rates, and the coverage page's node lists. SQL and Python, no engine,
+  on its own clock. See `docs/DATABASE.md` 8.1.
+- `supervisor.py` runs each job run as its own process
+  (`python -m sonoran.jobs.run_task <name>`), each with a memory ceiling
+  (`JOBS_MEMORY_LIMITS`). A watchdog stops a job that passes its ceiling,
+  alone; runs overlap when they fit in the container's memory, and wait
+  their turn otherwise; each run's peak is kept and plans the next. A
+  child raises its own OOM score, so the kernel takes a job, never the
+  supervisor. `JOBS_ISOLATE=false` runs every job in one process, as
+  before.
 - `scheduler.py` runs a due calibration, then coverage, then the siting
   half, on one clock. The snapshot and the per node gap assessment
   remain independent, because neither uses the engine.
@@ -580,6 +736,43 @@ display therefore runs about one interval behind live and says so. The
 status line also prints "drawing N of M packets" whenever the pool
 refuses anything, because the eye cannot count marks.
 
+The **Live traffic** list under the map follows the same replay
+(#386). Before, the list took the whole poll at fetch time, so five or
+six rows arrived together, each up to fifteen seconds before its line.
+Now the engine calls `onRelease` in each frame that releases packets,
+and `paintTrafficFeed` in `app.js` leaves out every packet that
+`pendingKeys()` says is still waiting. So a row arrives in the same
+frame as its line. A paused map holds the list too. A packet that
+leaves the queue in another way (its kind is hidden, the backlog is
+skipped, the queue cap drops it) is listed at once, because nothing
+waits for it.
+
+Each row wears its packet family: the family's `--pkt-*` token on the
+row's left edge and on a CSS mark of the family's shape, beside the
+packet type in words. These are the tokens the map reads, so the row
+and its relayed line have the same colour in both themes. A flat
+(direct) line takes the colour of its signal, and the row's SNR cell
+has that colour. The mark is CSS, not a canvas like `familySwatch`,
+because a canvas keeps the colour it was painted with after a theme
+change. The text is always there, so the row does not rest on colour
+alone (WCAG 1.4.1).
+
+The **packet type menu** in the map's controls row chooses which
+packet families the traffic layer draws (#385). It is a button and a
+drop-down of checkboxes, one for each entry of
+`SonoranLive.FAMILY_ORDER`, with the family's mark and name. Each
+change applies at once. The menu is a popover (`wireHint` with
+`placeMenu`), so it opens in the top layer over the map and takes no
+room in the row. Before, it was a `<details>` that opened a line of
+chips inside the row, which pushed the header down and closed only on
+its own summary. Now Escape, a tap outside, Done or the button close
+it. The top layer also clears the sideways scroll of the watch bar on
+a phone, which clips an ordinary absolute panel. Do not give the
+`.family-menu` rule a `display` value: it wins over the browser's
+`display: none` for a shut popover, and the menu then never closes.
+The choice is kept per browser, as the hidden set, so a family that a
+later build adds is drawn by default.
+
 `app.js` caches `api/graph/channels` for ten minutes and
 `api/map/nodes` for two. Both were refetched on every map refresh,
 four times a minute per open tab, and the channel list runs three
@@ -635,8 +828,8 @@ What each kind shows under "What it said":
 | `TELEMETRY_APP` | Named readings with units: device, environment, air quality or power. | the four telemetry tables |
 | `NEIGHBORINFO_APP` | A table of the neighbors it reported, each by name, with the SNR it heard it at. | `neighbor_metrics`, named through `node` |
 | `TRACEROUTE_APP` | The path, hop by hop, and the mesh-graph drawing. | `traceroute` |
-| `NODEINFO_APP` | A sentence saying it is not stored, and a link to the node page. | not stored per packet |
-| `ROUTING_APP` | A sentence saying it is not stored. | not stored |
+| `NODEINFO_APP` | The names, hardware, role and key the node sent. A packet stored before 2026-09-22 shows a sentence saying it is not stored, and a link to the node page. | `packet.payload_json` |
+| `ROUTING_APP` | The result: an acknowledgement or the error reason. A packet stored before 2026-09-22 shows a sentence saying it is not stored. The ID of the packet it acknowledges is not stored, so an ACK cannot be matched to its message (#293). | `packet.payload_json` |
 | any other | "No decoded value is stored for this packet." | none |
 
 The envelope says which key sealed the packet: the recipient's public
@@ -650,6 +843,61 @@ What the page does not claim, because the database does not hold it:
   and whose `error_reason` is `NONE`, but ingest does not store routing
   packets, so only the request is known.
 - The content of a node-info or routing packet.
+
+#### 3.10.2 Times that link, and times that do not yet (#387)
+
+A time that belongs to one packet, one traceroute or one node opens that
+packet, traceroute or node. A hover or a long press still gives the
+exact time, in the link's `title`. Will asked for this on the node page
+in #387, and asked for the whole site to be checked. All functions below
+are in `web/static/app.js`.
+
+Fixed in #387:
+
+- The node page, "Messages sent" (`messagesPanel`, through
+  `messageItem`). `/api/nodes/{id}/detail` now sends `packet_id` and
+  `from_node` with each message, so the time opens the packet. A
+  message stored with no packet ID keeps the popup with the exact time.
+
+Already correct:
+
+- `messageItem`. The chat reading view (`chatReading`), the dashboard
+  feed (`PAGES.dashboard`) and the check-in page use it.
+- The chat table view (`chatTable`).
+- A reply quote opens the message it answers (`replyQuote`).
+- The firehose time (`PAGES.firehose`).
+- The node page packet timeline (`drawTimeline`).
+- The traceroutes list (`PAGES.traceroutes`).
+- The packet link on a traceroute page (`PAGES.traceroute`).
+
+Not linked yet. Each one needs more than a link:
+
+- The node page Device and Weather ages (`devicePanel`,
+  `weatherPanel`). The device reading has `packet_id` in the API. The
+  weather reading needs one. The telemetry tables keep 90 days and
+  `packet` keeps 30 (`DATABASE.md` 6), so a link to an old reading can
+  open "packet not found". Link only a reading younger than the packet
+  retention.
+- The node page Neighbors "Last RX" (`neighborPanel`). The API does not
+  send the report's `packet_id`. `last_rx_time` is the node's own claim
+  about the neighbor, and the report is a different packet. Decide which
+  one the time opens first.
+- The node page "Who hears it" "Last" (`heardByPanel`), the furthest
+  node tiles (`routesPanel`), the node title "heard ... ago"
+  (`loadNodeDetail`) and the dashboard "Recent nodes" "Heard"
+  (`PAGES.dashboard`). Each is a summary of many packets, and the API
+  sends no packet ID for the newest one.
+- The link page Evidence "When" (`PAGES.link`). The "Packet" column of
+  the same row already opens the packet.
+- The chat overview "last ... ago" (`channelSection`). The newest
+  message is the first line under it, and its time links.
+- The live map: the traffic feed time (`trafficRow`), the traffic table
+  time (`trafficTable`), the watch ticker (`updateWatchStatus`), the
+  traceroute feed time (`PAGES.map`) and the node bubble "heard ... ago"
+  (`mapNodePopup`). A row's kind or name already links. The map page
+  has its own owner, so these are left for that work.
+- The graph node tooltip "heard ... ago" (`PAGES.graph`). A tooltip
+  cannot hold a link.
 - Which node relayed it. `relay_node` holds only the last byte of a
   node number (`mesh.proto`), which cannot name a node.
 
@@ -706,6 +954,18 @@ Terrain is served by this application, so it needs no connect source of
 its own. That is the reason the browser is not sent to the public tile
 host for elevation data.
 
+### 3.11 Small shared modules
+
+- `meshtastic/` holds the Python modules generated from the Meshtastic
+  protobufs at the commit in `proto/UPSTREAM_REV.txt`. Do not edit
+  them. `proto/update.sh` makes them again.
+- `positions.py` decides what counts as a usable position.
+- `roles.py` decides what counts as a piece of mesh infrastructure.
+  See AGENTS.md 9.22.
+- `read_models.py` holds the long-window views that the jobs service
+  builds and the API reads (#371).
+- `logging.py` sets up the logs.
+
 ## 4. Data flow: one packet
 
 ```
@@ -714,7 +974,9 @@ MQTT broker
   -> decode.envelope (ParsedEnvelope with MeshPacket)
   -> crypto.decrypt (plaintext Data bytes)
   -> decode.payloads (typed payload object)
+  -> ingest.presets (the modem preset of this upload, from memory)
   -> ingest.dedup (packet row, packet_seen row, is_new flag)
+  -> ingest.preset_writes (packet.modem_preset, node.last_preset on a new majority)
   -> ingest.handlers.<family> (node update, metric rows)
 ```
 
@@ -748,11 +1010,19 @@ mqtt -> decode -> crypto
 ingest -> mqtt, decode, crypto, db
 api -> db
 jobs -> db
+rf -> db
+contrib -> db, rf (the id rules only)
 web/static -> api (over HTTP only)
 ```
 
 Reverse imports are forbidden.
 CI checks the import rules with `import-linter` or an equivalent tool.
+
+One deliberate exception: `jobs` may call the view functions of `api`
+(`jobs/gaps.py` reads `api/traces.py`; `jobs/read_models.py` calls
+`graph.link_evidence` and `stats.broadcast_ranking`). A stored view must
+be computed by the same code as the live one, or the two would drift
+apart. It never goes the other way: `api` does not import `jobs`.
 
 ## 7. Error handling policy
 
@@ -767,4 +1037,6 @@ CI checks the import rules with `import-linter` or an equivalent tool.
 1. Use structured logs (JSON) through `sonoran.logging`.
 2. One log line per event. Include context fields.
 3. Count these events as metrics: packets received, packets new, packets duplicate, decrypt failures, decode failures, handler failures.
-4. Expose the counters on `/health` for the api process and on stdout for the ingest process.
+4. The ingest process writes its events to stdout. `/health` answers
+   the status and the version only. It does not read the database, so
+   it shows that the API process answers, not that the database does.

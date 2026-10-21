@@ -59,12 +59,16 @@ from sonoran.coverage.grid import (
 from sonoran.coverage.params import DEFAULT_FREQUENCY_MHZ
 from sonoran.coverage.render import (
     colour_levels,
+    margin_levels,
     sample_tile,
     tiles_for_grid,
+    write_grey_png,
     write_png,
 )
 from sonoran.coverage.sites import (
     HANDHELD_TX_POWER_DBM,
+    POSITION_OPERATOR,
+    POSITION_REPORTED,
     Site,
     downlink_offset_db,
     engine_params,
@@ -76,21 +80,37 @@ from sonoran.db.session import make_engine, make_session_factory
 from sonoran.landcover.store import PAGE_SIZE, class_page, have_pages
 from sonoran.landcover.store import tile_name as landcover_tile_name
 from sonoran.logging import configure_logging, get_logger
-from sonoran.positions import is_precise_enough, is_usable, precision_deviation_m
+from sonoran.positions import (
+    MIN_SITE_PRECISION_BITS,
+    SITE_PRECISION_APPROXIMATE,
+    SITE_PRECISION_PRECISE,
+    is_precise_enough,
+    is_usable,
+    precise_minimum_bits,
+    precision_deviation_m,
+    site_minimum_bits,
+)
 from sonoran.radio.overrides import EMPTY as EMPTY_OVERRIDES
 from sonoran.radio.overrides import Overrides, load_overrides
-from sonoran.radio.presets import ModemPreset, preset_by_key, preset_for_channel
+from sonoran.radio.presets import (
+    ModemPreset,
+    modelled,
+    preset_by_key,
+    preset_for_channel,
+    sensitivity_of,
+)
 from sonoran.radio.resolve import resolve_profile
 from sonoran.roles import (
     EVERY_ROLE,
     SITE_SET_DIAGNOSTIC,
     SITE_SET_EXTENDED,
     SITE_SET_INFRASTRUCTURE,
-    SITE_SET_LABELS,
+    approximate_site_set,
     is_diagnostic_role_set,
     is_site_role,
     parse_site_roles,
     role_name,
+    site_set_label,
     site_set_roles,
 )
 from sonoran.terrain.store import coordinates_in_region, load_page, read_cached_page
@@ -163,6 +183,7 @@ def group_by_preset(
     overrides: Overrides,
     offsets: dict[str, float] | None = None,
     allowed: frozenset[str] | None = None,
+    precision: str = SITE_PRECISION_PRECISE,
 ) -> tuple[dict[str, list[Site]], dict[str, Counter[str]], list[dict[str, object]]]:
     """Return the sites of each preset, strongest first, what was left
     out of each, and the nodes left out for a coarse position.
@@ -180,7 +201,13 @@ def group_by_preset(
 
     So is a node whose position is known to be coarse. The public
     Meshtastic broker fuzzes a position by up to 23 km, and the terrain
-    under a prediction is 90 m across.
+    under a prediction is 90 m across. `precision` names the rule:
+    `precise` for every published map, and `approximate` for the extra
+    map a host may ask for. See `sonoran/positions.py` and #315.
+
+    An operator position in the overrides file passes either rule. It
+    places a node and nothing else: the role test above comes first, so
+    a client given a position is still not infrastructure.
 
     The counts come back beside the groups, and not as a log line,
     because the manifest has to report them. A run that quietly drops
@@ -192,11 +219,18 @@ def group_by_preset(
     # before anything reads it, so the two never meet.
     if allowed is None:
         allowed = parse_site_roles(settings.coverage_site_roles)
+    minimum = site_minimum_bits(
+        precision, settings.coverage_min_precision_bits, settings.coverage_approximate_min_bits
+    )
+    precise = precise_minimum_bits(settings.coverage_min_precision_bits)
     groups: dict[str, list[Site]] = {}
     left_out: dict[str, Counter[str]] = {}
     coarse: list[dict[str, object]] = []
     for node in nodes:
-        preset = preset_for_channel(node.last_channel)
+        # A preset with no modelled sensitivity (#362) is left out with
+        # the channels that name no preset: there is no threshold to
+        # draw it against.
+        preset = modelled(preset_for_channel(node.last_channel))
         if preset is None:
             continue
         rejected = left_out.setdefault(preset.key, Counter())
@@ -207,9 +241,7 @@ def group_by_preset(
         # An operator who says where their own router is beats the
         # broker, which fuzzes what it relays.
         given = overrides.position_of(identifier)
-        if given is None and not is_precise_enough(
-            node.last_position_precision_bits, settings.coverage_min_precision_bits
-        ):
+        if given is None and not is_precise_enough(node.last_position_precision_bits, minimum):
             # The node said where it is, and said the answer is coarse.
             # A footprint drawn around it would describe ground that
             # may have no radio on it. See `sonoran/positions.py`.
@@ -250,10 +282,12 @@ def group_by_preset(
         latitude, longitude = given if given else (node.last_lat, node.last_lon)
         if latitude is None or longitude is None:
             continue
-        # Allowed, and still rounded: `COVERAGE_MIN_PRECISION_BITS` may
-        # be set below the exact threshold on purpose. Say so on the
-        # site, so the manifest can mark its footprint as approximate.
-        rounded = given is None and not is_precise_enough(node.last_position_precision_bits)
+        # Allowed, and still rounded: the approximate rule takes it, or
+        # `COVERAGE_MIN_PRECISION_BITS` is zero. Say so on the site, so
+        # the manifest can mark its footprint as approximate.
+        rounded = given is None and not is_precise_enough(
+            node.last_position_precision_bits, precise or MIN_SITE_PRECISION_BITS
+        )
         site = make_site(
             settings,
             identifier,
@@ -266,6 +300,7 @@ def group_by_preset(
             position_deviation_m=(
                 precision_deviation_m(node.last_position_precision_bits) if rounded else None
             ),
+            position_source=POSITION_OPERATOR if given else POSITION_REPORTED,
         )
         groups.setdefault(preset.key, []).append(site)
 
@@ -695,6 +730,9 @@ def _predict(
                 "calibrated": site.profile.is_measured,
                 # Set only for a rounded position. See `Site`.
                 "position_deviation_m": site.position_deviation_m,
+                # "operator" when the overrides file placed the site.
+                # The position itself is not written here (#315).
+                "position_source": site.position_source,
                 "cells_set": added_down,
                 "cells_set_uplink": added_up,
             }
@@ -737,6 +775,11 @@ def render_layer(
     the region, so writing it would multiply the run for no gain, and
     the API answers a missing tile with a 404 that Leaflet already
     handles.
+
+    Each colour tile gets a margin tile from the same sampled cells, so
+    the two describe the same ground (#334). The colour tile is written
+    exactly as it was before the margin tile existed: the public embed
+    serves it.
     """
     written = 0
     for zoom in range(settings.coverage_min_zoom, settings.coverage_max_zoom + 1):
@@ -747,6 +790,16 @@ def render_layer(
                 continue
             store.write_tile(
                 root, preset, site_set, layer, tile.zoom, tile.x, tile.y, write_png(image)
+            )
+            store.write_margin_tile(
+                root,
+                preset,
+                site_set,
+                layer,
+                tile.zoom,
+                tile.x,
+                tile.y,
+                write_grey_png(margin_levels(patch, threshold)),
             )
             written += 1
     return written
@@ -857,7 +910,7 @@ def _empty_summary(key: str, rejected: "Counter[str]") -> store.PresetSummary:
     return store.PresetSummary(
         preset=preset.name,
         label=preset.label,
-        sensitivity_dbm=preset.sensitivity_dbm,
+        sensitivity_dbm=sensitivity_of(preset),
         node_count=0,
         candidate_count=sum(rejected.values()),
         site_count=0,
@@ -881,6 +934,25 @@ class SiteSetPlan:
     groups: dict[str, list[Site]]
     left_out: dict[str, Counter[str]]
     coarse: list[dict[str, object]]
+    # The position rule, `precise` or `approximate`. See
+    # `sonoran/positions.py`.
+    precision: str = SITE_PRECISION_PRECISE
+
+
+def _site_set_summary(
+    plan: SiteSetPlan, summaries: list[store.PresetSummary]
+) -> store.SiteSetSummary:
+    """Return what the manifest says about one map of the run."""
+    return store.SiteSetSummary(
+        key=plan.key,
+        label=plan.label,
+        site_roles=sorted(plan.allowed) if plan.allowed is not None else [EVERY_ROLE],
+        is_diagnostic=is_diagnostic_role_set(plan.allowed),
+        presets=summaries,
+        data_bounds=union_bounds([item.data_bounds or [] for item in summaries]),
+        site_precision=plan.precision,
+        approximate=plan.precision == SITE_PRECISION_APPROXIMATE,
+    )
 
 
 # One node the run will sample its finished layers at: its number and
@@ -1006,7 +1078,7 @@ def _build_site_set(
         downlink = _charge_receiver(downlink, rx_loss)
         uplink = _charge_receiver(uplink, rx_loss)
         usable = _charge_receiver(usable, rx_loss)
-        threshold = preset.sensitivity_dbm
+        threshold = sensitivity_of(preset)
 
         tiles = 0
         for layer, levels in (
@@ -1117,16 +1189,7 @@ def _build(
         summaries = _build_site_set(
             settings, plan, grid, rx_loss, root, workers, missing_all, points, node_levels, region
         )
-        set_summaries.append(
-            store.SiteSetSummary(
-                key=plan.key,
-                label=plan.label,
-                site_roles=sorted(plan.allowed) if plan.allowed is not None else [EVERY_ROLE],
-                is_diagnostic=is_diagnostic_role_set(plan.allowed),
-                presets=summaries,
-                data_bounds=union_bounds([item.data_bounds or [] for item in summaries]),
-            )
-        )
+        set_summaries.append(_site_set_summary(plan, summaries))
 
     # The infrastructure set is the top-level answer.
     summaries = set_summaries[0].presets
@@ -1166,6 +1229,8 @@ def _build(
         data_bounds=union_bounds([item.data_bounds or [] for item in summaries]),
         presets=summaries,
         site_sets=set_summaries,
+        # Every tile this run wrote has a margin tile beside it (#334).
+        margin_tiles=store.margin_spec(),
     )
 
 
@@ -1190,7 +1255,27 @@ def _plans(
     A deployment that has set `COVERAGE_SITE_ROLES` to something of its
     own keeps it: that setting is what the first plan uses, so a
     diagnostic run of every role still behaves exactly as before.
+
+    Every map is predicted from precise positions. With
+    `COVERAGE_INCLUDE_APPROXIMATE` on, each one also gets an approximate
+    map, after all the precise ones, under its own site set name. The
+    first plan is therefore always precise, and that is the map the
+    manifest reports at the top level and the embed serves (#315).
     """
+    configured = settings.coverage_min_precision_bits
+    if 0 < configured < MIN_SITE_PRECISION_BITS:
+        # The value #318 told a host to set. It used to put rounded
+        # positions on the main map, and on the public one. Say why the
+        # map shrank, and what to set instead.
+        logger.warning(
+            "COVERAGE_MIN_PRECISION_BITS=%s is read as %s: every published map "
+            "predicts from precise positions only (#315). To also publish a map "
+            "with rounded positions, set COVERAGE_INCLUDE_APPROXIMATE=true and "
+            "COVERAGE_APPROXIMATE_MIN_BITS=%s, and remove this setting",
+            configured,
+            MIN_SITE_PRECISION_BITS,
+            configured,
+        )
     narrow = parse_site_roles(settings.coverage_site_roles)
     # Name the first map for what it holds, not for the slot it sits
     # in. A run that predicts from a role outside the infrastructure
@@ -1211,21 +1296,28 @@ def _plans(
     if settings.coverage_include_clients:
         wanted.append((SITE_SET_EXTENDED, site_set_roles(SITE_SET_EXTENDED)))
 
+    precisions = [SITE_PRECISION_PRECISE]
+    if settings.coverage_include_approximate:
+        precisions.append(SITE_PRECISION_APPROXIMATE)
+
     plans: list[SiteSetPlan] = []
-    for key, allowed in wanted:
-        groups, left_out, coarse = group_by_preset(
-            settings, nodes, overrides, offsets, allowed=allowed
-        )
-        plans.append(
-            SiteSetPlan(
-                key=key,
-                label=SITE_SET_LABELS.get(key, key),
-                allowed=allowed,
-                groups=groups,
-                left_out=left_out,
-                coarse=coarse,
+    for precision in precisions:
+        for base, allowed in wanted:
+            key = base if precision == SITE_PRECISION_PRECISE else approximate_site_set(base)
+            groups, left_out, coarse = group_by_preset(
+                settings, nodes, overrides, offsets, allowed=allowed, precision=precision
             )
-        )
+            plans.append(
+                SiteSetPlan(
+                    key=key,
+                    label=site_set_label(key),
+                    allowed=allowed,
+                    groups=groups,
+                    left_out=left_out,
+                    coarse=coarse,
+                    precision=precision,
+                )
+            )
     return plans
 
 
@@ -1240,7 +1332,7 @@ async def run_once(session: AsyncSession, settings: Settings) -> store.Manifest 
     # What the mesh measured, where there is enough of it. A node
     # with thin evidence is absent rather than zero, so it keeps its
     # nameplate figures.
-    offsets = store.calibration_offsets(settings)
+    offsets = await store.calibration_offsets(session)
     if offsets:
         logger.info("%s nodes carry a measured correction", len(offsets))
     plans = _plans(settings, nodes, overrides, offsets)

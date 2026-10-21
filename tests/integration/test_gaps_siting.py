@@ -11,7 +11,6 @@ because it is the state a new box starts in and the answer it must give
 is `unknown` and never "no benefit".
 """
 
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -25,7 +24,7 @@ from sonoran.coverage import store as coverage_store
 from sonoran.gaps import store
 from sonoran.jobs import coverage, gaps, gaps_siting
 from sonoran.terrain.srtm import PAGE_SIZE, page_cell, tile_name_of
-from tests.integration.conftest import role_url
+from tests.integration.conftest import role_url, run_store
 from tests.integration.test_gaps import (
     BASE,
     _add_node,
@@ -122,15 +121,15 @@ def _struggling(connection, node_num: int, latitude: float, longitude: float) ->
 
 
 def _siting(settings: Settings, preset: str = "LongFast") -> dict:
-    document = store.read_siting(settings, preset)
+    """Return the stored answer with its candidates, as the old file held it."""
+    document = run_store(settings, store.read_siting, preset)
     assert document is not None, "the siting job wrote nothing"
-    return document
+    _, candidates, _ = run_store(settings, store.read_candidates, preset, None, 10_000)
+    return document | {"candidates": candidates}
 
 
 def _run_siting(settings: Settings) -> list[str]:
-    import asyncio
-
-    return asyncio.run(gaps_siting.run_once(settings))
+    return _run(settings, gaps_siting.run_once)
 
 
 # ------------------------------------------------------ the whole thing
@@ -187,21 +186,21 @@ def test_the_whole_siting_pipeline_from_rows_to_the_api(
     assert cost["engine_seconds"] > 0
 
     # The API serves the written file and nothing else.
-    client = TestClient(create_app(settings))
-    served = client.get("/api/gaps/areas").json()
-    assert served["available"] is True
-    assert len(served["areas"]) == 1
-    assert "candidates" not in served
-    assert served["caveats"], "the limits travel with the answer"
+    with TestClient(create_app(settings)) as client:
+        served = client.get("/api/gaps/areas").json()
+        assert served["available"] is True
+        assert len(served["areas"]) == 1
+        assert "candidates" not in served
+        assert served["caveats"], "the limits travel with the answer"
 
-    rows = client.get("/api/gaps/candidates").json()
-    assert rows["matched_count"] == len(candidates)
-    assert rows["assumed_radio"]["tx_power_dbm"] == settings.gaps_candidate_tx_power_dbm
-    assert rows["assumed_radio"]["antenna_height_m"] == settings.gaps_candidate_height_m
+        rows = client.get("/api/gaps/candidates").json()
+        assert rows["matched_count"] == len(candidates)
+        assert rows["assumed_radio"]["tx_power_dbm"] == settings.gaps_candidate_tx_power_dbm
+        assert rows["assumed_radio"]["antenna_height_m"] == settings.gaps_candidate_height_m
 
-    one = client.get("/api/gaps/candidates?area=0").json()
-    assert one["matched_count"] == len(candidates)
-    assert client.get("/api/gaps/candidates?area=7").json()["matched_count"] == 0
+        one = client.get("/api/gaps/candidates?area=0").json()
+        assert one["matched_count"] == len(candidates)
+        assert client.get("/api/gaps/candidates?area=7").json()["matched_count"] == 0
 
 
 def test_a_box_with_no_terrain_says_unknown_and_never_no_benefit(
@@ -351,7 +350,7 @@ def test_two_presets_get_two_siting_answers_that_borrow_nothing(
     assert medium_ids
     assert not (long_ids & medium_ids), "a node was counted on two presets at once"
     # And there is no merged answer anywhere.
-    assert store.read_siting(settings, "Every") is None
+    assert run_store(settings, store.read_siting, "Every") is None
 
 
 # ------------------------------------------------------- the engine cost
@@ -422,10 +421,10 @@ def test_a_prediction_over_a_worker_process_answers_the_same(
 # ------------------------------------------------------------- the API
 
 
-def test_the_api_reads_the_artefact_and_computes_nothing(
+def test_the_api_reads_the_stored_answer_and_computes_nothing(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """Delete the file and the endpoint says so, rather than recomputing."""
+    """Delete the answer and the endpoint says so, rather than recomputing."""
     settings = _settings(timescale_url, tmp_path)
     _write_terrain(settings)
     with migrated_engine.begin() as connection:
@@ -437,19 +436,19 @@ def test_the_api_reads_the_artefact_and_computes_nothing(
     _run(settings, gaps.run_once)
     _run_siting(settings)
 
-    client = TestClient(create_app(settings))
-    assert client.get("/api/gaps/areas").json()["available"] is True
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/gaps/areas").json()["available"] is True
 
-    path = store.siting_path(settings, "LongFast")
-    assert path is not None
-    path.unlink()
+        with migrated_engine.begin() as connection:
+            connection.execute(text("DELETE FROM gaps_siting_candidate"))
+            connection.execute(text("DELETE FROM gaps_siting"))
 
-    body = client.get("/api/gaps/areas").json()
-    assert body["available"] is False
-    assert body["reason"] == "no_siting_run"
-    assert body["areas"] == []
-    # And the limits are still served, because they do not depend on a run.
-    assert body["caveats"]
+        body = client.get("/api/gaps/areas").json()
+        assert body["available"] is False
+        assert body["reason"] == "no_siting_run"
+        assert body["areas"] == []
+        # And the limits are still served, because they do not depend on a run.
+        assert body["caveats"]
 
 
 def test_a_channel_that_names_no_preset_is_refused_not_guessed(
@@ -457,34 +456,58 @@ def test_a_channel_that_names_no_preset_is_refused_not_guessed(
 ):  # type: ignore[no-untyped-def]
     """Weather rides on top of a preset and does not name one."""
     settings = _settings(timescale_url, tmp_path)
-    client = TestClient(create_app(settings))
-
-    body = client.get("/api/gaps/candidates?channel=Weather").json()
-    assert body["available"] is False
-    assert body["reason"] == "not_a_preset"
-    assert body["candidates"] == []
+    with TestClient(create_app(settings)) as client:
+        body = client.get("/api/gaps/candidates?channel=Weather").json()
+        assert body["available"] is False
+        assert body["reason"] == "not_a_preset"
+        assert body["candidates"] == []
 
 
 def test_the_siting_routes_take_no_writes(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
     settings = _settings(timescale_url, tmp_path)
-    client = TestClient(create_app(settings))
-    for path in ("/api/gaps/areas", "/api/gaps/candidates"):
-        for call in (client.post, client.put, client.patch, client.delete):
-            assert call(path).status_code in (404, 405)
+    with TestClient(create_app(settings)) as client:
+        for path in ("/api/gaps/areas", "/api/gaps/candidates"):
+            for call in (client.post, client.put, client.patch, client.delete):
+                assert call(path).status_code in (404, 405)
 
 
-def test_a_torn_file_is_never_served(
+def test_a_new_answer_replaces_the_old_one_whole(
     timescale_url: str, migrated_engine, tmp_path: Path, clean: None
 ):  # type: ignore[no-untyped-def]
-    """The job writes to a temporary name and renames over the old file."""
+    """A run is replaced, never merged: no candidate of the old run survives (#351)."""
     settings = _settings(timescale_url, tmp_path)
-    root = Path(settings.coverage_cache_dir) / "gaps"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "index.json").write_text(json.dumps({"presets": [{"preset": "LongFast"}]}))
-    (root / "siting-LongFast.json").write_text("{ not json at all")
 
-    client = TestClient(create_app(settings))
-    body = client.get("/api/gaps/areas").json()
-    assert body["available"] is False
+    def area(index: int) -> dict:
+        return {
+            "area": index,
+            "point_count": 0,
+            "node_count": 0,
+            "node_ids": [],
+            "centroid": [33.4, -112.1],
+            "bounds": [33.4, -112.1, 33.4, -112.1],
+            "width_km": 0.0,
+            "points": [],
+        }
+
+    def candidate(index: int, latitude: float) -> dict:
+        return {"kind": "ground", "area": index, "latitude": latitude, "longitude": -112.1}
+
+    first = {
+        "available": True,
+        "preset": "LongFast",
+        "generated_at": "2026-10-12T00:00:00+00:00",
+        "areas": [area(0), area(1)],
+        "candidates": [candidate(0, 33.1), candidate(1, 33.2), candidate(1, 33.3)],
+    }
+    second = first | {"areas": [area(0)], "candidates": [candidate(0, 33.9)]}
+    assert run_store(settings, store.write_siting, "LongFast", first)
+    assert run_store(settings, store.write_siting, "LongFast", second)
+
+    matched, rows, _ = run_store(settings, store.read_candidates, "LongFast", None, 100)
+    assert matched == 1
+    assert [row["latitude"] for row in rows] == [33.9]
+    held = run_store(settings, store.read_siting, "LongFast")
+    assert [item["area"] for item in held["areas"]] == [0]
+    assert "candidates" not in held

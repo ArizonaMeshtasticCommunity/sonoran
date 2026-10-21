@@ -203,10 +203,16 @@ Check these items on every pull request:
 
 ## 10. Release policy
 
-1. Version numbers follow semantic versioning.
-2. Tag releases in git.
-3. The CI builds the Docker image for each tag.
-4. Deploy with Docker Compose on the azmsh.net host.
+1. A release is named for the date in Arizona, `vYYYY.MM.DD`, then
+   `.2` for a second release on the same day. It is not a semantic
+   version. `tools/release.py` calculates the name. See
+   `docs/RELEASING.md`.
+2. `python tools/release.py publish` makes the git tag and the GitHub
+   release. It makes no commit.
+3. No workflow runs for a tag. CI does not build or publish an image for
+   a release. A deployment builds its images from the commit that it
+   runs. See `docs/DEPLOY.md`.
+4. Deploy with Docker Compose. See `docs/DEPLOY.md`.
 5. After a deploy, check `/health` and the ingest logs.
 5a. Before a deploy, take a snapshot of what the live API answers, and
     compare after it:

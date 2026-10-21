@@ -101,12 +101,15 @@ async function main() {
     }, level);
     await page.waitForTimeout(1500);
   }
-  // And each layer, so the buttons work in the built file.
+  // And each layer, so the layer select works in the built file. The
+  // layer is one select in the settings panel (#299, #334); the three
+  // buttons this used to press are gone.
   for (const layer of ['downlink', 'uplink', 'usable']) {
     await page.evaluate((name) => {
-      const buttons = [...document.querySelectorAll('[data-coverage-layers] button')];
-      const wanted = { usable: 0, downlink: 1, uplink: 2 }[name];
-      if (buttons[wanted]) buttons[wanted].click();
+      const select = document.querySelector('[data-coverage-layers]');
+      if (!select) return;
+      select.value = name;
+      select.dispatchEvent(new Event('change'));
     }, layer);
     await page.waitForTimeout(1800);
   }

@@ -101,6 +101,53 @@ share of packets. **Tripwire:**
 
 ---
 
+### The coverage map predicts from precise positions only (#315)
+
+**Decided by Will, 2026-10-08, following Tyler and Logan.** Every
+published coverage map predicts from a position of 16 bits or better,
+or from a position an operator gave in the overrides file. This
+reverses the part of #318 that let a host lower
+`COVERAGE_MIN_PRECISION_BITS` to 13, which s.azmsh.dev did.
+
+The evidence, from the #315 thread:
+
+- Will first asked for rounded positions: "The coverage map will always
+  be an estimate right?"
+- Logan: "computing for something offset to a mountain does not make
+  sense when its on a house just so its seen. ... its pointless for us
+  to spend compute on something we cant compute."
+- Tyler (the authority on direction) showed Tower Mountain predicted
+  from its reduced position, "deep in a valley", and wrote: "We should
+  only report either fully precise locations or override the map."
+
+A rounded point is 2.9 km out at 13 bits, over terrain 90 m across.
+The footprint is then a confident answer about the wrong hill, and it
+costs a full prediction.
+
+**What was built.** The existing operator position in the overrides
+file (`RADIO_OVERRIDES_PATH`) was reused, not duplicated: it
+already applied to the coverage job and the calibration fit only, and
+no page reads it. It now refuses a bad entry when the file is read, and
+the manifest says `position_source: "operator"` for such a site.
+A setting below 16 is read as 16 with a warning, because the stale 13
+is still in a host `.env`. Will also asked (#334) for an optional
+approximate map, off by default, as its own site set that the public
+embed never reads. It is there for a later settings panel on the
+coverage page.
+
+**Rejected:** a second override file just for positions. It would be a
+second place to look for one fact. A host that wants the positions out
+of the repository points `RADIO_OVERRIDES_PATH` at a file on the host
+(`docs/DEPLOY.md` 8).
+
+**What would change it:** a terrain-aware way to bound where a rounded
+node can be, or coverage built from measured performance rather than
+prediction, which Tyler also named.
+
+Pinned by `test_precise_is_sixteen_bits_and_cannot_be_lowered`,
+`test_an_operator_position_never_makes_a_client_a_public_site` and
+`test_the_public_tiles_never_serve_the_approximate_map`.
+
 ## Interface
 
 ### Panels stop growing on a wide screen, via the GRID not the track (#70)
@@ -1326,3 +1373,267 @@ This was proved by making the page re-render every 150 ms: the old read failed 2
 ### Environment
 - **Docker VM:** the Colima VM (2 CPUs, 1 GiB) ran six agents' Postgres containers. Postgres was OOM-killed more than once, and leftover test containers plus dangling images filled its 60 GB disk to 100%.
 - **Before fanning out:** check `df` inside the VM, and remove what you start.
+
+## 2026-10-08 — the gaps leaderboards follow the page range (#294)
+
+Will chose option A: the two gaps leaderboards follow the Statistics
+range. Four choices were made to build it. `docs/GAPS.md` 6.1 has the
+detail.
+
+- **A small file for each extra window, not a full assessment.** A board
+  needs four counts. The signals, the siting, and the neighbour,
+  traceroute and position reads are most of what an assessment costs,
+  and no board shows them. The assessment file keeps its shape, so the
+  gaps page and the node page are not touched.
+- **A custom range is never matched to a near window.** It holds the
+  job's own window and says "not the page range". A near window shown
+  as the range would be a claim about a period nobody measured.
+- **A long window is rebuilt less often.** A file is rebuilt once it is
+  older than 1/120 of its window, so 30 d is rebuilt every 6 hours. Its
+  read is about 4.3 times the 7 d one and its answer barely moves in
+  half an hour. The job logs each file's time, so the cost can be read
+  on the live box.
+- **The awake floor scales.** 24 awake hours in a 24 hour window would
+  rank almost nobody, so the floor is half the window when that is less.
+
+## 2026-10-08 — reachability is answered traceroutes (#293)
+
+Will chose the recommended measure: "Most consistently reachable" is
+replaced by the share of traceroutes to a node that it answered. A node
+needs at least 10 traceroutes from 2 or more senders, and the board
+follows the page range. `docs/GAPS.md` 6.2 has the detail. Five choices
+were made to build it.
+
+- **Matched by (asker, target, request packet ID).** A reply carries the
+  request's packet ID, and a packet ID belongs to its sender, so the
+  asker is part of the key. The pairing reads each row through
+  `trace_endpoints`, the one reading of a reply's direction (`AGENTS.md`
+  9.18). A reply with no request seen counts in neither number.
+- **Computed in the gaps job, not the API.** The job already reads every
+  traceroute of the 7 d window, and it already writes a file for each
+  other window (#294). The route stays a file read. A bounded query in
+  the route would read up to 30 days of traceroutes for each preset and
+  window on a page load, and the 30 d answer barely moves in six hours.
+- **Ranked by the low end of the Wilson interval, shown as the share.**
+  Ten of ten would otherwise top a board that also holds 95 of 100. The
+  measure line says that more traceroutes count for more, so a lower
+  share above a higher one is explained on the page.
+- **The floor is applied by the route.** The job writes every node
+  traced. So the board can say how many it left out, and a change to the
+  floor does not wait for the job.
+- **The uptime ratio is gone from the board, and kept everywhere else.**
+  Will asked to replace it. The awake and heard hours are still in the
+  assessment, because the `rf_intermittent` signal, the gaps page and
+  the node page read them. The board files no longer carry them: nothing
+  else reads those files.
+
+## 2026-10-14 — a power loop is counted restarts (#365)
+
+The broadcast table's "maybe power cycling" flagged any node between 5
+and 35 % battery that restarted once in the window: 24 nodes on the
+30 day view. The band had no source (AGENTS.md §3A.2). A power loop is
+now `LOOP_RESTARTS` (4) or more restarts inside 24 hours while the node
+sends NodeInfo above its default (`node_info_broadcast_secs`, 10800 s)
+inside the same 24 hours. The battery is shown, not judged.
+
+**The measurement behind 4.** Live data, 2026-10-14, the last 30 days,
+521 nodes with device telemetry. A restart is a reading whose
+`uptime_seconds` is lower than the node's reading before it, in our
+receive order, exactly as `stats._restart_times` counts it. For each
+node, the busiest 24 hours, and its NodeInfo inside them (8 in 24 h is
+1.0x):
+
+| Restarts in the busiest 24 h | Nodes | NodeInfo above default that day |
+|---|---|---|
+| 0 | 296 | - |
+| 1 | 151 | - |
+| 2 | 52 | 15 (29 %) |
+| 3 | 14 | 5 (36 %) |
+| 4 | 4 | 4 |
+| 5 | 2 | 2 |
+| 7 | 1 | 1 |
+| 15 | 1 | 1 |
+
+**Against chance.** On an ordinary day, 22.8 % of these nodes send
+NodeInfo above default (2,230 of 9,799 node-days, query below). At 2
+restarts the share that day is 29 %, about chance; at 3 it is 36 %; from
+4 up it is 100 % (8 of 8, at 1.1x to 12x). So 4 is where restarts and
+NodeInfo stop agreeing by chance.
+
+Run through the new code on the same data, the rule flags 2 nodes in 24
+hours (both looping now), 4 in 7 days and 8 in 30 days, against 24
+before. Two of the eight are on mains power, which the battery band
+could never flag.
+
+**A loop going on now is judged on the part of the day it has had.** Its
+span runs into "now", so NodeInfo is compared with what the default
+gives in that length (`nodeinfo_expected`, at least one). Expecting a
+full day's 8 hid both of the nodes looping in the last 24 hours.
+
+**NodeInfo on the same day, not over the window.** The node with 15
+restarts in one day averaged 0.87x NodeInfo over 30 days, and 1.75x on
+that day. A window-long average hides the day.
+
+**Readings link to packets by (node, packet ID).** `device_metrics.packet_pk`
+is empty on the rows ingest writes (`ingest/dedup.py`): joined on it, the
+same query found 18 of 521 nodes. AGENTS.md 9.1.
+
+The base rate:
+
+```sql
+CREATE TEMP TABLE n365 AS
+SELECT DISTINCT dm.node_num FROM device_metrics dm
+JOIN packet p ON p.from_node_num = dm.node_num AND p.packet_id = dm.packet_id AND p.first_seen_at >= now() - interval '30 days'
+WHERE dm.uptime_seconds IS NOT NULL AND dm.time >= now() - interval '50 days';
+-- Base rate: of the node-days (UTC days) on which a node with device
+-- telemetry sent anything, how many had NodeInfo above default (> 8)?
+WITH days AS (
+  SELECT from_node_num AS n, date_trunc('day', bucket) AS d FROM packet_hourly
+  WHERE bucket >= now() - interval '30 days' AND from_node_num IN (SELECT node_num FROM n365)
+  GROUP BY 1, 2),
+ni AS (
+  SELECT from_node_num AS n, date_trunc('day', first_seen_at) AS d, count(*) AS c FROM packet
+  WHERE portnum = 4 AND first_seen_at >= now() - interval '30 days' GROUP BY 1, 2)
+SELECT count(*) AS node_days, count(*) FILTER (WHERE coalesce(ni.c, 0) > 8) AS nodeinfo_above_default,
+       round(100.0 * count(*) FILTER (WHERE coalesce(ni.c, 0) > 8) / count(*), 1) AS percent
+FROM days LEFT JOIN ni USING (n, d);
+```
+
+The query:
+
+```sql
+-- #365: restarts counted as the code counts them (uptime falls between
+-- readings, our receive order), over the last 30 days.
+CREATE TEMP TABLE r365 AS
+WITH readings AS (
+  SELECT dm.node_num, p.first_seen_at AS at, dm.uptime_seconds AS up,
+         lag(dm.uptime_seconds) OVER (PARTITION BY dm.node_num ORDER BY p.first_seen_at, dm.id) AS before
+  FROM device_metrics dm
+  JOIN packet p ON p.from_node_num = dm.node_num AND p.packet_id = dm.packet_id AND p.first_seen_at >= now() - interval '30 days'
+  WHERE dm.uptime_seconds IS NOT NULL AND dm.time >= now() - interval '50 days'
+)
+SELECT node_num, at FROM readings WHERE up < before;
+
+-- Nodes with device telemetry in the window, for the zero row.
+CREATE TEMP TABLE n365 AS
+SELECT DISTINCT dm.node_num FROM device_metrics dm
+JOIN packet p ON p.from_node_num = dm.node_num AND p.packet_id = dm.packet_id AND p.first_seen_at >= now() - interval '30 days'
+WHERE dm.uptime_seconds IS NOT NULL AND dm.time >= now() - interval '50 days';
+
+-- The most restarts inside any 24 h, per node.
+CREATE TEMP TABLE m365 AS
+SELECT n.node_num, coalesce(max(w.cnt), 0) AS most_24h, coalesce(t.total, 0) AS total
+FROM n365 n
+LEFT JOIN LATERAL (
+  SELECT (SELECT count(*) FROM r365 b WHERE b.node_num = a.node_num
+          AND b.at >= a.at AND b.at < a.at + interval '24 hours') AS cnt
+  FROM r365 a WHERE a.node_num = n.node_num) w ON true
+LEFT JOIN (SELECT node_num, count(*) AS total FROM r365 GROUP BY node_num) t USING (node_num)
+GROUP BY n.node_num, t.total;
+
+-- Nodes by the most restarts in any 24 h (the first two table columns).
+SELECT most_24h, count(*) AS nodes FROM m365 GROUP BY most_24h ORDER BY most_24h;
+
+-- The busiest 24 h of each node with 3 or more restarts in it, and its
+-- NodeInfo inside that same span (8 in 24 h is the default, 1.0x).
+CREATE TEMP TABLE b365 AS
+SELECT DISTINCT ON (a.node_num) a.node_num, a.at AS span_start,
+       (SELECT count(*) FROM r365 b WHERE b.node_num = a.node_num
+        AND b.at >= a.at AND b.at < a.at + interval '24 hours') AS restarts
+FROM r365 a ORDER BY a.node_num, restarts DESC, a.at;
+SELECT b.restarts AS restarts_24h, count(*) AS nodes,
+       count(*) FILTER (WHERE x.nodeinfo > 8) AS nodeinfo_above_default_same_day,
+       round(avg(x.nodeinfo / 8.0), 2) AS mean_nodeinfo_ratio_same_day
+FROM b365 b
+CROSS JOIN LATERAL (SELECT count(*) AS nodeinfo FROM packet p WHERE p.from_node_num = b.node_num
+     AND p.portnum = 4 AND p.first_seen_at >= b.span_start AND p.first_seen_at < b.span_start + interval '24 hours') x
+WHERE b.restarts >= 2 GROUP BY b.restarts ORDER BY b.restarts;
+SELECT b.node_num, b.restarts, round(x.nodeinfo / 8.0, 2) AS nodeinfo_ratio_same_day, b.span_start
+FROM b365 b
+CROSS JOIN LATERAL (SELECT count(*) AS nodeinfo FROM packet p WHERE p.from_node_num = b.node_num
+     AND p.portnum = 4 AND p.first_seen_at >= b.span_start AND p.first_seen_at < b.span_start + interval '24 hours') x
+WHERE b.restarts >= 3 ORDER BY b.restarts DESC, nodeinfo_ratio_same_day DESC;
+```
+
+
+## 2026-10-17 — the packet page names relay candidates (#47, PR #378)
+
+**Decided by Logan.** This reverses #47's option 3 for the packet page
+only.
+
+**What changed.** `MeshPacket.relay_node` is the last byte of the node
+that sent a gateway its copy. It was kept once per packet, from the
+first upload. Each gateway hears its own relay, so each upload now
+keeps it (`packet_seen.relay_node`, migration `pr378`). The packet API
+gives each observation `relayed_by`: the byte, and every node ending in
+it that was heard within a day of the packet, newest first. The packet
+page shows them in "Who heard it", and says "one of these candidates"
+when there is more than one.
+
+**Why this is allowed now.** #47 declined drawing a relayer, because
+one byte names 4.91 nodes on average and 19 at worst (7 days, 1,164
+nodes, 237 bytes). Its tripwire allowed the honest form: "a page that
+showed 'relayed by one of these 19' would be honest. Exposing it
+quietly ... is the failure". The page lists every candidate and never
+picks one.
+
+**What is still declined.** Drawing anything from the byte: no line,
+no hop, no route on the live map or the graph. The map stays hop count
+only. `tests/unit/test_live_map_draws_no_inferred_hop.py` holds both:
+`map-live.js` may use no relay field, and the byte reaches a route only
+through `relay_candidates`.
+
+**What it cannot tell.** Which node relayed the copy, when there is
+more than one candidate; that the relay was a direct radio link to the
+gateway, when the gateway used several hops; anything about a packet
+stored before the migration.
+
+**What would change it again.** #47's own test: upstream sending a full
+relayer id, or a measured narrowing (same preset, heard recently, in
+range of both ends) that leaves one candidate for most uploads. The
+per-upload column is the data that measurement needs.
+
+## 2026-10-21 — every preset can be chosen, and several at once (#383)
+
+**Decided for Will (#383).** Will asked, in #383, for every preset to
+be selectable, for a choice of several, and for Medium Fast alone as
+the default. The details below were filled in while building it.
+
+**Still open, for Tyler (#232):** where the preset control lives. It
+is not decided here. The menu's switch stays where it was, and the
+boxes for several presets are on the Settings page because that is
+where there is room for them.
+
+**What changed.**
+
+- The menu offers every preset the server knows (`KNOWN` in
+  `radio/presets.py`, which covers every value of
+  `Config.LoRaConfig.ModemPreset`), not only the presets with traffic.
+  The two this mesh runs stay as buttons. The rest are in "More".
+  `tests/unit/test_preset_choices.py` keeps the browser's list and the
+  server's the same.
+- Several presets are chosen on the Settings page, with a box for each.
+  The menu's Settings link, under the switch, is the way there. The
+  menu's buttons still choose one preset alone.
+- A choice of several is kept in one fixed order: Medium Fast, Long
+  Fast, then the firmware presets, then any server-only name. The one
+  preset a one-preset page draws is the deployment's default when it
+  is chosen, and otherwise the first in that order.
+- The list endpoints take `preset=MediumFast,LongFast` (`docs/API.md`
+  1.2). That is a GET parameter only. One name runs the SQL it ran
+  before.
+- The map and the graph draw one preset when several are chosen, and
+  the note under the switch says which. A chosen preset with no traffic
+  here draws an empty map that says no node was heard on it. Coverage, gaps and the planner
+  already did that under "All". "All" still draws every preset on the
+  map and the graph, as decided in #370. A choice of several is
+  narrower, and a line between two presets cannot exist (AGENTS.md 9.7).
+- The choice is stored as before under `sonoran.preset`, with commas
+  between names. An older stored value, one name or `*`, still loads.
+
+**What a reader can now do that they could not.** Choose a preset with
+no traffic on it yet. The old store refused a preset the server had
+not listed, so a stored `ShortTurbo` fell back to the default. Every
+firmware preset is now always on offer, so only a name that is no
+preset at all is refused. Six cases in `preset_store_cases.mjs`
+changed for this reason, and each says so beside it.

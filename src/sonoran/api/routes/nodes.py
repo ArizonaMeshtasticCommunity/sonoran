@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sonoran.api import export
 from sonoran.api.dependencies import (
     LIKE_ESCAPE,
     contains,
@@ -31,15 +33,16 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
+from sonoran.api.preset_scope import Presets, preset_filter, require_presets
 from sonoran.api.schemas import NodeSummary
 from sonoran.api.sightings import direct as direct_sighting
 from sonoran.api.sightings import sightings
-from sonoran.config import Settings
 from sonoran.coverage.store import calibration_offsets
 from sonoran.db.models import (
     AirQualityMetrics,
     DeviceMetrics,
     EnvironmentMetrics,
+    LocalStatsMetrics,
     NeighborMetrics,
     Node,
     NodeConfig,
@@ -64,6 +67,8 @@ TELEMETRY_MODELS = {
     "air_quality": AirQualityMetrics,
     "power": PowerMetrics,
     "pax": PaxMetrics,
+    # Read by a contributor on request (#178), not sent by the node.
+    "local_stats": LocalStatsMetrics,
 }
 
 # Environment fields that the user interface shows as weather.
@@ -265,7 +270,14 @@ def _bands(rows: Sequence[Any]) -> list[dict[str, object]]:
 async def _messages(
     session: AsyncSession, node_num: int, since: datetime, limit: int
 ) -> dict[str, object]:
-    """Return the messages that one node sent in the selected window."""
+    """Return the messages that one node sent in the selected window.
+
+    Each message carries `packet_id` and `from_node`, the two halves of
+    its packet's identity (AGENTS.md 9.1). The page draws the time of a
+    message as a link to that packet, as the chat page does (#387).
+    `packet_id` is the Meshtastic ID, never the row ID, and it is null
+    for a row stored without one.
+    """
     total = await session.scalar(
         select(func.count())
         .select_from(TextMessage)
@@ -279,11 +291,14 @@ async def _messages(
             .limit(limit)
         )
     ).all()
-    names = await resolve_names(session, (row.to_node_num for row in rows))
+    names = await resolve_names(session, [node_num, *(row.to_node_num for row in rows)])
     return {
         "count": total or 0,
         "recent": [
             {
+                "packet_id": row.packet_id,
+                "from_node": format_node_id(row.from_node_num),
+                "from_name": name_of(names, row.from_node_num),
                 "body": row.body,
                 "channel": row.channel,
                 "to_node": format_node_id(row.to_node_num),
@@ -452,6 +467,7 @@ def _apply_node_filters(
     licensed: bool | None = None,
     first_seen_hours: int | None = None,
     quiet_hours: int | None = None,
+    preset: Presets | None = None,
 ) -> Select[Any]:
     """Apply the documented node list filters to a statement.
 
@@ -484,6 +500,10 @@ def _apply_node_filters(
         statement = statement.where(Node.last_heard < before)
     if channel:
         statement = statement.where(Node.last_channel == channel)
+    if preset is not None:
+        # The preset of the node's newest tagged packet, which stays put
+        # when its last packet was on a topic channel (#313).
+        statement = statement.where(preset_filter(Node.last_preset, Node.last_channel, preset))
     if position:
         statement = statement.where(_position_filter(position))
     if licensed is not None:
@@ -517,10 +537,37 @@ def _apply_node_filters(
     return statement
 
 
-@router.get("", response_model=list[NodeSummary])
-async def list_nodes(
-    request: Request,
-    response: Response,
+@dataclass(frozen=True)
+class NodeListParams:
+    """The filters and the order of the node list.
+
+    One set, read by one dependency, for the list and for its export.
+    A filter added to the list therefore reaches the export with no
+    second edit, and the file cannot hold rows the screen does not
+    (#350).
+    """
+
+    q: str | None
+    hw: str | None
+    role: str | None
+    gateway: bool | None
+    active_hours: int | None
+    before: datetime | None
+    channel: str | None
+    # The menu's modem presets, already checked by `require_presets`
+    # (#313, several since #383).
+    preset: Presets | None
+    position: str | None
+    licensed: bool | None
+    first_seen_hours: int | None
+    quiet_hours: int | None
+    gaps: str | None
+    gaps_preset: str | None
+    sort: str
+    order: str
+
+
+def node_list_params(
     q: str | None = None,
     hw: str | None = None,
     role: str | None = None,
@@ -528,6 +575,7 @@ async def list_nodes(
     active_hours: int | None = Query(default=None, ge=1, le=720),
     before: datetime | None = None,
     channel: str | None = None,
+    preset: str | None = None,
     position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
     licensed: bool | None = None,
     first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
@@ -536,6 +584,112 @@ async def list_nodes(
     gaps_preset: str | None = None,
     sort: str = Query(default="last_heard"),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
+) -> NodeListParams:
+    """Read the node list's query parameters. Refuse an unknown sort."""
+    if sort not in SORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"sort must be one of: {', '.join(sorted(SORTS))}",
+        )
+    return NodeListParams(
+        q=q,
+        hw=hw,
+        role=role,
+        gateway=gateway,
+        active_hours=active_hours,
+        before=before,
+        channel=channel,
+        preset=require_presets(preset),
+        position=position,
+        licensed=licensed,
+        first_seen_hours=first_seen_hours,
+        quiet_hours=quiet_hours,
+        gaps=gaps,
+        gaps_preset=gaps_preset,
+        sort=sort,
+        order=order,
+    )
+
+
+@dataclass(frozen=True)
+class NodeListQuery:
+    """The statements of one node list, before any paging."""
+
+    rows: Select[Any]
+    count: Select[Any]
+    column: Any
+    ordering: tuple[Any, ...]
+
+
+async def _node_list_query(session: AsyncSession, params: NodeListParams) -> NodeListQuery:
+    """Build the node list's row and count statements.
+
+    The list and its export both call this, so they cannot disagree
+    about which rows match or in which order they come.
+    """
+    column = SORTS[params.sort]
+    direction = column.asc() if params.order == "asc" else column.desc()
+
+    # Nulls last whichever way it was clicked. A node with no role is
+    # not the smallest role, and a reader scanning a column wants the
+    # rows that have nothing to say out of the way.
+    #
+    # `node_num` breaks the tie. Without it Postgres may order equal
+    # rows differently between two queries, so a node could arrive on
+    # two pages or on neither. With 160 nodes reporting no role at all,
+    # ties are the ordinary case here rather than an edge.
+    ordering = (direction.nullslast(), Node.node_num.asc())
+
+    filters = (
+        params.q,
+        params.hw,
+        params.role,
+        params.gateway,
+        params.active_hours,
+        params.before,
+        params.channel,
+        params.position,
+        params.licensed,
+        params.first_seen_hours,
+        params.quiet_hours,
+    )
+    # The sort value is selected beside the row, so the cursor can name it
+    # exactly as the database compares it. `name` is an expression, not a
+    # column the row carries.
+    statement = _apply_node_filters(
+        select(Node, column.label("sort_value")), *filters, preset=params.preset
+    )
+    counted = _apply_node_filters(
+        select(func.count()).select_from(Node), *filters, preset=params.preset
+    )
+
+    # The gaps state is per preset, because a node can need help on one
+    # mesh and be fine on another. Merging them would be the thing
+    # AGENTS.md 9.7 forbids everywhere else, wearing a filter's clothes.
+    if params.gaps:
+        if not params.gaps_preset:
+            raise HTTPException(
+                status_code=422,
+                detail="gaps needs gaps_preset: a node can need help on one preset and not another",
+            )
+        wanted = await _gaps_node_nums(session, params.gaps_preset, params.gaps)
+        if wanted is None:
+            # Not an empty result. Nothing has been assessed, and saying
+            # "no nodes" would be an answer we do not have.
+            raise HTTPException(
+                status_code=409,
+                detail=f"no gap assessment has been written for {params.gaps_preset} yet",
+            )
+        statement = statement.where(Node.node_num.in_(wanted))
+        counted = counted.where(Node.node_num.in_(wanted))
+    return NodeListQuery(statement, counted, column, ordering)
+
+
+@router.get("", response_model=list[NodeSummary])
+async def list_nodes(
+    request: Request,
+    response: Response,
+    params: NodeListParams = Depends(node_list_params),
     offset: int = Query(default=0, ge=0, le=100_000),
     cursor: str | None = Query(default=None, max_length=1024),
     limit: int = Query(default=100, ge=1, le=500),
@@ -566,95 +720,100 @@ async def list_nodes(
     cursor names the last row itself, so a row that moves cannot shift
     the next page. The cursor carries its sort and order and is refused
     under any other, as for the packet timeline (#259).
+
+    The filters, the sort and the query come from `node_list_params`
+    and `_node_list_query`, which `export_nodes` uses too (#350).
     """
-    if sort not in SORTS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"sort must be one of: {', '.join(sorted(SORTS))}",
-        )
-    after = None if cursor is None else _read_node_cursor(cursor, sort, order)
-    column = SORTS[sort]
-    direction = column.asc() if order == "asc" else column.desc()
+    after = None if cursor is None else _read_node_cursor(cursor, params.sort, params.order)
+    query = await _node_list_query(session, params)
+    statement = query.rows
 
-    # Nulls last whichever way it was clicked. A node with no role is
-    # not the smallest role, and a reader scanning a column wants the
-    # rows that have nothing to say out of the way.
-    #
-    # `node_num` breaks the tie. Without it Postgres may order equal
-    # rows differently between two queries, so a node could arrive on
-    # two pages or on neither. With 160 nodes reporting no role at all,
-    # ties are the ordinary case here rather than an edge.
-    ordering = (direction.nullslast(), Node.node_num.asc())
-
-    filters = (q, hw, role, gateway, active_hours, before, channel, position, licensed)
-    # The sort value is selected beside the row, so the cursor can name it
-    # exactly as the database compares it. `name` is an expression, not a
-    # column the row carries.
-    statement = _apply_node_filters(
-        select(Node, column.label("sort_value")), *filters, first_seen_hours, quiet_hours
-    )
-    counted = _apply_node_filters(
-        select(func.count()).select_from(Node), *filters, first_seen_hours, quiet_hours
-    )
-
-    # The gaps state is per preset, because a node can need help on one
-    # mesh and be fine on another. Merging them would be the thing
-    # AGENTS.md 9.7 forbids everywhere else, wearing a filter's clothes.
-    if gaps:
-        if not gaps_preset:
-            raise HTTPException(
-                status_code=422,
-                detail="gaps needs gaps_preset: a node can need help on one preset and not another",
-            )
-        wanted = _gaps_node_nums(request, gaps_preset, gaps)
-        if wanted is None:
-            # Not an empty result. Nothing has been assessed, and saying
-            # "no nodes" would be an answer we do not have.
-            raise HTTPException(
-                status_code=409,
-                detail=f"no gap assessment has been written for {gaps_preset} yet",
-            )
-        statement = statement.where(Node.node_num.in_(wanted))
-        counted = counted.where(Node.node_num.in_(wanted))
-
-    total = await session.scalar(counted)
+    total = await session.scalar(query.count)
     response.headers["X-Total-Count"] = str(total or 0)
 
     if after is not None:
-        statement = statement.where(_after_node(column, order, after))
+        statement = statement.where(_after_node(query.column, params.order, after))
     served = (
-        await session.execute(statement.order_by(*ordering).offset(offset).limit(limit))
+        await session.execute(statement.order_by(*query.ordering).offset(offset).limit(limit))
     ).all()
     if served:
         last, last_value = served[-1]
-        response.headers["X-Next-Cursor"] = _node_cursor(sort, order, last_value, last.node_num)
+        response.headers["X-Next-Cursor"] = _node_cursor(
+            params.sort, params.order, last_value, last.node_num
+        )
     return [_summary(node) for node, _value in served]
 
 
-def _gaps_node_nums(request: Request, preset: str, state: str) -> set[int] | None:
+@router.get("/export")
+async def export_nodes(
+    request: Request,
+    params: NodeListParams = Depends(node_list_params),
+    file_format: str = Query(default="csv", alias="format", pattern="^(csv|json)$"),
+    columns: str | None = Query(default=None, max_length=200),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Return every node the list would show, as one CSV or JSON file (#350).
+
+    It takes every filter and the sort of `/api/nodes`, through the same
+    dependency and the same query builder, so the file holds the rows
+    the screen holds, in the same order. It does not page: the file is
+    the whole list, which is the reason it exists.
+
+    `columns` names the list's columns in the order the page draws them.
+    No column adds a field the list does not show. See `api/export.py`.
+
+    Over `export.EXPORT_LIMIT` rows it refuses with 422 and does not cut
+    the file. The count is checked first, and the rows are read one past
+    the limit, so rows that arrive between the two queries are caught.
+    """
+    try:
+        chosen = export.parse_columns(columns)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    query = await _node_list_query(session, params)
+    limit = export.EXPORT_LIMIT
+    total = await session.scalar(query.count) or 0
+    if total > limit:
+        raise HTTPException(status_code=422, detail=_too_many(total, limit))
+    served = (await session.execute(query.rows.order_by(*query.ordering).limit(limit + 1))).all()
+    if len(served) > limit:
+        raise HTTPException(status_code=422, detail=_too_many(len(served), limit))
+    rows = [_summary(node) for node, _value in served]
+    if file_format == "csv":
+        body, media = export.to_csv(rows, chosen), "text/csv; charset=utf-8"
+    else:
+        body, media = export.to_json(rows, chosen), "application/json"
+    name = export.filename(file_format, datetime.now(UTC))
+    return Response(
+        content=body.encode("utf-8"),
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Cache-Control": "no-store",
+            "X-Total-Count": str(len(rows)),
+        },
+    )
+
+
+def _too_many(found: int, limit: int) -> str:
+    """The refusal for a file over the ceiling, in words a reader can act on."""
+    return (
+        f"{found} nodes match, and one export holds at most {limit}. "
+        "Narrow the filters and export again."
+    )
+
+
+async def _gaps_node_nums(session: AsyncSession, preset: str, state: str) -> set[int] | None:
     """Return the nodes the gaps assessment puts in one state, or None.
 
     None means no assessment has been written for that preset, which is
     a different answer from "no nodes are in that state" and must not be
     served as an empty filter that silently matches nothing.
 
-    This reads the artefact the gaps job already wrote, through the same
-    store its own routes use. It recomputes nothing and asks the
-    database for nothing.
+    This reads the rows the gaps job already wrote, by `worst_state`
+    (#351). It recomputes nothing.
     """
-    settings: Settings = request.app.state.settings
-    assessment = gaps_store.read_preset(settings, preset)
-    if assessment is None:
-        return None
-    wanted: set[int] = set()
-    nodes = cast(list[dict[str, object]], assessment.get("nodes") or [])
-    for node in nodes:
-        if node.get("worst_state") == state:
-            try:
-                wanted.add(parse_node_id(str(node["node_id"])))
-            except (KeyError, ValueError):
-                continue
-    return wanted
+    return await gaps_store.node_nums(session, preset, state)
 
 
 @router.get("/facets")
@@ -667,6 +826,7 @@ async def node_facets(
     active_hours: int | None = Query(default=None, ge=1, le=720),
     before: datetime | None = None,
     channel: str | None = None,
+    preset: str | None = None,
     position: str | None = Query(default=None, pattern="^(exact|coarse|none)$"),
     licensed: bool | None = None,
     first_seen_hours: int | None = Query(default=None, ge=1, le=8760),
@@ -688,7 +848,11 @@ async def node_facets(
     filter lifted and the rest in force, which is the number a reader
     is actually asking for: "if I also picked this, how many would I
     have".
+
+    `preset` is the menu's modem preset. It is never lifted: it says
+    which mesh is being counted, not one more filter to compare.
     """
+    menu_preset = require_presets(preset)
 
     async def counts(column: Any, lifted: str) -> list[dict[str, object]]:
         # Each facet is counted with its own filter lifted and the rest
@@ -708,6 +872,7 @@ async def node_facets(
             None if lifted == "licensed" else licensed,
             None if lifted == "first_seen_hours" else first_seen_hours,
             None if lifted == "quiet_hours" else quiet_hours,
+            preset=menu_preset,
         ).group_by(column)
         rows = (await session.execute(statement)).all()
         return [
@@ -742,20 +907,20 @@ async def node_facets(
         licensed,
         first_seen_hours,
         quiet_hours,
+        preset=menu_preset,
     ).group_by("state")
 
     # The gaps states, per preset, because a node can need help on one
     # mesh and be fine on another. Offering "needs help" without saying
     # on which would be the merge AGENTS.md 9.7 forbids.
-    settings: Settings = request.app.state.settings
     gaps_options: list[dict[str, object]] = []
-    index = gaps_store.read_index(settings) or {}
+    index = await gaps_store.read_index(session) or {}
     for entry in cast(list[dict[str, object]], index.get("presets") or []):
         preset = str(entry.get("preset") or "")
         if not preset:
             continue
         for state in ("bad", "unknown"):
-            wanted = _gaps_node_nums(request, preset, state)
+            wanted = await _gaps_node_nums(session, preset, state)
             if not wanted:
                 continue
             total = await session.scalar(
@@ -772,6 +937,7 @@ async def node_facets(
                     licensed,
                     first_seen_hours,
                     quiet_hours,
+                    preset=menu_preset,
                 ).where(Node.node_num.in_(wanted))
             )
             if total:
@@ -842,6 +1008,8 @@ async def node_detail(
         "device": await _latest_metric(session, DeviceMetrics, node_num),
         "air_quality": await _latest_metric(session, AirQualityMetrics, node_num),
         "power": await _latest_metric(session, PowerMetrics, node_num),
+        # The newest reading a contributor brought back (#178, #182).
+        "local_stats": await _latest_metric(session, LocalStatsMetrics, node_num),
         "activity": await _activity(session, node_num, since),
         "messages": await _messages(session, node_num, since, limit=25),
         "graph": {
@@ -931,9 +1099,8 @@ async def node_radio(
         raise HTTPException(status_code=404, detail="node not found")
 
     identifier = format_node_id(node_num)
-    settings = request.app.state.settings
     overrides = request.app.state.radio_overrides
-    offsets = calibration_offsets(settings)
+    offsets = await calibration_offsets(session)
     profile = resolve_profile(
         identifier, node.hw_model, overrides, offsets.get(identifier), role=node.role
     )

@@ -64,6 +64,18 @@ x-no-credentials: &no-credentials
   # whole, not because anything asked.
   CHANNEL_KEYS: ""
 
+# The broker passwords. Each one is blanked in every service but the one
+# that logs in with it, which takes it from its env files untouched. Not
+# `environment: {X: ${X}}` there: `environment` beats every `env_file`,
+# and would replace a password a host gives in its own override file.
+# `tests/unit/test_broker_credentials.py` pins it.
+x-no-mqtt: &no-mqtt
+  MQTT_PASSWORD: ""
+x-no-rf-mqtt: &no-rf-mqtt
+  RF_MQTT_PASSWORD: ""
+x-no-contrib-mqtt: &no-contrib-mqtt
+  CONTRIB_MQTT_PASSWORD: ""
+
 services:
   timescaledb:
     image: timescale/timescaledb-ha:pg17
@@ -119,7 +131,7 @@ services:
     # The API is the process on the public internet, and it reads the
     # SELECT-only role and nothing else. See `x-no-credentials`.
     environment:
-      <<: *no-credentials
+      <<: [*no-credentials, *no-mqtt, *no-rf-mqtt, *no-contrib-mqtt]
       DATABASE_URL_API: ${DATABASE_URL_API:?set DATABASE_URL_API in .env}
     depends_on:
       migrate:
@@ -162,7 +174,7 @@ services:
     # variable named — a `:?` here would stop unrelated commands such
     # as `docker compose up -d timescaledb` as well.
     environment:
-      <<: *no-credentials
+      <<: [*no-credentials, *no-mqtt, *no-rf-mqtt, *no-contrib-mqtt]
       DATABASE_URL_MIGRATE: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@${DB_HOSTNAME:-timescaledb}:5432/azmsh
       AZMSH_INGEST_PASSWORD: ${AZMSH_INGEST_PASSWORD:-}
       AZMSH_API_PASSWORD: ${AZMSH_API_PASSWORD:-}
@@ -182,7 +194,7 @@ services:
     # INSERT and UPDATE on the payload tables, and nothing else.
     # See `x-no-credentials`.
     environment:
-      <<: *no-credentials
+      <<: [*no-credentials, *no-rf-mqtt, *no-contrib-mqtt]
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
       # The one process that decrypts anything off the air.
       CHANNEL_KEYS: ${CHANNEL_KEYS:-}
@@ -207,8 +219,28 @@ services:
     command: ["sonoran-rf-ingest"]
     env_file: .env
     environment:
-      <<: *no-credentials
+      <<: [*no-credentials, *no-mqtt, *no-contrib-mqtt]
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+
+  # Contributors (#178, docs/design/contributors.md). Off by default:
+  #   docker compose --profile contrib up -d contrib
+  # It holds the only broker login that may publish jobs (CONTRIB_MQTT_*),
+  # and writes as the jobs role, which can read node roles.
+  contrib:
+    build: .
+    restart: unless-stopped
+    logging: *logging
+    profiles: ["contrib"]
+    command: ["sonoran-contrib"]
+    env_file: .env
+    environment:
+      <<: [*no-credentials, *no-mqtt, *no-rf-mqtt]
+      DATABASE_URL_JOBS: ${DATABASE_URL_JOBS:?set DATABASE_URL_JOBS in .env}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -222,6 +254,10 @@ services:
     networks:
       - sonoran-internal
     command: ["sonoran-jobs"]
+    # A small init as PID 1 (#371). The jobs supervisor stops a job over
+    # its memory ceiling by killing its process tree; the processes below
+    # the job are then re-parented to PID 1, and only an init reaps them.
+    init: true
     env_file: .env
     # Contain the coverage job's memory to the container that uses it.
     #
@@ -251,7 +287,7 @@ services:
     mem_limit: ${JOBS_MEMORY_LIMIT:-0}
     # The jobs role, and nothing else. See `x-no-credentials`.
     environment:
-      <<: *no-credentials
+      <<: [*no-credentials, *no-mqtt, *no-rf-mqtt, *no-contrib-mqtt]
       DATABASE_URL_JOBS: ${DATABASE_URL_JOBS:?set DATABASE_URL_JOBS in .env}
     volumes:
       # The coverage job reads terrain and land cover, and writes the

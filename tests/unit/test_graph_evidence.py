@@ -56,9 +56,14 @@ def test_the_endpoint_limits_what_is_drawn_not_what_is_counted() -> None:
     exists.
     """
     source = inspect.getsource(graph._mesh_graph)
-    built = source.index("_traceroute_edges(")
+    # The evidence is built by `link_evidence` (#371), whole, or read from
+    # the jobs' build of it, which stores every link: the cut is after.
+    built = source.index("link_evidence(")
     cut = source.index("ranked[:limit]")
     assert built < cut, "the limit is applied before the evidence is aggregated"
+    evidence = inspect.getsource(graph.link_evidence)
+    assert "_traceroute_edges(" in evidence and "_neighbor_edges(" in evidence
+    assert ".limit(" not in evidence and "[:" not in evidence
     assert "links_truncated" in source, (
         "a truncated graph does not say so, and a partial picture that "
         "does not admit it is worse than a small one"
