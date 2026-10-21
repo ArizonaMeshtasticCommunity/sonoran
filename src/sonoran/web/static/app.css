@@ -4896,7 +4896,10 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
        below the hint popovers (1900) and the full-screen chart (2000). */
     z-index: 1100;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    /* One equal column for each item, five by default. A page hidden by
+       HIDDEN_SECTIONS leaves the bar, and the rest share its width. */
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     height: var(--tabbar-h);
     padding: 0 var(--safe-right) var(--safe-bottom) var(--safe-left);
     background: var(--panel);

@@ -1608,7 +1608,8 @@ let leaderboardPreset = '';
 
 async function loadLeaderboards(page, { query = '', span = '' } = {}) {
   const target = $('[data-leaderboards]', page);
-  if (!target) return;
+  // Hidden by this deployment (HIDDEN_SECTIONS): its route answers 404.
+  if (!target || SonoranSections.isHidden('leaderboards')) return;
   /*
    * The preset comes from the menu now, not from a picker on this panel.
    *
@@ -1745,7 +1746,8 @@ PAGES.dashboard = async (page) => {
     'api/nodes?limit=15&active_hours=24',
     // Filtered like the Chat page: on LongFast this feed was showing
     // messages that no LongFast node hears. `preset=` since #313.
-    `api/chat?limit=${DASHBOARD_MESSAGES}${presetQuery()}`,
+    // Not asked for when chat is hidden: the card goes with it.
+    SonoranSections.isHidden('chat') ? null : `api/chat?limit=${DASHBOARD_MESSAGES}${presetQuery()}`,
     /*
      * The same 24 hours and the same preset the chart's own heading and
      * the firehose it links into use (§7.1).
@@ -1776,7 +1778,7 @@ PAGES.dashboard = async (page) => {
    */
   const feedChannel = $('[data-recent-chat-channel]', page);
   if (feedChannel) feedChannel.textContent = menuPresetWords();
-  replace($('[data-recent-chat]', page), messages
+  if (!SonoranSections.isHidden('chat')) replace($('[data-recent-chat]', page), messages
     ? (messages.length
         ? messages.map((message) => messageItem(message))
         : [empty('No messages stored.')])
@@ -1858,9 +1860,11 @@ PAGES.dashboard = async (page) => {
           return tooltipLines(
             `${band.label} (${band.wire})`,
             `${count(band.count)} packets`,
-            band.filterable
-              ? 'Click to open these in the firehose'
-              : 'Not a packet type, so the firehose cannot filter on it',
+            // Nothing about the firehose when it is hidden (HIDDEN_SECTIONS).
+            SonoranSections.isHidden('firehose') ? null
+              : band.filterable
+                ? 'Click to open these in the firehose'
+                : 'Not a packet type, so the firehose cannot filter on it',
           );
         },
       },
@@ -1873,6 +1877,8 @@ PAGES.dashboard = async (page) => {
         data: bands.map((band) => ({
           value: band.count,
           cursor: band.filterable ? 'pointer' : 'default',
+          // A hidden firehose (HIDDEN_SECTIONS) makes no bar a door.
+          ...(SonoranSections.isHidden('firehose') ? { cursor: 'default' } : {}),
         })),
         itemStyle: { color: PALETTE.accent, borderRadius: [0, 3, 3, 0] },
       }],
@@ -1902,6 +1908,8 @@ PAGES.dashboard = async (page) => {
         // nothing is right; navigating to `#firehose?type=undefined`
         // would be a filter nobody asked for.
         if (!band || !band.filterable) return;
+        // A hidden firehose is no place to send a reader (HIDDEN_SECTIONS).
+        if (SonoranSections.isHidden('firehose')) return;
         location.hash = firehoseHref(band.wire, PORTNUM_CHART_HOURS).slice(1);
       });
     }
@@ -11273,6 +11281,8 @@ const PRESET_PAGES = new Set([
 const PRESET_FREE_PAGES = new Set([
   'traceroutes', 'meshnet', 'rf', 'config',
   'node', 'packet', 'link', 'traceroute',
+  // The page a hidden section's address opens. It shows no data.
+  'unavailable',
 ]);
 
 /*
@@ -11401,7 +11411,13 @@ async function route() {
   const parts = (fragment || 'dashboard').split('/');
   const [name, nodeId] = parts;
 
-  const known = Object.hasOwn(PAGES, name) ? name : 'dashboard';
+  /*
+   * A page this deployment hides (HIDDEN_SECTIONS) opens the "not
+   * available" page instead, whatever the address says after its name.
+   * The menu and the links never offer it; this is for a bookmark, a
+   * shared link, or an address typed by hand.
+   */
+  const known = SonoranSections.pageFor(Object.hasOwn(PAGES, name) ? name : 'dashboard');
 
   if (watchFragmentWrite && known === currentPage) {
     watchFragmentWrite = false;
@@ -11570,6 +11586,12 @@ const SETTING_WORDS = {
   temperature: { fahrenheit: 'Fahrenheit', celsius: 'Celsius' },
   theme: { system: 'Follow my device', light: 'Light', dark: 'Dark' },
 };
+
+/*
+ * The page a hidden section's address opens (HIDDEN_SECTIONS). Its words
+ * and its link home are in the markup, so there is nothing to draw.
+ */
+PAGES.unavailable = async () => {};
 
 PAGES.settings = async (page) => {
   for (const group of $$('[data-setting]', page)) {
