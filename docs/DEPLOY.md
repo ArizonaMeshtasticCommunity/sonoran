@@ -109,6 +109,10 @@ Do not stop at the diff. Check what runs:
    python3 tools/deploy_check.py compare before.json http://<api-host>:<port>
    ```
 
+   When this deploy also changes `HIDDEN_SECTIONS`
+   (`docs/OPERATIONS.md` 2.1), the routes of a part that is now hidden
+   give `FAIL ... was 200, now 404`. That is the expected result. Take
+   the next snapshot after the change.
 4. The page has the new asset hashes, and the endpoints that you
    changed answer.
 5. The logs of the rebuilt services have no errors.

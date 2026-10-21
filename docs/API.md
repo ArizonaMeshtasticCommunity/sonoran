@@ -19,6 +19,9 @@ It uses ASD-STE100 Simplified Technical English.
 7. Errors return a JSON object: `{"error": "message"}`.
 8. The base path is `/api`.
 9. Each caller has a request budget. See 1.1.
+10. A route of a part of the site that the operator hides answers 404
+    (`HIDDEN_SECTIONS`, `docs/OPERATIONS.md` 2.1). With the default,
+    nothing is hidden.
 
 ### 1.1 Request budget
 

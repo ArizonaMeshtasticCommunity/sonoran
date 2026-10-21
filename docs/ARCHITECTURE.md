@@ -435,6 +435,9 @@ channel, Data message metadata, and receive time.
   - `limits.py`: the request budget of each caller (`API_RATE_*`).
   - `packet_summary.py`: one short line for each packet on a page.
   - `preset_scope.py`: the `preset=` filter of the list pages (#313).
+  - `sections.py`: the parts of the site an operator can hide
+    (`HIDDEN_SECTIONS`), and the one dependency that answers 404 for
+    their routes. The page side is `web/static/sections.js`.
   - `sightings.py`: observations with the hop count they started with.
   - `trace_drawing.py`: a mesh-graph drawing, fetched over the compose
     network from `MESH_GRAPH_INTERNAL_URL` and recoloured.

@@ -105,6 +105,96 @@ Rules:
 - The optional services need their profile in every command, for
   example `docker compose --profile rf restart rf-ingest`.
 
+### 2.1 Hide a part of the site
+
+You can hide a part of the site that is not ready. You do not change
+code. Logan asked for this for the test roll-out to `main`.
+
+1. In `.env`, set `HIDDEN_SECTIONS` to the ids of the parts. Use the
+   ids in the table below, comma separated:
+
+   ```bash
+   HIDDEN_SECTIONS=rf,planner
+   ```
+
+2. Make the `api` container again. Only `api` reads this setting, and
+   it needs no build. `restart` keeps the old environment, so do not
+   use it here:
+
+   ```bash
+   docker compose up -d --no-deps api
+   ```
+
+3. Read the `api` log: `docker compose logs --tail 20 api`. An id that
+   is not in the table gives one warning that starts with
+   `HIDDEN_SECTIONS names ids that are not sections`. The API ignores
+   that id and starts.
+4. Do a check. Each hidden part must answer 404, for example:
+
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/rf/kinds
+   ```
+
+To show a part again, remove its id and do step 2 again. An empty
+`HIDDEN_SECTIONS` shows everything. That is the default.
+
+What a hidden part loses:
+
+- Its entry in the menu, in the phone bar and in **More**.
+- The links to it on other pages, and the cards that lead to it.
+- Its address. An old link or a bookmark opens a page that says "This
+  part of Sonoran isn't available yet", with a link to the dashboard.
+- Its shortcut on the installed app's icon (touch and hold).
+- Its API routes. They answer 404, so the data is closed too, not only
+  out of view.
+
+The page gets the list in the config that the API writes into it. It
+makes no extra request. After a change, an open app shows "Sonoran was
+updated", because the page changed.
+
+A hidden part is not secret. Its script files are still served under
+`/static/`. Only its data and its way in are closed.
+
+The ids are the page names in the address bar (`#rf` is `rf`):
+
+| Id | What it hides | API routes that answer 404 |
+|---|---|---|
+| `map` | Map, with watch mode | `/api/map/traffic`, `/api/map/edges`, `/api/map/traceroute-paths`, `/api/map/track/…` |
+| `nodes` | The Nodes list. A node's own page stays. | `/api/nodes/export`, `/api/nodes/facets` |
+| `chat` | Chat, and the dashboard's "Latest messages" card | `/api/chat`, `/api/chat/channels`, `/api/chat/overview`, `/api/chat/conversation/…` |
+| `traceroutes` | The Traceroutes list. One traceroute's page stays. | `/api/traceroutes` |
+| `graph` | Graph | `/api/graph` |
+| `coverage` | Coverage, and the coverage embed | `/api/coverage/…`, `/embed/coverage`, `/api/embed/…` |
+| `planner` | Planner | `/api/terrain/…`, `/api/climate/…`, `/api/radio/…`, `/api/geocode` |
+| `gaps` | Gaps. The health checks on a node's page stay. | `/api/gaps/…` |
+| `config` | Config check, with the USB read, write and backup | None. The page works in the browser. |
+| `meshnet` | Weekly check-in | `/api/chat/tagged` |
+| `firehose` | Firehose. The dashboard's packet types chart stops opening it. | `/api/packets` |
+| `rf` | RF | `/api/rf/…` |
+| `stats` | Statistics, with its leaderboards | `/api/stats/daily`, `/api/stats/hardware`, `/api/stats/activity`, `/api/stats/broadcast`, `/api/stats/reliability/…`, `/api/stats/leaderboards` |
+| `leaderboards` | Only the Leaderboards panel on Statistics | `/api/stats/leaderboards` |
+
+You cannot hide the dashboard or Settings. You cannot hide the page of
+one node, packet, link or traceroute, because many pages link to them.
+The API ignores these ids and logs a warning.
+
+**The rule for a route.** A route closes only when **every** part that
+uses it is hidden:
+
+- `/api/map/nodes` closes when `map`, `coverage` and `planner` are all
+  hidden.
+- `/api/graph/channels` closes when `graph` and `map` are both hidden.
+
+These never close: the page, `/sw.js`, the manifest, `/health`,
+`/api/version`, and the routes that the dashboard and the detail pages
+read. Those are `/api/nodes`, `/api/nodes/{id}/…`, `/api/stats`,
+`/api/stats/top`, `/api/stats/portnums`, `/api/stats/snapshots/daily`,
+`/api/packets/{from}/{id}`, `/api/traceroutes/{id}`,
+`/api/traceroutes/by-packet/…` and `/api/graph/link`.
+
+The table in the code is `src/sonoran/api/sections.py`. A test fails
+when a new route is not in it.
+
 ## 3. Read the logs
 
 ```bash

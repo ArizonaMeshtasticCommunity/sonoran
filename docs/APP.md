@@ -82,6 +82,10 @@ is the same in the app and in a browser tab. In the app it fills the
 area of the home indicator, and its words stay above the indicator. The
 offline notice and the update notice show above the bar.
 
+A part of the site that the operator hides (`HIDDEN_SECTIONS`,
+`docs/OPERATIONS.md` 2.1) is not in the bar and not in **More**. The
+items that stay share the width of the bar.
+
 ## 4. For operators
 
 ### 4.1 The login proxy
@@ -141,6 +145,17 @@ The map tiles are not cached. The OpenStreetMap tile policy forbids
 bulk copies for offline use.
 
 `tests/unit/test_pwa.py` pins each of these points.
+
+### 4.2.1 The manifest when parts are hidden
+
+With `HIDDEN_SECTIONS` empty, `/static/manifest.webmanifest` is the
+file, as before. With a list, `api/app.py` serves it without the
+shortcuts to the hidden pages, so touch and hold on the icon offers no
+page that is hidden. The asset version then is a hash of the files and
+of the list. The manifest is kept for a year under its `?v=`, so a new
+list must be a new address. A change to the list therefore shows the
+update notice in an open app. The service worker keeps nothing, so it
+can never open a hidden page from a cache.
 
 ### 4.3 The icons
 
