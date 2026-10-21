@@ -163,3 +163,56 @@ def test_the_failure_says_what_to_add() -> None:
     assert 'data-term="snr"' in message
     assert "glossary.js" in message
     assert "docs/NEWCOMER.md" in message
+
+
+# --------------------------------------------------------------------------
+# The tooltip itself. The e2e journey "a glossary word explains itself by
+# tap and by keyboard" opens one in a browser; these hold the source shape.
+
+APP = (check.STATIC / "app.js").read_text(encoding="utf-8")
+INDEX = (check.STATIC / "index.html").read_text(encoding="utf-8")
+
+
+def _body(name: str) -> str:
+    start = APP.index(f"function {name}(")
+    return APP[start : APP.index("\n}\n", start)]
+
+
+def test_the_glossary_loads_before_app_js() -> None:
+    glossary = INDEX.index('src="static/glossary.js')
+    assert glossary < INDEX.index('src="static/app.js'), "app.js would find no glossary"
+
+
+def test_a_term_opens_the_one_hint_popover_and_never_a_title() -> None:
+    """One popover pattern on the site: the term button is a hint button."""
+    terms = _body("revealTerms")
+    assert "fitHint(host, 'word'" in terms
+    assert APP.count("function wireHint(") == 1
+    assert "wireHint(button, panel);" in _body("fitHint")
+    assert "role: 'tooltip'" not in APP and "'role', 'tooltip'" not in APP
+    assert "revealTerms(root);" in _body("revealHints"), "render never builds the term buttons"
+
+
+def test_a_term_on_a_control_goes_beside_it() -> None:
+    """A button cannot hold a button, and a label must keep its control's name."""
+    terms = _body("revealTerms")
+    assert "host.matches('button, a, select, input, textarea, summary, [id]')" in terms
+    assert "keepControlName(host)" in terms
+    assert "host.after(button, panel)" in _body("fitHint")
+
+
+def test_every_role_the_meshtastic_docs_name_has_an_entry() -> None:
+    glossary = check.load_glossary()
+    for role in (
+        "CLIENT", "CLIENT_MUTE", "CLIENT_HIDDEN", "CLIENT_BASE", "ROUTER", "ROUTER_LATE",
+        "ROUTER_CLIENT", "REPEATER", "TRACKER", "SENSOR", "TAK", "TAK_TRACKER", "LOST_AND_FOUND",
+    ):  # fmt: skip
+        term = "role-" + role.lower().replace("_", "-")
+        assert term in glossary, f"{role} has no glossary entry {term}"
+
+
+def test_the_node_page_shows_the_plain_role_and_keeps_the_exact_one() -> None:
+    rows = _body("identityRows")
+    assert "text: node.role ? roleLabel(node.role) : 'Unknown'" in rows
+    assert "exact: node.role || null" in rows
+    assert "`${roleLabel(node.role)} (${node.role})`" not in rows

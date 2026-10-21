@@ -599,7 +599,7 @@ coverage job (`coverage/sites.py::engine_params`) and the calibration
 
 - Job: the user interface.
 - Static HTML, CSS, and JavaScript files. There is no build step.
-- Files: `index.html`, `app.css`, `app.js`, `map-defaults.js`,
+- Files: `index.html`, `app.css`, `app.js`, `glossary.js`, `map-defaults.js`,
   `node-sheet.js`, `map-live.js`, `map-watch.js`, `planner.js`, `planner-params.js`,
   `planner.worker.js`, `config-check.js`, `meshtastic-static.js`,
   `gaps.js`, `siting.js`,
@@ -647,6 +647,16 @@ same element is shown with `hidden` and `position: fixed`, which
 escapes a plain `overflow` ancestor as well, and `app.js` closes it on
 Escape and on a tap outside. Each column's own exact protocol values
 are listed in its panel.
+
+A technical word carries `data-term` with an id from `glossary.js`, the
+one source of plain explanations (`AGENTS.md` 3B, `docs/NEWCOMER.md`).
+`revealTerms` in `app.js` gives it the same button and popover. On an
+element that `revealHints` already handles (a column, a field, a tile
+label, a heading with a hint) the glossary text joins that panel. The
+button goes beside a control or an element with an `id`, and a
+`<label>`'s control keeps its name. `tests/unit/test_newcomer_glossary.py`
+checks the glossary, `docs/GLOSSARY.md`, and that new on-screen text
+with a glossary word carries its tooltip.
 
 The config check page uses the community config checker's logic,
 vendored in `web/static/vendor/config-checker/`, and draws the result in

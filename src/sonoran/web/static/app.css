@@ -1163,6 +1163,24 @@ th { color: var(--muted); font-weight: 600; font-size: max(.75rem, var(--text-fl
    a long enum has no space in it to break at, and one of those must
    not push the panel past the edge of a 320 px screen. */
 .hint-pop .hint-exact { font: var(--mono); overflow-wrap: anywhere; }
+/*
+ * A glossary word (AGENTS.md 3B, `revealTerms` in app.js). The same
+ * button and panel as a hint; only the link is new. It is the accent
+ * colour with an underline, so it reads as a link in both themes.
+ */
+.hint-pop .hint-term a { color: var(--accent); text-decoration: underline; text-underline-offset: .15em; }
+.hint-pop .hint-term strong { color: var(--text); font-weight: 650; }
+/* The menu's "Preset" and its glossary button share a row. */
+.menu-field-head { display: flex; align-items: center; gap: .1rem; }
+.menu-field-head .hint-open { margin-left: 0; }
+/* In a row of word, menu and button, the button follows the word: the
+   menu moves to the end, so the "i" never wraps onto a line of its own. */
+.coverage-pick[data-term] > select { order: 1; }
+/* In running text the 24 px target would stretch its line; the
+   negative margin keeps the line height and the target size. */
+p > .hint-open { margin-block: -.3rem; }
+/* The key of the map legend opens with the word it explains. */
+.legend-lead { font-weight: 600; }
 tbody tr:hover { background: var(--panel-2); }
 /*
  * A column that stays put while the rest of a wide table scrolls under
@@ -4543,6 +4561,8 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
   /* The mark and the wordmark leave the screen, and the h1 stays in the
      tree. The mark carries an inline `display`, so this cannot be
      `display: none` either. */
+  /* The word "Preset" leaves, and its glossary button with it. */
+  html[data-sidebar="collapsed"] .menu-field-head .hint-open { display: none; }
   html[data-sidebar="collapsed"] .brand-mark,
   html[data-sidebar="collapsed"] .brand-text,
   html[data-sidebar="collapsed"] .sidebar .nav-label,
@@ -4956,6 +4976,10 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
     position: absolute; width: 1px; height: 1px; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap;
   }
+  /* The word gives up its place here, and so does its button: the
+     Settings page explains presets with room to do it (AGENTS.md 3B). */
+  .menu-field-head { display: contents; }
+  .menu-field-head .hint-open { display: none; }
   .menu-field .preset-switch { flex: 0 0 auto; }
   .menu-field .preset-more { flex: 1 1 7rem; width: auto; min-width: 0; padding-inline: .3rem; }
   /* The top bar, the page's own padding (1rem above, 1rem below) and

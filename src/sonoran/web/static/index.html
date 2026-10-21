@@ -370,7 +370,14 @@
             and in `preset.js`, where anybody changing this will meet it.
           -->
           <div class="menu-field">
-            <span class="menu-field-label" id="preset-label">Preset</span>
+            <!--
+              The row holds the word and its glossary button side by side
+              (AGENTS.md 3B). The button goes beside the word, not inside
+              it, because the radio group takes its name from this span.
+            -->
+            <div class="menu-field-head">
+              <span class="menu-field-label" id="preset-label" data-term="modem-preset">Preset</span>
+            </div>
             <div class="preset-switch" role="radiogroup" aria-labelledby="preset-label"
                  data-preset-switch></div>
             <select class="preset-more" data-preset-more aria-label="More presets" hidden></select>
@@ -508,7 +515,7 @@
                 fetches the map again: it only closes the menu.
               -->
               <div class="family-filter" data-family-filter>
-                <button type="button" class="family-toggle" data-family-toggle
+                <button type="button" class="family-toggle" data-family-toggle data-term="packet-type"
                         aria-expanded="false" aria-controls="family-menu"><span data-family-summary>Packet Types: all</span></button>
                 <div class="family-menu" id="family-menu" data-family-menu hidden>
                   <div class="family-chips" data-family-chips role="group" aria-label="Packet Types to draw"></div>
@@ -518,8 +525,8 @@
                   </div>
                 </div>
               </div>
-              <button type="button" class="toggle" data-show-traces aria-pressed="true">Live traceroutes</button>
-              <button type="button" class="toggle" data-show-links aria-pressed="false">Neighbor links</button>
+              <button type="button" class="toggle" data-show-traces aria-pressed="true" data-term="traceroute">Live traceroutes</button>
+              <button type="button" class="toggle" data-show-links aria-pressed="false" data-term="neighbor-info">Neighbor links</button>
               <!--
                 One preset at a time. A node on LongFast cannot hear a
                 node on MediumFast, so lines from both in one picture
@@ -909,7 +916,7 @@
               <label class="coverage-pick" data-coverage-siteset-wrap hidden>Map source
                 <select data-coverage-siteset aria-label="Which nodes the map is predicted from"></select>
               </label>
-              <label class="coverage-check">
+              <label class="coverage-check" data-term="position-precision">
                 <input type="checkbox" data-coverage-approx />
                 <span>Include approximate positions</span>
               </label>
@@ -920,7 +927,7 @@
               <!-- The signal floor (#334). A map choice, so it goes in the
                    address. Drawn from the run's margin tiles, which the
                    public embed never reads. -->
-              <label class="coverage-pick">Signal floor
+              <label class="coverage-pick" data-term="signal-margin">Signal floor
                 <select data-coverage-signal-floor aria-label="Show only where the signal is at least this far above what the radio needs">
                   <option value="0" selected>0 dB: all usable ground</option>
                   <option value="5">5 dB above the limit</option>
@@ -946,7 +953,7 @@
             <!-- Drawn in this browser only. Saved for this viewer, and
                  never in the address or on the server. -->
             <fieldset class="coverage-settings-group">
-              <legend>Node markers</legend>
+              <legend data-term="role">Node markers</legend>
               <div class="coverage-role-chips" role="group" aria-label="Node markers by role" data-coverage-roles></div>
               <label class="coverage-pick">Last heard
                 <select data-coverage-heard aria-label="Show nodes last heard within">
@@ -960,7 +967,7 @@
                 <span>Hide moving nodes</span>
               </label>
               <p class="coverage-setting-note">Moving means the Tracker and TAK tracker roles. The page cannot see a node of another role move.</p>
-              <label class="coverage-check">
+              <label class="coverage-check" data-term="position-precision">
                 <input type="checkbox" data-coverage-circles />
                 <span>Show uncertainty circles</span>
               </label>
@@ -982,7 +989,7 @@
               <!-- The part of the ramp below the signal floor is dimmed
                    (#334). `--coverage-floor` is set by coverage.js. -->
               <div class="coverage-ramp" data-coverage-ramp aria-hidden="true"></div>
-              <div class="coverage-scale">
+              <div class="coverage-scale" data-term="dbm">
                 <span><strong>Weak</strong><small data-coverage-floor></small></span>
                 <span><strong>Strong</strong><small data-coverage-ceiling></small></span>
               </div>
@@ -1299,7 +1306,7 @@
               <label>Antenna height (<span data-planner-unit="height">ft</span>) <input data-planner="tx_height" inputmode="decimal" /></label>
               <div class="pair" data-advanced-only>
                 <label>Power (dBm) <input data-planner="tx_power" inputmode="decimal" /></label>
-                <label>Antenna gain (dBi) <input data-planner="tx_gain" inputmode="decimal" /></label>
+                <label><span data-term="antenna-gain">Antenna gain (dBi)</span> <input data-planner="tx_gain" inputmode="decimal" /></label>
               </div>
               <!--
                 Pick the antenna instead of typing its gain (#111, #113).
@@ -1336,7 +1343,7 @@
               <p class="muted antenna-note" data-antenna-aim-note="tx" hidden></p>
 
               <h3>Receiver</h3>
-              <label>Modem preset <select data-planner="preset"></select></label>
+              <label><span data-term="modem-preset">Modem preset</span> <select data-planner="preset"></select></label>
               <!--
                 Preset, slot and frequency are one setting said three ways
                 (§6.5). The slot is `lora.channel_num` on the radio and
@@ -1354,8 +1361,8 @@
               <p class="muted planner-slot-note" data-planner-slot-note hidden></p>
               <label>Height (<span data-planner-unit="height">ft</span>) <input data-planner="rx_height" inputmode="decimal" /></label>
               <div class="pair" data-advanced-only>
-                <label>Sensitivity (dBm) <input data-planner="sensitivity" inputmode="decimal" /></label>
-                <label>Antenna gain (dBi) <input data-planner="rx_gain" inputmode="decimal" /></label>
+                <label><span data-term="sensitivity dbm">Sensitivity (dBm)</span> <input data-planner="sensitivity" inputmode="decimal" /></label>
+                <label><span data-term="antenna-gain">Antenna gain (dBi)</span> <input data-planner="rx_gain" inputmode="decimal" /></label>
               </div>
               <label data-advanced-only>Cable loss (dB), each end
                 <input data-planner="system_loss" inputmode="decimal" /></label>
@@ -2360,7 +2367,7 @@
             -->
             <div class="panel settings-presets">
               <h3 id="settings-presets-label">Modem presets</h3>
-              <p class="sub">The pages show what was heard on the presets you choose. The map,
+              <p class="sub" data-term="modem-preset">The pages show what was heard on the presets you choose. The map,
                 the graph, coverage, gaps and the planner draw one of them at a time, because
                 nodes on different presets cannot hear each other.</p>
               <div class="preset-boxes" role="group" aria-labelledby="settings-presets-label"
@@ -2430,6 +2437,13 @@
     <script src="static/units.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/preset.js?v=__SONORAN_ASSET_VERSION__"></script>
     <script src="static/labels.js?v=__SONORAN_ASSET_VERSION__"></script>
+    <!--
+      The plain explanation of every technical word on the site
+      (AGENTS.md 3B, docs/NEWCOMER.md). Before app.js, whose
+      `revealHints` reads `window.SonoranGlossary` when it builds an
+      element's `data-term` button.
+    -->
+    <script src="static/glossary.js?v=__SONORAN_ASSET_VERSION__"></script>
     <!--
       The weekly check-in's wording rules. Before app.js, which reads
       `window.SonoranMeshnet` at the top level of its meshnet section:
