@@ -1,7 +1,7 @@
 """Add location_source to position_metrics.
 
 Revision ID: pr344
-Revises: i368
+Revises: pr378
 Create Date: 2026-10-01
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "pr344"
-down_revision: str | None = "i368"
+down_revision: str | None = "pr378"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
