@@ -78,7 +78,23 @@ x-no-contrib-mqtt: &no-contrib-mqtt
 
 services:
   timescaledb:
-    image: timescale/timescaledb-ha:pg17
+    # Pinned by digest, the image that CI tests.
+    #
+    # `pg17` is a moving tag. It changed 6 times in 14 days, and a pull
+    # takes whatever was pushed last, with no record of which build
+    # runs the database. The tag is kept so a reader can see what it
+    # tracks. The digest is what Docker pulls. It is the multi-arch index
+    # (amd64 and arm64), and it is the same digest as the CI database
+    # (.github/workflows/ci.yml, tests/integration/conftest.py) and
+    # tools/backup.Dockerfile. test_ci_database_image.py holds them to
+    # one value. Update all of them together, in their own commit.
+    #
+    # Before you deploy an older digest than the one a database has run,
+    # check the extension version. This image holds TimescaleDB 2.30.2
+    # and every older 2.x release, and it cannot load a newer one:
+    #
+    #   SELECT extversion FROM pg_extension WHERE extname = 'timescaledb';
+    image: timescale/timescaledb-ha:pg17@sha256:e77fc7a0395b63a89d27b8b5043abcc7e8120576429ea9a470977d4bed3d0261
     restart: unless-stopped
     logging: *logging
     environment:
