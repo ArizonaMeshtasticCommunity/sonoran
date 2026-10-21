@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from sqlalchemy import select
+from sqlalchemy import case, func, select, text
 
 from sonoran.config import Settings
 from sonoran.coverage import store
@@ -93,71 +93,50 @@ def write_png(image: npt.NDArray[np.uint8]) -> bytes:
     )
 
 
-Row = tuple[int, float, float, int | None, int, int, int | None, int | None]
+# Points for each gateway that heard a position, by its fewest hops.
+# Direct is worth most; the score of a position is the sum over gateways.
+HOP_SCORES = ((0, 10.0), (2, 5.0), (4, 2.0))
+FAR_HOP_SCORE = 1.0
 
 
-def _score_packets(rows: list[Row], minimum_bits: int) -> list[tuple[float, float, float]]:
-    """Score each heard position by the gateways that heard it."""
-    # One packet is (node, packet ID). Packet IDs of different nodes can
-    # be equal (AGENTS.md 9.1).
-    packets: dict[tuple[int, int], tuple[float, float, dict[int, int]]] = {}
-    for node, lat, lon, prec, pkt_id, gw_num, hop_start, hop_limit in rows:
-        if hop_start is None or hop_limit is None:
-            continue
-        # The coverage map's precise rule (#315, docs/DECISIONS.md): a
-        # rounded position is the centre of its cell, not where the radio is.
-        if not is_precise_enough(prec, minimum_bits):
-            continue
+def _hop_score(hops: Any) -> Any:
+    """The SQL for one gateway's points: HOP_SCORES, else FAR_HOP_SCORE."""
+    return case(*((hops <= limit, score) for limit, score in HOP_SCORES), else_=FAR_HOP_SCORE)
 
-        key = (node, pkt_id)
-        if key not in packets:
-            packets[key] = (lat, lon, {})
 
-        hops_used = hop_start - hop_limit
-        gateways = packets[key][2]
-
-        if gw_num not in gateways or hops_used < gateways[gw_num]:
-            gateways[gw_num] = hops_used
-
-    final_data = []
-
-    for lat, lon, gateways in packets.values():
-        if not gateways:
-            continue
-
-        score = 0.0
-        for hops in gateways.values():
-            if hops <= 0:
-                score += 10.0
-            elif hops <= 2:
-                score += 5.0
-            elif hops <= 4:
-                score += 2.0
-            else:
-                score += 1.0
-
-        final_data.append((lat, lon, float(score)))
-
-    return final_data
+def _points(rows: Any, minimum_bits: int) -> list[tuple[float, float, float]]:
+    """Keep the precise positions (#315), as (latitude, longitude, score)."""
+    return [
+        (lat, lon, float(score))
+        for lat, lon, prec, score in rows
+        if is_precise_enough(prec, minimum_bits)
+    ]
 
 
 async def _fetch_position_metrics(
     session: Any, settings: Settings
 ) -> list[tuple[float, float, float]]:
-    """Fetch position metrics and calculate the position score for each packet."""
-    since = datetime.now(UTC) - timedelta(days=30)
+    """Score each heard position in the database, one row for each position.
 
-    query = (
-        select(
-            PositionMetrics.node_num,
-            PositionMetrics.latitude,
-            PositionMetrics.longitude,
-            PositionMetrics.precision_bits,
-            PositionMetrics.packet_id,
-            PacketSeen.gateway_node_num,
-            PacketSeen.hop_start,
-            PacketSeen.hop_limit,
-        )
+    The database groups the observations, so the job never holds them.
+    On the dev box on 2026-10-21 there were 1.5 million (one for each
+    gateway that heard each of 156 000 positions); read into Python they
+    took the job over its memory ceiling.
+
+    A packet is (node, packet ID): packet IDs of different nodes can be
+    equal (AGENTS.md 9.1). Each gateway counts once, at its fewest hops.
+    An observation with no hop count is left out.
+    """
+    since = datetime.now(UTC) - timedelta(days=30)
+    position = (
+        PositionMetrics.node_num,
+        PositionMetrics.packet_id,
+        PositionMetrics.latitude,
+        PositionMetrics.longitude,
+        PositionMetrics.precision_bits,
+    )
+    per_gateway = (
+        select(*position, func.min(PacketSeen.hop_start - PacketSeen.hop_limit).label("hops"))
         .join(
             PacketSeen,
             (PositionMetrics.packet_id == PacketSeen.packet_id)
@@ -169,14 +148,27 @@ async def _fetch_position_metrics(
         .where(PacketSeen.seen_at >= since)
         .where(PositionMetrics.latitude.is_not(None))
         .where(PositionMetrics.longitude.is_not(None))
+        .where(PacketSeen.hop_start.is_not(None))
+        .where(PacketSeen.hop_limit.is_not(None))
         .where(
             (PositionMetrics.location_source != "LOC_MANUAL")
             | PositionMetrics.location_source.is_(None)
         )
+        .group_by(*position, PacketSeen.gateway_node_num)
+        .subquery()
     )
+    c = per_gateway.c
+    query = select(
+        c.latitude, c.longitude, c.precision_bits, func.sum(_hop_score(c.hops))
+    ).group_by(c.node_num, c.packet_id, c.latitude, c.longitude, c.precision_bits)
 
+    # One worker. The parallel hash of the grouping asks for shared memory,
+    # and the database container has Docker's default 64 MB of /dev/shm:
+    # on the dev box (2026-10-21) the parallel plan failed with "could not
+    # resize shared memory segment". With one worker it took 18 s.
+    await session.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
     result = await session.execute(query)
-    return _score_packets(list(result), precise_minimum_bits(settings.coverage_min_precision_bits))
+    return _points(result, precise_minimum_bits(settings.coverage_min_precision_bits))
 
 
 def box_blur(grid: npt.NDArray[np.float32], radius: int) -> npt.NDArray[np.float32]:
