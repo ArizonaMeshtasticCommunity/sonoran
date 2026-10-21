@@ -1285,7 +1285,8 @@
     if (!host) return;
     
     if (state.layer === HEATMAP_LAYER) {
-      replace(host, el('p', { class: 'muted', text: 'This layer comes from heard positions, so it has no sites. It shows all gateways and all presets together.' }));
+      replace(host, el('p', { class: 'muted', 'data-term': 'gateway modem-preset', text: 'This layer comes from heard positions, so it has no sites. It shows all gateways and all presets together.' }));
+      if (typeof revealHints === 'function') revealHints(host);
       return;
     }
 
