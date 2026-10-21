@@ -29,7 +29,8 @@ The application does these things:
 - Alembic for database migrations
 - TimescaleDB (PostgreSQL) for storage
 - Protobuf definitions from `buf.build/meshtastic/protobufs`
-- Static frontend: HTML, HTMX, Alpine.js, Leaflet, ECharts
+- Static frontend: plain HTML, CSS and JavaScript (classic scripts and
+  ES modules), with vendored Leaflet and ECharts. No build step
 - numpy for the SRTM elevation transform
 - A vendored WebAssembly build of SPLAT! for coverage prediction (GPL-3)
 - Ruff for lint and format
@@ -570,10 +571,15 @@ leaks nothing a path would. Keep the attribution. See `docs/API.md`.
 
 ### 9.10 Channel keys come from settings, not from `.env`
 
-`CHANNEL_KEYS` is usually absent from `.env`, so the built-in default
-public key applies. Any offline script must read keys through
-`get_settings()`. Passing an empty environment variable silently
-decodes nothing.
+Outside Compose, an absent `CHANNEL_KEYS` gives the built-in default
+public key. Under Compose it does not: `docker-compose.yml` gives the
+ingest service `CHANNEL_KEYS: ${CHANNEL_KEYS:-}`, so a `.env` without the
+key passes an empty value, and an empty value is an empty list, not the
+default. Ingest then opens no packet and stores each one with an unknown
+port. So `.env.example` sets the default key, and `.env` must keep it.
+
+Any offline script must read keys through `get_settings()`. Passing an
+empty environment variable silently decodes nothing.
 
 ### 9.11 `packet.payload_json` holds only an allowlist
 

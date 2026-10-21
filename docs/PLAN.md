@@ -34,7 +34,7 @@ Do not reopen them without a documented reason.
 | D1 | Language | Python 3.13 or newer |
 | D2 | Database | TimescaleDB (PostgreSQL with the TimescaleDB extension) |
 | D3 | API | Read-only JSON API. GET endpoints only. FastAPI |
-| D4 | Frontend | Static files. HTML, HTMX, Alpine.js, Leaflet, ECharts. No build step |
+| D4 | Frontend | Static files. HTML, CSS and JavaScript, Leaflet, ECharts. No build step. (HTMX and Alpine.js were planned here and never used.) |
 | D5 | Deduplication | meshview model. One `packet` row. Many `packet_seen` rows |
 | D6 | Raw data | Store the raw protobuf bytes of every unique packet |
 | D7 | Traceroute graphs | Link to our own `mesh-graph` container. No fork |
@@ -100,7 +100,7 @@ TimescaleDB  (packet, packet_seen, node, metric tables)
 [api service]  FastAPI, GET endpoints only
    |
    v
-[static UI]  HTML + HTMX + Alpine.js + Leaflet + ECharts
+[static UI]  HTML + JavaScript + Leaflet + ECharts
    |
    +-- links and embeds --> [mesh-graph container]
 ```
