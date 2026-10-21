@@ -35,8 +35,12 @@ from sonoran.ingest.census import (
 )
 from sonoran.ingest.pipeline import _valid_data
 
+# OURS is the public default channel key of Meshtastic (PSK `AQ==`).
+# THEIRS is a key the classifier is not given. It only encrypts packets
+# built in this file, so any key that is not OURS does the job. It is
+# bytes 0 to 15, so nobody can take it for the key of a real channel.
 OURS = base64.b64decode("1PG7OiApB1nwvP+rz05pAQ==")
-THEIRS = base64.b64decode("AQ+i8ZJmxvJbz0CsT1bXHw==")
+THEIRS = bytes(range(16))
 
 SENDER = 0x0000ABCD
 
