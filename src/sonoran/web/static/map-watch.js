@@ -220,7 +220,19 @@ const SonoranWatch = (() => {
     setTimeout(settle, 260);
   }
 
-  async function leave() {
+  /*
+   * `away`: the reader is going to another page, so the map's address
+   * must not be written back over theirs, and focus must not go to a
+   * button on a page that is about to be hidden.
+   *
+   * That is the router's call, made before it shows the other page
+   * (Will, 2026-10-22: "if you click "Open node detail" it should take
+   * you out of full screen and then navigate you to that page"). The
+   * map shell is the full-screen element, and it stayed full screen on
+   * a hidden page: the browser kept giving it the whole screen, so the
+   * page shown under it took no click and no scroll.
+   */
+  async function leave({ away = false } = {}) {
     if (!on) return;
     on = false;
     /*
@@ -238,9 +250,10 @@ const SonoranWatch = (() => {
     }
     undress();
     syncControl();
-    writeFragment();
+    if (!away) writeFragment();
     settle();
     setTimeout(settle, 260);
+    if (away) return;
     /*
      * Put focus back on the control that started this.
      *

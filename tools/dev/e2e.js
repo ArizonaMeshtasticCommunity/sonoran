@@ -4673,6 +4673,85 @@ async function main() {
   });
   await settingsOnly.close();
 
+  /*
+   * "Open node detail" from watch mode leaves full screen first (Will,
+   * 2026-10-22): "If you're in full screen on the map and click "Open
+   * node detail", it keeps you in full screen but you can't click or
+   * scroll on the node detail page."
+   *
+   * The map shell is the full-screen element. It stayed full screen on
+   * the hidden map page, so the browser kept giving it the whole screen
+   * and the node page under it took no click and no wheel. Asked of the
+   * screen, not of state: what is at a link's centre, and does a wheel
+   * move the page. The positive control is the watch mode itself, read
+   * before the click, and a node page tall enough to scroll.
+   */
+  const watchAway = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(watchAway, 'Open node detail in watch mode leaves full screen, and the node page takes clicks and scrolls', async (page) => {
+    const watching = () => page.evaluate(() => ({
+      on: window.SonoranWatch.isOn(),
+      screen: Boolean(document.fullscreenElement) || document.body.classList.contains('watch-mode'),
+    }));
+    const enterWatch = async () => {
+      await page.locator('[data-page="map"] [aria-label="Watch mode"]').first().click();
+      must(await waitFor(page, () => window.SonoranWatch.isOn()
+        && (Boolean(document.fullscreenElement) || document.body.classList.contains('watch-mode')), 5000, 100),
+      'watch mode did not open, so this proves nothing');
+    };
+    await open(page, 'map', 4000);
+    must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
+      && window.SonoranMap.marks.size > 0 && !loading, 20000, 200), 'the map drew no node');
+    await enterWatch();
+
+    const nodeId = await page.evaluate(() => {
+      const [id, mark] = [...window.SonoranMap.marks.entries()][0];
+      mark.marker.openPopup();
+      return id;
+    });
+    const button = page.locator('[data-page="map"] .leaflet-popup button', { hasText: 'Open node detail' });
+    must(await waitFor(page, () => Boolean(document.querySelector('[data-page="map"] .leaflet-popup')), 5000, 100),
+      'the bubble did not open in watch mode');
+    await button.click();
+    must(await waitFor(page, (id) => decodeURIComponent(location.hash) === `#node/${id}`
+      && document.querySelector('[data-page="node"]').classList.contains('active') && !loading, 15000, 100, nodeId),
+    `"Open node detail" did not open the node page: ${await page.evaluate(() => location.hash)}`);
+    const after = await watching();
+    must(!after.on && !after.screen, `the node page opened still in full screen: ${JSON.stringify(after)}`);
+
+    // Nothing covers the node page: the element at a link's centre is
+    // that link.
+    const hit = await page.evaluate(() => {
+      const target = [...document.querySelectorAll('[data-page="node"] a[href], [data-page="node"] button')]
+        .find((item) => {
+          const box = item.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && box.top >= 0 && box.bottom <= innerHeight;
+        });
+      if (!target) return { found: false };
+      const box = target.getBoundingClientRect();
+      const at = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return { found: true, ok: Boolean(at && (at === target || target.contains(at))), at: at ? at.tagName : 'none' };
+    });
+    must(hit.found, 'the node page shows no link or button in view, so this proves nothing');
+    must(hit.ok, `something covers the node page: the point over its link is a ${hit.at}`);
+
+    // And a wheel scrolls it.
+    const tall = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+    must(tall > 200, `the node page is ${tall} px taller than the window, too short to prove a scroll`);
+    await page.mouse.move(720, 500);
+    await page.mouse.wheel(0, 600);
+    must(await waitFor(page, () => window.scrollY > 0, 3000, 100), 'the wheel did not scroll the node page');
+
+    // Any other way off the map does the same: a menu link.
+    await open(page, 'map', 2500);
+    await enterWatch();
+    await page.evaluate(() => { location.hash = '#dashboard'; });
+    must(await waitFor(page, () => location.hash === '#dashboard' && !loading, 10000, 100), 'the dashboard did not open');
+    const off = await watching();
+    must(!off.on && !off.screen, `the dashboard opened still in full screen: ${JSON.stringify(off)}`);
+    return `full screen left before #node/${nodeId}; its link takes the click; the wheel scrolls; the dashboard too`;
+  });
+  await watchAway.close();
+
   const settingsPhone = await browser.newContext({
     viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
   });

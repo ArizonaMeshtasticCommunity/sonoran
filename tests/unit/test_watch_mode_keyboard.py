@@ -64,7 +64,8 @@ def test_it_does_not_carry_a_role_it_no_longer_needs() -> None:
 
 
 def test_focus_returns_to_the_control_when_watch_mode_ends() -> None:
-    start = WATCH.index("async function leave()")
+    # `leave({ away })` since the router leaves watch mode for another page.
+    start = WATCH.index("async function leave(")
     body = WATCH[start : WATCH.index("\n  }\n", start)]
     assert ".focus()" in body, (
         "leave() no longer restores focus, so exiting strands a keyboard user on the map container"

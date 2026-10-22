@@ -11536,6 +11536,15 @@ async function route() {
     mapState.focusNodeId = null;
   }
   currentNodeId = known === 'node' ? decodeURIComponent(nodeId || '') : currentNodeId;
+  /*
+   * Any other page leaves watch mode first: "Open node detail" in a
+   * bubble, a menu link, Back, or an address typed by hand (Will,
+   * 2026-10-22). The map shell was left full screen on a hidden page,
+   * and the page shown under it took no click and no scroll.
+   */
+  if (known !== 'map' && window.SonoranWatch && SonoranWatch.isOn()) {
+    await SonoranWatch.leave({ away: true });
+  }
   const leavingMap = currentPage === 'map' && known !== 'map';
   currentPage = known;
 
