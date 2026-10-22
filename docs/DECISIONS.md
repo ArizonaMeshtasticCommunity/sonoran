@@ -1656,17 +1656,49 @@ that lives." This answers where the control lives (#232).
   The choice, its store (`sonoran.preset`), the default (Medium Fast
   alone), the `preset=` the list pages send and the address links
   (`#gaps?channel=`, `#map/node/<id>?preset=`) did not change.
-- A page that the preset narrows says so under its heading, with a
+- A page that the preset narrows said so under its heading, with a
   link to Settings: "Preset: Medium Fast · Change in Settings". A page
-  that draws one preset while several, or all, are chosen says which:
-  "Showing Medium Fast. This page shows one preset at a time." Without
-  the switch, nothing else on these pages said which preset was shown
-  or where to change it (AGENTS.md 3B).
-- No line under "All presets" on a page that shows every preset, and
-  none on a page the preset does not reach. The planner has no line:
-  its own "Modem preset" box names the preset of the prediction, and a
-  reader can change that box without changing the site's choice.
+  that drew one preset while several, or all, were chosen said which:
+  "Showing Medium Fast. This page shows one preset at a time."
+  **Taken out the next day at Will's request; see the 2026-10-22
+  entry below.** No page carries that line now.
 - Wording that said "in the menu" now says "in Settings".
 
 **What would change it again.** Will or Tyler asking for a quick
 control outside Settings again.
+
+## 2026-10-22 — no preset line under the page headings (part of #383)
+
+**Decided by Will.** In his words, on seeing the line the entry above
+added: "I think it looks really good but I think putting "Preset: i
+Medium Fast · Change in Settings" on the top of every page is
+excessive. Can you remove it from the header of every page?" (The "i"
+is the glossary button beside the word "Preset".)
+
+**What changed.**
+
+- No page has a line under its heading about the preset, in either
+  form ("Preset: Medium Fast · Change in Settings" or "Showing Medium
+  Fast. This page shows one preset at a time. Change it in Settings").
+- The code that existed only for that line went with it: its writer
+  in `app.js`, the lists of pages that decided which line a page got,
+  the preset each of the map, the graph and coverage reported having
+  drawn (`data-preset-shown`), and the line's style.
+- Everything else from the entry above stays. The menu has no preset
+  switch, the Settings page is the only place to change the presets,
+  the default is Medium Fast alone, and a page with nothing to show on
+  the chosen preset still says to choose another "in Settings". The
+  planner keeps its own "Modem preset" box.
+
+**What a reader loses.** A page no longer says which preset it shows.
+The Settings page says which are chosen, and a page with nothing on
+the chosen preset says so in its own empty message. Will judged a line
+on every page too much for what it told; this is the same call he made
+for the nav on 2026-09-26.
+
+**Held by** `tests/unit/test_preset_scope.py` (no line, no words, no
+reports, no leftover lists) and the e2e journey "no preset switch in
+the menu, no preset line on a page, and Settings changes the map".
+
+**What would change it again.** Will or Tyler asking for a page to say
+which preset it shows.
