@@ -828,8 +828,6 @@
     // run without the chosen one still draws something.
     const wanted = SonoranLabels.preferredPreset(presets, (item) => item.preset);
     if (wanted) state.preset = wanted.preset;
-    // What the map draws, for the line under the heading (part of #383).
-    if (state.preset) page.dataset.presetShown = state.preset;
   }
 
   function drawLegend(page) {
