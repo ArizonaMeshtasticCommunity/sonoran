@@ -2742,9 +2742,11 @@ const channelCache = { at: 0, value: null };
  * ingest tagged each packet with, so azmsh on LongFast is in, and azmsh
  * on MediumFast is out. `channel=` is still free to narrow further.
  *
- * Silent by design (Will, 2026-09-26): the menu says which preset is
- * selected, and a line on each page repeating it is the wordiness he had
- * just asked to be taken out of the nav.
+ * Silent by design: the Settings page says which presets are chosen, and
+ * a line on each page repeating it is wordiness Will asked twice to take
+ * out -- from the nav (2026-09-26), then from under every page heading
+ * (2026-10-22: "putting "Preset: i Medium Fast · Change in Settings" on
+ * the top of every page is excessive").
  */
 function menuPreset() {
   // "All presets" is no filter: every request built from this leaves
@@ -2889,8 +2891,6 @@ async function linkChannelOptions(page) {
       .map((item) => String(item.preset));
     if (presets.length) SonoranPreset.setAvailable(presets);
   }
-  // What the map draws, for the line under its heading (part of #383).
-  page.dataset.presetShown = everyPreset ? '' : linkChannel;
   return everyPreset ? '' : linkChannel;
 }
 
@@ -4523,8 +4523,6 @@ function graphTabs(page, all) {
   // "All presets": one graph of every channel. The API holds them all
   // together without `channel`, and the heading says so.
   if (window.SonoranPreset && SonoranPreset.isAll()) graphChannel = '';
-  // What the graph draws, for the line under its heading (part of #383).
-  page.dataset.presetShown = graphChannel;
   // Only the presets, and only those with links, so the menu never offers
   // a choice that opens an empty graph here.
   if (window.SonoranPreset) {
@@ -5655,7 +5653,7 @@ let nodeFacets = null;
  * channel from the sidebar (#301). Will (2026-09-27): count only what the
  * reader changed. A toolbar control counts when it differs from its
  * default, a panel filter counts when it is set, and the preset never
- * counts, because the line under the heading is where the preset shows.
+ * counts, because it is chosen on the Settings page, not in the filters.
  *
  * Counted by query key, so a filter that both the toolbar and the panel
  * can set ("Heard within", role, gateway) counts once. `gaps_preset`
@@ -11360,149 +11358,6 @@ if (!POPOVER) {
 }
 
 /*
- * Which pages the global preset actually applies to (#232, Tyler's second
- * point: "dim filters that are not applicable to the page you're on").
- *
- * DECLARED, never inferred, and that is the whole point of this list.
- *
- * Three ways of working it out automatically were tried and each got a
- * page wrong:
- *
- * - **Diffing the API requests** between the two presets said `coverage`
- *   ignores it. Coverage obeys it completely -- `state.preset` drives the
- *   tile URL, the node overlay, the legend and the summary -- and it only
- *   measured as inert because that instance had no published coverage run,
- *   so none of the path executed. The log was describing the data, not the
- *   code.
- * - **Grepping each page function** for the store said `stats` ignores it.
- *   The leaderboards read it from a separate function.
- * - **Looking for which modules mention the store** said `chat` ignores it.
- *   Chat then filtered its channel sections client-side, so the request
- *   never named a preset. It names one now (#313), as `preset=`.
- *
- * A note that says "not used here" is a CLAIM about what the reader is
- * looking at. Getting it wrong on coverage would tell somebody the switch
- * is doing nothing while it silently decides which mesh their map shows,
- * which is worse than saying nothing at all. So each page says, and
- * `test_preset_scope.py` fails if a page is added without saying.
- */
-const PRESET_PAGES = new Set([
-  'dashboard', 'nodes', 'chat', 'map', 'graph', 'coverage', 'planner',
-  'gaps', 'firehose', 'stats',
-  // The page where several presets are chosen (#383).
-  'settings',
-]);
-
-/*
- * Pages the preset does not reach. Listed rather than derived, so that the
- * two lists together must account for every page in `PAGES` -- a new page
- * belongs in exactly one and the test says which is missing.
- *
- * The four single-subject pages are here because they show one node, one
- * packet, one link or one traceroute: the thing is already chosen, and the
- * preset has nothing left to narrow.
- */
-const PRESET_FREE_PAGES = new Set([
-  'traceroutes', 'meshnet', 'rf', 'config',
-  'node', 'packet', 'link', 'traceroute',
-  // The page a hidden section's address opens. It shows no data.
-  'unavailable',
-]);
-
-/*
- * Preset pages that cannot show "All presets". A coverage map, a gaps
- * assessment and a planner prediction are each for one radio setting,
- * so under "All" they draw the deployment's default (`single()`).
- */
-const ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps']);
-
-/*
- * Pages that draw links, so they draw ONE preset when several are
- * chosen (#383): a line between two presets cannot exist (AGENTS.md
- * 9.7). "All presets" still draws everything here, as Logan asked for
- * (#370); a choice of several is a narrower question, and these pages
- * answer it for one preset and say which.
- */
-const LINK_PRESET_PAGES = new Set(['map', 'graph']);
-
-/** True when the menu's preset changes what this page shows. */
-function presetAppliesTo(name) {
-  return PRESET_PAGES.has(name);
-}
-
-/*
- * Under the heading of a page the preset narrows, say which preset it
- * shows and where to change it (part of #383).
- *
- * This was a note under the menu's preset switch. Will asked for the
- * switch to go ("the settings to be the only place to change the
- * presets"), and then nothing on a page said which preset it showed or
- * where to change it (AGENTS.md 3B). So the note is on the page now, one
- * line, with a link to Settings:
- *
- * - a page that draws one preset while several or all are chosen
- *   (`ONE_PRESET_PAGES` under "All" or several, `LINK_PRESET_PAGES` under
- *   several) says which: "Showing Medium Fast. This page shows one preset
- *   at a time." The words are those the issue thread asked for;
- * - any other page the preset narrows names it: "Preset: Medium Fast".
- *
- * No line under "All presets" on a page that shows every preset, and none
- * on a page the preset does not reach: there is nothing to say. Not on the
- * planner either: its own "Modem preset" box names the preset of the
- * prediction, and the reader may change that box without changing the
- * site's choice, so a second line could contradict it. Not on Settings,
- * which is the control.
- */
-function presetScopeNote(page) {
-  let note = $('[data-preset-scope]', page);
-  if (note) return note;
-  const head = $('.page-head', page);
-  if (!head) return null;
-  note = el('p', { class: 'preset-scope', 'data-preset-scope': '' });
-  head.after(note);
-  return note;
-}
-
-function drawPresetScope(name) {
-  const store = window.SonoranPreset;
-  const page = $(`[data-page="${name}"]`);
-  if (!page || !store) return;
-  const applies = presetAppliesTo(name) && name !== 'planner' && name !== 'settings';
-  const several = Boolean(store.isSeveral && store.isSeveral());
-  /*
-   * The preset the page reports it drew, when it reports one: the map,
-   * the graph and coverage can fall back to another preset (a link that
-   * names one, a preset with no links, a run without it). '' means it
-   * drew every preset. Read again after the draw, from `render`.
-   */
-  const reported = page.hasAttribute('data-preset-shown') ? page.dataset.presetShown : null;
-  const drawn = reported ?? SonoranPreset.single();
-  const elsewhere = Boolean(reported) && !store.isAll() && !store.selected().includes(reported);
-  const one = applies && Boolean(drawn)
-    && ((ONE_PRESET_PAGES.has(name) && (store.isAll() || several))
-      || (LINK_PRESET_PAGES.has(name) && (several || (store.isAll() && Boolean(reported))))
-      || elsewhere);
-  const narrowed = applies && reported !== ''
-    && (one || !store.isAll() || ONE_PRESET_PAGES.has(name));
-  const existing = $('[data-preset-scope]', page);
-  if (!narrowed) {
-    if (existing) existing.hidden = true;
-    return;
-  }
-  const note = existing || presetScopeNote(page);
-  if (!note) return;
-  const chosen = reported ? SonoranLabels.presetLabel(reported) : menuPresetWords();
-  // The glossary button goes beside the word "preset", not beside the link.
-  const word = (text) => el('span', { 'data-term': 'modem-preset', text });
-  note.hidden = false;
-  replace(note, ...(one
-    ? [`Showing ${SonoranLabels.presetLabel(drawn)}. This page shows one `, word('preset'),
-      ' at a time. ', el('a', { href: '#settings', text: 'Change it in Settings' })]
-    : [word('Preset:'), ` ${chosen || SonoranLabels.presetLabel(drawn)} · `,
-      el('a', { href: '#settings', text: 'Change in Settings' })]));
-}
-
-/*
  * A navigation that arrived while another page was still drawing.
  *
  * `render` drops a call while one is in flight, which is right for the
@@ -11526,10 +11381,6 @@ async function navigateRender(name) {
 async function render(name) {
   const page = $(`[data-page="${name}"]`);
   if (!page || loading) return;
-  // A page reports the preset it drew while it draws (the map, the graph,
-  // coverage). Until then the line says what the store would draw.
-  page.removeAttribute('data-preset-shown');
-  drawPresetScope(name);
   loading = true;
   try {
     if (CHART_PAGES.has(name)) await chartsReady();
@@ -11540,8 +11391,6 @@ async function render(name) {
     setStatus('down', 'Update failed');
   } finally {
     loading = false;
-    // Again after the draw: a page may have reported the preset it drew.
-    drawPresetScope(name);
     markScrollableTables(page);
     revealHints(page);
     // A render can restore a control from the address, or rewrite a

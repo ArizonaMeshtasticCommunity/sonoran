@@ -4160,19 +4160,6 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 }
 
 /*
- * The line under a page's heading that names the preset it shows, with a
- * link to Settings (part of #383). It was a note under the menu's preset
- * switch, which is gone. Quiet: it explains the page rather than
- * competing with it, and it must not read as an error.
- */
-.preset-scope {
-  margin: -.35rem 0 .75rem;
-  font-size: .8rem;
-  color: var(--muted);
-}
-.preset-scope a { color: var(--accent); text-decoration: underline; text-underline-offset: .15em; }
-
-/*
  * Appearance, readable at last (Will: "It's hard to read the dark on
  * dark").
  *

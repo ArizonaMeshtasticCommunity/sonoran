@@ -564,9 +564,10 @@ def test_the_facet_counts_follow_the_same_filters_as_the_rows() -> None:
 def test_the_filtering_is_silent() -> None:
     """Will's choice: no repeated notice in the nav.
 
-    The nav hint stays gone. The line that names the preset now sits on
-    the page itself (`drawPresetScope`), because the menu no longer says
-    which preset is chosen (#383).
+    The nav hint stays gone, and so does the line #398 put under every
+    page heading (Will, 2026-10-22: "putting "Preset: i Medium Fast ·
+    Change in Settings" on the top of every page is excessive"). The
+    Settings page is where the preset is chosen and seen.
     """
     html = _html()
     assert "data-preset-hint" not in html, "the nav hint is back"
@@ -724,13 +725,8 @@ def test_all_presets_is_a_choice_and_means_no_filter() -> None:
     assert "SonoranPreset.ALL" in boxes and "'All presets'" in boxes, "All is not offered"
 
 
-def test_one_preset_pages_draw_the_default_under_all_and_say_so() -> None:
+def test_one_preset_pages_draw_the_default_under_all() -> None:
     """Coverage, gaps and the planner are each for one radio setting."""
-    code = _code("app.js")
-    assert "ONE_PRESET_PAGES = new Set(['coverage', 'planner', 'gaps'])" in code
-    scope = code[code.index("function drawPresetScope") :]
-    scope = scope[: scope.index("\nfunction ")]
-    assert "SonoranPreset.single()" in scope, "the note does not name the preset drawn"
     labels = _code("labels.js")
     assert "store.single" in labels, "preferredPreset would hand '*' to coverage"
     assert "SonoranPreset.single()" in _code("gaps.js")

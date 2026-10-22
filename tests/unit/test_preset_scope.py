@@ -1,31 +1,20 @@
-"""Every page says whether the global preset applies to it (#232).
+"""No page carries a preset line under its heading (Will, 2026-10-22).
 
-Tyler's second point on #232: "dim filters that are not applicable to the
-page you're one [sic] (such as node name/number on the gaps page)". The
-site has one global filter -- the preset -- so the faithful version is to
-say when the page in view ignores it.
+#398 made the Settings page the only place to change the presets (part of
+#383), and put one line under the heading of every page the preset
+narrows: "Preset: Medium Fast · Change in Settings", or "Showing Medium
+Fast. This page shows one preset at a time. Change it in Settings".
 
-Saying that is a CLAIM, and these cases exist because three different ways
-of working it out automatically each got a page wrong:
+Will, on seeing it: "I think it looks really good but I think putting
+"Preset: i Medium Fast · Change in Settings" on the top of every page is
+excessive. Can you remove it from the header of every page?"
 
-- diffing the API requests between the two presets said `coverage` ignores
-  it, when coverage obeys it completely (`state.preset` drives the tile
-  URL, the node overlay, the legend and the summary). It measured as inert
-  only because that instance had no published coverage run, so the path
-  never ran;
-- grepping each page function for the store said `stats` ignores it, and
-  the leaderboards read it from another function;
-- looking for which modules mention the store says `chat` ignores it, and
-  chat filters its sections client-side.
-
-Getting it wrong on coverage would tell somebody the preset is doing
-nothing while it decides which mesh their map shows. So each page declares,
-and the case below fails when a new page does not.
-
-Since #383 the menu has no preset switch (Will: "the settings to be the
-only place to change the presets"). The same lists now decide which pages
-carry a line under their heading that names the preset and links to
-Settings.
+So the line is gone, with everything that existed only to write it: the
+writer, the per-page lists that decided which line a page got, the
+`data-preset-shown` reports the map, the graph and coverage made for it,
+and its style. The rest of #398 stays: the menu has no preset switch,
+Settings is the only control, and a page with nothing to show says to
+choose another preset "in Settings".
 """
 
 import re
@@ -33,131 +22,82 @@ from pathlib import Path
 
 STATIC = Path(__file__).resolve().parents[2] / "src" / "sonoran" / "web" / "static"
 APP = (STATIC / "app.js").read_text(encoding="utf-8")
-HTML = (STATIC / "index.html").read_text(encoding="utf-8")
-CSS = (STATIC / "app.css").read_text(encoding="utf-8")
 
 
-def _set(name: str) -> set[str]:
-    match = re.search(rf"const {name} = new Set\(\[(.*?)\]\)", APP, re.S)
-    assert match, f"{name} is gone"
-    return set(re.findall(r"'([a-z]+)'", match.group(1)))
+def _bare(path: Path) -> str:
+    """The file without its comments, so a note about history is not a hit."""
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".html":
+        return re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    if path.suffix == ".js":
+        text = re.sub(r"(?m)^\s*//.*$", "", text)
+    return text
 
 
-def _declared_pages() -> set[str]:
-    return set(re.findall(r"^PAGES\.(\w+) = ", APP, re.M))
-
-
-def test_every_page_is_classified_exactly_once() -> None:
-    """The case that makes the note trustworthy.
-
-    A page missing from both lists defaults to "the preset applies", which
-    is the safe direction but still a guess; a page in both is a
-    contradiction. Either way somebody has to decide, and this says so by
-    name rather than letting the note be quietly wrong.
-    """
-    pages = _declared_pages()
-    applies = _set("PRESET_PAGES")
-    free = _set("PRESET_FREE_PAGES")
-
-    missing = pages - applies - free
-    assert not missing, (
-        f"these pages do not say whether the preset applies to them: {sorted(missing)}. "
-        "Add each to PRESET_PAGES or PRESET_FREE_PAGES -- the note beside the "
-        "switch is a claim about what the reader is looking at, so it cannot be guessed."
+def _front_end() -> dict[str, str]:
+    # Ours, not the vendored tools under vendor/, keyed by path so two
+    # files with one name cannot hide each other.
+    files = sorted(
+        path
+        for path in STATIC.rglob("*")
+        if path.suffix in {".js", ".html", ".css"}
+        and "vendor" not in path.relative_to(STATIC).parts
     )
-    both = applies & free
-    assert not both, f"these pages are in both lists: {sorted(both)}"
-    unknown = (applies | free) - pages
-    assert not unknown, f"these are classified but are not pages: {sorted(unknown)}"
+    assert (STATIC / "app.js") in files, f"app.js is not under {STATIC}"
+    return {str(path.relative_to(STATIC)): _bare(path) for path in files}
 
 
-def test_coverage_is_on_the_right_side() -> None:
-    """Named, because this is the one a measurement got wrong.
-
-    `state.preset` drives `api/coverage/tiles/<stamp>/<preset>/…`, the node
-    overlay, the legend and the summary. A run-less instance makes it look
-    inert, which is how it ended up in the wrong column of a comment on the
-    issue before being corrected.
-    """
-    assert "coverage" in _set("PRESET_PAGES"), (
-        "coverage was moved to the preset-free list. It obeys the preset -- check "
-        "`drawPresets` and the tiles URL in coverage.js before changing this."
-    )
-    coverage = (STATIC / "coverage.js").read_text(encoding="utf-8")
-    assert "preferredPreset" in coverage, (
-        "coverage no longer consults the menu's preset, so this classification is stale"
-    )
+def test_no_page_has_a_preset_line() -> None:
+    """Will: "Can you remove it from the header of every page?"."""
+    for name, text in _front_end().items():
+        for mark in ("data-preset-scope", "preset-scope", "presetScopeNote", "drawPresetScope"):
+            assert mark not in text, f"{name} still writes the preset line ({mark})"
 
 
-def test_chat_and_stats_are_on_the_right_side() -> None:
-    """The two the other two instruments got wrong."""
-    applies = _set("PRESET_PAGES")
-    assert "chat" in applies, "chat asks the server for one preset (#313)"
-    assert "stats" in applies, "the leaderboards are drawn per preset"
+def test_no_page_says_the_line_s_words() -> None:
+    """Both forms of the line, in the words #398 gave them."""
+    for name, text in _front_end().items():
+        for words in (
+            "Change in Settings",
+            "Change it in Settings",
+            "This page shows one ",
+            "Showing ${SonoranLabels.presetLabel(",
+        ):
+            assert words not in text, f"{name} still says {words!r}"
 
 
-def test_the_single_subject_pages_are_preset_free() -> None:
-    """One node, one packet, one link, one traceroute.
-
-    The thing is already chosen, so there is nothing for a preset to narrow.
-    """
-    free = _set("PRESET_FREE_PAGES")
-    for name in ("node", "packet", "link", "traceroute"):
-        assert name in free, f"{name} shows one subject; the preset has nothing to narrow"
+def test_pages_no_longer_report_the_preset_they_drew() -> None:
+    """The map, the graph and coverage set `data-preset-shown` only for the line."""
+    for name, text in _front_end().items():
+        assert "presetShown" not in text, f"{name} still reports the preset it drew"
+        assert "data-preset-shown" not in text, f"{name} still reads the preset report"
 
 
-def test_the_note_exists_and_is_kept_in_step() -> None:
-    # Called from `render`, which runs on every page change, so the note
-    # cannot describe the page the reader just left.
-    assert "function drawPresetScope" in APP, "nothing writes the note"
+def test_nothing_is_left_that_only_the_line_used() -> None:
+    """The lists that decided which line a page got had no other reader."""
+    for name in (
+        "PRESET_PAGES",
+        "PRESET_FREE_PAGES",
+        "ONE_PRESET_PAGES",
+        "LINK_PRESET_PAGES",
+        "presetAppliesTo",
+    ):
+        assert not re.search(rf"\b{name}\b", APP), f"{name} is left with no reader"
+
+
+def test_render_draws_the_page_and_nothing_above_it() -> None:
     start = APP.index("async function render(name)")
-    assert "drawPresetScope(name)" in APP[start : start + 400], (
-        "the note is not updated when the page changes"
-    )
+    body = APP[start : APP.index("\n}\n", start)]
+    assert "await PAGES[name](page)" in body, "render no longer draws the page"
+    assert "Preset" not in body, "render still writes something about the preset"
 
 
-def _scope_body() -> str:
-    # The note's maker and its writer, read together.
-    pattern = (
-        r"function presetScopeNote\(page\) \{(.*?)\nfunction drawPresetScope\(name\) \{(.*?)\n\}"
-    )
-    match = re.search(pattern, APP, re.S)
-    assert match, "presetScopeNote or drawPresetScope is gone"
-    return match.group(1) + match.group(2)
-
-
-def test_the_note_is_on_the_page_not_in_the_menu() -> None:
-    """Will (#383): the presets are changed on the Settings page only.
-
-    The note sat under the menu's switch. With the switch gone a reader
-    still has to be able to tell which preset a page shows and where to
-    change it (AGENTS.md 3B), so the note moved onto the page, under its
-    heading, and it links to Settings.
-    """
-    html = re.sub(r"<!--.*?-->", "", HTML, flags=re.S)
-    menu = html[html.index('<div class="site-menu"') : html.index("</aside>")]
-    assert "data-preset-scope" not in menu, "the preset note is still in the menu"
-    body = _scope_body()
-    assert "page-head" in body, "the note is not placed under the page heading"
-    assert "href: '#settings'" in body, "the note does not link to the Settings page"
-    assert "Change" in body and "in Settings" in body, "the note does not say where to change it"
-
-
-def test_a_one_preset_page_says_which_preset_it_shows() -> None:
-    """Coverage and gaps draw one preset under "All" or several.
-
-    The words are the ones in the issue thread: "Showing Medium Fast.
-    This page shows one preset at a time." The planner is not given the
-    note, because its own "Modem preset" box names the preset it opens
-    on, and the reader may change that box without changing the site's.
-    """
-    body = _scope_body()
-    # "preset" is its own element, so its glossary button sits beside it.
-    assert "Showing ${" in body and "This page shows one `, word('preset')," in body
-    assert "' at a time. '" in body
-    assert "SonoranPreset.single()" in body, "the note does not name the preset drawn"
-    assert "name === 'planner'" in body or "'planner'" in body, (
-        "the planner would get a note that its own preset box can contradict"
+def test_settings_is_still_where_the_preset_is_changed() -> None:
+    """What #398 decided and Will kept: one control, on the Settings page."""
+    assert "function drawPresetBoxes" in APP, "the Settings page has no preset boxes"
+    assert "Choose another in Settings." in APP, (
+        "an empty page no longer says where to choose another preset"
     )
 
 
@@ -165,14 +105,4 @@ def test_the_preset_free_pages_get_no_note() -> None:
     """With no switch in view, "Not used on this page" explains nothing."""
     assert "Not used on this page." not in APP, (
         "a page the preset does not reach still says so, beside no control"
-    )
-
-
-def test_it_is_a_quiet_note() -> None:
-    """It explains the page, so it must not read as a warning."""
-    assert ".preset-scope" in CSS, "the note has no styling"
-    scope = re.search(r"\.preset-scope\s*\{([^}]*)\}", re.sub(r"/\*.*?\*/", "", CSS, flags=re.S))
-    assert scope, "the note rule is gone"
-    assert "var(--muted)" in scope.group(1), (
-        "the note is not muted, so it reads as a warning rather than an aside"
     )

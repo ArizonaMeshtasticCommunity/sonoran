@@ -194,17 +194,13 @@ const open = async (page, hash, settle = 3500) => {
  * why every journey in this file uses it.
  */
 /*
- * The words of the preset line under a page heading, without its glossary
- * button and panel (part of #383). `textContent` would read the panel's
- * explanation into the sentence.
+ * How many preset lines the document holds, on any page. #398 put one
+ * under each page heading ("Preset: Medium Fast · Change in Settings");
+ * Will asked for it to go from every page (2026-10-22), so the answer is
+ * always 0. Counted over the whole document, not the page in view, so a
+ * line left on a hidden page is found too.
  */
-const PRESET_LINE = (name) => {
-  const line = document.querySelector(`[data-page="${name}"] [data-preset-scope]`);
-  if (!line || line.hidden) return '';
-  const copy = line.cloneNode(true);
-  for (const extra of copy.querySelectorAll('.hint-open, .hint-pop')) extra.remove();
-  return copy.textContent.replace(/\s+/g, ' ').trim();
-};
+const PRESET_LINES = () => document.querySelectorAll('[data-preset-scope], .preset-scope').length;
 
 async function waitFor(page, condition, timeout = 240000, step = 500, arg = undefined) {
   const until = Date.now() + timeout;
@@ -4534,14 +4530,14 @@ async function main() {
     must(rows.includes(LONG_BODY) && rows.includes(MEDIUM_BODY),
       'the firehose on both presets does not list both azmsh check-ins');
 
-    // A page that draws links draws one preset, and says which.
+    // A page that draws links draws one preset, with no line about it
+    // under the heading (Will, 2026-10-22).
     await open(page, 'map', 3000);
     const map = last('/api/map/nodes');
     must(map && map.searchParams.get('channel') === 'MediumFast',
       `the map did not draw Medium Fast alone: ${map}`);
-    const note = await page.evaluate(PRESET_LINE, 'map');
-    must(/Showing Medium Fast\. This page shows one preset at a time\./.test(note),
-      `the map does not say what it drew: "${note}"`);
+    const lines = await page.evaluate(PRESET_LINES);
+    must(lines === 0, `${lines} preset lines with two presets chosen`);
     // Positive control for the quiet preset below: Medium Fast draws dots.
     must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
       && window.SonoranMap.marks.size > 0, 10000), 'the map drew no Medium Fast node');
@@ -4594,7 +4590,7 @@ async function main() {
     const old = Object.keys(got).filter((name) => got[name]);
     must(old.join() === 'LongFast', `an old stored "LongFast" loaded as ${old.join(', ')}`);
     return `${offered} presets offered, Medium Fast alone by default, two chosen reach the firehose `
-      + 'as one preset=, the map draws one and says so, the last box stays, one alone again, an old value loads';
+      + 'as one preset=, the map draws one with no line, the last box stays, one alone again, an old value loads';
   });
   await several.close();
 
@@ -4604,12 +4600,15 @@ async function main() {
    * gone and the settings to be the only place to change the presets."
    *
    * The menu, on a desktop and in the phone's More, holds no preset
-   * control. A page still says which preset it shows and links to
-   * Settings, and a choice made there still changes what the map draws.
-   * The positive control is the first draw: Medium Fast, said in words.
+   * control, and no page carries a line naming the preset under its
+   * heading (Will, 2026-10-22: "putting "Preset: i Medium Fast · Change
+   * in Settings" on the top of every page is excessive"). A choice made
+   * in Settings still changes what the map draws. The positive control
+   * for the absence is the menu's Settings link, found by the same kind
+   * of query; for the redraw, the first draw on Medium Fast.
    */
   const settingsOnly = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await journey(settingsOnly, 'the menu has no preset switch, and Settings changes the map (part of #383)', async (page) => {
+  await journey(settingsOnly, 'no preset switch in the menu, no preset line on a page, and Settings changes the map (part of #383)', async (page) => {
     const asked = [];
     page.on('request', (request) => {
       if (/\/api\/map\/nodes\?/.test(request.url())) asked.push(new URL(request.url()));
@@ -4627,19 +4626,20 @@ async function main() {
     must(menu.controls === 0, `the menu still holds ${menu.controls} preset controls`);
     must(!menu.word, 'the menu still names a preset');
 
-    const line = page.locator('[data-page="map"] [data-preset-scope]');
     must(last() && last().searchParams.get('channel') === 'MediumFast', `the map did not draw Medium Fast: ${last()}`);
-    must(await line.isVisible(), 'the map does not say which preset it shows');
-    let said = await page.evaluate(PRESET_LINE, 'map');
-    must(/Preset: Medium Fast/.test(said) && /Change in Settings/.test(said), `the map says "${said}"`);
     must(await waitFor(page, () => window.SonoranMap.marks instanceof Map
       && window.SonoranMap.marks.size > 0 && !loading, 15000, 100), 'the map drew no Medium Fast node');
     const before = await page.evaluate(() => [...window.SonoranMap.marks.keys()].sort().join());
+    // Positive control: the same kind of query finds the menu's link.
+    must(await page.evaluate(() => document.querySelectorAll('.menu-settings-link').length) > 0,
+      'the query found no Settings link, so a count of 0 below proves nothing');
+    let lines = await page.evaluate(PRESET_LINES);
+    must(lines === 0, `the map carries ${lines} preset lines`);
 
-    // The line's link is the way to Settings.
-    await line.locator('a', { hasText: 'Change in Settings' }).click();
+    // Settings is reached from the menu, and it is where the choice is made.
+    await page.locator('.menu-settings-link').click();
     must(await waitFor(page, () => location.hash === '#settings'
-      && document.querySelector('[data-preset-boxes] input'), 5000, 100), 'the link did not open Settings');
+      && document.querySelector('[data-preset-boxes] input'), 5000, 100), 'the menu link did not open Settings');
     for (const value of ['LongFast', 'MediumFast']) {
       await page.locator(`[data-preset-boxes] input[value="${value}"]`).click();
       await waitFor(page, () => !loading, 10000, 100);
@@ -4651,22 +4651,25 @@ async function main() {
     let followed = false;
     for (let tries = 0; tries < 60 && !followed; tries += 1) {
       followed = await page.evaluate(() => location.hash === '#map' && !loading)
-        && /Long Fast/.test(await page.evaluate(PRESET_LINE, 'map'));
+        && last() && last().searchParams.get('channel') === 'LongFast';
       if (!followed) await page.waitForTimeout(250);
     }
-    must(followed, 'the map line does not follow the choice made in Settings');
+    must(followed, `the map did not ask for Long Fast after it was chosen in Settings: ${last()}`);
+    // The seed has no Long Fast node with a position, so "different" here
+    // is "not the Medium Fast nodes"; the map draws none of them.
     await page.waitForTimeout(800);
-    must(last() && last().searchParams.get('channel') === 'LongFast', `the map did not ask for Long Fast: ${last()}`);
-    said = await page.evaluate(PRESET_LINE, 'map');
-    must(/Preset: Long Fast/.test(said), `the map says "${said}" after Long Fast was chosen`);
     const after = await page.evaluate(() => [...window.SonoranMap.marks.keys()].sort().join());
     must(after !== before, 'the map drew the same nodes on Long Fast as on Medium Fast');
 
-    // A page the preset does not reach carries no line.
-    await open(page, 'rf', 1200);
-    const rf = Boolean(await page.evaluate(PRESET_LINE, 'rf'));
-    must(!rf, 'the RF page, which the preset does not reach, names one');
-    return `no preset control in the menu; map line "${said}"; Settings moved the map to Long Fast`;
+    // No line on any page, opened one after another, Long Fast chosen.
+    const carried = [];
+    for (const name of ['dashboard', 'nodes', 'chat', 'map', 'graph', 'coverage', 'gaps', 'firehose', 'stats', 'rf']) {
+      await open(page, name, 900);
+      lines = await page.evaluate(PRESET_LINES);
+      if (lines) carried.push(`${name} (${lines})`);
+    }
+    must(!carried.length, `preset lines on: ${carried.join(', ')}`);
+    return 'no preset control in the menu, no preset line on 10 pages, Settings moved the map to Long Fast';
   });
   await settingsOnly.close();
 

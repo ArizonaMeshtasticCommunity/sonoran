@@ -20,8 +20,8 @@
  * the packet types on statistics) send every chosen name as one
  * `preset=MediumFast,LongFast`. A page that can only draw ONE preset --
  * the map and the graph, which draw links (AGENTS.md 9.7), coverage,
- * gaps, the planner and the leaderboards -- asks `single()` and says
- * under its heading which one it drew. `current()` gives that same one
+ * gaps, the planner and the leaderboards -- asks `single()` for the one
+ * it draws. `current()` gives that same one
  * preset, so a caller that only knows one name keeps working.
  *
  * The Settings page is the only control for this choice (part of #383).
@@ -76,8 +76,8 @@ window.SonoranPreset = (function build() {
    *
    * Not a preset name: `menuPreset()` in app.js turns it into no filter
    * at all, and a page that can only draw one preset (coverage, gaps,
-   * the planner, the leaderboards) asks `single()` instead and says so
-   * under its heading. '*' cannot be a channel name the server sends.
+   * the planner, the leaderboards) asks `single()` instead. '*' cannot
+   * be a channel name the server sends.
    */
   const ALL = '*';
 
