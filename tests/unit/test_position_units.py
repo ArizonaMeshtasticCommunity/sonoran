@@ -78,6 +78,11 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str]], str]] = {
         )],
         "FAIL KMH: the node page",
     ),
+    # Reading the proto comment's old "1/100 degrees" instead of the firmware.
+    "track_in_hundredths": (
+        [("GROUND_TRACK_PER_DEGREE = 1e5;", "GROUND_TRACK_PER_DEGREE = 100;")],
+        "FAIL TRACK: 30975000 is 309.75 degrees",
+    ),
 }
 
 

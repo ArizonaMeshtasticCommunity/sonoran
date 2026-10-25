@@ -96,6 +96,7 @@ function load(choice) {
   };
   return new Function(...Object.keys(stubs), [
     extract('precisionMetres'),
+    constant('GROUND_TRACK_PER_DEGREE'),
     constant('DECODED_LABELS'),
     extract('decodedValues'),
     extract('positionValues'),
@@ -127,6 +128,12 @@ for (const [choice, speed] of [['imperial', '78.9 mph'], ['metric', '127.0 km/h'
 }
 
 const api = load('imperial');
+const track = (raw) => pairs(api.decodedValues({ ground_track: raw }))['Ground track'];
+eq('TRACK: 30975000 is 309.75 degrees, shown whole', track(30975000), '310 deg');
+eq('TRACK: due east, 90 degrees, is 9000000', track(9000000), '90 deg');
+eq('TRACK: the firmware ceiling, 359.99 degrees, rounds to 360', track(35999000), '360 deg');
+eq('TRACK: a small heading keeps its sense', track(150000), '2 deg');
+
 // A plausible wrong fix: the old m/s reading is 3.6 times too fast.
 eq('WOULD BE CAUGHT: a truck at 127 km/h is not shown at 284 mph',
   pairs(api.decodedValues({ ground_speed: 127 }))['Ground speed'] === '284.1 mph', false);

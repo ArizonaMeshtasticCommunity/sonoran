@@ -10377,6 +10377,16 @@ function pathBackPanel(trace) {
 }
 
 
+/*
+ * Position.ground_track is degrees * 10^-5 on the wire, not the 1/100
+ * degrees the mesh.proto comment says: firmware src/gps/GPS.cpp scales
+ * the GPS course "to match the expected degrees * 10^-5", and
+ * src/modules/PositionModule.cpp: "ground_track is stored as degrees * 1e5".
+ * Measured on the box (30 days to 2026-10-25): 57,784 of 58,438 stored
+ * tracks are 36000 or more, which only that scale allows.
+ */
+const GROUND_TRACK_PER_DEGREE = 1e5;
+
 /* Labels and units for the decoded values a packet can carry. */
 const DECODED_LABELS = {
   ...WEATHER_LABELS,
@@ -10387,7 +10397,7 @@ const DECODED_LABELS = {
   // km/h, not m/s: mesh.proto Position.ground_speed "Ground speed in km/h";
   // firmware src/gps/GPS.cpp sets it from reader.speed.kmph().
   ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromKmh(v)],
-  ground_track: ['Ground track', (v) => `${round(v, 0)} deg`],
+  ground_track: ['Ground track', (v) => `${round(v / GROUND_TRACK_PER_DEGREE, 0)} deg`],
   sats_in_view: ['Satellites', (v) => String(v)],
   precision_bits: ['Precision bits', (v) => String(v)],
   body: ['Message', (v) => v],
