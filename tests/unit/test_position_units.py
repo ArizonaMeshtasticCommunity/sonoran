@@ -28,7 +28,9 @@ CASES = ROOT / "tests" / "unit" / "js" / "position_units_cases.mjs"
 
 def _node() -> str:
     node = shutil.which("node")
-    assert node, "node is not on PATH, so the position units went unchecked; a skip looks like a pass."
+    assert node, (
+        "node is not on PATH, so the position units went unchecked; a skip looks like a pass."
+    )
     return node
 
 
@@ -64,18 +66,22 @@ def test_the_behaviour_holds() -> None:
 MUTATIONS: dict[str, tuple[list[tuple[str, str]], str]] = {
     # The bug as reported: the packet page reads km/h as m/s.
     "packet_page_reads_ms": (
-        [(
-            "ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromKmh(v)],",
-            "ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromMs(v)],",
-        )],
+        [
+            (
+                "ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromKmh(v)],",
+                "ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromMs(v)],",
+            )
+        ],
         "FAIL KMH: the packet page",
     ),
     # Fixing one page and missing the other.
     "node_page_reads_ms": (
-        [(
-            "['Ground speed', SonoranUnits.speedFromKmh(row.ground_speed)]",
-            "['Ground speed', SonoranUnits.speedFromMs(row.ground_speed)]",
-        )],
+        [
+            (
+                "['Ground speed', SonoranUnits.speedFromKmh(row.ground_speed)]",
+                "['Ground speed', SonoranUnits.speedFromMs(row.ground_speed)]",
+            )
+        ],
         "FAIL KMH: the node page",
     ),
     # Reading the proto comment's old "1/100 degrees" instead of the firmware.
