@@ -10384,7 +10384,9 @@ const DECODED_LABELS = {
   latitude: ['Latitude', (v) => round(v, 5)],
   longitude: ['Longitude', (v) => round(v, 5)],
   altitude: ['Altitude', (v) => SonoranUnits.heightFromM(v)],
-  ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromMs(v)],
+  // km/h, not m/s: mesh.proto Position.ground_speed "Ground speed in km/h";
+  // firmware src/gps/GPS.cpp sets it from reader.speed.kmph().
+  ground_speed: ['Ground speed', (v) => SonoranUnits.speedFromKmh(v)],
   ground_track: ['Ground track', (v) => `${round(v, 0)} deg`],
   sats_in_view: ['Satellites', (v) => String(v)],
   precision_bits: ['Precision bits', (v) => String(v)],
@@ -10622,7 +10624,8 @@ function positionValues(row) {
       ? 'full'
       : `about ${SonoranUnits.distanceFromM(doubt)} `
         + `(${row.precision_bits} bits). The node chose to send a rounded position.`],
-    row.ground_speed == null ? null : ['Ground speed', SonoranUnits.speedFromMs(row.ground_speed)],
+    // km/h on the wire (see DECODED_LABELS.ground_speed).
+    row.ground_speed == null ? null : ['Ground speed', SonoranUnits.speedFromKmh(row.ground_speed)],
     row.sats_in_view == null ? null : ['Satellites', String(row.sats_in_view)],
   ].filter(Boolean);
   return el('dl', { class: 'kv' }, entries.flatMap(([label, value]) =>
