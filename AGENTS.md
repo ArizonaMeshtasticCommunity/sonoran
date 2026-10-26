@@ -113,9 +113,14 @@ The tests come from the issue, not from the code. Tests that only prove
    reason. Put that failing output in the PR. A test that never failed
    proves nothing.
 3. **Green.** Write the smallest code that makes the test pass.
-4. **Never change a test to make it pass.** Do not weaken, skip or delete
-   a test to get green. If a test is wrong, say so in the PR, and get the
-   issue author's agreement before you change it.
+4. **Keep tests accurate. Do not change a test only to make it pass.**
+   Examine existing tests to make sure they are still accurate. When a
+   change breaks a test, examine both the test and the failure. If the
+   feature under test has changed, update the test to match the new
+   intended behaviour. Never change a test only to make it pass. Do
+   not change a test to get green regardless of the consequences. Do
+   not weaken, skip or delete a test to hide a defect or match broken
+   code. If a test was wrong or outdated, explain the change in the PR.
 5. **Refactor** while the tests stay green.
 6. **Small steps.** One behaviour for each cycle.
 7. **A bug fix starts with a test that reproduces the bug** and fails on
@@ -218,9 +223,10 @@ A change is complete only when all of these pass:
    `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
    ignored, and nothing is added to the served frontend.
 10. The PR shows its red step (§3A.5): the new tests, and their failing
-    output on `main` before the change. A change that §3A.5 exempts
-    (documentation, comments, configuration with no logic, or layout)
-    says why instead.
+    output on `main` before the change. If an existing test was updated
+    because the feature changed (§3A.5 item 4), the PR explains the
+    change. A change that §3A.5 exempts (documentation, comments,
+    configuration with no logic, or layout) says why instead.
 11. Every new number has its source in the code comment and in the doc
     (§3A.2), and the PR lists them under "Basis".
 
