@@ -29,6 +29,7 @@ The application does these things:
 ## 2. Technology stack
 
 - Python 3.13 or newer
+- `uv` for Python package and environment management
 - FastAPI for the JSON API
 - aiomqtt for MQTT
 - SQLAlchemy 2.0 (async) with asyncpg
@@ -37,6 +38,7 @@ The application does these things:
 - Protobuf definitions from `buf.build/meshtastic/protobufs`
 - Static frontend: plain HTML, CSS and JavaScript (classic scripts and
   ES modules), with vendored Leaflet and ECharts. No build step.
+- Node.js, ESLint, and Playwright for frontend linting and end-to-end tests
 - numpy for the SRTM elevation transform
 - A vendored WebAssembly build of SPLAT! for coverage prediction (GPL-3)
 - Ruff for lint and format
@@ -87,12 +89,7 @@ Put the link in the code comment beside the constant **and** in the
 matching doc. Do not merge a number with no source. "A reasonable value"
 and "a common rule of thumb" are not sources.
 
-### 3A.3 No new coverage-gaps features for now
-
-Do not add gaps signals, scores, leaderboards or gaps pages until Logan or
-Tyler says otherwise in an issue. Bug fixes to what exists are still fine.
-
-### 3A.4 No tool credit and no session links
+### 3A.3 No tool credit and no session links
 
 - Do not add "Generated with ...", "Co-Authored-By: <a tool or model>" or
   any other tool or model credit to a commit, a PR, an issue or a comment.
@@ -101,7 +98,7 @@ Tyler says otherwise in an issue. Bug fixes to what exists are still fine.
   that can hold file contents, command output, paths and secrets.
 - The author of a PR is the person responsible for it.
 
-### 3A.5 Test-driven development
+### 3A.4 Test-driven development
 
 The tests come from the issue, not from the code. Tests that only prove
 "the code does what the agent decided" prove nothing about the measure.
@@ -174,7 +171,7 @@ on-screen text uses a glossary word without its tooltip, when an entry
 has no plain explanation, or when `docs/GLOSSARY.md` drifts. Its
 baseline only gets shorter: never add a line to make it pass, unless a
 maintainer agrees in the PR (`docs/NEWCOMER.md` §6.3). Never weaken the
-check to get green (§3A.5 item 4).
+check to get green (§3A.4 item 4).
 
 **The review.** Before you ask for a merge, run the newcomer review in
 `docs/NEWCOMER.md` §5, or ask a second agent to run it.
@@ -219,13 +216,15 @@ A change is complete only when all of these pass:
 6. Alembic migrations apply cleanly.
 7. The matching doc in `docs/` is updated.
 8. Commit messages use conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`).
+   Use standard scopes where applicable (`ui`, `map`, `position`, `ingest`,
+   `api`, `planner`, `coverage`, `rf`, `db`).
 9. `npx eslint src/sonoran/web/static` passes. Install it with
    `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
    ignored, and nothing is added to the served frontend.
-10. The PR shows its red step (§3A.5): the new tests, and their failing
+10. The PR shows its red step (§3A.4): the new tests, and their failing
     output on `main` before the change. If an existing test was updated
-    because the feature changed (§3A.5 item 4), the PR explains the
-    change. A change that §3A.5 exempts (documentation, comments,
+    because the feature changed (§3A.4 item 4), the PR explains the
+    change. A change that §3A.4 exempts (documentation, comments,
     configuration with no logic, or layout) says why instead.
 11. Every new number has its source in the code comment and in the doc
     (§3A.2), and the PR lists them under "Basis".
@@ -1082,47 +1081,6 @@ silence fits at -14.46 dB, inside the guard, with nothing weakened. The
 full decomposition, the falsification table and the path forward are in
 `docs/ISSUES.md` 2.4.2.
 
-### 9.22 A role of NULL is a client, not an unknown (fixed at ingest, #197)
-
-**Fixed for new rows.** `ingest/handlers/nodeinfo.py` used to read every
-enum with
-
-    if not value:
-        return None
-
-and Meshtastic numbers `CLIENT` as zero, so the most common node on a
-mesh was stored with `role IS NULL`, exactly like a node that had never
-sent a NodeInfo at all. The live map drew 167 clients on MediumFast in
-the grey it keeps for "no role reported".
-
-Roles now go through `_role_name`, which never returns None for a node
-that introduced itself: zero is `CLIENT` (config.proto calls it the
-"Default Role"), and a number this repository has not vendored keeps its
-digits as `ROLE_<n>` rather than collapsing back into NULL.
-
-`_enum_name` still treats zero as None, and still should — `hw_model`
-zero is `UNSET`, which really does mean nothing was reported. Fixing the
-role handler by changing the shared helper would have made every unset
-hardware model read as whatever name zero has.
-
-**Old rows are still NULL** and cannot be backfilled: nothing in the
-database says which NULLs were clients. `roles.resolve_role` reads a
-stored `long_name` or `short_name` as evidence that a User message was
-processed, because `store_nodeinfo` writes those in one statement with
-the role and nothing else in the ingest writes them. That inference
-lives in `roles.py` only — never add a second copy in a page — and it
-expires: when `SELECT count(*) FROM node WHERE role IS NULL AND
-long_name IS NOT NULL` reaches zero, it can go.
-
-Never read NULL as "unknown, so include it". The coverage map did, and
-predicted from 689 nodes where 50 were infrastructure. `sonoran/roles.py`
-holds the test and `tests/unit/test_roles.py` pins it.
-
-The same trap is why `tests/integration/test_coverage_job.py::_add_node`
-takes its role as a required keyword argument. It defaulted to `ROUTER`,
-so every coverage test asserted about routers while its author believed
-it asserted about nodes. Do not give it a default again.
-
 ### 9.23 The engine's clutter scalar is passed as zero on purpose
 
 `coverage/params.py` sets `clutter_height_m=0.0` for every prediction.
@@ -1275,8 +1233,7 @@ one.**
       {name field{... on ProjectV2FieldCommon{name}}}}}}}}}}'
 
 An issue **absent** from the board is not gated by the board. It is not
-automatically fair game: it must still meet §3A.1, and a gaps feature is
-paused by §3A.3.
+automatically fair game: it must still meet §3A.1.
 
 #### The trap: an empty answer that means two different things
 

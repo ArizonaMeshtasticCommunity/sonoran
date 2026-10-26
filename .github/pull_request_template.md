@@ -20,7 +20,7 @@ and its result). Or write "No new numbers."
 ## Red evidence
 
 <!--
-AGENTS.md §3A.5. The new tests, and their failing output on `main` before
+AGENTS.md §3A.4. The new tests, and their failing output on `main` before
 this change. For a bug fix, the test that reproduces the bug. Or the
 reason no test applies (documentation only, layout with screenshots).
 -->
@@ -69,5 +69,5 @@ author. They are thanked by name in the release.
 - [ ] The matching doc in `docs/` is updated
 - [ ] "Release notes" and "Issues" above are filled in
 - [ ] "Basis" and "Red evidence" above are filled in (AGENTS.md §3A)
-- [ ] No tool or model credit and no agent session link anywhere in this PR or its commits (§3A.4)
+- [ ] No tool or model credit and no agent session link anywhere in this PR or its commits (§3A.3)
 - [ ] "Newcomer check" above is filled in (AGENTS.md §3B)

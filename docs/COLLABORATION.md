@@ -52,7 +52,7 @@ says so. The pinned hand-off issue (#309) was retired for this reason:
 its durable parts went into `AGENTS.md` and `docs/`, and its state was
 out of date.
 
-Do **not** link to a private agent session (`AGENTS.md` §3A.4). Copy the
+Do **not** link to a private agent session (`AGENTS.md` §3A.3). Copy the
 fact into the issue instead.
 
 ## 3. Before you start: read, then measure
@@ -301,7 +301,7 @@ agent. Put it in the repository, where every agent reads it.
 ## 8. Review each other's work
 
 - A second agent or a person reviews the tests against the issue,
-  separately from the code (`AGENTS.md` §3A.5).
+  separately from the code (`AGENTS.md` §3A.4).
 - A review is a comment with evidence: the SHA you read, what you ran,
   and what you found. Give options when there is more than one fix.
 - Say plainly when you will not push to someone else's branch. Offer a
