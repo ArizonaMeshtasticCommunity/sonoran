@@ -299,7 +299,11 @@ Packet routing and network statistics.
 ### 4.7 `position_metrics`
 
 `latitude` (double precision), `longitude` (double precision),
-`altitude` (integer), `ground_speed` (integer), `ground_track` (integer),
+`altitude` (integer), `ground_speed` (integer, km/h as the firmware sends it:
+`mesh.proto` Position.ground_speed, `src/gps/GPS.cpp` `reader.speed.kmph()`),
+`ground_track` (integer, degrees * 10^-5 as the firmware sends it:
+`src/gps/GPS.cpp`, `src/modules/PositionModule.cpp`; not the 1/100 degrees
+the `mesh.proto` comment says),
 `precision_bits` (integer), `sats_in_view` (integer),
 `location_source` (text, nullable, revision pr344): the proto name of
 `Position.location_source` (`LOC_MANUAL`, `LOC_INTERNAL` or
