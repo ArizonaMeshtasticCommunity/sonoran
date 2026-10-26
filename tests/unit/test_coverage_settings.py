@@ -3,7 +3,7 @@
 Will asked for one settings button at the top right of the coverage
 page, with every choice about the map behind it, and for the defaults to
 be the map Logan and Tyler asked for in #315: precise positions only,
-routers and repeaters, the usable layer.
+routers and repeaters, the uplink layer.
 
 The rules themselves (the defaults, the count, the reset, the address
 and the storage) are pure functions in `coverage-settings.js`, and

@@ -1328,6 +1328,8 @@ class CoverageLevels:
         if holder is None:
             return None
         value = holder.get(layer)
+        if value is None and layer in ("usable", "uplink"):
+            value = holder.get("uplink" if layer == "usable" else "usable")
         return None if value is None else int(value)
 
 

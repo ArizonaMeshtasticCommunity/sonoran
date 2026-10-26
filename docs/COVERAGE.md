@@ -165,16 +165,12 @@ the same amount either way, and what is left is
 A node that shouts at 30 dBm is heard 8 dB further than it hears a
 handheld that shouts at 22. See `coverage/sites.py`.
 
-**The weaker of the two for one node, and only then the best node.**
-The order matters and it is easy to get wrong. Taking the best of each
-direction across every site first, and the weaker of the two
-afterwards, lets one node answer for the downlink and a different node
-answer for the uplink, and paints a place as usable both ways where no
-single radio closes both. A tall router a handheld cannot answer,
-beside a solar node the handheld can reach but which cannot be heard,
-is exactly that place, and the mesh does not work there. `usable` is
-therefore built in `_predict`, beside the two directions, and is not
-derived from them afterwards.
+**Simulated coverage renders the uplink direction.**
+All infrastructure nodes in this network transmit with power equal to or
+greater than assumed handheld power (22 dBm). The uplink path is the
+limiting direction. The uplink map is therefore identical to bidirectional
+reach. The coverage job renders only the uplink layer to save compute
+time and disk space.
 
 ## 5. One preset at a time
 
@@ -242,7 +238,7 @@ The defaults are the map that Logan and Tyler asked for in #315.
 |---------|---------|------------|
 | Map source: "Routers and repeaters" or "Also nodes that repeat" | Routers and repeaters (the run's first map) | The address |
 | Include approximate positions | Off | The address |
-| Layer: usable, downlink or uplink | Usable | The address |
+| Layer: uplink or actual coverage | Uplink (simulated) | The address |
 | Signal floor: 0, 5, 10 or 20 dB above what the radio needs (6.1.2) | 0 dB | The address |
 | Show: map, nodes, signal strength | All on | This visit only |
 | Signal opacity | 100 % | This browser |
@@ -255,7 +251,7 @@ The defaults are the map that Logan and Tyler asked for in #315.
 `#coverage` address.
 
 The map choices change what the map is, so they go in the address:
-`#coverage?set=extended&approx=1&layer=downlink&floor=10`. Only a value that
+`#coverage?set=extended&approx=1&layer=empirical_heatmap_position&floor=10`. Only a value that
 differs from the default is written. A link therefore shows the same
 map to the next reader, and a plain `#coverage` link is always the
 precise map. The map choices are not stored in the browser. If they

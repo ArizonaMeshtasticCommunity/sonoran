@@ -768,8 +768,8 @@ def test_the_coverage_run_writes_the_level_at_each_node(
     assert for_preset["threshold_level"] == to_level(sensitivity_of(long_fast))
 
     assert str(near) in levels, "a node inside the region must be sampled"
-    assert set(levels[str(near)]) == {"usable", "downlink", "uplink"}
-    assert 0 <= levels[str(near)]["usable"] <= 255
+    assert set(levels[str(near)]) == {"uplink"}
+    assert 0 <= levels[str(near)]["uplink"] <= 255
 
     # A node outside the region grid is ABSENT, not zero. Zero would
     # say the run looked there and found nothing.

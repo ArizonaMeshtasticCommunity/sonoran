@@ -254,10 +254,10 @@ def test_a_run_makes_tiles_the_api_serves(
         assert root is not None
         # A default run publishes the infrastructure site set, so the tiles
         # and the URL both carry that segment now. See the site-sets work.
-        tile = next(root.glob("LongFast/infrastructure/usable/*/*/*.png"))
+        tile = next(root.glob("LongFast/infrastructure/uplink/*/*/*.png"))
         zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
         response = client.get(
-            f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/usable/{zoom}/{x}/{y}.png"
+            f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/uplink/{zoom}/{x}/{y}.png"
         )
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
@@ -269,12 +269,12 @@ def test_a_run_makes_tiles_the_api_serves(
         # not in that URL: the route serves the infrastructure map and has
         # nowhere to be told otherwise. See `docs/API.md` 3B.4.
         public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
-        embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
+        embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/uplink/{zoom}/{x}/{y}.png")
         assert embedded.status_code == 200
         assert embedded.content == response.content
         # With the embed off, as it ships, that path does not exist at all.
         assert (
-            client.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png").status_code
+            client.get(f"/api/embed/tiles/{stamp}/LongFast/uplink/{zoom}/{x}/{y}.png").status_code
             == 404
         )
 
@@ -313,17 +313,17 @@ def test_a_run_writes_a_margin_tile_beside_every_colour_tile(
     summary = client.get("/api/coverage").json()
     assert summary["margin_tiles"]["encoding"] == "margin_db_plus_one"
     stamp = summary["stamp"]
-    tile = next((root / "LongFast" / "infrastructure" / "usable").glob("*/*/*.png"))
+    tile = next((root / "LongFast" / "infrastructure" / "uplink").glob("*/*/*.png"))
     zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
     response = client.get(
-        f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/usable/margin/{zoom}/{x}/{y}.png"
+        f"/api/coverage/tiles/{stamp}/LongFast/infrastructure/uplink/margin/{zoom}/{x}/{y}.png"
     )
     assert response.status_code == 200
     # Grey, eight bits: colour type 0 in the header.
     assert response.content[24:26] == bytes((8, 0))
 
     public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
-    embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png")
+    embedded = public.get(f"/api/embed/tiles/{stamp}/LongFast/uplink/{zoom}/{x}/{y}.png")
     assert embedded.status_code == 200
     assert embedded.content == tile.read_bytes()
     assert "margin_tiles" not in public.get("/api/embed/coverage").json()
@@ -891,13 +891,13 @@ def test_a_diagnostic_run_never_reaches_the_public_tiles(
     # around a client node. That is the directory that must not exist.
     assert not (root / "LongFast" / "infrastructure").exists()
 
-    tile = next(root.glob("LongFast/diagnostic/usable/*/*/*.png"))
+    tile = next(root.glob("LongFast/diagnostic/uplink/*/*/*.png"))
     zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
     stamp = manifest.stamp
 
     public = TestClient(create_app(settings.model_copy(update={"embed_enabled": True})))
     assert (
-        public.get(f"/api/embed/tiles/{stamp}/LongFast/usable/{zoom}/{x}/{y}.png").status_code
+        public.get(f"/api/embed/tiles/{stamp}/LongFast/uplink/{zoom}/{x}/{y}.png").status_code
         == 404
     )
     assert public.get("/api/embed/coverage").json()["reason"] == "diagnostic"
@@ -905,7 +905,7 @@ def test_a_diagnostic_run_never_reaches_the_public_tiles(
     # And the dashboard has it, by the name the run wrote.
     dashboard = TestClient(create_app(settings))
     served = dashboard.get(
-        f"/api/coverage/tiles/{stamp}/LongFast/diagnostic/usable/{zoom}/{x}/{y}.png"
+        f"/api/coverage/tiles/{stamp}/LongFast/diagnostic/uplink/{zoom}/{x}/{y}.png"
     )
     assert served.status_code == 200
     assert served.content[:8] == b"\x89PNG\r\n\x1a\n"
@@ -1163,13 +1163,13 @@ def test_the_approximate_map_is_its_own_site_set_and_never_public(
 
     root = store.current_root(settings)
     assert root is not None
-    tile = next(root.glob("LongFast/infrastructure_approximate/usable/*/*/*.png"))
+    tile = next(root.glob("LongFast/infrastructure_approximate/uplink/*/*/*.png"))
     zoom, x, y = tile.parts[-3], tile.parts[-2], tile.stem
 
     # The dashboard has it, by the name the run wrote.
     dashboard = TestClient(create_app(settings))
     served = dashboard.get(
-        f"/api/coverage/tiles/{manifest.stamp}/LongFast/infrastructure_approximate/usable/"
+        f"/api/coverage/tiles/{manifest.stamp}/LongFast/infrastructure_approximate/uplink/"
         f"{zoom}/{x}/{y}.png"
     )
     assert served.status_code == 200

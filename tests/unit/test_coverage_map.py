@@ -570,15 +570,15 @@ def test_a_run_becomes_visible_in_one_step(tmp_path: Path) -> None:
     from sonoran.coverage import store
 
     pending = store.pending_dir(settings, "20260820T000000Z")
-    (pending / "LongFast" / "infrastructure" / "usable" / "6" / "12").mkdir(parents=True)
-    (pending / "LongFast" / "infrastructure" / "usable" / "6" / "12" / "25.png").write_bytes(b"x")
+    (pending / "LongFast" / "infrastructure" / "uplink" / "6" / "12").mkdir(parents=True)
+    (pending / "LongFast" / "infrastructure" / "uplink" / "6" / "12" / "25.png").write_bytes(b"x")
 
     publish(settings, "20260820T000000Z", _manifest("20260820T000000Z"))
     read = read_manifest(settings)
     assert read is not None
     assert read["stamp"] == "20260820T000000Z"
-    assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 25) == b"x"
-    assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 99) is None
+    assert store.read_tile(settings, "LongFast", "infrastructure", "uplink", 6, 12, 25) == b"x"
+    assert store.read_tile(settings, "LongFast", "infrastructure", "uplink", 6, 12, 99) is None
 
 
 def test_old_runs_are_removed(tmp_path: Path) -> None:
@@ -603,24 +603,24 @@ def test_a_stamped_tile_never_moves_to_a_new_run(tmp_path: Path) -> None:
         ("20260820T000002Z", b"second"),
     ):
         pending = store.pending_dir(settings, stamp)
-        tile = pending / "LongFast" / "infrastructure" / "usable" / "6" / "12" / "25.png"
+        tile = pending / "LongFast" / "infrastructure" / "uplink" / "6" / "12" / "25.png"
         tile.parent.mkdir(parents=True)
         tile.write_bytes(content)
         publish(settings, stamp, _manifest(stamp))
 
     assert (
         store.read_run_tile(
-            settings, "20260820T000001Z", "LongFast", "infrastructure", "usable", 6, 12, 25
+            settings, "20260820T000001Z", "LongFast", "infrastructure", "uplink", 6, 12, 25
         )
         == b"first"
     )
     assert (
         store.read_run_tile(
-            settings, "20260820T000002Z", "LongFast", "infrastructure", "usable", 6, 12, 25
+            settings, "20260820T000002Z", "LongFast", "infrastructure", "uplink", 6, 12, 25
         )
         == b"second"
     )
-    assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 25) == b"second"
+    assert store.read_tile(settings, "LongFast", "infrastructure", "uplink", 6, 12, 25) == b"second"
 
 
 def test_a_broken_index_reads_as_no_run(tmp_path: Path) -> None:
@@ -650,7 +650,7 @@ def test_every_layer_has_a_label() -> None:
     from sonoran.coverage.store import LAYER_LABELS
 
     assert set(LAYERS) == set(LAYER_LABELS)
-    assert LAYERS[0] == "usable", "the honest layer must be the first one a page shows"
+    assert LAYERS[0] == "uplink", "the simulated coverage layer must be the first one a page shows"
 
 
 def test_a_stored_calibration_is_bounded_before_it_is_used() -> None:
@@ -733,9 +733,9 @@ def test_a_run_stamp_that_is_not_a_stamp_is_refused(tmp_path: Path) -> None:
         path.write_text(json.dumps({"current": bad}), encoding="utf-8")
         assert store.current_stamp(settings) is None, bad
         assert store.current_root(settings) is None
-        assert store.read_tile(settings, "LongFast", "infrastructure", "usable", 6, 12, 25) is None
+        assert store.read_tile(settings, "LongFast", "infrastructure", "uplink", 6, 12, 25) is None
         assert (
-            store.read_run_tile(settings, bad, "LongFast", "infrastructure", "usable", 6, 12, 25)
+            store.read_run_tile(settings, bad, "LongFast", "infrastructure", "uplink", 6, 12, 25)
             is None
         )
 
@@ -840,11 +840,11 @@ def test_a_dead_worker_pool_costs_time_and_not_the_run(
 
     def fake_predict(
         _settings: Settings, _grid: Grid, _sites: object, workers: int
-    ) -> tuple[object, object, list[dict[str, object]], set[str]]:
+    ) -> tuple[object, list[dict[str, object]], set[str]]:
         calls.append(workers)
         if workers >= 1:
             raise BrokenProcessPool("out of memory")
-        return _grid.empty(), _grid.empty(), [], set()
+        return _grid.empty(), [], set()
 
     monkeypatch.setattr(coverage, "_predict", fake_predict)
     coverage.predict_preset(settings, grid, [], 4)
@@ -977,16 +977,15 @@ def test_usable_is_the_weaker_direction_of_one_node() -> None:
     assert to_dbm(int(right[0, 0])) < threshold, "and the right order does not"
 
 
-def test_the_job_builds_usable_from_each_site() -> None:
-    """`_predict` must return its own usable layer, not one derived
-    from the other two afterwards."""
+def test_the_job_builds_uplink_from_each_site() -> None:
+    """`_predict` must return the uplink layer."""
     import inspect
 
     from sonoran.jobs import coverage
 
     source = inspect.getsource(coverage._predict)
-    assert "blit_max(usable, grid, combine_min(" in source
-    assert "return downlink, uplink, usable, notes, missing" in source
+    assert "added_up = blit_max(uplink, grid, up_here, site_grid)" in source
+    assert "return uplink, notes, missing" in source
 
 
 def test_a_preset_that_kept_no_site_is_still_reported(tmp_path: Path) -> None:
@@ -1071,7 +1070,7 @@ def test_the_worker_priority_is_only_ever_lowered() -> None:
         coverage._be_nice(10)
         assert seen == [10]
     finally:
-        os.nice = original  # type: ignore[assignment]
+        os.nice = original
 
 
 def test_a_host_without_nice_is_left_alone() -> None:

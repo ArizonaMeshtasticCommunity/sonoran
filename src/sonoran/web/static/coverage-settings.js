@@ -34,7 +34,7 @@ window.SonoranCoverageSettings = (function build() {
 
   const DEFAULT_BASE = 'infrastructure';
   const APPROXIMATE_SUFFIX = '_approximate';
-  const LAYERS = ['usable', 'downlink', 'uplink', 'empirical_heatmap_position'];
+  const LAYERS = ['uplink', 'empirical_heatmap_position'];
 
   /*
    * The signal floors the panel offers, in dB above what the radio
@@ -67,7 +67,7 @@ window.SonoranCoverageSettings = (function build() {
     return {
       base: DEFAULT_BASE,
       approximate: false,
-      layer: 'usable',
+      layer: 'uplink',
       floor: 0,
       showMap: true,
       showNodes: true,
@@ -169,7 +169,7 @@ window.SonoranCoverageSettings = (function build() {
     return {
       base: SET_KEY.test(set) && !set.endsWith(APPROXIMATE_SUFFIX) ? set : DEFAULT_BASE,
       approximate: q.get('approx') === '1',
-      layer: LAYERS.includes(layer) ? layer : 'usable',
+      layer: LAYERS.includes(layer) ? layer : 'uplink',
       floor: floorOf(q.get('floor')),
     };
   }
@@ -179,7 +179,7 @@ window.SonoranCoverageSettings = (function build() {
     const q = new URLSearchParams();
     if (settings.base && settings.base !== DEFAULT_BASE) q.set('set', settings.base);
     if (settings.approximate) q.set('approx', '1');
-    if (settings.layer && settings.layer !== 'usable') q.set('layer', settings.layer);
+    if (settings.layer && settings.layer !== 'uplink') q.set('layer', settings.layer);
     if (floorOf(settings.floor)) q.set('floor', String(floorOf(settings.floor)));
     const text = q.toString();
     return text ? `#coverage?${text}` : '#coverage';

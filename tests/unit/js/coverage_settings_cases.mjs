@@ -68,7 +68,7 @@ const WITH_APPROXIMATE = [
   const d = C.defaults();
   eq('the default map is routers and repeaters', d.base, 'infrastructure');
   eq('the default map is precise only', d.approximate, false);
-  eq('the default layer is usable', d.layer, 'usable');
+  eq('the default layer is uplink', d.layer, 'uplink');
   eq('no role is hidden by default', d.hiddenRoles, []);
   eq('any time by default', d.heard, 'any');
   eq('moving nodes shown by default', d.hideMoving, false);
@@ -85,7 +85,7 @@ const WITH_APPROXIMATE = [
   const s = C.defaults();
   s.hiddenRoles = ['CLIENT', 'SENSOR', 'TRACKER'];
   eq('three hidden roles are one setting', C.changedCount(s), 1);
-  s.layer = 'downlink';
+  s.layer = 'empirical_heatmap_position';
   s.approximate = true;
   s.heard = '24h';
   s.circles = true;
@@ -129,11 +129,11 @@ const WITH_APPROXIMATE = [
 // --- the address -------------------------------------------------------
 {
   eq('a plain link is the default map', C.fromHash('#coverage'),
-    { base: 'infrastructure', approximate: false, layer: 'usable', floor: 0 });
+    { base: 'infrastructure', approximate: false, layer: 'uplink', floor: 0 });
   eq('a link names its map',
-    C.fromHash('#coverage?set=extended&approx=1&layer=downlink'),
-    { base: 'extended', approximate: true, layer: 'downlink', floor: 0 });
-  eq('an unknown layer is the default', C.fromHash('#coverage?layer=sideways').layer, 'usable');
+    C.fromHash('#coverage?set=extended&approx=1&layer=empirical_heatmap_position'),
+    { base: 'extended', approximate: true, layer: 'empirical_heatmap_position', floor: 0 });
+  eq('an unknown layer is the default', C.fromHash('#coverage?layer=sideways').layer, 'uplink');
   eq('a set name that is not a set name is the default',
     C.fromHash('#coverage?set=..%2Fetc').base, 'infrastructure');
   eq('an approximate set name is not a map source; approx says that',
@@ -141,12 +141,12 @@ const WITH_APPROXIMATE = [
   eq('approx must say 1', C.fromHash('#coverage?approx=yes').approximate, false);
   eq('the default map writes a plain link', C.toHash(C.defaults()), '#coverage');
   eq('a changed map writes only what changed',
-    C.toHash({ ...C.defaults(), approximate: true, layer: 'uplink' }), '#coverage?approx=1&layer=uplink');
-  const round = { ...C.defaults(), base: 'extended', approximate: true, layer: 'downlink' };
+    C.toHash({ ...C.defaults(), approximate: true, layer: 'empirical_heatmap_position' }), '#coverage?approx=1&layer=empirical_heatmap_position');
+  const round = { ...C.defaults(), base: 'extended', approximate: true, layer: 'empirical_heatmap_position' };
   eq('a written link reads back as the same map', C.fromHash(C.toHash(round)),
-    { base: 'extended', approximate: true, layer: 'downlink', floor: 0 });
+    { base: 'extended', approximate: true, layer: 'empirical_heatmap_position', floor: 0 });
   eq('the address says whether it names anything', [C.hashNamesMap('#coverage'),
-    C.hashNamesMap('#coverage?layer=uplink')], [false, true]);
+    C.hashNamesMap('#coverage?layer=empirical_heatmap_position')], [false, true]);
   eq('display filters never reach the address',
     C.toHash({ ...C.defaults(), hiddenRoles: ['CLIENT'], circles: true, opacity: 0.4 }), '#coverage');
 }
@@ -158,7 +158,7 @@ const WITH_APPROXIMATE = [
     ...C.defaults(),
     base: 'extended',
     approximate: true,
-    layer: 'downlink',
+    layer: 'empirical_heatmap_position',
     hiddenRoles: ['CLIENT'],
     heard: '7d',
     hideMoving: true,
@@ -171,7 +171,7 @@ const WITH_APPROXIMATE = [
     [back.hiddenRoles, back.heard, back.hideMoving, back.circles, back.opacity],
     [['CLIENT'], '7d', true, true, 0.6]);
   eq('the map choices do not: a plain link must mean the precise map',
-    [back.base, back.approximate, back.layer], ['infrastructure', false, 'usable']);
+    [back.base, back.approximate, back.layer], ['infrastructure', false, 'uplink']);
 }
 {
   eq('refused storage loads the defaults', C.load(refused), C.defaults());
