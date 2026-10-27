@@ -104,7 +104,7 @@ async function main() {
   // And each layer, so the layer select works in the built file. The
   // layer is one select in the settings panel (#299, #334); the three
   // buttons this used to press are gone.
-  for (const layer of ['downlink', 'uplink', 'usable']) {
+  for (const layer of ['uplink', 'empirical_heatmap_position']) {
     await page.evaluate((name) => {
       const select = document.querySelector('[data-coverage-layers]');
       if (!select) return;

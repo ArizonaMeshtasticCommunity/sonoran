@@ -141,7 +141,7 @@ def main() -> int:
     parser.add_argument("meshmonitor", help="base URL of a MeshMonitor instance")
     parser.add_argument("--cache", default="/var/lib/sonoran/coverage")
     parser.add_argument("--preset", default="LongFast")
-    parser.add_argument("--layer", default="usable")
+    parser.add_argument("--layer", default="uplink")
     # One run can publish more than one map of the same preset, and they
     # are different answers. The infrastructure map is the narrow one and
     # the one this tool means.

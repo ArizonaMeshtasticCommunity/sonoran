@@ -82,7 +82,7 @@ function pixel(data, index) {
 {
   eq('a floor of 0 counts nothing', C.changedCount({ ...C.defaults(), floor: 0 }), 0);
   eq('a floor above 0 counts one', C.changedCount({ ...C.defaults(), floor: 10 }), 1);
-  eq('with the layer it counts two', C.changedCount({ ...C.defaults(), floor: 20, layer: 'uplink' }), 2);
+  eq('with the layer it counts two', C.changedCount({ ...C.defaults(), floor: 20, layer: 'empirical_heatmap_position' }), 2);
   eq('Reset clears the floor', C.reset().floor, 0);
 }
 
@@ -95,9 +95,9 @@ function pixel(data, index) {
     C.toHash({ ...C.defaults(), floor: 10 }), '#coverage?floor=10');
   eq('no floor writes nothing', C.toHash({ ...C.defaults(), floor: 0 }), '#coverage');
   eq('with the other map choices',
-    C.toHash({ ...C.defaults(), approximate: true, layer: 'uplink', floor: 5 }),
-    '#coverage?approx=1&layer=uplink&floor=5');
-  const round = { ...C.defaults(), layer: 'downlink', floor: 20 };
+    C.toHash({ ...C.defaults(), approximate: true, layer: 'empirical_heatmap_position', floor: 5 }),
+    '#coverage?approx=1&layer=empirical_heatmap_position&floor=5');
+  const round = { ...C.defaults(), layer: 'empirical_heatmap_position', floor: 20 };
   eq('a written floor reads back', C.fromHash(C.toHash(round)).floor, 20);
 
   const kept = storage();

@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from sonoran.api.app import create_app
 from sonoran.config import Settings
+from sonoran.coverage import store as coverage_store
 from sonoran.coverage.clutter import knife_edge_db
 from sonoran.gaps import siting
 from sonoran.gaps.siting import BAD, OK, UNKNOWN, Candidate, DemandPoint
@@ -561,6 +562,37 @@ def test_a_diagnostic_run_answers_nothing_about_the_baseline() -> None:
     point = DemandPoint(33.4, -112.1, ("!00000001",), ("n",))
 
     assert baseline.usable(gaps_siting._node_numbers(point)) is None
+
+
+def _published(monkeypatch, layer: str, level: int) -> None:  # type: ignore[no-untyped-def]
+    """Publish a run whose node levels carry one layer for node 1."""
+    document = {
+        "stamp": "20261027T000000Z",
+        "presets": {
+            "LongFast": {
+                "threshold_level": 61,
+                "site_sets": {"infrastructure": {"1": {layer: level}}},
+            }
+        },
+    }
+    monkeypatch.setattr(coverage_store, "read_manifest", lambda settings: {})
+    monkeypatch.setattr(coverage_store, "read_node_levels", lambda settings: document)
+
+
+def test_the_baseline_reads_the_uplink_level_of_a_run(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A run writes only `uplink` (#402). The baseline must not lose it."""
+    _published(monkeypatch, "uplink", 90)
+    baseline = gaps_siting.read_baseline(Settings(), LONG_FAST)
+
+    assert baseline.levels == {"1": 90}
+
+
+def test_the_baseline_still_reads_a_run_published_before_402(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The published run stays until the next run replaces it."""
+    _published(monkeypatch, "usable", 90)
+    baseline = gaps_siting.read_baseline(Settings(), LONG_FAST)
+
+    assert baseline.levels == {"1": 90}
 
 
 # ------------------------------------------------ where the engine runs

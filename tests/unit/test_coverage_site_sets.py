@@ -126,8 +126,8 @@ class TestTilePathsKeepTheSetsApart:
         from sonoran.coverage.store import tile_path
 
         root = FsPath("/tmp/run")
-        infra = tile_path(root, "LongFast", "infrastructure", "usable", 6, 12, 25)
-        wide = tile_path(root, "LongFast", "extended", "usable", 6, 12, 25)
+        infra = tile_path(root, "LongFast", "infrastructure", "uplink", 6, 12, 25)
+        wide = tile_path(root, "LongFast", "extended", "uplink", 6, 12, 25)
         assert infra != wide
         assert infra.parts[-5] == "infrastructure"
         assert wide.parts[-5] == "extended"
@@ -139,7 +139,7 @@ class TestTilePathsKeepTheSetsApart:
         from sonoran.coverage.store import tile_path
 
         seen = {
-            tile_path(FsPath("/r"), "LongFast", key, "usable", 6, 12, 25) for key in SITE_SET_ROLES
+            tile_path(FsPath("/r"), "LongFast", key, "uplink", 6, 12, 25) for key in SITE_SET_ROLES
         }
         assert len(seen) == len(SITE_SET_ROLES)
 

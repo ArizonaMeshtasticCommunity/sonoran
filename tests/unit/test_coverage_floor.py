@@ -212,13 +212,13 @@ def test_the_job_writes_a_margin_tile_beside_each_colour_tile(tmp_path: Path) ->
     levels[700:900, 100:600] = floor - 5
 
     written = render_layer(
-        tmp_path, "LongFast", "infrastructure", "usable", levels, grid, settings, THRESHOLD
+        tmp_path, "LongFast", "infrastructure", "uplink", levels, grid, settings, THRESHOLD
     )
     assert written > 0
 
-    colours = sorted((tmp_path / "LongFast" / "infrastructure" / "usable" / "8").rglob("*.png"))
+    colours = sorted((tmp_path / "LongFast" / "infrastructure" / "uplink" / "8").rglob("*.png"))
     margins = sorted(
-        (tmp_path / "LongFast" / "infrastructure" / "usable" / store.MARGIN_DIR / "8").rglob(
+        (tmp_path / "LongFast" / "infrastructure" / "uplink" / store.MARGIN_DIR / "8").rglob(
             "*.png"
         )
     )
@@ -228,10 +228,10 @@ def test_the_job_writes_a_margin_tile_beside_each_colour_tile(tmp_path: Path) ->
     for tile in tiles_for_grid(grid, 8):
         patch = sample_tile(levels, grid, tile)
         colour = store.tile_path(
-            tmp_path, "LongFast", "infrastructure", "usable", tile.zoom, tile.x, tile.y
+            tmp_path, "LongFast", "infrastructure", "uplink", tile.zoom, tile.x, tile.y
         )
         margin = store.margin_tile_path(
-            tmp_path, "LongFast", "infrastructure", "usable", tile.zoom, tile.x, tile.y
+            tmp_path, "LongFast", "infrastructure", "uplink", tile.zoom, tile.x, tile.y
         )
         assert colour.exists() == margin.exists()
         if colour.exists():
@@ -242,11 +242,11 @@ def test_the_job_writes_a_margin_tile_beside_each_colour_tile(tmp_path: Path) ->
 def test_no_colour_tile_path_can_name_a_margin_tile(tmp_path: Path) -> None:
     """The colour routes take a whole number for the zoom. The margin
     tiles sit under a directory whose name is not one."""
-    margin = store.margin_tile_path(tmp_path, "LongFast", "infrastructure", "usable", 7, 20, 50)
+    margin = store.margin_tile_path(tmp_path, "LongFast", "infrastructure", "uplink", 7, 20, 50)
     assert store.MARGIN_DIR in margin.parts
     assert not store.MARGIN_DIR.isdigit()
     for zoom in range(0, 17):
-        colour = store.tile_path(tmp_path, "LongFast", "infrastructure", "usable", zoom, 20, 50)
+        colour = store.tile_path(tmp_path, "LongFast", "infrastructure", "uplink", zoom, 20, 50)
         assert store.MARGIN_DIR not in colour.parts
 
 
@@ -285,11 +285,11 @@ ZOOM, X, Y = 7, 20, 50
 
 def _write_run(root: Path, *, with_margin: bool) -> None:
     run = root / "runs" / STAMP
-    colour = store.tile_path(run, "LongFast", "infrastructure", "usable", ZOOM, X, Y)
+    colour = store.tile_path(run, "LongFast", "infrastructure", "uplink", ZOOM, X, Y)
     colour.parent.mkdir(parents=True, exist_ok=True)
     colour.write_bytes(COLOUR_PNG)
     if with_margin:
-        margin = store.margin_tile_path(run, "LongFast", "infrastructure", "usable", ZOOM, X, Y)
+        margin = store.margin_tile_path(run, "LongFast", "infrastructure", "uplink", ZOOM, X, Y)
         margin.parent.mkdir(parents=True, exist_ok=True)
         margin.write_bytes(MARGIN_PNG)
     manifest: dict[str, object] = {
@@ -310,8 +310,8 @@ def _client(root: Path, **extra: object) -> TestClient:
     return TestClient(create_app(Settings(_env_file=None, coverage_cache_dir=str(root), **extra)))
 
 
-MARGIN_URL = f"/api/coverage/tiles/{STAMP}/LongFast/infrastructure/usable/margin/{ZOOM}/{X}/{Y}.png"
-COLOUR_URL = f"/api/coverage/tiles/{STAMP}/LongFast/infrastructure/usable/{ZOOM}/{X}/{Y}.png"
+MARGIN_URL = f"/api/coverage/tiles/{STAMP}/LongFast/infrastructure/uplink/margin/{ZOOM}/{X}/{Y}.png"
+COLOUR_URL = f"/api/coverage/tiles/{STAMP}/LongFast/infrastructure/uplink/{ZOOM}/{X}/{Y}.png"
 
 
 def test_the_dashboard_reads_a_margin_tile(tmp_path: Path) -> None:
@@ -341,9 +341,9 @@ def test_the_margin_route_checks_what_the_colour_route_checks(tmp_path: Path) ->
     base = f"/api/coverage/tiles/{STAMP}/LongFast"
     for path in (
         f"{base}/infrastructure/sideways/margin/{ZOOM}/{X}/{Y}.png",
-        f"{base}/nonsense/usable/margin/{ZOOM}/{X}/{Y}.png",
-        f"{base}/infrastructure/usable/margin/{ZOOM}/999/{Y}.png",
-        f"{base}/infrastructure/usable/margin/17/{X}/{Y}.png",
+        f"{base}/nonsense/uplink/margin/{ZOOM}/{X}/{Y}.png",
+        f"{base}/infrastructure/uplink/margin/{ZOOM}/999/{Y}.png",
+        f"{base}/infrastructure/uplink/margin/17/{X}/{Y}.png",
     ):
         assert client.get(path).status_code == 422, path
 
@@ -356,15 +356,15 @@ def test_no_public_path_serves_a_margin_tile(tmp_path: Path) -> None:
     try:
         _write_run(tmp_path, with_margin=True)
         client = _client(tmp_path, embed_enabled=True)
-        public = f"/api/embed/tiles/{STAMP}/LongFast/usable/{ZOOM}/{X}/{Y}.png"
+        public = f"/api/embed/tiles/{STAMP}/LongFast/uplink/{ZOOM}/{X}/{Y}.png"
         allowed = client.get(public)
         assert allowed.status_code == 200
         assert allowed.content == COLOUR_PNG
         for path in (
-            f"/api/embed/tiles/{STAMP}/LongFast/usable/margin/{ZOOM}/{X}/{Y}.png",
+            f"/api/embed/tiles/{STAMP}/LongFast/uplink/margin/{ZOOM}/{X}/{Y}.png",
             f"/api/embed/tiles/{STAMP}/LongFast/margin/{ZOOM}/{X}/{Y}.png",
-            f"/api/embed/tiles/{STAMP}/LongFast/usable/{ZOOM}/{X}/{Y}.margin.png",
-            f"/api/embed/tiles/{STAMP}/margin/usable/{ZOOM}/{X}/{Y}.png",
+            f"/api/embed/tiles/{STAMP}/LongFast/uplink/{ZOOM}/{X}/{Y}.margin.png",
+            f"/api/embed/tiles/{STAMP}/margin/uplink/{ZOOM}/{X}/{Y}.png",
         ):
             response = client.get(path)
             assert response.status_code >= 400, path

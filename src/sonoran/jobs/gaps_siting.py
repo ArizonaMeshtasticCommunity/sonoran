@@ -119,7 +119,7 @@ class Baseline:
 
 
 def read_baseline(settings: Settings, preset: ModemPreset) -> Baseline:
-    """Return the published run's usable level at each node.
+    """Return the published run's uplink level at each node.
 
     The site set is always the infrastructure one, which is the only map
     that describes coverage a fixed node holds open. A diagnostic run
@@ -144,8 +144,13 @@ def read_baseline(settings: Settings, preset: ModemPreset) -> Baseline:
     levels: dict[str, int] = {}
     if isinstance(holder, dict):
         for key, value in holder.items():
-            if isinstance(value, dict) and isinstance(value.get("usable"), int):
-                levels[str(key)] = int(value["usable"])
+            if not isinstance(value, dict):
+                continue
+            # A run writes `uplink` only (#402). A run published before
+            # that wrote `usable`, and it stays until the next run.
+            level = value.get("uplink", value.get("usable"))
+            if isinstance(level, int):
+                levels[str(key)] = level
     return Baseline(
         stamp=stamp if isinstance(stamp, str) else None,
         available=True,

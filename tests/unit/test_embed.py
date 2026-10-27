@@ -407,7 +407,7 @@ def _embed_tile_url() -> str:
         **{
             "summary.stamp": TILE_STAMP,
             "state.preset": TILE_PRESET,
-            "LAYER": "usable",
+            "LAYER": "uplink",
             "SITE_SET": "infrastructure",
         }
     )
@@ -429,7 +429,7 @@ def _write_run(
     run = root / "runs" / stamp
     zoom, x, y = TILE_COORDS
     for site_set, png in site_sets.items():
-        tile = run / TILE_PRESET / site_set / "usable" / str(zoom) / str(x) / f"{y}.png"
+        tile = run / TILE_PRESET / site_set / "uplink" / str(zoom) / str(x) / f"{y}.png"
         tile.parent.mkdir(parents=True, exist_ok=True)
         tile.write_bytes(png)
     (run / "manifest.json").write_text(
@@ -491,9 +491,9 @@ def test_the_public_tiles_cannot_be_asked_for_the_client_map(tmp_path: Path) -> 
     zoom, x, y = TILE_COORDS
     prefix = _public_tile_prefix()
     for candidate in (
-        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/extended/usable/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/extended/uplink/{zoom}/{x}/{y}.png",
         f"{prefix}{TILE_STAMP}/{TILE_PRESET}/extended/{zoom}/{x}/{y}.png",
-        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/usable/extended/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/uplink/extended/{zoom}/{x}/{y}.png",
     ):
         response = client.get(candidate)
         assert response.status_code >= 400, candidate
@@ -503,7 +503,7 @@ def test_the_public_tiles_cannot_be_asked_for_the_client_map(tmp_path: Path) -> 
     # and this change must not have taken it away.
     zoom, x, y = TILE_COORDS
     dashboard = client.get(
-        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/extended/usable/{zoom}/{x}/{y}.png"
+        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/extended/uplink/{zoom}/{x}/{y}.png"
     )
     assert dashboard.status_code == 200
     assert dashboard.content == EXTENDED_PNG
@@ -534,9 +534,9 @@ def test_the_public_tiles_never_serve_the_approximate_map(tmp_path: Path) -> Non
     zoom, x, y = TILE_COORDS
     prefix = _public_tile_prefix()
     for candidate in (
-        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/{approximate}/usable/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/{approximate}/uplink/{zoom}/{x}/{y}.png",
         f"{prefix}{TILE_STAMP}/{TILE_PRESET}/{approximate}/{zoom}/{x}/{y}.png",
-        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/usable/{approximate}/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/uplink/{approximate}/{zoom}/{x}/{y}.png",
     ):
         response = client.get(candidate)
         assert response.status_code >= 400, candidate
@@ -544,7 +544,7 @@ def test_the_public_tiles_never_serve_the_approximate_map(tmp_path: Path) -> Non
 
     # The dashboard reads it by name, from its own route.
     dashboard = client.get(
-        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/{approximate}/usable/{zoom}/{x}/{y}.png"
+        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/{approximate}/uplink/{zoom}/{x}/{y}.png"
     )
     assert dashboard.status_code == 200
     assert dashboard.content == APPROXIMATE_PNG
@@ -578,7 +578,7 @@ def test_a_diagnostic_run_is_not_reachable_through_the_public_tiles(tmp_path: Pa
     # And the dashboard keeps it, which is the point of the feature.
     zoom, x, y = TILE_COORDS
     dashboard = client.get(
-        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/infrastructure/usable/{zoom}/{x}/{y}.png"
+        f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/infrastructure/uplink/{zoom}/{x}/{y}.png"
     )
     assert dashboard.status_code == 200
 
@@ -594,13 +594,13 @@ def test_the_public_tiles_serve_the_published_run_only(tmp_path: Path) -> None:
     _write_run(tmp_path, is_diagnostic=False, site_sets={"infrastructure": INFRASTRUCTURE_PNG})
     run = tmp_path / "runs" / older
     zoom, x, y = TILE_COORDS
-    tile = run / TILE_PRESET / "infrastructure" / "usable" / str(zoom) / str(x) / f"{y}.png"
+    tile = run / TILE_PRESET / "infrastructure" / "uplink" / str(zoom) / str(x) / f"{y}.png"
     tile.parent.mkdir(parents=True, exist_ok=True)
     tile.write_bytes(EXTENDED_PNG)
 
     client = _client(embed_enabled=True, coverage_cache_dir=str(tmp_path))
     prefix = _public_tile_prefix()
-    stale = client.get(f"{prefix}{older}/{TILE_PRESET}/usable/{zoom}/{x}/{y}.png")
+    stale = client.get(f"{prefix}{older}/{TILE_PRESET}/uplink/{zoom}/{x}/{y}.png")
     assert stale.status_code == 404
     assert stale.content != EXTENDED_PNG
 
@@ -626,8 +626,8 @@ def test_every_public_tile_path_is_gone_while_the_embed_is_off(tmp_path: Path) -
     prefix = _public_tile_prefix()
     for path in (
         _embed_tile_url(),
-        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/usable/{zoom}/{x}/{y}.png",
-        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/infrastructure/usable/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/uplink/{zoom}/{x}/{y}.png",
+        f"{prefix}{TILE_STAMP}/{TILE_PRESET}/infrastructure/uplink/{zoom}/{x}/{y}.png",
         "/embed/coverage",
         "/api/embed/coverage",
         "/api/embed/nodes",
@@ -651,7 +651,7 @@ def test_the_dashboard_tile_route_still_serves_the_dashboard(tmp_path: Path) -> 
     zoom, x, y = TILE_COORDS
     for site_set, png in (("infrastructure", INFRASTRUCTURE_PNG), ("extended", EXTENDED_PNG)):
         response = client.get(
-            f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/{site_set}/usable/{zoom}/{x}/{y}.png"
+            f"/api/coverage/tiles/{TILE_STAMP}/{TILE_PRESET}/{site_set}/uplink/{zoom}/{x}/{y}.png"
         )
         assert response.status_code == 200
         assert response.content == png

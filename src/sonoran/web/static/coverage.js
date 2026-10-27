@@ -25,13 +25,11 @@
   /*
    * The layer a reader sees first.
    *
-   * `usable` is the weaker of the two directions, so it answers "can I
-   * use the mesh from here", which is the question somebody looking at
-   * a coverage map is actually asking. A carrier map shows the downlink
-   * because that is what sells telephones. Showing only the downlink
-   * here would promise reach that a handheld cannot return.
+   * `uplink` is simulated coverage from a handheld radio to a mesh
+   * node. Every infrastructure site transmits at 22 dBm or more, so
+   * the uplink path is always the limiting direction.
    */
-  const DEFAULT_LAYER = 'usable';
+  const DEFAULT_LAYER = 'uplink';
   const HEATMAP_LAYER = 'empirical_heatmap_position';
   const HEATMAP_NOTE = 'This layer is a record, not a prediction. It shows where nodes were '
     + 'when the mesh heard their position. No colour does not mean no coverage: '
@@ -565,21 +563,16 @@
 
   function drawLayers(page) {
     /*
-     * One drop-down, not three pills (#299). It was in the page head and
-     * is in the settings panel now (#334). The same three layers, the
-     * same state, the same redraw. The change listener is in
-     * `wireSettings`.
-     * The pill's `title` for "Usable both ways" moves to the select while
-     * that layer is chosen, so it is no less reachable than it was.
+     * One drop-down in the settings panel (#299, #334). The change
+     * listener is in `wireSettings`.
      */
     const host = $('[data-coverage-layers]', page);
     if (!host || !state.summary) return;
-    const usableTitle = () => (host.value === 'usable' ? 'The weaker of the two directions' : '');
     /* The run's own layers, then the heatmap. The heatmap is not a
        layer of the run: its tiles come from the activity_heatmap job. */
     const layers = [
       ...(state.summary.layers || []),
-      { key: HEATMAP_LAYER, label: 'Heard positions, last 30 days' },
+      { key: HEATMAP_LAYER, label: 'Actual coverage (based on heard positions)' },
     ];
     replace(
       host,
@@ -587,7 +580,6 @@
         el('option', { value: layer.key, text: layer.label })),
     );
     host.value = state.layer;
-    host.title = usableTitle();
     /* A newcomer needs to know that this layer is a record, not a
        prediction, and what it cannot show. */
     const note = $('[data-coverage-layer-note]', page);
@@ -906,9 +898,8 @@
         preset.skipped_count ? `${preset.skipped_count} over the cap` : null),
       // The run measured the area at the limit. A floor hides some of
       // it on the map and does not change the figure, so it says so.
-      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Usable area',
-        state.floor > 0 ? 'Both directions, at the limit' : 'Both directions'),
-      statTile(SonoranUnits.areaFromKm2(preset.downlink_area_km2) || '-', 'Heard area', 'One direction only'),
+      statTile(SonoranUnits.areaFromKm2(preset.usable_area_km2) || '-', 'Simulated area',
+        state.floor > 0 ? 'Total coverage, at the limit' : 'Total coverage'),
       statTile(when(summary.generated_at), 'Last run', `${number(summary.seconds, 0)} s`),
     );
   }

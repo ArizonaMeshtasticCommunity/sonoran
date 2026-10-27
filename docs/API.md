@@ -751,13 +751,11 @@ path, so a path that said `infrastructure` while holding a footprint
 around every client node in region was a path that lied. See
 `AGENTS.md` 9.25.
 
-`layer` is one of:
+`layer` is:
 
 | Layer | Meaning |
 |---|---|
-| `usable` | The weaker of the two directions. The honest answer, and what a page shows first |
-| `downlink` | A node is heard here |
-| `uplink` | Here is heard by a node |
+| `uplink` | Simulated coverage: uplink reach from a handheld to a node |
 
 A tile that was never written is ground no node reaches, and returns
 404. A map library already knows how to draw that.

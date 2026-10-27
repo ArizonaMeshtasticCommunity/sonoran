@@ -20,7 +20,7 @@
 
   // The layer a visitor sees. Not a choice: the other two need
   // explaining and this one does not.
-  const LAYER = 'usable';
+  const LAYER = 'uplink';
   // There is no site set constant here any more. The public tile route
   // does not take one: it serves the infrastructure map of the
   // published run and nothing else. A constant in this file was only

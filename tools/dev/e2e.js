@@ -443,7 +443,6 @@ function stubManifest({ approximate, margins = false }) {
     candidate_count: 3,
     sensitivity_dbm: -136,
     usable_area_km2: 120,
-    downlink_area_km2: 240,
     data_bounds: box,
     excluded_by_role: {},
     nodes,
@@ -472,9 +471,7 @@ function stubManifest({ approximate, margins = false }) {
     available: true,
     stamp: STUB_STAMP,
     layers: [
-      { key: 'usable', label: 'Usable both ways' },
-      { key: 'downlink', label: 'Node heard here' },
-      { key: 'uplink', label: 'Here heard by a node' },
+      { key: 'uplink', label: 'Simulated coverage' },
     ],
     active_hours: 168,
     tile_size: 256,
@@ -517,6 +514,7 @@ async function stubCoverage(page, { approximate = false, margins = false } = {})
   await page.route(/\/api\/coverage(\?|$)/, (route) => route.fulfill({ json: stubManifest({ approximate, margins }) }));
   await page.route(/\/api\/coverage\/calibration(\?|$)/, (route) => route.fulfill({ json: { available: false, nodes: [] } }));
   await page.route(/\/api\/coverage\/tiles\//, (route) => route.fulfill({ contentType: 'image/png', body: CLEAR_PNG }));
+  await page.route(/\/api\/map\/heatmap\//, (route) => route.fulfill({ contentType: 'image/png', body: CLEAR_PNG }));
   // Registered later, so it is asked first.
   await page.route(/\/api\/coverage\/tiles\/.*\/margin\//, (route) => route.fulfill({ contentType: 'image/png', body: MARGIN_PNG }));
   await page.route(/\/api\/map\/nodes(\?|$)/, (route) => route.fulfill({
@@ -2133,7 +2131,8 @@ async function main() {
     await page.waitForTimeout(800);
     const title = (await page.locator('[data-coverage-legend-title]').textContent()).trim();
     const chosen = (await layer.locator('option:checked').textContent()).trim();
-    must(title === chosen, `the legend says "${title}" after choosing "${chosen}"`);
+    const expectedTitle = second === 'empirical_heatmap_position' ? 'How well the mesh heard nodes here' : chosen;
+    must(title === expectedTitle, `the legend says "${title}" after choosing "${chosen}"`);
     {
       // Switch, then back: the choice is global and outlives this page.
       const before = await page.evaluate(() => window.SonoranPreset.current());
@@ -2245,14 +2244,14 @@ async function main() {
     must(await panel.isVisible(), 'the gear did not open the panel');
     must((await button.getAttribute('aria-expanded')) === 'true', 'the button did not say it opened');
     const before = await valueOf(page, COVERAGE_TILE_URL);
-    must(before && before.includes(`/${STUB_STAMP}/MediumFast/infrastructure/usable/`),
+    must(before && before.includes(`/${STUB_STAMP}/MediumFast/infrastructure/uplink/`),
       `the default tiles are ${before}`);
-    await page.locator('[data-coverage-layers]').selectOption('downlink');
+    await page.locator('[data-coverage-layers]').selectOption('empirical_heatmap_position');
     await page.waitForTimeout(400);
     const after = await valueOf(page, COVERAGE_TILE_URL);
-    must(after && after.includes('/infrastructure/downlink/'), `after choosing the downlink the tiles are ${after}`);
+    must(after && after.includes('/api/map/heatmap/position/'), `after choosing the heatmap the tiles are ${after}`);
     const hash = await page.evaluate(() => location.hash);
-    must(hash === '#coverage?layer=downlink', `the address says ${hash}`);
+    must(hash === '#coverage?layer=empirical_heatmap_position', `the address says ${hash}`);
     must((await button.getAttribute('aria-label')) === 'Settings, 1 changed',
       `the button says "${await button.getAttribute('aria-label')}"`);
     /*
@@ -2268,7 +2267,7 @@ async function main() {
       `the toggle says "${said}"`);
     const which = (await page.locator('[data-coverage-which]').textContent()).trim();
     must(which.includes('precise positions only'), `the stats line says "${which}"`);
-    return `${before.split('/api/')[1].split('{')[0]} -> downlink; approximate disabled and says why`;
+    return `${before.split('/api/')[1].split('{')[0]} -> empirical_heatmap_position; approximate disabled and says why`;
   });
 
   await journey(context, 'coverage settings: the approximate toggle picks the approximate map (#334)', async (page) => {
@@ -2281,7 +2280,7 @@ async function main() {
     await box.check();
     await page.waitForTimeout(500);
     const url = await valueOf(page, COVERAGE_TILE_URL);
-    must(url && url.includes('/MediumFast/infrastructure_approximate/usable/'), `the tiles are ${url}`);
+    must(url && url.includes('/MediumFast/infrastructure_approximate/uplink/'), `the tiles are ${url}`);
     const hash = await page.evaluate(() => location.hash);
     must(hash === '#coverage?approx=1', `the address says ${hash}`);
     const legend = (await page.locator('[data-coverage-legend-map]').textContent()).trim();
@@ -2305,7 +2304,7 @@ async function main() {
     const button = page.locator('[data-coverage-options]');
     const badge = page.locator('[data-page="coverage"] [data-options-count]');
     await button.click();
-    await page.locator('[data-coverage-layers]').selectOption('uplink');
+    await page.locator('[data-coverage-layers]').selectOption('empirical_heatmap_position');
     await page.locator('[data-coverage-approx]').check();
     await page.waitForTimeout(400);
     await page.locator('[data-coverage-heard]').selectOption('24h');
@@ -2333,7 +2332,7 @@ async function main() {
       tiles: window.SonoranCoverageState.tiles && window.SonoranCoverageState.tiles._url,
     }));
     const wrong = [];
-    if (got.layer !== 'usable') wrong.push(`layer ${got.layer}`);
+    if (got.layer !== 'uplink') wrong.push(`layer ${got.layer}`);
     if (got.approx) wrong.push('approximate on');
     if (got.heard !== 'any') wrong.push(`heard ${got.heard}`);
     if (got.moving) wrong.push('moving hidden');
@@ -2341,7 +2340,7 @@ async function main() {
     if (got.opacity !== '100') wrong.push(`opacity ${got.opacity}`);
     if (got.unpressed) wrong.push(`${got.unpressed} roles still hidden`);
     if (got.hash !== '#coverage') wrong.push(`address ${got.hash}`);
-    if (!got.tiles || !got.tiles.includes('/infrastructure/usable/')) wrong.push(`tiles ${got.tiles}`);
+    if (!got.tiles || !got.tiles.includes('/infrastructure/uplink/')) wrong.push(`tiles ${got.tiles}`);
     must(!wrong.length, `after Reset: ${wrong.join(', ')}`);
     must(await badge.isHidden(), 'after Reset the badge still shows');
     must((await button.getAttribute('aria-label')) === 'Settings', `after Reset the button says "${await button.getAttribute('aria-label')}"`);
@@ -2386,7 +2385,7 @@ async function main() {
     await stubCoverage(page);
     await open(page, 'coverage?approx=1', 2500);
     const url = await valueOf(page, COVERAGE_TILE_URL);
-    must(url && url.includes('/MediumFast/infrastructure/usable/'), `the tiles are ${url}`);
+    must(url && url.includes('/MediumFast/infrastructure/uplink/'), `the tiles are ${url}`);
     const got = await page.evaluate(() => ({
       checked: document.querySelector('[data-coverage-approx]').checked,
       legend: document.querySelector('[data-coverage-legend-map]').textContent.trim(),
@@ -2401,11 +2400,11 @@ async function main() {
   await journey(context, 'coverage settings: a link restores the layer (#334)', async (page) => {
     await stubCoverage(page);
     // The hash is in the first `goto` (AGENTS.md 9.33).
-    await open(page, 'coverage?layer=downlink', 2500);
+    await open(page, 'coverage?layer=empirical_heatmap_position', 2500);
     const url = await valueOf(page, COVERAGE_TILE_URL);
-    must(url && url.includes('/infrastructure/downlink/'), `a link to the downlink drew ${url}`);
+    must(url && url.includes('/api/map/heatmap/position/'), `a link to the heatmap drew ${url}`);
     const chosen = await page.evaluate(() => document.querySelector('[data-coverage-layers]').value);
-    must(chosen === 'downlink', `the layer control says ${chosen}`);
+    must(chosen === 'empirical_heatmap_position', `the layer control says ${chosen}`);
     // A display filter is this viewer's own and survives a reload; the
     // map choice comes only from the address.
     await page.locator('[data-coverage-options]').click();
@@ -2424,8 +2423,8 @@ async function main() {
       layer: document.querySelector('[data-coverage-layers]').value,
     }));
     must(back.heard === '7d', `the saved filter came back as ${back.heard}`);
-    must(back.layer === 'usable', `a plain link drew the ${back.layer} layer`);
-    return 'downlink from the address; the filter kept, the plain link precise and usable';
+    must(back.layer === 'uplink', `a plain link drew the ${back.layer} layer`);
+    return 'heatmap from the address; the filter kept, the plain link precise and uplink';
   });
 
   /* The alpha of a west and an east pixel of each painted margin tile. */
@@ -2503,7 +2502,7 @@ async function main() {
     await floor.selectOption('10');
     must(await waitFor(page, () => {
       const state = window.SonoranCoverageState;
-      return Boolean(state.tiles && String(state.tiles._url).includes('/infrastructure/usable/margin/'));
+      return Boolean(state.tiles && String(state.tiles._url).includes('/infrastructure/uplink/margin/'));
     }, 10000), 'a 10 dB floor did not switch to the margin tiles');
     must(await waitFor(page, () => {
       const state = window.SonoranCoverageState;
@@ -2548,7 +2547,7 @@ async function main() {
     await stubCoverage(page);
     await open(page, 'coverage?floor=10', 2500);
     const url = await valueOf(page, COVERAGE_TILE_URL);
-    must(url && url.includes('/infrastructure/usable/') && !url.includes('/margin/'), `the tiles are ${url}`);
+    must(url && url.includes('/infrastructure/uplink/') && !url.includes('/margin/'), `the tiles are ${url}`);
     await page.locator('[data-coverage-options]').click();
     const floor = page.locator('[data-coverage-signal-floor]');
     must(await floor.isDisabled(), 'the floor is enabled on a run with no margin tiles');
@@ -4320,10 +4319,10 @@ async function main() {
     await open(page, 'coverage', 2500);
     await page.locator('[data-coverage-options]').click();
     await page.locator('[data-coverage-heard]').selectOption('24h');
-    await page.locator('[data-coverage-layers]').selectOption('uplink');
+    await page.locator('[data-coverage-layers]').selectOption('empirical_heatmap_position');
     await page.waitForTimeout(400);
     const url = await valueOf(page, COVERAGE_TILE_URL);
-    must(url && url.includes('/infrastructure/uplink/'), `with storage refused the tiles are ${url}`);
+    must(url && url.includes('/api/map/heatmap/position/'), `with storage refused the tiles are ${url}`);
     const changed = (await page.locator('[data-page="coverage"] [data-options-count]').textContent()).trim();
     must(changed === '2', `with storage refused the badge says "${changed}"`);
     return 'the panel works for the visit';

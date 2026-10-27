@@ -95,19 +95,13 @@ CALIBRATION_NAME = "calibration.json"
 NODE_LEVELS_NAME = "coverage-at-nodes.json"
 
 # The layers a run writes.
-#
-# `usable` is the honest one and the one a page shows first. It is the
-# weaker of the two directions, so it answers "can I use the mesh from
-# here", which is what somebody looking at a coverage map wants to know.
-LAYERS = ("usable", "downlink", "uplink")
+LAYERS = ("uplink",)
 
 # The directory of the margin tiles, inside the directory of a layer.
 MARGIN_DIR = "margin"
 
 LAYER_LABELS: dict[str, str] = {
-    "usable": "Usable both ways",
-    "downlink": "Node heard here",
-    "uplink": "Here heard by a node",
+    "uplink": "Simulated coverage",
 }
 
 
@@ -131,7 +125,6 @@ class PresetSummary:
     # unknown, and the page must be able to say how many there were.
     excluded_by_role: dict[str, int]
     usable_area_km2: float
-    downlink_area_km2: float
     tile_count: int
     # The box the usable coverage sits in. None when nothing is
     # covered. The page opens on this rather than on the whole region.
