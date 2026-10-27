@@ -89,6 +89,25 @@ def test_no_self_hosted_job_runs_for_a_pull_request_from_a_fork() -> None:
     assert checked, "no self-hosted job of a pull request workflow was checked"
 
 
+MICROVM = ["self-hosted", "sonoran-microvm"]
+
+
+def test_every_job_runs_in_a_microvm() -> None:
+    """Each job asks for a Firecracker microVM, never for any runner.
+
+    `runs-on: self-hosted` alone takes any self-hosted runner of the
+    organization, including one where jobs share a machine and its
+    Docker. The `sonoran-microvm` label takes a VM that runs one job and
+    is destroyed (ci-runner, README.md).
+    """
+    checked = 0
+    for path in WORKFLOWS:
+        for name, job in _load(path)["jobs"].items():
+            assert job.get("runs-on") == MICROVM, f"{path.name} {name}: {job.get('runs-on')}"
+            checked += 1
+    assert checked
+
+
 def test_the_guard_still_runs_ci_on_main() -> None:
     """Would be caught: a guard that stopped every run, pushes to main too."""
     workflow = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))

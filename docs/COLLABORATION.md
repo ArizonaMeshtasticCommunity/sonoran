@@ -185,10 +185,10 @@ in one session, after the first one was written down.
 
 ### 6.2 CI runs on a person's hardware
 
-Every job is `runs-on: self-hosted`. The runners belong to a community
-member, and there is no monthly reset (`AGENTS.md` §6.2). In September 2026,
-up to the 23rd, this repository used 877 minutes in 208 runs, mostly
-one PR per small fix.
+Every job is `runs-on: [self-hosted, sonoran-microvm]`. The runners
+belong to a community member, and there is no monthly reset
+(`AGENTS.md` §6.2). In September 2026, up to the 23rd, this repository
+used 877 minutes in 208 runs, mostly one PR per small fix.
 
 - Test locally first. CI confirms. It is not a test runner.
 - One PR for a batch, one commit for each fix, push once.

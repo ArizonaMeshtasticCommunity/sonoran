@@ -54,7 +54,7 @@ jobs:
     # other reason this job stays manual: a nightly walk of a live
     # instance is a standing charge on somebody else's machine, and
     # turning it on is their call rather than mine.
-    runs-on: self-hosted
+    runs-on: [self-hosted, sonoran-microvm]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0

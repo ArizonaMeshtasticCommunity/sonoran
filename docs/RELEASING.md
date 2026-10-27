@@ -81,8 +81,8 @@ Nothing. This is a requirement, not an accident.
   release. The file travels in the next pull request, which runs CI
   anyway.
 - Never add a workflow that runs on `release` or on a tag push. Every
-  job in this repository is `runs-on: self-hosted`, and that hardware
-  belongs to a community member.
+  job in this repository is `runs-on: [self-hosted, sonoran-microvm]`,
+  and that hardware belongs to a community member.
 
 ## 6. How the notes are made
 
