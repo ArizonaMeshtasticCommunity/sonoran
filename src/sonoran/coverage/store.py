@@ -125,7 +125,6 @@ class PresetSummary:
     # unknown, and the page must be able to say how many there were.
     excluded_by_role: dict[str, int]
     usable_area_km2: float
-    downlink_area_km2: float
     tile_count: int
     # The box the usable coverage sits in. None when nothing is
     # covered. The page opens on this rather than on the whole region.

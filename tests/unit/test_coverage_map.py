@@ -551,7 +551,6 @@ def _manifest(stamp: str) -> Manifest:
                 excluded_by_role={},
                 skipped_count=0,
                 usable_area_km2=1.0,
-                downlink_area_km2=1.0,
                 tile_count=1,
             )
         ],
@@ -651,6 +650,17 @@ def test_every_layer_has_a_label() -> None:
 
     assert set(LAYERS) == set(LAYER_LABELS)
     assert LAYERS[0] == "uplink", "the simulated coverage layer must be the first one a page shows"
+
+
+def test_a_run_writes_no_area_for_a_layer_it_did_not_make() -> None:
+    """A run makes no downlink layer (#402), so it writes no downlink area.
+
+    A zero says the run looked and found nothing. Absent says it did not
+    look. The two are different answers.
+    """
+    from dataclasses import fields
+
+    assert "downlink_area_km2" not in {each.name for each in fields(PresetSummary)}
 
 
 def test_a_stored_calibration_is_bounded_before_it_is_used() -> None:

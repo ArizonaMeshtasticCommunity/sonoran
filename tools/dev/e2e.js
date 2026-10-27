@@ -443,7 +443,6 @@ function stubManifest({ approximate, margins = false }) {
     candidate_count: 3,
     sensitivity_dbm: -136,
     usable_area_km2: 120,
-    downlink_area_km2: 0,
     data_bounds: box,
     excluded_by_role: {},
     nodes,
