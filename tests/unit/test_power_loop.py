@@ -1,6 +1,6 @@
 """A power loop is several restarts close together, counted (#365).
 
-The issue's rule, as tests written before the code (AGENTS.md §3A.5):
+The issue's rule, as tests written before the code (AGENTS.md §3A.4):
 
 - restarts are counted from `uptime_seconds` falling between readings;
 - a power loop is at least `LOOP_RESTARTS` restarts inside `LOOP_SPAN`,

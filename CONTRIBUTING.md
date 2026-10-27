@@ -76,7 +76,7 @@ The full list of gates is in `AGENTS.md` 6 and in
 Write the test from the issue before the code. Run it and see it fail
 for the right reason. Put that failing output in the pull request. Then
 write the smallest code that makes it pass. Never change a test only to
-make it pass. See `AGENTS.md` 3A.5.
+make it pass. See `AGENTS.md` 3A.4.
 
 Documentation, comments, configuration with no logic, and layout are
 exceptions. For layout, a screenshot before and after is the evidence.
@@ -92,7 +92,7 @@ exceptions. For layout, a screenshot before and after is the evidence.
 - **Commit messages use conventional commits:** `feat:`, `fix:`,
   `refactor:`, `test:`, `docs:`, `chore:`.
 - **No tool credit and no agent session links** in a commit, a pull
-  request, an issue or a comment. See `AGENTS.md` 3A.4.
+  request, an issue or a comment. See `AGENTS.md` 3A.3.
 
 ## 5. CI runs on a volunteer's hardware
 

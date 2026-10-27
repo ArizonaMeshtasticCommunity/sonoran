@@ -52,7 +52,7 @@ def test_every_entry_explains_itself_in_plain_words() -> None:
 
 
 def test_a_bad_entry_is_caught() -> None:
-    """A plausible broken entry fails the check (AGENTS.md 3A.5 item 9)."""
+    """A plausible broken entry fails the check (AGENTS.md 3A.4 item 9)."""
     bad = {
         "SNR": {"label": "SNR", "plain": "x", "words": []},
         "rssi": {"label": "RSSI", "plain": "", "words": ["RSSI"]},

@@ -29,6 +29,7 @@ The application does these things:
 ## 2. Technology stack
 
 - Python 3.13 or newer
+- `uv` for Python package and environment management
 - FastAPI for the JSON API
 - aiomqtt for MQTT
 - SQLAlchemy 2.0 (async) with asyncpg
@@ -36,7 +37,8 @@ The application does these things:
 - TimescaleDB (PostgreSQL) for storage
 - Protobuf definitions from `buf.build/meshtastic/protobufs`
 - Static frontend: plain HTML, CSS and JavaScript (classic scripts and
-  ES modules), with vendored Leaflet and ECharts. No build step
+  ES modules), with vendored Leaflet and ECharts. No build step.
+- Node.js, ESLint, and Playwright for frontend linting and end-to-end tests
 - numpy for the SRTM elevation transform
 - A vendored WebAssembly build of SPLAT! for coverage prediction (GPL-3)
 - Ruff for lint and format
@@ -87,12 +89,7 @@ Put the link in the code comment beside the constant **and** in the
 matching doc. Do not merge a number with no source. "A reasonable value"
 and "a common rule of thumb" are not sources.
 
-### 3A.3 No new coverage-gaps features for now
-
-Do not add gaps signals, scores, leaderboards or gaps pages until Logan or
-Tyler says otherwise in an issue. Bug fixes to what exists are still fine.
-
-### 3A.4 No tool credit and no session links
+### 3A.3 No tool credit and no session links
 
 - Do not add "Generated with ...", "Co-Authored-By: <a tool or model>" or
   any other tool or model credit to a commit, a PR, an issue or a comment.
@@ -101,7 +98,7 @@ Tyler says otherwise in an issue. Bug fixes to what exists are still fine.
   that can hold file contents, command output, paths and secrets.
 - The author of a PR is the person responsible for it.
 
-### 3A.5 Test-driven development
+### 3A.4 Test-driven development
 
 The tests come from the issue, not from the code. Tests that only prove
 "the code does what the agent decided" prove nothing about the measure.
@@ -113,9 +110,14 @@ The tests come from the issue, not from the code. Tests that only prove
    reason. Put that failing output in the PR. A test that never failed
    proves nothing.
 3. **Green.** Write the smallest code that makes the test pass.
-4. **Never change a test to make it pass.** Do not weaken, skip or delete
-   a test to get green. If a test is wrong, say so in the PR, and get the
-   issue author's agreement before you change it.
+4. **Keep tests accurate. Do not change a test only to make it pass.**
+   Examine existing tests to make sure they are still accurate. When a
+   change breaks a test, examine both the test and the failure. If the
+   feature under test has changed, update the test to match the new
+   intended behaviour. Never change a test only to make it pass. Do
+   not change a test to get green regardless of the consequences. Do
+   not weaken, skip or delete a test to hide a defect or match broken
+   code. If a test was wrong or outdated, explain the change in the PR.
 5. **Refactor** while the tests stay green.
 6. **Small steps.** One behaviour for each cycle.
 7. **A bug fix starts with a test that reproduces the bug** and fails on
@@ -169,7 +171,7 @@ on-screen text uses a glossary word without its tooltip, when an entry
 has no plain explanation, or when `docs/GLOSSARY.md` drifts. Its
 baseline only gets shorter: never add a line to make it pass, unless a
 maintainer agrees in the PR (`docs/NEWCOMER.md` §6.3). Never weaken the
-check to get green (§3A.5 item 4).
+check to get green (§3A.4 item 4).
 
 **The review.** Before you ask for a merge, run the newcomer review in
 `docs/NEWCOMER.md` §5, or ask a second agent to run it.
@@ -214,13 +216,16 @@ A change is complete only when all of these pass:
 6. Alembic migrations apply cleanly.
 7. The matching doc in `docs/` is updated.
 8. Commit messages use conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`).
+   Use standard scopes where applicable (`ui`, `map`, `position`, `ingest`,
+   `api`, `planner`, `coverage`, `rf`, `db`).
 9. `npx eslint src/sonoran/web/static` passes. Install it with
    `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
    ignored, and nothing is added to the served frontend.
-10. The PR shows its red step (§3A.5): the new tests, and their failing
-    output on `main` before the change. A change that §3A.5 exempts
-    (documentation, comments, configuration with no logic, or layout)
-    says why instead.
+10. The PR shows its red step (§3A.4): the new tests, and their failing
+    output on `main` before the change. If an existing test was updated
+    because the feature changed (§3A.4 item 4), the PR explains the
+    change. A change that §3A.4 exempts (documentation, comments,
+    configuration with no logic, or layout) says why instead.
 11. Every new number has its source in the code comment and in the doc
     (§3A.2), and the PR lists them under "Basis".
 
@@ -351,8 +356,13 @@ licence yet (its upstream has none). Do not add one in the copy.
 ### Change the database schema
 
 1. Edit the models in `src/sonoran/db/models.py`.
-2. Create a migration. Name the revision after its issue: `i` and the issue number, for example `alembic revision --autogenerate -m "description" --rev-id i366`. Do not use sequential numbers like `0018`: two branches pick the same next number. Use the pull request number (`pr344`) when there is no issue.
-3. Rebase on `main` before you push. Set `down_revision` to the current head (`alembic heads`). `tests/unit/test_migrations_head.py` fails when the migrations have two heads.
+2. Create a migration. Name the revision after its issue: `i` and the
+   issue number, for example `alembic revision --autogenerate -m "description" --rev-id i366`.
+   Do not use sequential numbers like `0018`: two branches pick the same
+   next number. Use the pull request number (`pr344`) when there is no issue.
+3. Rebase on `main` before you push. Set `down_revision` to the current
+   head (`alembic heads`). `tests/unit/test_migrations_head.py` fails when
+   the migrations have two heads.
 4. Review the generated migration by hand.
 5. Test: `alembic upgrade head` then `alembic downgrade -1` then `alembic upgrade head`.
 6. Update `docs/DATABASE.md`.
@@ -409,9 +419,9 @@ inherit the same skew, so a row can sit in the future for a day or more.
 
 This rule was already written down and the ingest broke it anyway.
 `_first_seen_at` preferred `packet.rx_time` over the receive time, so
-`packet.first_seen_at` carried whichever gateway relayed the packet.
+`packet.first_seen_at` carried the time of whichever gateway relayed the packet.
 Live data ended up with 349 packet rows in the future, the furthest more
-than a day ahead. A six hour query returned eighteen hourly buckets, and
+than a day ahead. A six-hour query returned eighteen hourly buckets, and
 retention could not expire a row dated after its own window.
 
 There is one way to get this time, `heard_at` in `ingest/pipeline.py`,
@@ -427,7 +437,7 @@ with retention. See `docs/ISSUES.md` 1.5.
 
 `packet_seen.rx_snr` belongs to the last hop into that gateway, not to
 the link between the sending node and the gateway. In live traffic
-about 82 percent of observations were relayed and only 5 percent
+about 82 percent of observations were relayed and only 5 percent were
 direct.
 
 An observation is direct only when no hop was used:
@@ -455,7 +465,7 @@ Two things then read as facts and are not:
   alone calls them direct and then offers the reading as the sender's
   own link. On the same live packet all three "direct" rows were the
   sender, and no other gateway had heard it directly at all. `direct`
-  now needs a different node as well as no hop.
+  now requires a different node as well as no hop.
 
 ### 9.6 Traceroute SNR needs care
 
@@ -479,7 +489,7 @@ positioned nodes in place. The reader is then invited to join two nodes
 that have no way to reach each other. A node belongs to a channel when
 it sent traffic seen on it, which is a claim about what it was doing
 rather than how it is configured, so a genuine dual-preset node appears
-on both. Live data had 14 of those against 709.
+on both. Live data had 14 of those against 709 total nodes.
 
 **The preset of a packet is decided at ingest and stored (#313).**
 `packet_seen.modem_preset`, `packet.modem_preset` and `node.last_preset`
@@ -590,16 +600,32 @@ rather than one directive so it covers a source nobody remembered.
 A refused origin is logged, because the browser gives no sign: a tile
 host missing from `img-src` draws nothing and says nothing.
 
+### 9.9.1 The OpenStreetMap tiles need a Referer
+
+The map showed OpenStreetMap's "blocked" placeholder tile, not the map,
+and nothing in the console said why. The cause was our own security
+header: `Referrer-Policy` was `no-referrer`, so the browser sent no
+`Referer` to the tile host. The OSM tile server returns the placeholder
+tile for a request that lacks a `Referer`. Its usage policy requires a
+site to identify itself, and the `Referer` header is how a browser
+identifies itself. Confirmed on this deployment: the real tile came back
+with a `Referer`, the placeholder without one.
+
+The fix is not to leave OSM. It is `strict-origin-when-cross-origin` in
+`api/app.py`, which sends the origin, never a path. The dashboard keeps
+its state in the URL fragment, which a `Referer` never carries, so this
+leaks nothing a path would. Keep the attribution. See `docs/API.md`.
+
 ### 9.9.2 The header decision must use the routed path
 
 `scope["path"]` carries the mount prefix when `WEB_BASE_PATH` is set and
 the proxy does not strip it. The security middleware matched on it, so
 under that deployment **neither** branch matched:
 
-- The embed took `X-Frame-Options: DENY` and would not frame. Closed,
-  so only a trap.
+- The embed took `X-Frame-Options: DENY` and would not frame. It was
+  closed, so it was only a trap.
 - The dashboard was served with **no `Content-Security-Policy` at all**.
-  Open, and the reason this was a defect rather than an untidiness.
+  It was open, which made it a security defect rather than untidiness.
 
 Use `starlette.routing.get_route_path(scope)`, which is the helper the
 router itself uses to match a route, so the header decision and the
@@ -610,22 +636,6 @@ path excludes `root_path` unless it is told otherwise. A test that
 cannot see the production shape is a test that reports green over it;
 pass `root_path=` to `TestClient` **and** request the prefixed path to
 get the shape a non-stripping proxy sends.
-
-### 9.9.1 The OpenStreetMap tiles need a Referer
-
-The map showed OpenStreetMap's "blocked" placeholder tile, not the map,
-and nothing in the console said why. The cause was our own security
-header: `Referrer-Policy` was `no-referrer`, so the browser sent no
-`Referer` to the tile host. The OSM tile server answers a request with
-no `Referer` with the placeholder tile, because its usage policy asks a
-site to identify itself and the `Referer` is how a browser does that.
-Confirmed on this deployment: the real tile came back with a `Referer`,
-the placeholder without one.
-
-The fix is not to leave OSM. It is `strict-origin-when-cross-origin` in
-`api/app.py`, which sends the origin, never a path. The dashboard keeps
-its state in the URL fragment, which a `Referer` never carries, so this
-leaks nothing a path would. Keep the attribution. See `docs/API.md`.
 
 ### 9.10 Channel keys come from settings, not from `.env`
 
@@ -673,7 +683,7 @@ Two stages, two different rules:
   pins the whole London tile by hash. Do not update the hash to make a
   test pass. Find out what changed.
 - `downsample_average` **cannot** be bit-exact against GDAL. About 6
-  cells in 100 000 differ by one metre, always where the true average
+  cells in 100,000 differ by one metre, always where the true average
   falls within 1e-4 of a half metre. The site planner has the same
   disagreement and asks for 99.9 percent exact with a largest error of
   one metre. This port measures 99.994 percent. Do not chase the rest.
@@ -758,8 +768,8 @@ exact.
 Every `HEAPU8`, `HEAP32` and `HEAPF64` view must be read again after any
 call that can grow the heap, including `_splat_malloc`. A view taken
 before the growth points at a buffer that has been thrown away, and
-reads rubbish without raising anything. Every `_splat_malloc` also needs
-a `_splat_free` in a `finally`: the module has no garbage collector.
+reads invalid data without raising an error. Every `_splat_malloc` also
+needs a `_splat_free` in a `finally`: the module has no garbage collector.
 
 ### 9.16.1 The engine declares integers where JavaScript hides them
 
@@ -790,8 +800,8 @@ The engine reports a field strength as a byte with a 200 dB offset. It
 is tempting to take the offset off and keep a signed byte, because a
 level looks like a small negative number.
 
-It does not fit. A signed byte reaches -128 and the sensitivity of Long
-fast is -139 dBm. Every level clipped to -127, every level then sat
+It does not fit. A signed byte reaches -128 and the sensitivity of
+LongFast is -139 dBm. Every level clipped to -127, every level then sat
 above every threshold, and the usable filter passed the whole map
 without failing anything.
 
@@ -844,7 +854,7 @@ the processor and would otherwise stop the event loop of the whole jobs
 process. It starts worker processes from inside that thread.
 
 Fork copies only the thread that calls it. A lock that any other thread
-held at that moment is held for ever in the child, and the logging lock
+held at that moment is held forever in the child, and the logging lock
 is the one that does it: this job logs from the main thread while it
 works. The child then blocks before it runs a single instruction of the
 initialiser.
@@ -863,46 +873,213 @@ happens to hold no lock at the moment of the fork works.
 Spawn starts a new interpreter and inherits no locks. It costs about a
 second for each worker, once, against a run of half an hour.
 
-### 9.22 A role of NULL is a client, not an unknown (fixed at ingest, #197)
+### 9.17 The config check page imports vendored logic and its globals
 
-**Fixed for new rows.** `ingest/handlers/nodeinfo.py` used to read every
-enum with
+`web/static/vendor/config-checker/` is a copy of the community config
+checker. Sonoran uses its **logic** and draws the result itself, in
+`web/static/config-check.js`. That is the same arrangement as the
+coverage planner. The vendored files are never edited here, and an
+update is a re-copy of the directory. See its `PROVENANCE.md`.
 
-    if not value:
-        return None
+Nothing about this feature runs on the server. A config, a channel key,
+and an MQTT password are read in the browser and sent nowhere. There is
+no endpoint for it and there must never be one. A test asserts that.
 
-and Meshtastic numbers `CLIENT` as zero, so the most common node on a
-mesh was stored with `role IS NULL`, exactly like a node that had never
-sent a NodeInfo at all. The live map drew 167 clients on MediumFast in
-the grey it keeps for "no role reported".
+Five things keep it working, and each fails quietly:
 
-Roles now go through `_role_name`, which never returns None for a node
-that introduced itself: zero is `CLIENT` (config.proto calls it the
-"Default Role"), and a number this repository has not vendored keeps its
-digits as `ROLE_<n>` rather than collapsing back into NULL.
+1. The logic modules read `protobuf`, `jsyaml` and `MeshtasticProto` off
+   `window`. Sonoran's `index.html` holds those three, then
+   `config-check.js`, inside `<template data-lazy-scripts="config">`,
+   and `PAGES.config` loads them with `loadScripts('config')` on the
+   first visit (#277): the classic scripts in order, the module after
+   them. Miss them and every parse dies with "jsyaml is not defined",
+   while building a config from scratch still works, because that path
+   parses nothing. Test with a real file, not with the build button.
+2. `config-check.js` is a module, so it runs after `app.js`. `app.js`
+   holds a `configReady` promise that the module resolves, and
+   `PAGES.config` waits on it. Without that a reload on `#config` finds
+   nothing registered and falls back to the dashboard. The template is
+   after `app.js` in the page, so `loadScripts` waits for the document
+   to be parsed before it looks for it; without that wait a reload on
+   `#config` found no template and waited for ever.
+3. `connect-src` must hold `https://api.github.com`. It is the only
+   outbound request the dashboard makes, and it asks which firmware
+   release is current. It carries no user data.
+4. Android `.cfg` files are protobuf, and protobuf.js builds its
+   decoders by compiling strings with `new Function`, which
+   `script-src` forbids. The solution is not `unsafe-eval`: that would
+   give back the permission that stops a crafted config becoming running
+   code. `static/meshtastic-static.js` is the same schema compiled ahead
+   of time by `tools/generate_protobuf_static.sh`, and
+   `config-check.js` points `protobuf.Root.fromJSON` at it, so the
+   vendored parser works unchanged. Two traps live in that script, and
+   it refuses to install a bad result rather than let either through:
+   the generator must be the same major version as the vendored runtime
+   (protobuf.js 8 emits `reader.tag()`, which 7.6.3 does not have), and
+   the generated runtime import must be rewritten to the local shim,
+   because a browser cannot resolve a bare specifier.
+5. `Permissions-Policy` must grant `serial=(self)`. Web Serial also
+   needs a secure context: over plain HTTP the browser hides
+   `navigator.serial` whatever the headers say, so the USB feature is
+   missing until the dashboard is served over HTTPS. Nothing in the code
+   can work round that.
 
-`_enum_name` still treats zero as None, and still should -- `hw_model`
-zero is `UNSET`, which really does mean nothing was reported. Fixing
-role by changing the shared helper would have made every unset hardware
-model read as whatever name zero has.
+### 9.18 A traceroute row is not a path
 
-**Old rows are still NULL** and cannot be backfilled: nothing in the
-database says which NULLs were clients. `roles.resolve_role` reads a
-stored `long_name` or `short_name` as evidence that a User message was
-processed, because `store_nodeinfo` writes those in one statement with
-the role and nothing else in the ingest writes them. That inference
-lives in `roles.py` only -- never add a second copy in a page -- and it
-expires: when `SELECT count(*) FROM node WHERE role IS NULL AND
-long_name IS NOT NULL` reaches zero, it can go.
+`sonoran/api/traces.py` holds the only correct reading of a traceroute
+row. The graph, the map, and the traceroute pages all go through it.
+They must keep doing so. Three pages once held a copy of these rules
+each, the copies disagreed, and the graph drew links that the link page
+could then find no evidence for.
 
-Never read NULL as "unknown, so include it". The coverage map did, and
-predicted from 689 nodes where 50 were infrastructure. `sonoran/roles.py`
-holds the test and `tests/unit/test_roles.py` pins it.
+Three rules apply, and each one drew a false link when it was missed:
 
-The same trap is why `tests/integration/test_coverage_job.py::_add_node`
-takes its role as a required keyword argument. It defaulted to `ROUTER`,
-so every coverage test asserted about routers while its author believed
-it asserted about nodes. Do not give it a default again.
+1. A reply travels back, so `from_node_num` is the node the request was
+   asked of. `trace_endpoints` swaps them. Reading a reply as stored
+   keeps the middle of the path and invents the first hop and the last.
+   One intermediate hop hides the fault, because the two links come out
+   the same either way round. Two hops show it.
+2. A hop past the last slot in `snr_towards` has not happened yet. The
+   broker sees a packet while it travels, so a report often stops part
+   way along its intended path. `evidenced_hops` cuts it there. A slot
+   holding INT8_MIN still counts: the hop happened and only its reading
+   is missing.
+3. An unanswered request has an empty route, so its intended path is
+   one hop from end to end. Drawing that claims the two nodes hear each
+   other directly, which is the one thing the trace failed to show.
+   Half of all rows in live data are these.
+
+A request with a route is a fourth case, and it is not a fault. The
+broker saw the request in flight, so the hops it had already made are
+real and were really measured. Its readings stop one short of its
+intended path, which is rule 2 doing its job: the hop to the far end
+had not happened, which is why no reply came. Such links are true, and
+the evidence for them runs one way. `Edge.confirmed` marks them, and
+the graph page draws them fainter behind a toggle. In live data they
+were 141 of 982 traceroute links, about 14 percent.
+
+Note the two words are not the same. "Unconfirmed" on that page means
+no SNR reading. "One-way" means measured, but no reply came back.
+
+### 9.19 A row limit must never decide what evidence exists
+
+`/api/graph` read 2000 traceroute rows and `/api/graph/link` read the
+newest 500. With two thousand traceroutes a day, the graph drew plenty
+of links whose evidence lay outside the smaller window. Clicking such a
+link opened a page that said no report evidences it.
+
+Raising the limit only moves the cut. A query that answers "what
+evidences this link" must select by the nodes it asks about, not by
+recency. `_mentions` in `routes/graph.py` does that, over the route
+JSONB as well as the two endpoints.
+
+The same trap has a frontend counterpart. `PAGES.link` in `app.js` asked
+for a fixed 24 hours while the graph drew whatever `[data-graph-hours]`
+said. A link found over seven days then opened an empty page.
+`graphHours` carries the window across.
+
+### 9.20 An ordinary packet does not carry its route
+
+Only a traceroute holds the nodes it passed through. Every other packet
+arrives with the sender, the gateway that uploaded it, and a hop count,
+and nothing at all about the ground between them. A live traffic line is
+therefore a straight line between two ends of a route that was never
+straight. Say the hop count and leave the rest unclaimed. The one place
+a true path can be drawn is `/api/map/traceroute-paths`.
+
+`MeshPacket.relay_node` looks like the missing piece and is not. The
+firmware truncates it to one byte, the low byte of the relayer's node
+number. `mesh_packet_metrics.relay_node_num` stores it for the first
+upload of a packet, and since migration `pr378` `packet_seen.relay_node`
+stores it for every upload, since each gateway hears its own relay. The
+packet page shows it per gateway as a list of candidates, never as one
+node. That reverses #47's option 3 for the packet page only (Logan,
+2026-10-17, `docs/DECISIONS.md`). Drawing anything from it is still
+declined, and `tests/unit/test_live_map_draws_no_inferred_hop.py` holds
+that.
+
+The candidates follow the firmware (v2.8.1), not the byte alone. The
+firmware resolves a byte only among the receiving node's direct
+neighbours (`NodeDB::resolveLastByte`, `NodeDB.cpp:4179-4182`), so the
+candidates for an upload are the nodes that gateway uploaded at 0 hops
+within a day. Never match the byte against the whole mesh: that listed
+a LongFast-only node on a MediumFast gateway's upload
+(`!8fa02db0/2591142278`). Every send writes the sender's own byte first
+and each rebroadcast overwrites it (`FloodingRouter.cpp:22`,
+`NextHopRouter.cpp:116`), and the first hop always lowers the hop limit
+(`Router.cpp:256-258`). So a 0-hop upload names the sender exactly
+(live, 2026-10-18: 563 of 563). After a hop the relay is never the sender
+and never a `CLIENT_MUTE` node (`FloodingRouter.cpp:154-158`). Byte `ff`
+also stands for a node that ends in `00` (`NodeDB.h:431`). Live,
+2026-10-18, 12,645 relayed uploads: one candidate for 79.9 %, none for
+6.7 %, at most 6.
+
+Values run 2 to 255. With 694 nodes active in a day this mesh
+had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for
+the worst, and only 5.4 percent of relay observations resolving to a
+single node. It also names the last hop alone, never the path. Drawing
+a line from it would be a guess.
+
+### 9.21 A calibration estimate is not a radio reading
+
+`neighbor_metrics.snr` is measured. `NodeFit.offset_db` is inferred.
+Never present the second value as if a node reported it.
+
+The censored regression once had no bound and did not fit its global
+model bias during each expectation round. A node with seven silent
+links and no reported link reached -1830.35 dB. Some usable raw offsets
+also passed 50 dB. The radio-profile resolver held the value to 15 dB,
+but the report still showed the impossible estimate and the bad node
+could pull the rest of the fit.
+
+Keep all of these guards:
+
+1. Fit the global bias in every censored-data round.
+2. Bound and anchor node offsets in every round.
+3. Check the bound again when a stored file is read.
+4. Give no offset to a node with too little evidence or wide scatter.
+5. Reject the whole fit when its bias or scatter is outside 20 dB.
+6. Run a due calibration before coverage, never beside it.
+7. Hold a `lock_calibration` node at zero **inside** the fit, and keep
+   the 15 dB bound when you do.
+
+Guard 7 has a trap in it. The bound used to be applied by the same
+projection that held the offsets summing to zero. A pinned node is
+already the anchor, so a pinned fit must not re-centre anything — that
+would drag the pinned node off zero — and it therefore does not run that
+projection. The bound is then applied on its own, in the same place. If
+you remove the clip, the estimate returns to -1830.35 dB.
+`test_pinning_a_node_still_bounds_the_others` pins it.
+
+Pinning also moves the reported model bias, on purpose. With nothing
+pinned the bias is measured against the mean of every guess; with a node
+pinned it is measured against that radio. Two runs on either side of a lock
+produce two different answers. Neither answer is a fault.
+
+The live fit on 2026-08-21 had a bias near -41 dB and was rejected. Do
+not increase the guard to make live data pass. First prove that absence
+from an aggregated neighbour list means the radio link was silent.
+
+The 2026-09-18 run read 420 links and 362 of them, 86 percent, were
+censored. The solver handles censoring correctly — measured against
+planted truth it recovers a bias to within 0.6 dB at 48 percent
+censoring — and it cannot survive a censored observation that is not
+true: false silence drives the fitted bias down almost linearly with its
+share while the reported-only mean stays at zero.
+
+`summary.mean_db` is that reported-only mean, and it has now been read:
+-13.57 dB. So the -44.62 dB bias splits into -13.57 dB of real error on
+the links the mesh measured and -31.05 dB from rows that record silence.
+Inverting the intercept score equation puts the mean censoring bound at
+-42.3 dB, and only about 6 percent of silence that deep is credible
+against the links we did measure. Two things follow and both are
+load-bearing: **do not lower `MAX_CANDIDATES` to make the bias look
+better** — it moves the bias 30 dB while the reported mean does not move
+at all, so it is a dial and not a measurement — and **do not raise the
+trust guard**. Fix the evidence instead; the same mesh without the false
+silence fits at -14.46 dB, inside the guard, with nothing weakened. The
+full decomposition, the falsification table and the path forward are in
+`docs/ISSUES.md` 2.4.2.
 
 ### 9.23 The engine's clutter scalar is passed as zero on purpose
 
@@ -930,6 +1107,49 @@ ground as usable both ways where no single radio closes both.
 each site, before anything is combined. Do not derive it from the
 finished layers.
 
+### 9.25 A diagnostic coverage run never reaches the public embed
+
+`COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
+for. It also predicts from every client, and a client is usually
+somebody's house. Each one then draws a footprint, and a footprint has
+a centre.
+
+`embed/sanitise.py` keeps the markers back and always has. The tiles
+are the leak. So `/api/embed/coverage` answers `available: false` with
+`reason: "diagnostic"` for such a run rather than labelling it, and the
+public page says a diagnostic is not published there.
+
+Do not "improve" this into a banner. A banner tells a reader what they
+are looking at; it does not stop them reading the middle of a circle.
+
+**The JSON refusal is not the complete protection, and older versions had
+no protection.** The embed drew its tiles from `/api/coverage/tiles`, the
+dashboard's route, which has no `EMBED_ENABLED` dependency and no
+diagnostic test and takes the site set from the path. Publishing the
+embed meant opening that path, and one segment then fetched the client
+map. So there are now two more locks, and both are load-bearing:
+
+1. The public tiles are `/api/embed/tiles/{stamp}/{preset}/{layer}/...`
+   on the **embed** router, so `_require_enabled` reaches them. There is
+   no site set in the URL, the stamp must be the published run, and a
+   diagnostic run is refused by `_require_published_map`, a dependency
+   of the whole tile router. That is 9.16.3 one level down: the route
+   that carries the pixels is the route that has to refuse.
+2. A diagnostic run writes its tiles under the site set `diagnostic`,
+   never `infrastructure`. The path carries the set, so a path that
+   said `infrastructure` while holding a client footprint was a path
+   that lied, and the tiles are what a reader fetches.
+
+`docs/API.md` 3B.5 is the exact list of paths a proxy may open. Never
+`/api/coverage` by prefix: it publishes the dashboard's tiles of every
+site set, the node names and rounded positions in `coarse_sites` and
+`presets[].nodes`, and the calibration.
+
+`embed/sanitise.py` also takes no settings argument, and must not gain
+one. If the public role test read `COVERAGE_SITE_ROLES`, one
+environment variable would put the whole mesh on a public map.
+`test_a_diagnostic_run_can_never_widen_the_public_map` pins it.
+
 ### 9.26 The calibration fit reads every role. The map does not.
 
 These are opposite questions and the answer is opposite.
@@ -945,14 +1165,55 @@ of what a radio heard. `jobs/calibrate.py::read_peers` reads the role
 only to pick an antenna height. Do not add a role test to it.
 `test_the_fit_reads_every_role_and_the_map_does_not` pins it.
 
+### 9.27 A run can publish more than one map, and only one is public
+
+`COVERAGE_INCLUDE_CLIENTS` makes a run predict a second map from the
+nodes that repeat traffic without being infrastructure: `CLIENT`,
+`CLIENT_BASE` and `ROUTER_CLIENT`. It answers a real question, which is
+why a neighbourhood works where no router covers it.
+
+Three things hold it apart from the public map, and each one is
+load-bearing:
+
+1. The tile path carries the site set:
+   `{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`. Two maps of the same
+   preset are different answers and must never share a tile.
+2. `Manifest.presets` and `Manifest.is_diagnostic` stay the
+   **infrastructure** map. A reader that takes them without asking for
+   a site set gets the narrow answer, and `/api/embed/coverage` is that
+   reader. `Manifest.site_sets` carries every map, and the dashboard
+   reads it.
+3. The public tile route takes no site set. It is
+   `/api/embed/tiles/{stamp}/{preset}/{layer}/...`, it reads
+   `SITE_SET_INFRASTRUCTURE`, and there is nowhere in the URL to name
+   another set.
+
+The third one used to be a constant in
+`web/static/embed-coverage.js`, on a route that took the set from the
+path. A constant in a page the public loads is a rule for a browser
+that means no harm; it is not a lock. When something must be refused,
+refuse it where the bytes are served.
+
+`EXTENDED_ROLES` is not a subset of `INFRASTRUCTURE_ROLES`, so
+`is_diagnostic_role_set` already calls the wider map diagnostic and
+`/api/embed/coverage` already refuses a diagnostic run. That is the
+first lock, and it was there before this feature.
+
+Membership of the set is quoted from `meshtastic/config.proto` in
+`sonoran/roles.py`, never inferred. `CLIENT_MUTE` is out because the
+proto says it "does not forward packets from other devices". `SENSOR`,
+`TAK` and `LOST_AND_FOUND` are out because the proto never says whether
+they forward, and this project does not assert what the vendor did not
+state. `TRACKER` and `TAK_TRACKER` are out because they move.
+
 ### 9.28 Check the project board before starting an issue, every time
 
 Tyler gates work through the **Roadmap** board: an issue on it is not to
 be started until its Status is **Ready**. The statuses are `Ideation`,
 `Ready`, `Blocked`, `In progress`, `Done`.
 
-**Ask the board. Do not carry the answer.** As of 2026-09-24, four
-issues are on it and all four are `Ideation`:
+**Ask the board. Do not carry the answer.** For example, on 2026-09-24,
+four issues were on it and all four were `Ideation`:
 
     #178 Noise Floor Tracking
     #179 Sonoran-Contributor docker service
@@ -972,8 +1233,7 @@ one.**
       {name field{... on ProjectV2FieldCommon{name}}}}}}}}}}'
 
 An issue **absent** from the board is not gated by the board. It is not
-automatically fair game: it must still meet §3A.1, and a gaps feature is
-paused by §3A.3.
+automatically fair game: it must still meet §3A.1.
 
 #### The trap: an empty answer that means two different things
 
@@ -1008,7 +1268,7 @@ gated issue moved to `Ready` can also be set to `In progress` and then
 `rf_latest` one point per thing. They used to pick the point that
 **claimed** the loudest `rssi_db`, and the one that **claimed** the
 newest `t`, up to a minute ahead. Both are numbers the station chooses.
-A modified agent that sent `rssi_db: 50` and stamps 59 s ahead won
+A modified agent that sent `rssi_db: 50` and stamped 59 s ahead won
 every shared point, other stations' aircraft included. It could never
 post as another station; it did not need to.
 
@@ -1095,298 +1355,6 @@ the disk.
   coverage run. Seed what the measurement needs first. The "gaps sites
   against an area" journey needs `uv run sonoran-gaps-once` after the
   seed.
-
-### 9.25 A diagnostic coverage run never reaches the public embed
-
-`COVERAGE_SITE_ROLES=ALL` predicts from every node, which is what it is
-for. It also predicts from every client, and a client is usually
-somebody's house. Each one then draws a footprint, and a footprint has
-a centre.
-
-`embed/sanitise.py` keeps the markers back and always has. The tiles
-are the leak. So `/api/embed/coverage` answers `available: false` with
-`reason: "diagnostic"` for such a run rather than labelling it, and the
-public page says a diagnostic is not published there.
-
-Do not "improve" this into a banner. A banner tells a reader what they
-are looking at; it does not stop them reading the middle of a circle.
-
-**The JSON refusal is not the whole of it, and used not to be any of
-it.** The embed drew its tiles from `/api/coverage/tiles`, the
-dashboard's route, which has no `EMBED_ENABLED` dependency and no
-diagnostic test and takes the site set from the path. Publishing the
-embed meant opening that path, and one segment then fetched the client
-map. So there are now two more locks, and both are load-bearing:
-
-1. The public tiles are `/api/embed/tiles/{stamp}/{preset}/{layer}/...`
-   on the **embed** router, so `_require_enabled` reaches them. There is
-   no site set in the URL, the stamp must be the published run, and a
-   diagnostic run is refused by `_require_published_map`, a dependency
-   of the whole tile router. That is 9.16.3 one level down: the route
-   that carries the pixels is the route that has to refuse.
-2. A diagnostic run writes its tiles under the site set `diagnostic`,
-   never `infrastructure`. The path carries the set, so a path that
-   said `infrastructure` while holding a client footprint was a path
-   that lied, and the tiles are what a reader fetches.
-
-`docs/API.md` 3B.5 is the exact list of paths a proxy may open. Never
-`/api/coverage` by prefix: it publishes the dashboard's tiles of every
-site set, the node names and rounded positions in `coarse_sites` and
-`presets[].nodes`, and the calibration.
-
-`embed/sanitise.py` also takes no settings argument, and must not gain
-one. If the public role test read `COVERAGE_SITE_ROLES`, one
-environment variable would put the whole mesh on a public map.
-`test_a_diagnostic_run_can_never_widen_the_public_map` pins it.
-
-### 9.27 A run can publish more than one map, and only one is public
-
-`COVERAGE_INCLUDE_CLIENTS` makes a run predict a second map from the
-nodes that repeat traffic without being infrastructure: `CLIENT`,
-`CLIENT_BASE` and `ROUTER_CLIENT`. It answers a real question, which is
-why a neighbourhood works where no router covers it.
-
-Three things hold it apart from the public map, and each one is
-load-bearing:
-
-1. The tile path carries the site set:
-   `{preset}/{site_set}/{layer}/{z}/{x}/{y}.png`. Two maps of the same
-   preset are different answers and must never share a tile.
-2. `Manifest.presets` and `Manifest.is_diagnostic` stay the
-   **infrastructure** map. A reader that takes them without asking for
-   a site set gets the narrow answer, and `/api/embed/coverage` is that
-   reader. `Manifest.site_sets` carries every map, and the dashboard
-   reads it.
-3. The public tile route takes no site set. It is
-   `/api/embed/tiles/{stamp}/{preset}/{layer}/...`, it reads
-   `SITE_SET_INFRASTRUCTURE`, and there is nowhere in the URL to name
-   another set.
-
-The third one used to be a constant in
-`web/static/embed-coverage.js`, on a route that took the set from the
-path. A constant in a page the public loads is a rule for a browser
-that means no harm; it is not a lock. When something must be refused,
-refuse it where the bytes are served.
-
-`EXTENDED_ROLES` is not a subset of `INFRASTRUCTURE_ROLES`, so
-`is_diagnostic_role_set` already calls the wider map diagnostic and
-`/api/embed/coverage` already refuses a diagnostic run. That is the
-first lock, and it was there before this feature.
-
-Membership of the set is quoted from `meshtastic/config.proto` in
-`sonoran/roles.py`, never inferred. `CLIENT_MUTE` is out because the
-proto says it "does not forward packets from other devices". `SENSOR`,
-`TAK` and `LOST_AND_FOUND` are out because the proto never says whether
-they forward, and this project does not assert what the vendor did not
-state. `TRACKER` and `TAK_TRACKER` are out because they move.
-
-### 9.17 The config check page imports vendored logic and its globals
-
-`web/static/vendor/config-checker/` is a copy of the community config
-checker. Sonoran uses its **logic** and draws the result itself, in
-`web/static/config-check.js`. That is the same arrangement as the
-coverage planner. The vendored files are never edited here, and an
-update is a re-copy of the directory. See its `PROVENANCE.md`.
-
-Nothing about this feature runs on the server. A config, a channel key,
-and an MQTT password are read in the browser and sent nowhere. There is
-no endpoint for it and there must never be one. A test asserts that.
-
-Five things keep it working, and each fails quietly:
-
-1. The logic modules read `protobuf`, `jsyaml` and `MeshtasticProto` off
-   `window`. Sonoran's `index.html` holds those three, then
-   `config-check.js`, inside `<template data-lazy-scripts="config">`,
-   and `PAGES.config` loads them with `loadScripts('config')` on the
-   first visit (#277): the classic scripts in order, the module after
-   them. Miss them and every parse dies with "jsyaml is not defined",
-   while building a config from scratch still works, because that path
-   parses nothing. Test with a real file, not with the build button.
-2. `config-check.js` is a module, so it runs after `app.js`. `app.js`
-   holds a `configReady` promise that the module resolves, and
-   `PAGES.config` waits on it. Without that a reload on `#config` finds
-   nothing registered and falls back to the dashboard. The template is
-   after `app.js` in the page, so `loadScripts` waits for the document
-   to be parsed before it looks for it; without that wait a reload on
-   `#config` found no template and waited for ever.
-3. `connect-src` must hold `https://api.github.com`. It is the only
-   outbound request the dashboard makes, and it asks which firmware
-   release is current. It carries no user data.
-4. Android `.cfg` files are protobuf, and protobuf.js builds its
-   decoders by compiling strings with `new Function`, which
-   `script-src` forbids. The way round is not `unsafe-eval`: that would
-   give back the permission that stops a crafted config becoming running
-   code. `static/meshtastic-static.js` is the same schema compiled ahead
-   of time by `tools/generate_protobuf_static.sh`, and
-   `config-check.js` points `protobuf.Root.fromJSON` at it, so the
-   vendored parser works unchanged. Two traps live in that script, and
-   it refuses to install a bad result rather than let either through:
-   the generator must be the same major version as the vendored runtime
-   (protobuf.js 8 emits `reader.tag()`, which 7.6.3 has not got), and
-   the generated runtime import must be rewritten to the local shim,
-   because a browser cannot resolve a bare specifier.
-5. `Permissions-Policy` must grant `serial=(self)`. Web Serial also
-   needs a secure context: over plain HTTP the browser hides
-   `navigator.serial` whatever the headers say, so the USB feature is
-   missing until the dashboard is served over HTTPS. Nothing in the code
-   can work round that.
-
-### 9.18 A traceroute row is not a path
-
-`sonoran/api/traces.py` holds the only correct reading of a traceroute
-row. The graph, the map, and the traceroute pages all go through it.
-They must keep doing so. Three pages once held a copy of these rules
-each, the copies disagreed, and the graph drew links that the link page
-could then find no evidence for.
-
-Three rules apply, and each one drew a false link when it was missed:
-
-1. A reply travels back, so `from_node_num` is the node the request was
-   asked of. `trace_endpoints` swaps them. Reading a reply as stored
-   keeps the middle of the path and invents the first hop and the last.
-   One intermediate hop hides the fault, because the two links come out
-   the same either way round. Two hops show it.
-2. A hop past the last slot in `snr_towards` did not happen yet. The
-   broker sees a packet while it travels, so a report often stops part
-   way along its intended path. `evidenced_hops` cuts it there. A slot
-   holding INT8_MIN still counts: the hop happened and only its reading
-   is missing.
-3. An unanswered request has an empty route, so its intended path is
-   one hop from end to end. Drawing that claims the two nodes hear each
-   other directly, which is the one thing the trace failed to show.
-   Half of all rows in live data are these.
-
-A request with a route is a fourth case, and it is not a fault. The
-broker saw the request in flight, so the hops it had already made are
-real and were really measured. Its readings stop one short of its
-intended path, which is rule 2 doing its job: the hop to the far end
-had not happened, which is why no reply came. Such links are true, and
-the evidence for them runs one way. `Edge.confirmed` marks them, and
-the graph page draws them fainter behind a toggle. In live data they
-were 141 of 982 traceroute links, about 14 percent.
-
-Note the two words are not the same. "Unconfirmed" on that page means
-no SNR reading. "One-way" means measured, but no reply came back.
-
-### 9.19 A row limit must never decide what evidence exists
-
-`/api/graph` read 2000 traceroute rows and `/api/graph/link` read the
-newest 500. With two thousand traceroutes a day, the graph drew plenty
-of links whose evidence lay outside the smaller window. Clicking such a
-link opened a page that said no report evidences it.
-
-Raising the limit only moves the cut. A query that answers "what
-evidences this link" must select by the nodes it asks about, not by
-recency. `_mentions` in `routes/graph.py` does that, over the route
-JSONB as well as the two endpoints.
-
-The same trap has a front end half. `PAGES.link` in `app.js` asked for
-a fixed 24 hours while the graph drew whatever `[data-graph-hours]`
-said. A link found over seven days then opened an empty page.
-`graphHours` carries the window across.
-
-### 9.20 An ordinary packet does not carry its route
-
-Only a traceroute holds the nodes it passed through. Every other packet
-arrives with the sender, the gateway that uploaded it, and a hop count,
-and nothing at all about the ground between them. A live traffic line is
-therefore a straight line between two ends of a route that was never
-straight. Say the hop count and leave the rest unclaimed. The one place
-a true path can be drawn is `/api/map/traceroute-paths`.
-
-`MeshPacket.relay_node` looks like the missing piece and is not. The
-firmware truncates it to one byte, the low byte of the relayer's node
-number. `mesh_packet_metrics.relay_node_num` stores it for the first
-upload of a packet, and since migration `pr378` `packet_seen.relay_node`
-stores it for every upload, since each gateway hears its own relay. The
-packet page shows it per gateway as a list of candidates, never as one
-node. That reverses #47's option 3 for the packet page only (Logan,
-2026-10-17, `docs/DECISIONS.md`). Drawing anything from it is still
-declined, and `tests/unit/test_live_map_draws_no_inferred_hop.py` holds
-that.
-
-The candidates follow the firmware (v2.8.1), not the byte alone. The
-firmware resolves a byte only among the receiving node's direct
-neighbours (`NodeDB::resolveLastByte`, `NodeDB.cpp:4179-4182`), so the
-candidates for an upload are the nodes that gateway uploaded at 0 hops
-within a day. Never match the byte against the whole mesh: that listed
-a LongFast-only node on a MediumFast gateway's upload
-(`!8fa02db0/2591142278`). Every send writes the sender's own byte first
-and each rebroadcast overwrites it (`FloodingRouter.cpp:22`,
-`NextHopRouter.cpp:116`), and the first hop always lowers the hop limit
-(`Router.cpp:256-258`). So a 0-hop upload names the sender exactly
-(live, 2026-10-18: 563 of 563). After a hop the relay is never the sender
-and never a `CLIENT_MUTE` node (`FloodingRouter.cpp:154-158`). Byte `ff`
-also stands for a node that ends in `00` (`NodeDB.h:431`). Live,
-2026-10-18, 12,645 relayed uploads: one candidate for 79.9 %, none for
-6.7 %, at most 6.
-
-Values run 2 to 255. With 694 nodes active in a day this mesh
-had 215 distinct bytes, 3.2 candidate nodes for an average byte, 12 for
-the worst, and only 5.4 percent of relay observations resolving to a
-single node. It also names the last hop alone, never the path. Drawing
-a line from it would be a guess.
-
-### 9.21 A calibration estimate is not a radio reading
-
-`neighbor_metrics.snr` is measured. `NodeFit.offset_db` is inferred.
-Never present the second value as if a node reported it.
-
-The censored regression once had no bound and did not fit its global
-model bias during each expectation round. A node with seven silent
-links and no reported link reached -1830.35 dB. Some usable raw offsets
-also passed 50 dB. The radio-profile resolver held the value to 15 dB,
-but the report still showed the impossible estimate and the bad node
-could pull the rest of the fit.
-
-Keep all of these guards:
-
-1. Fit the global bias in every censored-data round.
-2. Bound and anchor node offsets in every round.
-3. Check the bound again when a stored file is read.
-4. Give no offset to a node with too little evidence or wide scatter.
-5. Reject the whole fit when its bias or scatter is outside 20 dB.
-6. Run a due calibration before coverage, never beside it.
-7. Hold a `lock_calibration` node at zero **inside** the fit, and keep
-   the 15 dB bound when you do.
-
-Guard 7 has a trap in it. The bound used to be applied by the same
-projection that held the offsets summing to zero. A pinned node is
-already the anchor, so a pinned fit must not re-centre anything — that
-would drag the pinned node off zero — and it therefore does not run that
-projection. The bound is then applied on its own, in the same place. Take
-the clip out and you are back to the -1830.35 dB estimate this section
-is about. `test_pinning_a_node_still_bounds_the_others` pins it.
-
-Pinning also moves the reported model bias, on purpose. With nothing
-pinned the bias is measured against the mean of every guess; with a node
-pinned it is measured against that radio. Two runs either side of a lock
-are two different answers and neither is a fault.
-
-The live fit on 2026-08-21 had a bias near -41 dB and was rejected. Do
-not increase the guard to make live data pass. First prove that absence
-from an aggregated neighbour list means the radio link was silent.
-
-The 2026-09-18 run read 420 links and 362 of them, 86 percent, were
-censored. The solver handles censoring correctly — measured against
-planted truth it recovers a bias to within 0.6 dB at 48 percent
-censoring — and it cannot survive a censored observation that is not
-true: false silence drives the fitted bias down almost linearly with its
-share while the reported-only mean stays at zero.
-
-`summary.mean_db` is that reported-only mean, and it has now been read:
--13.57 dB. So the -44.62 splits into -13.57 dB of real error on the
-links the mesh measured and -31.05 dB opened by rows that record
-silence. Inverting the intercept score equation puts the mean censoring
-bound at -42.3 dB, and only about 6 percent of silence that deep is
-credible against the links we did measure. Two things follow and both
-are load-bearing: **do not lower `MAX_CANDIDATES` to make the bias look
-better** — it moves the bias 30 dB while the reported mean does not
-move at all, so it is a dial and not a measurement — and **do not raise
-the trust guard**. Fix the evidence instead; the same mesh without the
-false silence fits at -14.46 dB, inside the guard, with nothing
-weakened. The full decomposition, the falsification table and the path
-forward are in `docs/ISSUES.md` 2.4.2.
 
 ## 10. Reference documents
 
