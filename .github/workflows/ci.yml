@@ -107,8 +107,10 @@ jobs:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
         # 14 days, and each change pulled and unpacked about 4 GB again on
-        # the runners' shared, slow disk. The days with the most pulls had
-        # the most failures. To update it, change the digest on purpose, in
+        # the shared, slow disk of the old runners. The days with the most
+        # pulls had the most failures. The Docker Hub cache on the microVM
+        # host keeps one copy of this digest for every VM. To update it,
+        # change the digest on purpose, in
         # its own commit, here, in the e2e service and in
         # tests/integration/conftest.py (test_ci_database_image.py holds
         # the three to one value).
@@ -116,10 +118,11 @@ jobs:
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: sonoran
-        # Docker picks the host port. A job must not assume that it has
-        # the machine to itself: on a runner that several jobs share, a
-        # fixed 5432 would let two jobs' databases collide. The first
-        # step points the URL below at whichever port this got.
+        # Docker picks the host port. A microVM runs one job only, so a
+        # fixed 5432 would work there. A free port keeps this job correct
+        # on any other machine too, for example one with its own
+        # Postgres. The first step points the URL below at whichever port
+        # this got.
         ports:
           - 5432
         # The health check uses `-h 127.0.0.1` deliberately. A bare
@@ -151,7 +154,7 @@ jobs:
         # disk. The database is thrown away when the job ends, and the
         # disk is too slow at synchronous writes: the image's init server
         # could not flush its shutdown checkpoint in 60 s under load, and
-        # the container exited 1. Measured on the runner VM, ready over
+        # the container exited 1. Measured on the old shared runner VM, ready over
         # TCP: 14.8 s on disk on a quiet box and over 60 s under load,
         # 5.1 s on tmpfs whatever the load. The path is $PGDATA in this
         # image (mounting its parent fails: root owns a new tmpfs). uid
@@ -207,8 +210,10 @@ jobs:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
         # 14 days, and each change pulled and unpacked about 4 GB again on
-        # the runners' shared, slow disk. The days with the most pulls had
-        # the most failures. To update it, change the digest on purpose, in
+        # the shared, slow disk of the old runners. The days with the most
+        # pulls had the most failures. The Docker Hub cache on the microVM
+        # host keeps one copy of this digest for every VM. To update it,
+        # change the digest on purpose, in
         # its own commit, here, in the e2e service and in
         # tests/integration/conftest.py (test_ci_database_image.py holds
         # the three to one value).
@@ -248,7 +253,7 @@ jobs:
         # disk. The database is thrown away when the job ends, and the
         # disk is too slow at synchronous writes: the image's init server
         # could not flush its shutdown checkpoint in 60 s under load, and
-        # the container exited 1. Measured on the runner VM, ready over
+        # the container exited 1. Measured on the old shared runner VM, ready over
         # TCP: 14.8 s on disk on a quiet box and over 60 s under load,
         # 5.1 s on tmpfs whatever the load. The path is $PGDATA in this
         # image (mounting its parent fails: root owns a new tmpfs). uid
@@ -277,8 +282,9 @@ jobs:
       # defaults to /var/lib/sonoran and is not writable on a runner.
       # The API reads it back from the same setting, so both steps need
       # this and they need it to agree. Both are set by the first step,
-      # under the job's own temporary directory, so that two runs on the
-      # same machine never read each other's artefacts.
+      # under the job's own temporary directory. A microVM starts empty,
+      # but on a machine that keeps its disk, two runs then never read
+      # each other's artefacts.
       #
       # No basemap in CI. The default is tile.openstreetmap.org, which
       # answers a datacenter address with 403, and the suite counts a
@@ -289,8 +295,9 @@ jobs:
       # is absent, and the code already handles an empty tile URL.
       MAP_TILE_URL: ''
     steps:
-      # A job must not assume that it has the machine to itself, so
-      # nothing here may assume a fixed port or path: the database is on
+      # Nothing here assumes a fixed port or path, so these steps work
+      # in a microVM and on a machine that also runs other things: the
+      # database is on
       # whatever port Docker gave it, the API takes a free port and
       # listens only on loopback, and the caches live in this job's
       # temporary directory.
