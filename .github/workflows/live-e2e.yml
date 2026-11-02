@@ -80,7 +80,10 @@ jobs:
 
       - name: Install the browser
         if: steps.target.outputs.known == 'yes'
-        run: npx --yes playwright@1.49.1 install --with-deps chromium
+        # `--with-deps` installs Chromium's system libraries with sudo
+        # apt. The microVM image has them already (ci-runner,
+        # image/Dockerfile), as in ci.yml.
+        run: npx --yes playwright@1.49.1 install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
 
       - name: Walk it
         if: steps.target.outputs.known == 'yes'

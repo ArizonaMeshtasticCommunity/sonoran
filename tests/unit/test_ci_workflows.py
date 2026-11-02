@@ -108,6 +108,22 @@ def test_every_job_runs_in_a_microvm() -> None:
     assert checked
 
 
+ONLY_ON_HOSTED = "${{ runner.environment == 'github-hosted' && '--with-deps' || '' }}"
+
+
+def test_no_job_installs_system_packages_in_a_microvm() -> None:
+    """`--with-deps` runs only on a GitHub-hosted runner.
+
+    It installs Chromium's system libraries with sudo apt. The microVM
+    image has them already, and a job must not change the system that
+    it runs on. live-e2e.yml once used it on every runner.
+    """
+    for path in WORKFLOWS:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "--with-deps" in line and not line.lstrip().startswith("#"):
+                assert ONLY_ON_HOSTED in line, f"{path.name}: {line.strip()}"
+
+
 def test_the_guard_still_runs_ci_on_main() -> None:
     """Would be caught: a guard that stopped every run, pushes to main too."""
     workflow = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))
