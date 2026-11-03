@@ -124,6 +124,18 @@ def test_no_job_installs_system_packages_in_a_microvm() -> None:
                 assert ONLY_ON_HOSTED in line, f"{path.name}: {line.strip()}"
 
 
+def test_the_test_job_sets_up_node() -> None:
+    """The unit suite runs JavaScript with node, and fails without it.
+
+    The old shared runner had node installed, so the test job worked
+    without asking for it. A microVM has no node until a step installs
+    it, and 97 tests failed with "node is not on PATH" (run 41548026423).
+    """
+    steps = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))["jobs"]["test"]["steps"]
+    uses = [str(step.get("uses", "")) for step in steps]
+    assert any(action.startswith("actions/setup-node@") for action in uses), uses
+
+
 def test_the_guard_still_runs_ci_on_main() -> None:
     """Would be caught: a guard that stopped every run, pushes to main too."""
     workflow = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))
