@@ -4688,10 +4688,21 @@ async function main() {
    */
   const watchAway = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   await journey(watchAway, 'Open node detail in watch mode leaves full screen, and the node page takes clicks and scrolls', async (page) => {
-    const watching = () => page.evaluate(() => ({
+    /*
+     * Leaving watch mode sets `on` at once, then waits for the browser's
+     * `exitFullscreen`, and only then takes the watch-mode class off. One
+     * read just after a navigation can land between the two:
+     * {"on":false,"screen":true} on the CI runner (sonoran run
+     * 41551075144), while the page left full screen a moment later. So
+     * read until it has left, for 5 s. A page that stays in full screen
+     * still fails, with what it was seen in.
+     */
+    const WATCHING = () => ({
       on: window.SonoranWatch.isOn(),
       screen: Boolean(document.fullscreenElement) || document.body.classList.contains('watch-mode'),
-    }));
+    });
+    const leftWatch = (got) => !got.on && !got.screen;
+    const watching = () => waitForValue(page, WATCHING, undefined, leftWatch, 5000);
     const enterWatch = async () => {
       await page.locator('[data-page="map"] [aria-label="Watch mode"]').first().click();
       must(await waitFor(page, () => window.SonoranWatch.isOn()
@@ -4716,7 +4727,7 @@ async function main() {
       && document.querySelector('[data-page="node"]').classList.contains('active') && !loading, 15000, 100, nodeId),
     `"Open node detail" did not open the node page: ${await page.evaluate(() => location.hash)}`);
     const after = await watching();
-    must(!after.on && !after.screen, `the node page opened still in full screen: ${JSON.stringify(after)}`);
+    must(after.ok, `the node page opened still in full screen: ${JSON.stringify(after.got)}`);
 
     // Nothing covers the node page: the element at a link's centre is
     // that link.
@@ -4747,7 +4758,7 @@ async function main() {
     await page.evaluate(() => { location.hash = '#dashboard'; });
     must(await waitFor(page, () => location.hash === '#dashboard' && !loading, 10000, 100), 'the dashboard did not open');
     const off = await watching();
-    must(!off.on && !off.screen, `the dashboard opened still in full screen: ${JSON.stringify(off)}`);
+    must(off.ok, `the dashboard opened still in full screen: ${JSON.stringify(off.got)}`);
     return `full screen left before #node/${nodeId}; its link takes the click; the wheel scrolls; the dashboard too`;
   });
   await watchAway.close();
