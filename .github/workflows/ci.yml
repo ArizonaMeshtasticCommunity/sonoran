@@ -21,10 +21,13 @@ permissions:
 # No job runs for a pull request from a fork.
 #
 # Every job runs on self-hosted hardware that belongs to a community
-# member (AGENTS.md 6.2), and the jobs can reach Docker there. A pull
-# request from a fork can change any test or the Dockerfile, so it would
-# run its author's code on that machine. Each job therefore runs for a
-# push to main, and for a pull request from a branch of this repository.
+# member (AGENTS.md 6.2), and the jobs can reach Docker there. Each job
+# runs in its own Firecracker microVM (label `sonoran-microvm`), which is
+# destroyed when the job ends, so a job cannot keep the machine or reach
+# the next job. A pull request from a fork can still change any test or
+# the Dockerfile and run its author's code in that VM, with the
+# internet. Each job therefore runs for a push to main, and for a pull
+# request from a branch of this repository.
 # A maintainer who wants CI on a fork's change reads it, then pushes it
 # to a branch here.
 #
@@ -39,7 +42,7 @@ permissions:
 # checks the condition on each job.
 jobs:
   lint:
-    runs-on: self-hosted
+    runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -60,7 +63,7 @@ jobs:
       - run: npx eslint src/sonoran/web/static
 
   typecheck:
-    runs-on: self-hosted
+    runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -69,7 +72,7 @@ jobs:
       - run: uv run mypy src
 
   test:
-    runs-on: self-hosted
+    runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       # This job runs the 166 database-backed tests in tests/integration
@@ -88,6 +91,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+      # The unit suite runs JavaScript with node, and a test fails when
+      # node is missing. A microVM has no node until this step installs
+      # it. The old shared runner had node on the machine.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '22'
       - run: uv sync --extra dev
       - run: >-
           uv run pytest
@@ -98,14 +107,16 @@ jobs:
           --cov-fail-under=80
 
   migrations:
-    runs-on: self-hosted
+    runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     services:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
         # 14 days, and each change pulled and unpacked about 4 GB again on
-        # the runners' shared, slow disk. The days with the most pulls had
-        # the most failures. To update it, change the digest on purpose, in
+        # the shared, slow disk of the old runners. The days with the most
+        # pulls had the most failures. The Docker Hub cache on the microVM
+        # host keeps one copy of this digest for every VM. To update it,
+        # change the digest on purpose, in
         # its own commit, here, in the e2e service and in
         # tests/integration/conftest.py (test_ci_database_image.py holds
         # the three to one value).
@@ -113,9 +124,11 @@ jobs:
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: sonoran
-        # Docker picks the host port. Several runners share one machine,
-        # so a fixed 5432 would let two jobs' databases collide; the
-        # first step points the URL below at whichever port this got.
+        # Docker picks the host port. A microVM runs one job only, so a
+        # fixed 5432 would work there. A free port keeps this job correct
+        # on any other machine too, for example one with its own
+        # Postgres. The first step points the URL below at whichever port
+        # this got.
         ports:
           - 5432
         # The health check uses `-h 127.0.0.1` deliberately. A bare
@@ -147,7 +160,7 @@ jobs:
         # disk. The database is thrown away when the job ends, and the
         # disk is too slow at synchronous writes: the image's init server
         # could not flush its shutdown checkpoint in 60 s under load, and
-        # the container exited 1. Measured on the runner VM, ready over
+        # the container exited 1. Measured on the old shared runner VM, ready over
         # TCP: 14.8 s on disk on a quiet box and over 60 s under load,
         # 5.1 s on tmpfs whatever the load. The path is $PGDATA in this
         # image (mounting its parent fails: root owns a new tmpfs). uid
@@ -197,14 +210,16 @@ jobs:
   # has to be deterministic. The nightly-against-production idea is in
   # #83 and is deliberately not this job.
   e2e:
-    runs-on: self-hosted
+    runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     services:
       timescaledb:
         # Pinned by digest. `pg17` is a moving tag: it changed 6 times in
         # 14 days, and each change pulled and unpacked about 4 GB again on
-        # the runners' shared, slow disk. The days with the most pulls had
-        # the most failures. To update it, change the digest on purpose, in
+        # the shared, slow disk of the old runners. The days with the most
+        # pulls had the most failures. The Docker Hub cache on the microVM
+        # host keeps one copy of this digest for every VM. To update it,
+        # change the digest on purpose, in
         # its own commit, here, in the e2e service and in
         # tests/integration/conftest.py (test_ci_database_image.py holds
         # the three to one value).
@@ -244,7 +259,7 @@ jobs:
         # disk. The database is thrown away when the job ends, and the
         # disk is too slow at synchronous writes: the image's init server
         # could not flush its shutdown checkpoint in 60 s under load, and
-        # the container exited 1. Measured on the runner VM, ready over
+        # the container exited 1. Measured on the old shared runner VM, ready over
         # TCP: 14.8 s on disk on a quiet box and over 60 s under load,
         # 5.1 s on tmpfs whatever the load. The path is $PGDATA in this
         # image (mounting its parent fails: root owns a new tmpfs). uid
@@ -273,8 +288,9 @@ jobs:
       # defaults to /var/lib/sonoran and is not writable on a runner.
       # The API reads it back from the same setting, so both steps need
       # this and they need it to agree. Both are set by the first step,
-      # under the job's own temporary directory, so that two runs on the
-      # same machine never read each other's artefacts.
+      # under the job's own temporary directory. A microVM starts empty,
+      # but on a machine that keeps its disk, two runs then never read
+      # each other's artefacts.
       #
       # No basemap in CI. The default is tile.openstreetmap.org, which
       # answers a datacenter address with 403, and the suite counts a
@@ -285,10 +301,12 @@ jobs:
       # is absent, and the code already handles an empty tile URL.
       MAP_TILE_URL: ''
     steps:
-      # Several runners share one machine, so nothing here may assume a
-      # fixed port or path: the database is on whatever port Docker gave
-      # it, the API takes a free port and listens only on loopback, and
-      # the caches live in this job's temporary directory.
+      # Nothing here assumes a fixed port or path, so these steps work
+      # in a microVM and on a machine that also runs other things: the
+      # database is on
+      # whatever port Docker gave it, the API takes a free port and
+      # listens only on loopback, and the caches live in this job's
+      # temporary directory.
       - name: Give this job its own ports and caches
         run: |
           db=${{ job.services.timescaledb.ports['5432'] }}
@@ -320,9 +338,9 @@ jobs:
         # fallbacks that only exist on a developer's machine.
         #
         # `--with-deps` installs Chromium's system libraries with sudo
-        # apt. Hosted runners need it and allow it; the self-hosted
-        # runner has the libraries installed already and no sudo, so
-        # there it would only fail.
+        # apt. Hosted runners need it and allow it. The microVM image
+        # has the libraries installed already (ci-runner,
+        # image/Dockerfile), so there it is not needed.
         run: |
           npm install --no-save playwright@1.49.1
           npx playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
@@ -339,13 +357,14 @@ jobs:
         run: node tools/dev/e2e.js
 
   docker:
-    runs-on: self-hosted
+    runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       # No setup-buildx-action. It made a new BuildKit container for every
       # job, with an empty cache, and asked it for GPU access, which the
       # runners refuse and it retried without. Docker's built-in builder
-      # reads `# syntax=docker/dockerfile:1` too, and uses the cache the
-      # runners share, so unchanged layers are not fetched again.
+      # reads `# syntax=docker/dockerfile:1` too. Each microVM starts
+      # with an empty build cache. Its base images come from the Docker
+      # Hub cache on the runner host, so they are not downloaded again.
       - run: docker build -t sonoran:ci .

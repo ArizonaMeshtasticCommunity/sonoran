@@ -89,6 +89,53 @@ def test_no_self_hosted_job_runs_for_a_pull_request_from_a_fork() -> None:
     assert checked, "no self-hosted job of a pull request workflow was checked"
 
 
+MICROVM = ["self-hosted", "sonoran-microvm"]
+
+
+def test_every_job_runs_in_a_microvm() -> None:
+    """Each job asks for a Firecracker microVM, never for any runner.
+
+    `runs-on: self-hosted` alone takes any self-hosted runner of the
+    organization, including one where jobs share a machine and its
+    Docker. The `sonoran-microvm` label takes a VM that runs one job and
+    is destroyed (ci-runner, README.md).
+    """
+    checked = 0
+    for path in WORKFLOWS:
+        for name, job in _load(path)["jobs"].items():
+            assert job.get("runs-on") == MICROVM, f"{path.name} {name}: {job.get('runs-on')}"
+            checked += 1
+    assert checked
+
+
+ONLY_ON_HOSTED = "${{ runner.environment == 'github-hosted' && '--with-deps' || '' }}"
+
+
+def test_no_job_installs_system_packages_in_a_microvm() -> None:
+    """`--with-deps` runs only on a GitHub-hosted runner.
+
+    It installs Chromium's system libraries with sudo apt. The microVM
+    image has them already, and a job must not change the system that
+    it runs on. live-e2e.yml once used it on every runner.
+    """
+    for path in WORKFLOWS:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "--with-deps" in line and not line.lstrip().startswith("#"):
+                assert ONLY_ON_HOSTED in line, f"{path.name}: {line.strip()}"
+
+
+def test_the_test_job_sets_up_node() -> None:
+    """The unit suite runs JavaScript with node, and fails without it.
+
+    The old shared runner had node installed, so the test job worked
+    without asking for it. A microVM has no node until a step installs
+    it, and 97 tests failed with "node is not on PATH" (run 41548026423).
+    """
+    steps = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))["jobs"]["test"]["steps"]
+    uses = [str(step.get("uses", "")) for step in steps]
+    assert any(action.startswith("actions/setup-node@") for action in uses), uses
+
+
 def test_the_guard_still_runs_ci_on_main() -> None:
     """Would be caught: a guard that stopped every run, pushes to main too."""
     workflow = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))

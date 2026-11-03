@@ -86,7 +86,7 @@ def test_it_runs_where_the_other_jobs_run() -> None:
     A job on `ubuntu-latest` in this repo would be both inconsistent and
     queued behind a runner label nothing else uses.
     """
-    assert FLOW["jobs"]["walk"]["runs-on"] == "self-hosted", (
+    assert FLOW["jobs"]["walk"]["runs-on"] == ["self-hosted", "sonoran-microvm"], (
         "the live walk runs on a different runner from every other job in this repository"
     )
 

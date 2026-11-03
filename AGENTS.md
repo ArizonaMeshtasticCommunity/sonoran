@@ -267,8 +267,10 @@ See `docs/RELEASING.md`.
 
 ## 6.2 CI runs on someone else's hardware
 
-Every job in this repository is `runs-on: self-hosted`. The runners
-belong to a community member, and there is no monthly reset. This is
+Every job in this repository is `runs-on: [self-hosted, sonoran-microvm]`.
+Each job runs in its own Firecracker microVM, and the VM is destroyed
+when the job ends. The runners belong to a community member, and there
+is no monthly reset. This is
 the working agreement with the runner's owner (#308):
 
 1. Pull `main` first. Other people edit this repository too.
