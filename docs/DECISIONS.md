@@ -103,7 +103,7 @@ share of packets. **Tripwire:**
 
 ### The coverage map predicts from precise positions only (#315)
 
-**Decided by Will, 2026-10-08, following Tyler and Logan.** Every
+**Decided by the maintainers, 2026-10-08.** Every
 published coverage map predicts from a position of 16 bits or better,
 or from a position an operator gave in the overrides file. This
 reverses the part of #318 that let a host lower
@@ -111,12 +111,12 @@ reverses the part of #318 that let a host lower
 
 The evidence, from the #315 thread:
 
-- Will first asked for rounded positions: "The coverage map will always
+- A maintainer first asked for rounded positions: "The coverage map will always
   be an estimate right?"
-- Logan: "computing for something offset to a mountain does not make
+- A maintainer: "computing for something offset to a mountain does not make
   sense when its on a house just so its seen. ... its pointless for us
   to spend compute on something we cant compute."
-- Tyler (the authority on direction) showed Tower Mountain predicted
+- A maintainer (the authority on direction) showed Tower Mountain predicted
   from its reduced position, "deep in a valley", and wrote: "We should
   only report either fully precise locations or override the map."
 
@@ -130,7 +130,7 @@ already applied to the coverage job and the calibration fit only, and
 no page reads it. It now refuses a bad entry when the file is read, and
 the manifest says `position_source: "operator"` for such a site.
 A setting below 16 is read as 16 with a warning, because the stale 13
-is still in a host `.env`. Will also asked (#334) for an optional
+is still in a host `.env`. A maintainer also asked (#334) for an optional
 approximate map, off by default, as its own site set that the public
 embed never reads. It is there for a later settings panel on the
 coverage page.
@@ -142,7 +142,7 @@ of the repository points `RADIO_OVERRIDES_PATH` at a file on the host
 
 **What would change it:** a terrain-aware way to bound where a rounded
 node can be, or coverage built from measured performance rather than
-prediction, which Tyler also named.
+prediction, which a maintainer also named.
 
 Pinned by `test_precise_is_sixteen_bits_and_cannot_be_lowered`,
 `test_an_operator_position_never_makes_a_client_a_public_site` and
@@ -918,7 +918,7 @@ literal length is a fragile instrument.
 
 ### The message item and the live map dots (#199, #196)
 
-Built to the proposals posted on both issues, after Will delegated the
+Built to the proposals posted on both issues, after the maintainers delegated the
 design calls.
 
 **URLs in a message body stay text, never links (#199).** 21 of the
@@ -1181,7 +1181,7 @@ Checked directly, four are on it and **all four are `Ideation`**:
     #181  Ideation   Sonoran - Contributor management
     #182  Ideation   Sonoran - Noise Floor display
 
-`Ideation` is not `Ready`, so under Tyler's rule none of them may be
+`Ideation` is not `Ready`, so under the maintainers' rule none of them may be
 started. Nothing was: no branch or PR references any of the three. The
 only thing that reached them was a comment on #182 about a naming
 collision, which is not starting work.
@@ -1328,20 +1328,19 @@ with only `{{.State}}`, which prints `running` and omits Health.
 
 ### Released and deployed from a branch, while CI is frozen
 
-Self-hosted CI runs on a community member's hardware and was frozen after
-the September budget was spent. The owner asked for this batch to be
-released and deployed. Everything that costs no CI was done: the branch
+Self-hosted CI was frozen after the monthly budget was spent. The
+maintainers asked for this batch to be released and deployed. Everything that costs no CI was done: the branch
 was pushed (a branch push starts no workflow — `ci.yml` runs on pushes to
 `main` and on pull requests), deployed by bundle, and tagged as a release
 (a tag starts no workflow). **Merging to `main` would start one CI run, so
 it is held until the freeze lifts.** Until then `main` is behind what is
 deployed, and anyone deploying from `main` would roll the site back — the
-branch and tag names are in the release notes and in the handoff so that
+branch and tag names are in the release notes so that
 cannot happen by accident.
 
 ## 2026-09-27 — batch 3 (#303, release v2026.09.27.2)
 
-38 issues filed under `rancur` and not blocked on a decision. Seven agents built them in parallel, one area each, in separate worktrees. The branches were merged locally, verified as a whole, and sent as one PR.
+38 issues filed by a maintainer and not blocked on a decision. Seven agents built them in parallel, one area each, in separate worktrees. The branches were merged locally, verified as a whole, and sent as one PR.
 
 ### Parallel tracks each pass alone and break together
 Each track's full e2e suite was green on its own branch. Merged, three things broke that no branch could have shown:
@@ -1376,7 +1375,7 @@ This was proved by making the page re-render every 150 ms: the old read failed 2
 
 ## 2026-10-08 — the gaps leaderboards follow the page range (#294)
 
-Will chose option A: the two gaps leaderboards follow the Statistics
+The maintainers chose option A: the two gaps leaderboards follow the Statistics
 range. Four choices were made to build it. `docs/GAPS.md` 6.1 has the
 detail.
 
@@ -1398,7 +1397,7 @@ detail.
 
 ## 2026-10-08 — reachability is answered traceroutes (#293)
 
-Will chose the recommended measure: "Most consistently reachable" is
+The maintainers chose the recommended measure: "Most consistently reachable" is
 replaced by the share of traceroutes to a node that it answered. A node
 needs at least 10 traceroutes from 2 or more senders, and the board
 follows the page range. `docs/GAPS.md` 6.2 has the detail. Five choices
@@ -1422,7 +1421,7 @@ were made to build it.
   traced. So the board can say how many it left out, and a change to the
   floor does not wait for the job.
 - **The uptime ratio is gone from the board, and kept everywhere else.**
-  Will asked to replace it. The awake and heard hours are still in the
+  A maintainer asked to replace it. The awake and heard hours are still in the
   assessment, because the `rf_intermittent` signal, the gaps page and
   the node page read them. The board files no longer carry them: nothing
   else reads those files.
@@ -1558,7 +1557,7 @@ WHERE b.restarts >= 3 ORDER BY b.restarts DESC, nodeinfo_ratio_same_day DESC;
 
 ## 2026-10-17 — the packet page names relay candidates (#47, PR #378)
 
-**Decided by Logan.** This reverses #47's option 3 for the packet page
+**Decided by a maintainer.** This reverses #47's option 3 for the packet page
 only.
 
 **What changed.** `MeshPacket.relay_node` is the last byte of the node
@@ -1595,14 +1594,14 @@ per-upload column is the data that measurement needs.
 
 ## 2026-10-21 — every preset can be chosen, and several at once (#383)
 
-**Decided for Will (#383).** Will asked, in #383, for every preset to
+**Decided for a maintainer (#383).** A maintainer asked, in #383, for every preset to
 be selectable, for a choice of several, and for Medium Fast alone as
 the default. The details below were filled in while building it.
 
-**Still open, for Tyler (#232):** where the preset control lives. It
+**Still open, for the maintainers (#232):** where the preset control lives. It
 is not decided here. The menu's switch stays where it was, and the
 boxes for several presets are on the Settings page because that is
-where there is room for them. Will decided it later the same day: see
+where there is room for them. A maintainer decided it later the same day: see
 the next entry.
 
 **What changed.**
@@ -1641,7 +1640,7 @@ changed for this reason, and each says so beside it.
 
 ## 2026-10-21 — the presets are changed on the Settings page only (part of #383)
 
-**Decided by Will (#383).** In his words: "I don't like this dropdown
+**Decided by a maintainer (#383).** In their words: "I don't like this dropdown
 on the sidebar and want it gone and the settings to be the only place
 to change the presets." And: "Getting rid of the MediumFast / LongFast
 slider selector can go as well. The settings page will be where all of
@@ -1660,16 +1659,16 @@ that lives." This answers where the control lives (#232).
   link to Settings: "Preset: Medium Fast · Change in Settings". A page
   that drew one preset while several, or all, were chosen said which:
   "Showing Medium Fast. This page shows one preset at a time."
-  **Taken out the next day at Will's request; see the 2026-10-22
+  **Taken out the next day at a maintainer's request; see the 2026-10-22
   entry below.** No page carries that line now.
 - Wording that said "in the menu" now says "in Settings".
 
-**What would change it again.** Will or Tyler asking for a quick
+**What would change it again.** A maintainer asking for a quick
 control outside Settings again.
 
 ## 2026-10-22 — no preset line under the page headings (part of #383)
 
-**Decided by Will.** In his words, on seeing the line the entry above
+**Decided by a maintainer.** In their words, on seeing the line the entry above
 added: "I think it looks really good but I think putting "Preset: i
 Medium Fast · Change in Settings" on the top of every page is
 excessive. Can you remove it from the header of every page?" (The "i"
@@ -1692,13 +1691,13 @@ is the glossary button beside the word "Preset".)
 
 **What a reader loses.** A page no longer says which preset it shows.
 The Settings page says which are chosen, and a page with nothing on
-the chosen preset says so in its own empty message. Will judged a line
-on every page too much for what it told; this is the same call he made
+the chosen preset says so in its own empty message. A maintainer judged a line
+on every page too much for what it told; this is the same call made
 for the nav on 2026-09-26.
 
 **Held by** `tests/unit/test_preset_scope.py` (no line, no words, no
 reports, no leftover lists) and the e2e journey "no preset switch in
 the menu, no preset line on a page, and Settings changes the map".
 
-**What would change it again.** Will or Tyler asking for a page to say
+**What would change it again.** A maintainer asking for a page to say
 which preset it shows.

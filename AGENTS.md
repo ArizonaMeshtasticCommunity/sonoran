@@ -93,8 +93,7 @@ and "a common rule of thumb" are not sources.
 
 - Do not add "Generated with ...", "Co-Authored-By: <a tool or model>" or
   any other tool or model credit to a commit, a PR, an issue or a comment.
-- **Never paste an agent session link** (for example
-  an agent session link). It points into a private session
+- **Never paste an agent session link.** It points into a private session
   that can hold file contents, command output, paths and secrets.
 - The author of a PR is the person responsible for it.
 
@@ -144,7 +143,7 @@ has the patterns, the jargon table and the review.
 **The reader** is somebody in their first weeks of Meshtastic, often on
 a phone. They know what a node and a message are. They do not know SNR,
 RSSI, hops, a modem preset, a gateway, MQTT, a role or a traceroute.
-Logan, Tyler and their agents are experts, so a word that is plain to
+The maintainers and their agents are experts, so a word that is plain to
 them is often a wall to this reader.
 
 **Every UI change must have:**
@@ -265,13 +264,13 @@ Fill in the pull request template: "Release notes", "Issues" and
 stay open, never any form of close, fix or resolve beside its number.
 See `docs/RELEASING.md`.
 
-## 6.2 CI runs on someone else's hardware
+## 6.2 CI runs on self-hosted hardware
 
 Every job in this repository is `runs-on: [self-hosted, sonoran-microvm]`.
 Each job runs in its own Firecracker microVM, and the VM is destroyed
-when the job ends. The runners belong to a community member, and there
+when the job ends. The runners are self-hosted, and there
 is no monthly reset. This is
-the working agreement with the runner's owner (#308):
+the working agreement with the CI provider (#308):
 
 1. Pull `main` first. Other people edit this repository too.
 2. Build, lint and test locally first. CI is not a test runner.
@@ -282,7 +281,7 @@ the working agreement with the runner's owner (#308):
 4. Never put a security fix in the same PR as features.
 5. **A person merges a security PR.** Never merge one yourself. A green
    PR that is not a security fix may be merged by its author.
-6. Stop and wait if the owner is working. Look at `gh run list` for
+6. Stop and wait if the CI provider is working. Look at `gh run list` for
    jobs in progress.
 7. No CI job runs for a pull request from a fork (`ci.yml`). To test a
    fork's change, read it, then push it to a branch of this repository.
@@ -995,7 +994,7 @@ number. `mesh_packet_metrics.relay_node_num` stores it for the first
 upload of a packet, and since migration `pr378` `packet_seen.relay_node`
 stores it for every upload, since each gateway hears its own relay. The
 packet page shows it per gateway as a list of candidates, never as one
-node. That reverses #47's option 3 for the packet page only (Logan,
+node. That reverses #47's option 3 for the packet page only (a maintainer,
 2026-10-17, `docs/DECISIONS.md`). Drawing anything from it is still
 declined, and `tests/unit/test_live_map_draws_no_inferred_hop.py` holds
 that.
@@ -1210,7 +1209,7 @@ state. `TRACKER` and `TAK_TRACKER` are out because they move.
 
 ### 9.28 Check the project board before starting an issue, every time
 
-Tyler gates work through the **Roadmap** board: an issue on it is not to
+The maintainers gate work through the **Roadmap** board: an issue on it is not to
 be started until its Status is **Ready**. The statuses are `Ideation`,
 `Ready`, `Blocked`, `In progress`, `Done`.
 
@@ -1262,7 +1261,7 @@ it. If you use the `gh issue view` form, check the scope first:
 
 The token carries `project` (read and write) as of 2026-09-24, so a
 gated issue moved to `Ready` can also be set to `In progress` and then
-`Done` from here, which is what Tyler asked for.
+`Done` from here, which is what the maintainers asked for.
 
 ### 9.29 A shared RF layer is never decided by what a station says (#324)
 
@@ -1375,8 +1374,6 @@ the disk.
 - `docs/PLANNER.md` — the coverage planner, its parameters, and its licence
 - `docs/GAPS.md` — which nodes the mesh is not carrying well, where one new
   node would help, and what neither of those can say
-- `docs/archive/` — old session notes and reviews, kept for their
-  history only. Do not take current state from them
 - `docs/RELEASING.md` — how to publish a release, and what it costs in CI
 - `docs/COLLABORATION.md` — how people and agents hand work to each other,
   leave notes, record lessons, and avoid the known hand-off mistakes

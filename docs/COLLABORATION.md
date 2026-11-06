@@ -43,7 +43,7 @@ where to look, and two copies cannot disagree.
 | How a part works | `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/DATABASE.md`, and the other docs in `AGENTS.md` §10 | Next to the reference for that part. |
 | The state of one piece of work | Its issue or its pull request | It is public, it has a date, and the people who care get a notification. |
 | What changed for users | The PR body "Release notes", then the release | `tools/release.py` builds the release from it. |
-| What is planned | The issue, and the Roadmap board (§9.28) | Tyler gates work through the board. |
+| What is planned | The issue, and the Roadmap board (§9.28) | The maintainers gate work through the board. |
 
 Do **not** keep state in a file in the repository. A file such as a
 session plan or a hand-off note is correct on the day it is written. It
@@ -159,7 +159,7 @@ Rules for a hand-off:
   Ask the question once, in the issue, with options. Do not ask it again
   in a new comment while it waits.
 - **Sign it.** On a shared account, write who you are and for whom you
-  work, for example "Barry (for Will)".
+  work, for example "a second maintainer (for the first)".
 
 ## 6. Known failure modes
 
@@ -183,12 +183,11 @@ in one session, after the first one was written down.
 
 - If an issue closed by accident, open it again and say why in a comment.
 
-### 6.2 CI runs on a person's hardware
+### 6.2 CI runs on self-hosted hardware
 
 Every job is `runs-on: [self-hosted, sonoran-microvm]`. The runners
-belong to a community member, and there is no monthly reset
-(`AGENTS.md` §6.2). In September 2026, up to the 23rd, this repository
-used 877 minutes in 208 runs, mostly one PR per small fix.
+are self-hosted, and there is no monthly reset (`AGENTS.md` §6.2).
+Treat CI as a shared resource.
 
 - Test locally first. CI confirms. It is not a test runner.
 - One PR for a batch, one commit for each fix, push once.

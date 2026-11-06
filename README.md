@@ -17,9 +17,7 @@ MQTT ingest · TimescaleDB storage · read-only API · static web UI.
 
 Sonoran reads Meshtastic packets from an MQTT broker, decrypts and decodes
 them, stores them in TimescaleDB with deduplication, and serves a read-only
-JSON API and a static web UI. It replaces two older tools:
-`az-meshtastic-metrics-exporter` (a collector with no deduplication) and
-`meshview` (a web UI with a weak traceroute display and SQLite problems).
+JSON API and a static web UI.
 
 ## ✨ Features
 
@@ -265,7 +263,6 @@ The coverage planner reads terrain tiles. Fill the local cache once with
 | [docs/QA.md](docs/QA.md) | The QA process |
 | [docs/ISSUES.md](docs/ISSUES.md) | The long analyses of known gaps. New work is in the GitHub issues |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | Research on the source tools and the protocol |
-| [docs/archive/](docs/archive/) | Old session notes and reviews, kept for their history |
 | [AGENTS.md](AGENTS.md) | The rules for people and agents who change the code |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, check and send a change |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | The vendored code and data, and their licences |

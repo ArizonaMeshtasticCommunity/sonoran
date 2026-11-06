@@ -562,7 +562,7 @@ correlated subquery, so a wide window over a busy mesh runs one index
 probe per observation. The endpoint is public and the map refreshes it
 every fifteen seconds. A grouped join against the distinct packet keys
 of the window, with the duplicate rows removed first, would answer in
-one pass. This was finding 2.1 in `docs/archive/REVIEW-2026-08-10.md`, left
+one pass. This was finding 2.1 in the 2026-08-10 review, left
 open there for a benchmarked rewrite.
 
 ---

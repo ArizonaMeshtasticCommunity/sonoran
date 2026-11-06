@@ -24,15 +24,6 @@ See `docs/RELEASING.md`.
 - No database migration.
 - Rebuild `api` and `jobs` (`docs/DEPLOY.md` §9). The coverage signal floor appears after the next coverage run; until then it is shown as disabled, with the reason. Coverage tiles take about 1.7 times the disk.
 
-## Toward a public release
-
-This is a regular release of the private repository. It is **not** the public release yet; that is the maintainers' decision. A readiness audit of the whole repository and its history found no secrets and a sound application, and these items still stand between this release and a public one. They are tracked in the readiness issue and the security PR:
-
-1. CI runs on a volunteer's self-hosted runners, which fork pull requests could reach in a public repository.
-2. The vendored config checker has no licence yet.
-3. The git history holds personal data (an email address, a machine name, private session links, a real node's position in an old fixture).
-4. A security batch is ready for review by a person: dependency advisories, image hardening, an escaped broker login for mesh-graph, read-only CI tokens, and `SECURITY.md`.
-
 ---
 
 5 pull requests merged, 6 issues closed.
