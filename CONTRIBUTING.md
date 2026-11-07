@@ -55,8 +55,9 @@ uv run ruff check src tests
 uv run ruff format --check src tests
 uv run mypy src
 uv run pytest tests/unit
-npm install --no-save eslint@9.39.5 globals@15.15.0
-npx eslint src/sonoran/web/static
+npm ci --ignore-scripts
+npm audit --audit-level=high
+npm run lint
 ```
 
 - `node_modules/` is ignored by git. Nothing is added to the served

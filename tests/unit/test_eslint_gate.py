@@ -15,16 +15,19 @@ with both names, and renaming `el` in app.js failed every other file that
 calls it.
 """
 
+import json
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 CONFIG = (ROOT / "eslint.config.mjs").read_text(encoding="utf-8")
+MANIFEST = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
 
 
 def test_ci_runs_eslint_over_the_frontend() -> None:
-    assert "npx eslint src/sonoran/web/static" in CI, "CI does not lint the frontend"
+    assert MANIFEST["scripts"]["lint"] == "eslint src/sonoran/web/static"
+    assert "npm run lint" in CI, "CI does not lint the frontend"
 
 
 def test_eslint_runs_inside_the_existing_lint_job() -> None:
@@ -34,14 +37,13 @@ def test_eslint_runs_inside_the_existing_lint_job() -> None:
     pull request, for a check that takes seconds.
     """
     lint = CI[CI.index("  lint:") : CI.index("  typecheck:")]
-    assert "npx eslint" in lint, "ESLint moved out of the lint job into a job of its own"
+    assert "npm run lint" in lint, "ESLint moved out of the lint job into a job of its own"
 
 
 def test_the_versions_are_pinned() -> None:
-    install = re.search(r"npm install --no-save (eslint@\S+) (globals@\S+)", CI)
-    assert install, "ESLint is installed without pinned versions"
-    for spec in install.groups():
-        assert re.search(r"@\d+\.\d+\.\d+$", spec), f"{spec} is not pinned to an exact version"
+    tools = MANIFEST["devDependencies"]
+    for name in ("eslint", "globals"):
+        assert re.fullmatch(r"\d+\.\d+\.\d+", tools[name]), f"{name} is not pinned exactly"
 
 
 def test_no_undef_is_an_error() -> None:

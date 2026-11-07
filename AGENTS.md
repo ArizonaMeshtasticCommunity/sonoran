@@ -217,9 +217,9 @@ A change is complete only when all of these pass:
 8. Commit messages use conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`).
    Use standard scopes where applicable (`ui`, `map`, `position`, `ingest`,
    `api`, `planner`, `coverage`, `rf`, `db`).
-9. `npx eslint src/sonoran/web/static` passes. Install it with
-   `npm install --no-save eslint@9.39.5 globals@15.15.0`; `node_modules/` is
-   ignored, and nothing is added to the served frontend.
+9. `npm run lint` passes. Install the locked tools with
+   `npm ci --ignore-scripts`, then run `npm audit --audit-level=high`.
+   `node_modules/` is ignored, and nothing is added to the served frontend.
 10. The PR shows its red step (§3A.4): the new tests, and their failing
     output on `main` before the change. If an existing test was updated
     because the feature changed (§3A.4 item 4), the PR explains the

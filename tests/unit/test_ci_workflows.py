@@ -6,17 +6,19 @@ member (AGENTS.md 6.2). Two rules keep what runs there fixed:
 - A token that can write is a token that a compromised step can use.
   Each workflow says what its token may do, and `contents: read` is the
   most that CI needs.
-- `actions/checkout@v4` is a tag, and the owner of the action can move
+- `actions/checkout@v7` is a tag, and the owner of the action can move
   a tag. A commit cannot be moved. The tag stays as a comment, so a
   reader can see which release the commit is.
 """
 
+import json
 import re
 from pathlib import Path
 
 import yaml
 
 WORKFLOWS = sorted((Path(__file__).resolve().parents[2] / ".github" / "workflows").glob("*.yml"))
+ROOT = Path(__file__).resolve().parents[2]
 BY_COMMIT = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 
 
@@ -134,6 +136,37 @@ def test_the_test_job_sets_up_node() -> None:
     steps = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))["jobs"]["test"]["steps"]
     uses = [str(step.get("uses", "")) for step in steps]
     assert any(action.startswith("actions/setup-node@") for action in uses), uses
+
+
+def test_setup_node_checks_for_the_latest_security_patch() -> None:
+    """A cached Node 22 build must not hide a newer security patch."""
+    checked = 0
+    for path in WORKFLOWS:
+        for name, job in _load(path)["jobs"].items():
+            for step in job.get("steps", []):
+                if not str(step.get("uses", "")).startswith("actions/setup-node@"):
+                    continue
+                inputs = step.get("with", {})
+                assert str(inputs.get("node-version")) == "22", f"{path.name} {name}: {inputs}"
+                assert inputs.get("check-latest") is True, f"{path.name} {name}: {inputs}"
+                checked += 1
+    assert checked
+
+
+def test_node_tools_are_locked_and_audited() -> None:
+    """The browser and linter must not return to an unsafe ad-hoc install."""
+    manifest = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    tools = manifest["devDependencies"]
+    playwright = tuple(int(part) for part in tools["playwright"].split("."))
+    eslint = tuple(int(part) for part in tools["eslint"].split("."))
+    assert playwright >= (1, 55, 1), "Playwright is vulnerable to CVE-2025-59288"
+    assert eslint >= (10, 0, 0), "ESLint 9 is no longer supported"
+    assert (ROOT / "package-lock.json").is_file()
+
+    workflows = "\n".join(path.read_text(encoding="utf-8") for path in WORKFLOWS)
+    assert "npm install" not in workflows
+    assert "npm ci --ignore-scripts" in workflows
+    assert "npm audit --audit-level=high" in workflows
 
 
 def test_the_guard_still_runs_ci_on_main() -> None:

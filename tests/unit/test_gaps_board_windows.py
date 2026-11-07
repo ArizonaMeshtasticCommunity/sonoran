@@ -166,7 +166,7 @@ def test_a_custom_range_is_never_passed_off_as_a_board_window(
     _write_assessment(settings)
     _write_board(settings, 24, 24, DAY)
     with TestClient(create_app(settings)) as client:
-        custom = _gaps_boards(client, "since=2026-10-07")
+        custom = _gaps_boards(client, "since=2026-10-07&until=2026-10-14")
     for board in custom.values():
         assert board["follows_window"] is False
         assert board["window_hours"] == 168
