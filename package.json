@@ -1,0 +1,16 @@
+{
+  "name": "sonoran-development-tools",
+  "private": true,
+  "scripts": {
+    "audit": "npm audit --audit-level=high",
+    "lint": "eslint src/sonoran/web/static"
+  },
+  "devDependencies": {
+    "eslint": "10.14.0",
+    "globals": "17.14.0",
+    "playwright": "1.65.0"
+  },
+  "overrides": {
+    "minimatch": "11.0.5"
+  }
+}

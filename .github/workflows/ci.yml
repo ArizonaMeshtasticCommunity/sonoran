@@ -45,8 +45,8 @@ jobs:
     runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       - run: uv sync --extra dev
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
@@ -55,19 +55,21 @@ jobs:
       # a reader's browser threw. Six of those in one session (#248).
       # Steps in this job rather than a job of its own: every job here runs
       # on self-hosted hardware, and a new job is a new runner allocation.
-      # Pinned to the versions it was proven with; see eslint.config.mjs.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      # package-lock.json pins the versions; see eslint.config.mjs.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: '22'
-      - run: npm install --no-save eslint@9.39.5 globals@15.15.0
-      - run: npx eslint src/sonoran/web/static
+          check-latest: true
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
+      - run: npm run lint
 
   typecheck:
     runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       - run: uv sync --extra dev
       - run: uv run mypy src
 
@@ -89,14 +91,15 @@ jobs:
       # start is a failure and not a quiet subtraction of 166 tests.
       SONORAN_REQUIRE_INTEGRATION: "1"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       # The unit suite runs JavaScript with node, and a test fails when
       # node is missing. A microVM has no node until this step installs
       # it. The old shared runner had node on the machine.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: '22'
+          check-latest: true
       - run: uv sync --extra dev
       - run: >-
           uv run pytest
@@ -192,8 +195,8 @@ jobs:
         run: >-
           echo "DATABASE_URL_MIGRATE=${DATABASE_URL_MIGRATE/localhost:5432/localhost:${{ job.services.timescaledb.ports['5432'] }}}"
           >> "$GITHUB_ENV"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       - run: uv sync --extra dev
       - run: uv run alembic upgrade head
       - run: uv run alembic downgrade -1
@@ -321,11 +324,12 @@ jobs:
             echo "COVERAGE_CACHE_DIR=$RUNNER_TEMP/sonoran-coverage"
             echo "TERRAIN_CACHE_DIR=$RUNNER_TEMP/sonoran-terrain"
           } >> "$GITHUB_ENV"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: '22'
+          check-latest: true
       - run: uv sync --extra dev
       - run: uv run alembic upgrade head
       - run: uv run python tools/dev/seed.py
@@ -342,7 +346,7 @@ jobs:
         # has the libraries installed already (ci-runner,
         # image/Dockerfile), so there it is not needed.
         run: |
-          npm install --no-save playwright@1.49.1
+          npm ci --ignore-scripts
           npx playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
       - name: Start the API
         run: |
@@ -360,7 +364,7 @@ jobs:
     runs-on: [self-hosted, sonoran-microvm]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # No setup-buildx-action. It made a new BuildKit container for every
       # job, with an empty cache, and asked it for GPU access, which the
       # runners refuse and it retried without. Docker's built-in builder
