@@ -420,8 +420,17 @@ function nodeChip(node) {
       ? el('span', { class: 'short', text: node.short_name })
       : null,
   );
-  if (!id) return chip;
-  return el('button', { class: 'linky', type: 'button', title: id, onclick: () => openNode(id) }, chip);
+  if (!id || id === '^all') return chip;
+  return el('a', { class: 'linky node-link', href: nodeHref(id), title: id }, chip);
+}
+
+/*
+ * The address of a node page. A link to it is an `<a href>`, not a
+ * button that sets `location.hash`, so the browser can open it in a new
+ * tab, copy it, and show it on hover (beta-sonoran#411).
+ */
+function nodeHref(nodeId) {
+  return `#node/${nodeId}`;
 }
 
 /*
@@ -708,10 +717,9 @@ const REACTION_CAP = 4;
 function reactionSenders(reaction) {
   return el('ul', { class: 'reaction-senders' }, (reaction.senders || []).map((sender) =>
     el('li', {},
-      el('button', {
-        class: 'linky', type: 'button', title: sender.node_id,
+      el('a', {
+        class: 'linky', href: nodeHref(sender.node_id), title: sender.node_id,
         text: sender.display_name,
-        onclick: () => openNode(sender.node_id),
       }),
       sender.packet_id == null
         ? null
@@ -835,9 +843,8 @@ function messageItem(message, options = {}) {
      * packet and still a real link; it just stops competing.
      */
     el('div', { class: 'who' },
-      el('button', {
-        class: 'name', type: 'button', title: message.from_node,
-        onclick: () => openNode(message.from_node),
+      el('a', {
+        class: 'name', href: nodeHref(message.from_node), title: message.from_node,
         text: message.from_name || message.from_node,
       }),
       // Something the page wants beside the name, such as the check-in
@@ -2287,7 +2294,7 @@ function mapNodePopup(row) {
     el('div', { style: `font-size:.8rem;color:${nodeColour(row)}` },
       roleLabel(row.role) + (row.is_mqtt_gateway ? ', MQTT gateway' : '')),
     row.hw_model ? el('div', { class: 'muted', style: 'font-size:.8rem', text: row.hw_model }) : null,
-    el('button', { class: 'linky', type: 'button', text: 'Open node detail', onclick: () => openNode(row.node_id) }));
+    el('a', { class: 'linky', href: nodeHref(row.node_id), text: 'Open node detail' }));
 }
 
 /*
@@ -4103,11 +4110,10 @@ PAGES.map = async (page) => {
       traces.traces.length
         ? traces.traces.slice(0, 25).map((trace) => el('li', {},
             el('div', {},
-              el('button', {
+              el('a', {
                 class: 'linky',
-                type: 'button',
+                href: `#traceroute/${encodeURIComponent(trace.id)}`,
                 text: `${trace.from.display_name} to ${trace.to.display_name}`,
-                onclick: () => openTraceroute(trace.id),
               })),
             el('div', { class: 'meta' },
               el('span', { text: `${trace.link_count} link${trace.link_count === 1 ? '' : 's'}` }),
@@ -10169,10 +10175,6 @@ function openPacket(fromNode, packetId) {
   location.hash = `packet/${encodeURIComponent(fromNode)}/${encodeURIComponent(packetId)}`;
 }
 
-/** Put a traceroute in the address bar. */
-function openTraceroute(traceId) {
-  location.hash = `traceroute/${encodeURIComponent(traceId)}`;
-}
 
 const packetLink = (fromNode, packetId, text) =>
   el('a', {
@@ -10190,10 +10192,7 @@ function traceroutePath(hops) {
   if (!hops || !hops.length) return empty('This traceroute recorded no path.');
   const chain = el('ol', { class: 'hops' });
   chain.append(el('li', { class: 'hop-node' },
-    el('button', {
-      class: 'linky', type: 'button', text: hops[0].from_name,
-      onclick: () => openNode(hops[0].from_node),
-    })));
+    el('a', { class: 'linky', href: nodeHref(hops[0].from_node), text: hops[0].from_name })));
   for (const hop of hops) {
     chain.append(
       el('li', { class: 'hop-link' },
@@ -10202,10 +10201,7 @@ function traceroutePath(hops) {
           ? el('span', { class: 'muted', text: 'no signal reading' })
           : snrCell(hop.snr)),
       el('li', { class: 'hop-node' },
-        el('button', {
-          class: 'linky', type: 'button', text: hop.to_name,
-          onclick: () => openNode(hop.to_node),
-        })));
+        el('a', { class: 'linky', href: nodeHref(hop.to_node), text: hop.to_name })));
   }
   return chain;
 }
@@ -10738,9 +10734,9 @@ function decodedPanels(packet) {
       NOT_STORED[packet.portnum]
         ? el('p', {}, NOT_STORED[packet.portnum], ' ',
             packet.portnum === 'NODEINFO_APP'
-              ? el('button', {
-                  class: 'linky', type: 'button', text: `Open ${packet.from_name || packet.from_node}`,
-                  onclick: () => openNode(packet.from_node),
+              ? el('a', {
+                  class: 'linky', href: nodeHref(packet.from_node),
+                  text: `Open ${packet.from_name || packet.from_node}`,
                 })
               : null)
         : packet.portnum === 'TRACEROUTE_APP'

@@ -607,6 +607,12 @@ button:disabled:hover { border-color: var(--line); background: none; }
   color: var(--accent); cursor: pointer; text-align: left; font: inherit;
 }
 .linky:hover { text-decoration: underline; }
+/*
+ * A node chip is an `<a href>` (beta-sonoran#411). It holds a flex row,
+ * so it keeps the box a button had: inline-block, no underline at rest.
+ */
+a.node-link { display: inline-block; max-width: 100%; text-decoration: none; }
+a.node-link:hover { text-decoration: underline; }
 
 /*
  * A link drawn as a button (#258).
@@ -1993,7 +1999,7 @@ body.chart-staged { overflow: hidden; }
  */
 .messages .who { display: flex; gap: .5rem; align-items: baseline; font-size: .8rem; }
 .messages .who .name {
-  background: none; border: 0; padding: 0; cursor: pointer;
+  background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none;
   color: var(--text); font: inherit; font-weight: 600;
 }
 .messages .who .name:hover, .messages .who .name:focus-visible { text-decoration: underline; }
