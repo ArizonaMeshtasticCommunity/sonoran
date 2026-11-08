@@ -1571,8 +1571,14 @@ LongFast cannot hear a node on MediumFast, so drawing both sets of dots
 under one preset's lines invites the reader to join two nodes that have
 no way to reach each other. See AGENTS.md 9.7.
 
-Response item: `node_id`, `short_name`, `lat`, `lon`, `altitude`,
-`last_heard`, `role`, `is_mqtt_gateway`.
+Response item: `node_id`, `short_name`, `lat`, `lon`,
+`precision_bits`, `altitude`, `last_heard`, `role`, `is_mqtt_gateway`.
+
+`precision_bits` is the precision of the node's last position (NULL or
+32 means full precision). When two or more nodes share one rounded
+position, the map draws each dot 2 % of its precision cell away, in a
+direction taken from the node number, so each one can be clicked
+(beta-sonoran#401). The position in the response is not changed.
 
 ### 6.2 `GET /api/map/edges`
 
