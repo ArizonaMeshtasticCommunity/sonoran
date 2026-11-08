@@ -2,9 +2,9 @@
  * The installed-app half of the page (#322).
  *
  * 1. Register the service worker (`sw.js`, served from the app root).
- * 2. When a deploy has installed a new worker, say that Sonoran was
- *    updated, and reload only when the reader chooses. A page is never
- *    swapped in the middle of a session.
+ * 2. Keep the worker current. A deploy installs a new one, which takes
+ *    over at once and shows nothing (#382). The page is never reloaded
+ *    for it: the next page load gets the new files.
  * 3. When the device loses its connection, say so, and mark the page as
  *    not live. Every figure on the page stopped at that moment, and a
  *    figure that looks live and is not is the one thing this dashboard
@@ -166,51 +166,10 @@
   // nothing to do.
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
 
-  let updateShown = false;
-  let reloading = false;
-
-  /*
-   * The words say that the page changed, not that a release came out
-   * (#382). The worker changes when any static file changes, which is
-   * most deploys, and a release is tagged later, if at all. "A new
-   * version" read like a release. The server knows no release tag, so
-   * the notice names none.
-   */
-  function offerUpdate(worker) {
-    if (updateShown) return;
-    updateShown = true;
-    notice('Sonoran was updated. Reload to get the new page.', {
-      label: 'Reload',
-      run: () => {
-        reloading = true;
-        worker.postMessage('sonoran:activate');
-      },
-    });
-  }
-
-  // The new worker took over because the reader asked for it. Reload
-  // once, so the page and its scripts are the updated ones too.
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) window.location.reload();
-  });
-
   function watch(registration) {
-    // A worker that was already waiting when this page opened.
-    if (registration.waiting && navigator.serviceWorker.controller) {
-      offerUpdate(registration.waiting);
-    }
-    registration.addEventListener('updatefound', () => {
-      const worker = registration.installing;
-      if (!worker) return;
-      worker.addEventListener('statechange', () => {
-        // With no controller this is the first install, not an update.
-        if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-          offerUpdate(worker);
-        }
-      });
-    });
     // An installed app can stay open for days. Ask for a new worker when
-    // the reader comes back to it, and at most once a minute.
+    // the reader comes back to it, and at most once a minute, so its
+    // offline page is the current one.
     let asked = Date.now();
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible' || Date.now() - asked < 60000) return;
@@ -221,7 +180,7 @@
 
   // Relative to the document, so a deployment under WEB_BASE_PATH works.
   // A failure is not the reader's problem: the page works without a
-  // worker, and only the offline page and the update notice are lost.
+  // worker, and only the offline page is lost.
   navigator.serviceWorker
     .register('sw.js', { scope: './' })
     .then(watch)

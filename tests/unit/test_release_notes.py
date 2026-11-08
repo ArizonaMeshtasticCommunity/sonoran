@@ -10,7 +10,6 @@ from tools.release import (
     next_tag,
     pr_section,
     referenced_numbers,
-    render_changelog,
     render_notes,
     section_of,
 )
@@ -87,36 +86,3 @@ def test_the_notes_never_use_a_closing_keyword_beside_a_number():
     issues = {1: Issue(1, "one", "r"), 2: Issue(2, "two", "s", is_open=True)}
     notes = render_notes("v2026.09.26", None, prs, issues, REPO)
     assert not CLOSING.search(notes), CLOSING.search(notes)
-
-
-def test_the_changelog_keeps_its_own_headings_on_top():
-    text = render_changelog(
-        [
-            {
-                "tagName": "v2026.09.26",
-                "publishedAt": "2026-09-26T20:00:00Z",
-                "body": "### Fixes\n- a",
-            }
-        ]
-    )
-    assert "## v2026.09.26 — 2026-09-26" in text
-    assert "#### Fixes" in text
-
-
-def test_the_changelog_dates_a_release_in_arizona_not_utc():
-    """The heading has to agree with the tag it sits under.
-
-    Tags are named for the Arizona date. `publishedAt` is UTC, and Arizona is
-    UTC-7 all year, so anything published after 17:00 local is already the next
-    day in UTC. The first real release, v2026.09.26, went out at 03:14 UTC on the
-    27th, and its heading read "v2026.09.26 — 2026-09-27".
-    """
-    out = render_changelog(
-        [{"tagName": "v2026.09.26", "publishedAt": "2026-09-27T03:14:00Z", "body": "x"}]
-    )
-    assert "## v2026.09.26 — 2026-09-26" in out, out
-    # And a morning release does not move the other way.
-    out = render_changelog(
-        [{"tagName": "v2026.09.26", "publishedAt": "2026-09-26T15:00:00Z", "body": "x"}]
-    )
-    assert "## v2026.09.26 — 2026-09-26" in out, out

@@ -152,7 +152,7 @@ def test_the_other_bottom_layers_stand_on_the_bar() -> None:
     assert "bottom: var(--tabbar-h)" in sheet[: sheet.index("}")], "the node sheet is under the bar"
     notices = CSS[CSS.index(".app-notices {") :]
     assert "var(--tabbar-h)" in notices[: notices.index("}")], (
-        "the offline and update notices sit on top of the bar"
+        "the offline notice sits on top of the bar"
     )
 
 
