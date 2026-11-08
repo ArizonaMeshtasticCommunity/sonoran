@@ -4330,12 +4330,11 @@ async function main() {
   await nostore.close();
 
   /*
-   * The update notice (#382). Logan saw "A new version of Sonoran is
-   * available" when no release was published. The notice follows the
-   * bytes of `/sw.js`, which change with every deploy that changes a
-   * static file, so it says the page was updated, not that a release
-   * came out. The issue also asks whether it can show when nothing
-   * changed, and whether Reload makes it go.
+   * No update notice (#382). Logan saw "A new version of Sonoran is
+   * available" after deploys. The notice followed the bytes of `/sw.js`,
+   * which change with every deploy that changes a static file, and the
+   * reader had nothing to do about it. Now a new worker takes over at
+   * once and the page says nothing.
    *
    * Chromium fetches a worker update in the browser process, where
    * `page.route` and `context.route` never see it. So the page is loaded
@@ -4343,14 +4342,13 @@ async function main() {
    * `/sw.js`, which is what a deploy does to it. 127.0.0.1 is a secure
    * context, so the worker registers over plain HTTP.
    *
-   * Negative and positive in one run: with the same bytes, three update
-   * checks and reloads show nothing; with changed bytes, the notice
-   * shows. Then Reload must reload the page and the notice must not come
-   * back, on that page or a new one.
+   * Negative and positive in one run: with the same bytes, update checks
+   * and reloads install nothing; with changed bytes, the new worker takes
+   * control of the open page, with no notice and no reload.
    */
   const updates = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const proxy = await workerProxy();
-  await journey(updates, 'the update notice shows only for a changed worker, and goes after Reload (#382)', async (page) => {
+  await journey(updates, 'a deploy changes the worker with no notice and no reload (#382)', async (page) => {
     const notices = () => page.evaluate(() => [...document.querySelectorAll('.app-notice p')]
       .map((item) => item.textContent).filter((text) => !/offline/i.test(text)));
     const check = () => page.evaluate(() => navigator.serviceWorker.getRegistration()
@@ -4361,45 +4359,36 @@ async function main() {
       new Promise((resolve) => setTimeout(() => resolve(false), 15000)),
     ]));
     must(ready, 'the service worker never became active, so nothing here was measured');
+    await page.reload({ waitUntil: 'load' });
+    await page.evaluate(() => {
+      window.__swChanges = 0;
+      navigator.serviceWorker.addEventListener('controllerchange', () => { window.__swChanges += 1; });
+    });
     for (let round = 0; round < 3; round += 1) {
       await check();
       await page.waitForTimeout(800);
-      await page.reload({ waitUntil: 'load' });
-      await page.waitForTimeout(800);
     }
-    const quiet = await notices();
-    must(quiet.length === 0, `with an unchanged worker the page says "${quiet.join(' ')}"`);
+    must(await page.evaluate(() => window.__swChanges) === 0,
+      'an unchanged worker replaced the one in control');
     const served = new Set(proxy.served);
     must(proxy.served.length >= 4 && served.size === 1,
       `the worker was fetched ${proxy.served.length} times with ${served.size} different bodies`);
 
+    const navigated = page.waitForNavigation({ timeout: 5000 }).then(() => true, () => false);
     proxy.change('\n// a deploy\n');
     await check();
-    must(await waitFor(page, () => document.querySelectorAll('.app-notice button').length > 0, 10000),
-      'a changed worker showed no notice, so the quiet run above proves nothing');
-    const said = (await notices()).join(' ');
-    must(/updated/i.test(said) && !/version/i.test(said),
-      `the notice says "${said}", which reads like a release`);
-
-    const reloaded = page.waitForNavigation({ timeout: 10000 }).then(() => true, () => false);
-    await page.locator('.app-notice button').first().click();
-    must(await reloaded, 'Reload did not reload the page');
-    await page.waitForTimeout(1500);
-    for (let round = 0; round < 2; round += 1) {
-      await check();
-      await page.waitForTimeout(800);
-      await page.reload({ waitUntil: 'load' });
-      await page.waitForTimeout(800);
-    }
-    const after = await notices();
-    must(after.length === 0, `after Reload the page still says "${after.join(' ')}"`);
+    must(await waitFor(page, () => window.__swChanges > 0, 10000),
+      'a changed worker did not take control of the open page');
+    must(!(await navigated), 'the new worker reloaded the page in the middle of a session');
+    const said = await notices();
+    must(said.length === 0, `after a deploy the page says "${said.join(' ')}"`);
     const fresh = await updates.newPage();
     await fresh.goto(`${proxy.url}/#nodes`, { waitUntil: 'load' });
     await fresh.waitForTimeout(2000);
-    const other = await fresh.evaluate(() => document.querySelectorAll('.app-notice button').length);
+    const other = await fresh.evaluate(() => document.querySelectorAll('.app-notice').length);
     await fresh.close();
-    must(other === 0, 'a new tab after Reload shows the notice again');
-    return `quiet over ${proxy.served.length} identical fetches; "${said}"; gone after Reload and in a new tab`;
+    must(other === 0, 'a new tab after a deploy shows a notice');
+    return `no change over ${proxy.served.length} identical fetches; the changed worker took over with no notice and no reload`;
   });
   await updates.close();
   await proxy.close();

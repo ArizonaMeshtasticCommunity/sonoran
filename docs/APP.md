@@ -61,16 +61,13 @@ live.
 
 ## 3. After an update
 
-After a deploy, an open app shows "Sonoran was updated. Reload to get
-the new page." and a **Reload** button. Nothing changes until the reader
-chooses to reload, so a page never changes in the middle of a session.
-An app that was closed opens on the updated page.
+After a deploy, nothing shows. An open page goes on as it was, and its
+next load gets the updated page. An app that was closed opens on the
+updated page.
 
-The notice is about the page, not about a release (#382). It shows when
-any file of the page changed, and most deploys change one. A release is
-tagged after the deploy, and several deploys can come before one
-release. The server does not know the release of the running build, so
-the notice names none.
+Until #382 the app showed an update notice after every deploy that
+changed a file of the page, and asked the reader to reload. The reader
+had nothing to do, so the notice is gone.
 
 In an installed app there is no browser back button. The node, link,
 packet and traceroute pages have a **Back** button there. In a browser
@@ -80,7 +77,7 @@ On a phone, a bar at the bottom of the screen holds Map, Nodes, Chat
 and Dashboard, and **More**, which opens the full menu (#282). The bar
 is the same in the app and in a browser tab. In the app it fills the
 area of the home indicator, and its words stay above the indicator. The
-offline notice and the update notice show above the bar.
+offline notice shows above the bar.
 
 A part of the site that the operator hides (`HIDDEN_SECTIONS`,
 `docs/OPERATIONS.md` 2.1) is not in the bar and not in **More**. The
@@ -136,10 +133,11 @@ under `/static/`. Under `WEB_BASE_PATH` it is at the base path.
 - It shows the offline page only when a page load cannot reach any
   server. A redirect and an error status pass through as they are.
 - The asset version is written into it, so every deploy changes its
-  bytes. The browser then installs the new worker, and `pwa.js` shows
-  the update notice. The asset version is a hash of every file under
-  `web/static/`. It is not a release number. A deploy that changes no
-  static file, or a restart, serves the same bytes and shows no notice.
+  bytes. The browser then installs the new worker, and it takes over
+  at once, with no notice (#382). It keeps nothing, so the swap changes
+  nothing the reader sees. The asset version is a hash of every file
+  under `web/static/`. A deploy that changes no static file, or a
+  restart, serves the same bytes and installs nothing.
 
 The map tiles are not cached. The OpenStreetMap tile policy forbids
 bulk copies for offline use.
@@ -153,8 +151,8 @@ file, as before. With a list, `api/app.py` serves it without the
 shortcuts to the hidden pages, so touch and hold on the icon offers no
 page that is hidden. The asset version then is a hash of the files and
 of the list. The manifest is kept for a year under its `?v=`, so a new
-list must be a new address. A change to the list therefore shows the
-update notice in an open app. The service worker keeps nothing, so it
+list must be a new address. A change to the list therefore installs a
+new worker, like a deploy. The service worker keeps nothing, so it
 can never open a hidden page from a cache.
 
 ### 4.3 The icons
@@ -178,20 +176,17 @@ with no session cookie to a login page on another origin:
 - The app opened with no network: the offline page, with status 503.
 - An expired session with the network on: the reader reached the login
   page.
-- A deploy while the page was open: the update notice showed, the old
-  worker stayed in control until **Reload**, and the page then loaded
-  the new version.
-- With the same `/sw.js` (#382, 2026-10-21): three update checks and
-  reloads showed no notice, and every fetch of `/sw.js` gave the same
-  bytes. With changed bytes the notice showed. After **Reload** it did
-  not come back, on the same page or in a new tab. The e2e journey
-  "the update notice shows only for a changed worker" repeats this.
+- With the same `/sw.js`, update checks and reloads installed no new
+  worker, and every fetch of `/sw.js` gave the same bytes. With changed
+  bytes the new worker took control of the open page with no notice and
+  no reload. The e2e journey "a deploy changes the worker with no notice
+  and no reload" repeats this.
 - In standalone mode, Back went to the earlier page, or to the list
   when there was no earlier page.
 
-Still to check in Firefox, which is where #382 was seen: that the
-notice does not show with an unchanged `/sw.js`, and that **Reload**
-activates the waiting worker (see `about:serviceworkers`).
+On production (2026-11-08) `/sw.js` changed only at the two deploys of
+that day, for Firefox and Chrome alike. The notice Logan saw (#382)
+followed real deploys.
 
 Still to check on real devices: the install itself on Android and iOS
 against production, the Keycloak login inside an iOS home-screen app,

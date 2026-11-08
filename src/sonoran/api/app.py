@@ -74,8 +74,8 @@ def _page_version(files: str, hidden: frozenset[str]) -> str:
     With nothing hidden it is the hash of the files, as it always was.
     With a hidden list it is a hash of both, because the manifest is
     served without the hidden pages' shortcuts and is kept for a year
-    under its `?v=`. A new list is then a new address, and an open app
-    shows the update notice, which is true: the page changed.
+    under its `?v=`. A new list is then a new address, and a new
+    service worker, like any deploy that changes a file.
     """
     if not hidden:
         return files

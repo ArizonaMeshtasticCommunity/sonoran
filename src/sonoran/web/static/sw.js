@@ -6,8 +6,9 @@
  *    to the browser's own error.
  * 2. It changes with every deploy, because the asset version below is
  *    written into it by the server. The browser compares the script
- *    byte for byte, so a deploy installs a new worker, and pwa.js tells
- *    the reader that Sonoran was updated (#382).
+ *    byte for byte, so a deploy installs a new worker, and the new one
+ *    takes over at once. It keeps nothing, so the swap changes nothing
+ *    the reader can see, and there is no notice to show (#382).
  *
  * It keeps NOTHING in a cache, on purpose:
  *
@@ -32,9 +33,12 @@
 const VERSION = '__SONORAN_ASSET_VERSION__';
 
 self.addEventListener('install', () => {
-  // No `skipWaiting` here. A new worker waits until the reader chooses
-  // to reload (pwa.js), so a page is never changed in the middle of a
-  // session. The first install has no worker to wait for.
+  // A new worker takes over at once (#382). It holds no cache and
+  // touches no request but a page load, so an open page goes on exactly
+  // as before, and its next load comes from the network with the new
+  // files. An update notice told the reader about a change that needed
+  // nothing from them, after every deploy.
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -47,14 +51,11 @@ self.addEventListener('activate', (event) => {
     if (self.registration.navigationPreload) {
       await self.registration.navigationPreload.enable();
     }
-    // Take control of the open page on the first install, so the offline
-    // page works without a reload.
+    // Take control of the open pages, on the first install so the
+    // offline page works without a reload, and after an update so no
+    // page keeps the old worker.
     await self.clients.claim();
   })());
-});
-
-self.addEventListener('message', (event) => {
-  if (event.data === 'sonoran:activate') self.skipWaiting();
 });
 
 self.addEventListener('fetch', (event) => {
