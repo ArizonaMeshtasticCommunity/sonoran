@@ -4718,7 +4718,8 @@ async function main() {
       mark.marker.openPopup();
       return id;
     });
-    const button = page.locator('[data-page="map"] .leaflet-popup button', { hasText: 'Open node detail' });
+    // A link, not a button, since beta-sonoran#411.
+    const button = page.locator('[data-page="map"] .leaflet-popup a', { hasText: 'Open node detail' });
     must(await waitFor(page, () => Boolean(document.querySelector('[data-page="map"] .leaflet-popup')), 5000, 100),
       'the bubble did not open in watch mode');
     await button.click();
