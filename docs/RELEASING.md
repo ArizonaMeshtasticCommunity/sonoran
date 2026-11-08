@@ -8,7 +8,7 @@ It uses ASD-STE100 Simplified Technical English.
 A person who reports a bug wants to know when it is repaired.
 A release names each issue that it completes and each person who reported,
 wrote or tested the work, with an @handle. GitHub then notifies them.
-The releases also make a log of every change, in `CHANGELOG.md`.
+The GitHub Releases page is the log of every change.
 
 ## 2. The rule
 
@@ -61,8 +61,6 @@ newest release before that commit.
    ```
 
    This makes the tag and the GitHub release. It makes no commit.
-5. In your **next** pull request, run `python tools/release.py changelog`
-   and include the changed `CHANGELOG.md`.
 
 For the first release only, no tag exists yet. Start it at the merge of
 PR #221, the last merge of 2026-09-25, so that the fixes of that week and
@@ -76,10 +74,8 @@ Nothing. This is a requirement, not an accident.
 
 - `ci.yml` runs on `push` to `main` and on `pull_request`. A tag is not
   a push to `main`, so `publish` starts no workflow.
-- `CHANGELOG.md` is not changed by a commit of its own. A commit to
-  `main` would start a full CI run on self-hosted hardware for each
-  release. The file travels in the next pull request, which runs CI
-  anyway.
+- No file in the repository records the releases. A commit to `main`
+  would start a full CI run on self-hosted hardware for each release.
 - Never add a workflow that runs on `release` or on a tag push. Every
   job in this repository is `runs-on: [self-hosted, sonoran-microvm]`,
   and that hardware belongs to a community member.

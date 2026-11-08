@@ -6,7 +6,6 @@ See docs/RELEASING.md for the process. In short:
     python tools/release.py draft --since REF   # first release: no tag exists yet
     python tools/release.py publish             # create the tag and the GitHub release
     python tools/release.py check               # exit 1 if merged work is not released
-    python tools/release.py changelog           # rewrite CHANGELOG.md from the releases
 
 `draft` is the default and it is read-only. Only `publish` writes to GitHub,
 and it writes a tag and a release, never a commit. A tag does not match the
@@ -179,7 +178,7 @@ def render_notes(
 
     The notes never use a GitHub closing keyword (close, fix, resolve, in any
     form) next to an issue number. A release body closes nothing, but these
-    notes get pasted into PR bodies and CHANGELOG commits, and there the
+    notes get pasted into PR bodies, and there the
     keyword parser closes the issue even when the sentence says it must not.
     """
     lines: list[str] = []
@@ -260,34 +259,6 @@ def render_notes(
 
 def _reporter(issue: Issue) -> str:
     return f" (reported by @{issue.author})" if credit(issue.author) else ""
-
-
-def render_changelog(releases: list[dict[str, str]]) -> str:
-    """Build CHANGELOG.md from the published releases, newest first."""
-    out = [
-        "# Changelog",
-        "",
-        "Every release of Sonoran, newest first.",
-        "The GitHub Releases page is the source of this file.",
-        "Do not edit it by hand. Run `python tools/release.py changelog`.",
-        "See `docs/RELEASING.md`.",
-        "",
-    ]
-    for release in releases:
-        # The tag is named for the Arizona date (`RELEASE_ZONE`), so the
-        # heading must be too. `publishedAt` is UTC, and a release published
-        # in the Arizona evening is already tomorrow in UTC: the first one,
-        # v2026.09.26, printed as "2026-09-27" under its own name.
-        published = datetime.fromisoformat(release["publishedAt"].replace("Z", "+00:00"))
-        date = published.astimezone(RELEASE_ZONE).date().isoformat()
-        out.append(f"## {release['tagName']} — {date}")
-        out.append("")
-        body = release["body"].replace("\r\n", "\n").strip()
-        # Keep the file's own headings at level two.
-        body = re.sub(r"^### ", "#### ", body, flags=re.MULTILINE)
-        out.append(body)
-        out.append("")
-    return "\n".join(out).rstrip() + "\n"
 
 
 # --------------------------------------------------------- GitHub and git
@@ -395,29 +366,13 @@ def build(args: argparse.Namespace) -> tuple[str, str | None, str, str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "command", nargs="?", default="draft", choices=("draft", "publish", "check", "changelog")
+        "command", nargs="?", default="draft", choices=("draft", "publish", "check")
     )
     parser.add_argument("--since", help="start ref; defaults to the latest release tag")
     parser.add_argument("--target", default="origin/main", help="end ref (default origin/main)")
     parser.add_argument("--tag", help="override the computed tag name")
     parser.add_argument("--output", type=Path, help="also write the notes to this file")
     args = parser.parse_args(argv)
-
-    if args.command == "changelog":
-        releases = gh_json(
-            "release", "list", "--limit", "1000", "--json", "tagName,publishedAt,isDraft"
-        )
-        assert isinstance(releases, list)
-        full = []
-        for rel in releases:
-            if rel["isDraft"]:
-                continue
-            body = gh_json("release", "view", rel["tagName"], "--json", "body")
-            assert isinstance(body, dict)
-            full.append({**rel, "body": body["body"]})
-        Path("CHANGELOG.md").write_text(render_changelog(full))
-        print(f"CHANGELOG.md: {len(full)} releases")
-        return 0
 
     if args.command == "check":
         run("git", "fetch", "--quiet", "origin")
@@ -458,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
         "--notes-file",
         str(notes_file),
     )
-    print(f"Published {tag}. Now run `python tools/release.py changelog` in your next PR.")
+    print(f"Published {tag}.")
     return 0
 
 

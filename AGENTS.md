@@ -245,17 +245,14 @@ See `docs/QA.md` for the full process.
 
 **After you merge to `main`, you must publish a release.** A merge without
 a release is not finished work: the people who reported the bug are never
-told, and the change log has a hole in it.
+told.
 
 1. After your last merge in a session, run `python tools/release.py draft`.
 2. Read the draft. Every "Done" issue must be closed now, and every
    @handle is a notification to a real person.
 3. Run `python tools/release.py publish`. It makes a tag and a release,
    no commit, and it starts no CI run.
-4. In your next pull request, run `python tools/release.py changelog`
-   and include `CHANGELOG.md`. Never commit it to `main` by itself: that
-   is one more CI run on self-hosted hardware.
-5. Before you end a session, run `python tools/release.py check`. It
+4. Before you end a session, run `python tools/release.py check`. It
    exits 1 when merged work is not in a release. If you cannot publish,
    say so in your report.
 
