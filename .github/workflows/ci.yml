@@ -50,6 +50,13 @@ permissions:
 # reads a secret, the token can only read, and checkout does not keep
 # the token. Do not add a secret or a write permission to this file.
 #
+# actions/checkout refuses to check out a fork in this event. Each
+# checkout here sets `allow-unsafe-pr-checkout` only for the event that
+# adds `ci:approved`. That is safe here only because the job runs in a
+# microVM that is destroyed, with no secret and a token that can only
+# read. Change none of these without the agreement of the runner's
+# owner. See https://gh.io/securely-using-pull_request_target.
+#
 # This needs the agreement of the runner's owner. test_ci_workflows.py
 # checks the guard and the checkout on each job.
 jobs:
@@ -64,6 +71,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          # checkout refuses the commit of a fork here, unless this is true.
+          # It is true only for the commit that a triager approved.
+          allow-unsafe-pr-checkout: ${{ github.event.action == 'labeled' && github.event.label.name == 'ci:approved' }}
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       - run: uv sync --extra dev
       - run: uv run ruff check src tests
@@ -96,6 +106,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          # checkout refuses the commit of a fork here, unless this is true.
+          # It is true only for the commit that a triager approved.
+          allow-unsafe-pr-checkout: ${{ github.event.action == 'labeled' && github.event.label.name == 'ci:approved' }}
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       - run: uv sync --extra dev
       - run: uv run mypy src
@@ -125,6 +138,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          # checkout refuses the commit of a fork here, unless this is true.
+          # It is true only for the commit that a triager approved.
+          allow-unsafe-pr-checkout: ${{ github.event.action == 'labeled' && github.event.label.name == 'ci:approved' }}
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       # The unit suite runs JavaScript with node, and a test fails when
       # node is missing. A microVM has no node until this step installs
@@ -238,6 +254,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          # checkout refuses the commit of a fork here, unless this is true.
+          # It is true only for the commit that a triager approved.
+          allow-unsafe-pr-checkout: ${{ github.event.action == 'labeled' && github.event.label.name == 'ci:approved' }}
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       - run: uv sync --extra dev
       - run: uv run alembic upgrade head
@@ -373,6 +392,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          # checkout refuses the commit of a fork here, unless this is true.
+          # It is true only for the commit that a triager approved.
+          allow-unsafe-pr-checkout: ${{ github.event.action == 'labeled' && github.event.label.name == 'ci:approved' }}
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
@@ -422,6 +444,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          # checkout refuses the commit of a fork here, unless this is true.
+          # It is true only for the commit that a triager approved.
+          allow-unsafe-pr-checkout: ${{ github.event.action == 'labeled' && github.event.label.name == 'ci:approved' }}
       # No setup-buildx-action. It made a new BuildKit container for every
       # job, with an empty cache, and asked it for GPU access, which the
       # runners refuse and it retried without. Docker's built-in builder
