@@ -190,6 +190,34 @@ def test_a_pull_request_checks_out_its_own_commit() -> None:
     assert checked
 
 
+def test_checkout_accepts_a_fork_only_when_a_triager_approved_it() -> None:
+    """Would be caught: an approved fork that fails at checkout.
+
+    actions/checkout refuses the commit of a fork in a
+    `pull_request_target` run, unless `allow-unsafe-pr-checkout` is
+    true. It must be true for the approved event and for nothing else.
+    """
+    checked = 0
+    for workflow, name, job in _self_hosted_pull_request_jobs():
+        for step in job.get("steps", []):
+            if not str(step.get("uses", "")).startswith("actions/checkout@"):
+                continue
+            where = f"{workflow} {name}"
+            opt_in = str(step.get("with", {}).get("allow-unsafe-pr-checkout", ""))
+            assert opt_in.startswith("${{") and opt_in.endswith("}}"), f"{where}: {opt_in!r}"
+            expression = opt_in[3:-2]
+            assert _evaluate(expression, _pull_request("labeled", FORK, APPROVED_LABEL)), where
+            # Would be caught: a step that turns the check off for every run.
+            assert not _evaluate(expression, _push()), where
+            assert not _evaluate(expression, _pull_request("synchronize", FORK)), where
+            assert not _evaluate(expression, _pull_request("synchronize", REPOSITORY)), where
+            assert not _evaluate(expression, _pull_request("labeled", FORK, "bug")), where
+            removed = _pull_request("unlabeled", FORK, APPROVED_LABEL)
+            assert not _evaluate(expression, removed), where
+            checked += 1
+    assert checked
+
+
 MICROVM = ["self-hosted", "sonoran-microvm"]
 
 
