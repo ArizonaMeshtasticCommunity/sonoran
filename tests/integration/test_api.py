@@ -914,6 +914,47 @@ def test_a_sender_gatewaying_itself_is_not_a_direct_observation(
     assert body["gateway_count"] == 2
 
 
+def test_a_sender_that_hears_its_own_packet_come_back_is_a_hop_count(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """beta-sonoran#410: a node can upload the copy a relay sends back.
+
+    The first upload is its own voice (hop_limit equal to hop_start).
+    A later upload from the same gateway, after a relay, used hops: it is
+    a radio reception like any other gateway's, and its path is "2 hops",
+    not "its own upload".
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                "first_seen_at) VALUES (8511, 93, 1, 3, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"now": now},
+        )
+        for hop_limit, seen in ((3, now), (1, now + timedelta(seconds=4))):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, hop_limit, rx_snr, seen_at) "
+                    "VALUES (8511, 93, 8511, 'msh/US/AZ/t', :h, 5.0, :s) ON CONFLICT DO NOTHING"
+                ),
+                {"h": hop_limit, "s": seen},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/packets/!0000213f/93").json()
+
+    by_hops = {row["hops_taken"]: row for row in body["observations"]}
+    assert by_hops[0]["self_reported"] is True
+    assert by_hops[2]["self_reported"] is False, (
+        "the copy heard back after 2 hops is labelled as the node's own upload"
+    )
+    assert by_hops[2]["direct"] is False
+
+
 def test_heard_by_does_not_credit_a_self_upload_with_signal(
     migrated_engine, timescale_url: str
 ) -> None:  # type: ignore[no-untyped-def]

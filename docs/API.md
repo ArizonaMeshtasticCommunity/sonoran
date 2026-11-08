@@ -1297,7 +1297,9 @@ number of gateways.
 gateways its own traffic uploads the packet it has just transmitted,
 which measures no radio link. Such a row always carries `hop_start`
 equal to `hop_limit`, so it is excluded from `direct` by node as well
-as by hop count.
+as by hop count. A row from the sender that used hops is not
+`self_reported`: a relay sent the packet back, and the sender's gateway
+heard that copy like any other gateway would (beta-sonoran#410).
 
 `direct` is true only when no hop was used and the gateway is another
 node. Only then does the signal reading describe the sender's own link.

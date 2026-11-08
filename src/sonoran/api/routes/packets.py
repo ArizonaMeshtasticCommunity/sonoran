@@ -414,7 +414,17 @@ async def get_packet(
                 # direct observation. Every such row has hop_start equal
                 # to hop_limit, so the hop rule alone calls it direct and
                 # then offers its reading as the sender's own link.
-                "self_reported": item.gateway_node_num == packet.from_node_num,
+                # A copy that came back to the sender after a relay used
+                # hops, so it is a reception like any other gateway's
+                # (beta-sonoran#410).
+                "self_reported": (
+                    item.gateway_node_num == packet.from_node_num
+                    and (
+                        packet.hop_start is None
+                        or item.hop_limit is None
+                        or packet.hop_start == item.hop_limit
+                    )
+                ),
                 "direct": (
                     packet.hop_start is not None
                     and packet.hop_start == item.hop_limit
