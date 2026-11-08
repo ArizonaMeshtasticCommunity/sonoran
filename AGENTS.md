@@ -438,6 +438,13 @@ Rows written before the fix keep the wrong time. They cannot be
 repaired, because the true receive time was never stored. They age out
 with retention. See `docs/ISSUES.md` 1.5.
 
+A clock can also be wrong in the other direction, by 56 years. A node
+with no time source stamps telemetry with its seconds since boot
+(`getTime()`, firmware `src/gps/RTC.cpp:440-447`), so it says 1970.
+Retention then deletes the row at once, and the node page shows no
+telemetry (#408). `clocks.device_time` uses the receipt time for any
+stamp before the first firmware commit, 2020-02-01.
+
 ### 9.5 A gateway observation is usually not a direct link
 
 `packet_seen.rx_snr` belongs to the last hop into that gateway, not to
