@@ -10,7 +10,14 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from sonoran.api.trace_drawing import LIGHT_LINE, LIGHT_TEXT, MAX_BYTES, NODE_PLAIN, recolour
+from sonoran.api.trace_drawing import (
+    LIGHT_LINE,
+    LIGHT_TEXT,
+    MAX_BYTES,
+    NODE_PLAIN,
+    node_boxes,
+    recolour,
+)
 
 SAMPLE = b"""<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
@@ -131,3 +138,44 @@ def test_a_plain_white_node_is_toned_down_and_keeps_dark_text() -> None:
     assert text.get("fill") is None
     pastel = _group(_tree(), "node1").find(".//s:ellipse", NS)
     assert pastel is not None and pastel.get("fill") == "#ffa9a9"
+
+
+# beta-sonoran#405: each node of the drawing links to its node page. The
+# drawing stays in an `<img>`, inert, and the page lays a link over each
+# node's box. The boxes are fractions of the picture, so they scale with
+# it. In SAMPLE the graph group is `translate(4 196)` in a 200 x 200 view.
+
+
+def _boxes() -> dict[str, tuple[float, float, float, float]]:
+    return {b["node_id"]: (b["x"], b["y"], b["w"], b["h"]) for b in node_boxes(SAMPLE)}
+
+
+def test_each_node_has_a_box_in_picture_fractions() -> None:
+    boxes = _boxes()
+    assert set(boxes) == {"!00000001", "!00000002", "!00000003"}
+    # Ellipse cx 50 cy -150 rx 40 ry 20, moved by (4, 196): x 14-94, y 26-66.
+    assert boxes["!00000001"] == pytest.approx((0.07, 0.13, 0.40, 0.20))
+    # Polygon 0-10 on both axes: x 4-14, y 196-206.
+    assert boxes["!00000003"] == pytest.approx((0.02, 0.98, 0.05, 0.05))
+
+
+def test_the_scale_of_the_graph_group_is_applied() -> None:
+    scaled = SAMPLE.replace(
+        b'transform="translate(4 196)"', b'transform="scale(0.5 0.5) rotate(0) translate(4 196)"'
+    )
+    box = {b["node_id"]: b for b in node_boxes(scaled)}["!00000001"]
+    assert (box["x"], box["y"], box["w"], box["h"]) == pytest.approx((0.035, 0.065, 0.20, 0.10))
+
+
+def test_a_title_that_is_not_a_node_id_gets_no_link() -> None:
+    """The title is third-party text and becomes part of an href."""
+    hostile = SAMPLE.replace(b"<title>!00000002</title>", b"<title>javascript:alert(1)</title>")
+    assert "javascript:alert(1)" not in {b["node_id"] for b in node_boxes(hostile)}
+    assert len(node_boxes(hostile)) == 2
+
+
+def test_a_rotated_drawing_gets_no_links_rather_than_wrong_ones() -> None:
+    rotated = SAMPLE.replace(
+        b'transform="translate(4 196)"', b'transform="rotate(90) translate(4 196)"'
+    )
+    assert node_boxes(rotated) == []

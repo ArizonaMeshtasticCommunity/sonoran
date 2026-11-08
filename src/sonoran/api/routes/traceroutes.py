@@ -2,13 +2,13 @@
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import format_node_id, name_of, resolve_names
-from sonoran.api.trace_drawing import fetch_trace_svg, recolour
+from sonoran.api.trace_drawing import fetch_trace_svg, node_boxes, recolour
 from sonoran.api.traces import (
     Hop,
     evidenced_hops,
@@ -127,6 +127,10 @@ def _item(
         "drawing_url": (
             None if _trace_key(trace) is None else f"api/traceroutes/{trace.id}/drawing.svg"
         ),
+        # Where each node is drawn, so the page can link it (beta-sonoran#405).
+        "drawing_nodes_url": (
+            None if _trace_key(trace) is None else f"api/traceroutes/{trace.id}/drawing-nodes"
+        ),
         "node_graph_url": (
             f"{graph_base_url.rstrip('/')}/graph/node/!{trace.from_node_num:08x}?clickable=true"
         ),
@@ -224,17 +228,12 @@ async def get_traceroute(
     return item
 
 
-@router.get("/{trace_id}/drawing.svg")
-async def traceroute_drawing(
-    trace_id: int,
-    request: Request,
-    session: AsyncSession = Depends(get_session),
-) -> Response:
-    """Return mesh-graph's drawing of one trace, recoloured for the dark site.
+async def _raw_drawing(trace_id: int, request: Request, session: AsyncSession) -> bytes:
+    """Fetch mesh-graph's drawing of one trace, or raise the HTTP error.
 
     404 when the trace is unknown, has no key mesh-graph could file it
     under, or mesh-graph holds no drawing for it. 502 when mesh-graph
-    cannot be reached or answers with something that is not an SVG.
+    cannot be reached.
     """
     trace = await session.scalar(
         select(Traceroute).where(Traceroute.id == trace_id).order_by(Traceroute.seen_at.desc())
@@ -248,6 +247,43 @@ async def traceroute_drawing(
         raise HTTPException(status_code=502, detail="mesh-graph is not reachable") from exc
     if raw is None:
         raise HTTPException(status_code=404, detail="mesh-graph holds no drawing for this trace")
+    return raw
+
+
+@router.get("/{trace_id}/drawing-nodes")
+async def traceroute_drawing_nodes(
+    trace_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Return where each node of a trace drawing is (beta-sonoran#405).
+
+    Fractions of the picture: `node_id`, `x`, `y`, `w`, `h`. The page
+    lays a link to each node page over its box. The drawing itself stays
+    in an `<img>`, so nothing of it runs in the page. Errors as for
+    `drawing.svg`.
+    """
+    raw = await _raw_drawing(trace_id, request, session)
+    try:
+        boxes = node_boxes(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="mesh-graph sent no usable drawing") from exc
+    return JSONResponse(boxes, headers={"Cache-Control": "public, max-age=300"})
+
+
+@router.get("/{trace_id}/drawing.svg")
+async def traceroute_drawing(
+    trace_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Return mesh-graph's drawing of one trace, recoloured for the dark site.
+
+    404 when the trace is unknown, has no key mesh-graph could file it
+    under, or mesh-graph holds no drawing for it. 502 when mesh-graph
+    cannot be reached or answers with something that is not an SVG.
+    """
+    raw = await _raw_drawing(trace_id, request, session)
     try:
         body = recolour(raw)
     except ValueError as exc:

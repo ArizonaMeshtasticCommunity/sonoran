@@ -10251,15 +10251,41 @@ function meshGraphTrace(trace, extra = '') {
      * measured, the request was not made at all, so neither the drawing
      * nor the "holds no drawing" sentence ever appeared (#289).
      */
-    onload: (event) => { event.target.style.display = 'block'; },
+    onload: (event) => {
+      event.target.style.display = 'block';
+      if (!trace.drawing_nodes_url) return;
+      get(trace.drawing_nodes_url)
+        .then((boxes) => wrap.append(...traceNodeLinks(boxes)))
+        // No links is the drawing as it was. The picture still shows.
+        .catch(() => {});
+    },
     onerror: (event) => {
-      event.target.replaceWith(el('p', {
+      wrap.replaceWith(el('p', {
         class: 'muted', style: 'margin:0',
         text: 'mesh-graph keeps its own database and holds no drawing for this trace.',
       }));
     },
   });
-  return panel(drawing);
+  const wrap = el('div', { class: 'trace-drawing-wrap' }, drawing);
+  return panel(wrap);
+}
+
+/*
+ * One link over each node of a trace drawing (beta-sonoran#405). `boxes`
+ * are fractions of the picture, from `/api/traceroutes/{id}/drawing-nodes`.
+ * The drawing stays an `<img>`, so mesh-graph's SVG never runs in the
+ * page. Each link is an ordinary `<a href>`, so it opens in a new tab too.
+ */
+function traceNodeLinks(boxes) {
+  const percent = (value) => `${Number((value * 100).toFixed(3))}%`;
+  return (boxes || []).map((box) => el('a', {
+    class: 'trace-node-link',
+    href: nodeHref(box.node_id),
+    'aria-label': `Open node ${box.node_id}`,
+    title: box.node_id,
+    style: `left:${percent(box.x)};top:${percent(box.y)};`
+      + `width:${percent(box.w)};height:${percent(box.h)}`,
+  }));
 }
 
 

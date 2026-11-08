@@ -215,6 +215,7 @@ SHARED: frozenset[str] = frozenset(
         "/api/traceroutes/by-packet/{from_node}/{packet_id}",
         "/api/traceroutes/{trace_id}",
         "/api/traceroutes/{trace_id}/drawing.svg",
+        "/api/traceroutes/{trace_id}/drawing-nodes",
     }
 )
 

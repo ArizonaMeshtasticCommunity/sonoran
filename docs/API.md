@@ -2230,7 +2230,8 @@ Response item includes the route, the return route, SNR lists, and the mesh-grap
 ### 9.2 `GET /api/traceroutes/{id}`
 
 Returns one traceroute with full detail, the mesh-graph URL
-(`graph_url`), and `drawing_url`, the recoloured drawing below.
+(`graph_url`), `drawing_url`, the recoloured drawing below, and
+`drawing_nodes_url`, where each node of that drawing is (9.4).
 
 `reply_id` is the row ID of the newest stored reply to this trace, or
 null. A reply is a row of its own: it carries this trace's `packet_id`
@@ -2247,12 +2248,26 @@ text are light, and node fills keep mesh-graph's own colours. 404 when
 the trace is unknown or mesh-graph holds no drawing, 502 when mesh-graph
 cannot be reached or sends no SVG. Cached for five minutes.
 
+### 9.4 `GET /api/traceroutes/{id}/drawing-nodes`
+
+Returns where each node of the drawing in 9.3 is, so the page can link
+each node to its node page (beta-sonoran#405). Each item is `node_id`,
+`x`, `y`, `w` and `h`: the node's box as fractions (0 to 1) of the
+picture. The page lays an `<a href="#node/...">` over each box. The
+drawing stays in an `<img>`, so mesh-graph's SVG never runs in the page.
+
+A node whose title is not a node id (`!` and eight hex digits) gets no
+box, because the title becomes part of a link. A drawing with a real
+rotation gets no boxes, rather than boxes in the wrong place. Errors are
+as for 9.3. Cached for five minutes.
+
 ## 10. mesh-graph URL building
 
 The API returns links from `MESH_GRAPH_BASE_URL`, and the UI links to
 the mesh-graph pages for full views.
 
-There is one exception to "links only": the trace drawing (9.3). mesh-graph
+There is one exception to "links only": the trace drawing (9.3, and
+9.4 reads the same SVG). mesh-graph
 draws on white, the site is dark, mesh-graph is not changed here, and a
 CSS filter over its picture inverts its colours too (issue #51). So the
 API fetches that one SVG from `MESH_GRAPH_INTERNAL_URL` on the compose

@@ -2753,6 +2753,18 @@ a.more { text-decoration: none; display: inline-block; }
   display: none; width: 100%; background: var(--panel-2);
   border: 1px solid var(--line); border-radius: .35rem;
 }
+/*
+ * Links over the nodes of a trace drawing (beta-sonoran#405). The
+ * picture is an inert `<img>`, so each node's link is a box laid over it,
+ * placed in percent of the picture so it follows the picture's size.
+ */
+.trace-drawing-wrap { position: relative; }
+.trace-node-link {
+  position: absolute; display: block; border-radius: .25rem;
+}
+.trace-node-link:hover, .trace-node-link:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
 
 /*
  * A table row that opens something. The whole row is the target, and it

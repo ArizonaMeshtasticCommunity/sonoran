@@ -2173,6 +2173,37 @@ def test_the_trace_drawing_is_served_recoloured(  # type: ignore[no-untyped-def]
     assert b'stroke="black"' not in response.content
 
 
+_GRAPHVIZ_WITH_NODE = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+    b'<g class="graph" transform="translate(0 100)">'
+    b'<g class="node"><title>!00001e79</title>'
+    b'<polygon points="10,-90 30,-90 30,-80 10,-80"/></g></g></svg>'
+)
+
+
+def test_each_node_of_the_trace_drawing_has_a_link_box(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str, monkeypatch
+) -> None:
+    """beta-sonoran#405: the page links each drawn node to its node page."""
+    from sonoran.api.routes import traceroutes
+
+    async def fake_fetch(settings, key):  # type: ignore[no-untyped-def]
+        return _GRAPHVIZ_WITH_NODE
+
+    monkeypatch.setattr(traceroutes, "fetch_trace_svg", fake_fetch)
+    trace_id = _seed_drawn_trace(migrated_engine, 780004)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        detail = client.get(f"/api/traceroutes/{trace_id}").json()
+        response = client.get(f"/api/traceroutes/{trace_id}/drawing-nodes")
+        missing = client.get("/api/traceroutes/999999999/drawing-nodes")
+
+    assert detail["drawing_nodes_url"] == f"api/traceroutes/{trace_id}/drawing-nodes"
+    assert response.status_code == 200
+    assert response.json() == [{"node_id": "!00001e79", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1}]
+    assert missing.status_code == 404
+
+
 def test_a_trace_mesh_graph_never_drew_is_a_404(  # type: ignore[no-untyped-def]
     migrated_engine, timescale_url: str, monkeypatch
 ) -> None:
