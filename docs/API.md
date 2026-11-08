@@ -1297,7 +1297,9 @@ number of gateways.
 gateways its own traffic uploads the packet it has just transmitted,
 which measures no radio link. Such a row always carries `hop_start`
 equal to `hop_limit`, so it is excluded from `direct` by node as well
-as by hop count.
+as by hop count. A row from the sender that used hops is not
+`self_reported`: a relay sent the packet back, and the sender's gateway
+heard that copy like any other gateway would (beta-sonoran#410).
 
 `direct` is true only when no hop was used and the gateway is another
 node. Only then does the signal reading describe the sender's own link.
@@ -1569,8 +1571,14 @@ LongFast cannot hear a node on MediumFast, so drawing both sets of dots
 under one preset's lines invites the reader to join two nodes that have
 no way to reach each other. See AGENTS.md 9.7.
 
-Response item: `node_id`, `short_name`, `lat`, `lon`, `altitude`,
-`last_heard`, `role`, `is_mqtt_gateway`.
+Response item: `node_id`, `short_name`, `lat`, `lon`,
+`precision_bits`, `altitude`, `last_heard`, `role`, `is_mqtt_gateway`.
+
+`precision_bits` is the precision of the node's last position (NULL or
+32 means full precision). When two or more nodes share one rounded
+position, the map draws each dot 2 % of its precision cell away, in a
+direction taken from the node number, so each one can be clicked
+(beta-sonoran#401). The position in the response is not changed.
 
 ### 6.2 `GET /api/map/edges`
 
@@ -2222,7 +2230,8 @@ Response item includes the route, the return route, SNR lists, and the mesh-grap
 ### 9.2 `GET /api/traceroutes/{id}`
 
 Returns one traceroute with full detail, the mesh-graph URL
-(`graph_url`), and `drawing_url`, the recoloured drawing below.
+(`graph_url`), `drawing_url`, the recoloured drawing below, and
+`drawing_nodes_url`, where each node of that drawing is (9.4).
 
 `reply_id` is the row ID of the newest stored reply to this trace, or
 null. A reply is a row of its own: it carries this trace's `packet_id`
@@ -2239,12 +2248,26 @@ text are light, and node fills keep mesh-graph's own colours. 404 when
 the trace is unknown or mesh-graph holds no drawing, 502 when mesh-graph
 cannot be reached or sends no SVG. Cached for five minutes.
 
+### 9.4 `GET /api/traceroutes/{id}/drawing-nodes`
+
+Returns where each node of the drawing in 9.3 is, so the page can link
+each node to its node page (beta-sonoran#405). Each item is `node_id`,
+`x`, `y`, `w` and `h`: the node's box as fractions (0 to 1) of the
+picture. The page lays an `<a href="#node/...">` over each box. The
+drawing stays in an `<img>`, so mesh-graph's SVG never runs in the page.
+
+A node whose title is not a node id (`!` and eight hex digits) gets no
+box, because the title becomes part of a link. A drawing with a real
+rotation gets no boxes, rather than boxes in the wrong place. Errors are
+as for 9.3. Cached for five minutes.
+
 ## 10. mesh-graph URL building
 
 The API returns links from `MESH_GRAPH_BASE_URL`, and the UI links to
 the mesh-graph pages for full views.
 
-There is one exception to "links only": the trace drawing (9.3). mesh-graph
+There is one exception to "links only": the trace drawing (9.3, and
+9.4 reads the same SVG). mesh-graph
 draws on white, the site is dark, mesh-graph is not changed here, and a
 CSS filter over its picture inverts its colours too (issue #51). So the
 API fetches that one SVG from `MESH_GRAPH_INTERNAL_URL` on the compose

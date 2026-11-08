@@ -47,21 +47,19 @@ function objectConstant(name) {
  *
  * `el` records what was built instead of making DOM. `table` hands the
  * column definitions straight back, so a case can call one cell with
- * one row -- which is the unit the bug lived in. `openNode` exists
- * because `nodeChip` closes over it for a click handler that no case
- * fires.
+ * one row -- which is the unit the bug lived in. `nodeChip` links with
+ * `nodeHref` (beta-sonoran#411), so that is extracted beside it.
  */
 const el = (tag, attrs = {}, ...kids) => ({ tag, attrs, kids: kids.flat() });
 const table = (columns, rows, emptyMessage) => ({ columns, rows, emptyMessage });
 const snrCell = (snr) => ({ tag: 'span', attrs: { text: `${snr} dB` }, kids: [] });
-const openNode = () => {};
-
-const api = new Function('el', 'table', 'snrCell', 'openNode', [
+const api = new Function('el', 'table', 'snrCell', [
   extract('nodeChip'),
+  extract('nodeHref'),
   extract('neighbourValues'),
   objectConstant('DECODED_KIND'),
   'return { nodeChip, neighbourValues, DECODED_KIND };',
-].join('\n'))(el, table, snrCell, openNode);
+].join('\n'))(el, table, snrCell);
 
 let failed = 0;
 const eq = (name, got, want) => {
@@ -77,8 +75,8 @@ const ok = (name, cond, detail) => {
 
 /** The visible text of the chip a column cell produced. */
 function shown(cell) {
-  // nodeChip wraps the chip in a button when it has an ID to open.
-  const chip = cell.tag === 'button' ? cell.kids[0] : cell;
+  // nodeChip wraps the chip in a link when it has an ID to open.
+  const chip = cell.tag === 'a' ? cell.kids[0] : cell;
   const long = chip.kids.find((kid) => kid && kid.attrs && kid.attrs.class === 'long');
   return long ? long.attrs.text : null;
 }
@@ -86,7 +84,10 @@ function shown(cell) {
 const built = api.neighbourValues([]);
 const columns = built.kids[0].columns;
 const nameColumn = columns[0];
-const idOf = (cell) => (cell.tag === 'button' ? cell.attrs.title : null);
+// The chip is a link to the node page (beta-sonoran#411). Its href must
+// name the same node as its title.
+const idOf = (cell) => (cell.tag === 'a' && cell.attrs.href === `#node/${cell.attrs.title}`
+  ? cell.attrs.title : null);
 
 // --- The bug: a named neighbour must read as its name ---------------
 

@@ -914,6 +914,47 @@ def test_a_sender_gatewaying_itself_is_not_a_direct_observation(
     assert body["gateway_count"] == 2
 
 
+def test_a_sender_that_hears_its_own_packet_come_back_is_a_hop_count(
+    migrated_engine, timescale_url: str
+) -> None:  # type: ignore[no-untyped-def]
+    """beta-sonoran#410: a node can upload the copy a relay sends back.
+
+    The first upload is its own voice (hop_limit equal to hop_start).
+    A later upload from the same gateway, after a relay, used hops: it is
+    a radio reception like any other gateway's, and its path is "2 hops",
+    not "its own upload".
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                "first_seen_at) VALUES (8511, 93, 1, 3, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"now": now},
+        )
+        for hop_limit, seen in ((3, now), (1, now + timedelta(seconds=4))):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, hop_limit, rx_snr, seen_at) "
+                    "VALUES (8511, 93, 8511, 'msh/US/AZ/t', :h, 5.0, :s) ON CONFLICT DO NOTHING"
+                ),
+                {"h": hop_limit, "s": seen},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/packets/!0000213f/93").json()
+
+    by_hops = {row["hops_taken"]: row for row in body["observations"]}
+    assert by_hops[0]["self_reported"] is True
+    assert by_hops[2]["self_reported"] is False, (
+        "the copy heard back after 2 hops is labelled as the node's own upload"
+    )
+    assert by_hops[2]["direct"] is False
+
+
 def test_heard_by_does_not_credit_a_self_upload_with_signal(
     migrated_engine, timescale_url: str
 ) -> None:  # type: ignore[no-untyped-def]
@@ -2130,6 +2171,37 @@ def test_the_trace_drawing_is_served_recoloured(  # type: ignore[no-untyped-def]
     assert asked == [780001], "the trace key comes from the row, never from the request"
     assert b'fill="white"' not in response.content
     assert b'stroke="black"' not in response.content
+
+
+_GRAPHVIZ_WITH_NODE = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+    b'<g class="graph" transform="translate(0 100)">'
+    b'<g class="node"><title>!00001e79</title>'
+    b'<polygon points="10,-90 30,-90 30,-80 10,-80"/></g></g></svg>'
+)
+
+
+def test_each_node_of_the_trace_drawing_has_a_link_box(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str, monkeypatch
+) -> None:
+    """beta-sonoran#405: the page links each drawn node to its node page."""
+    from sonoran.api.routes import traceroutes
+
+    async def fake_fetch(settings, key):  # type: ignore[no-untyped-def]
+        return _GRAPHVIZ_WITH_NODE
+
+    monkeypatch.setattr(traceroutes, "fetch_trace_svg", fake_fetch)
+    trace_id = _seed_drawn_trace(migrated_engine, 780004)
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        detail = client.get(f"/api/traceroutes/{trace_id}").json()
+        response = client.get(f"/api/traceroutes/{trace_id}/drawing-nodes")
+        missing = client.get("/api/traceroutes/999999999/drawing-nodes")
+
+    assert detail["drawing_nodes_url"] == f"api/traceroutes/{trace_id}/drawing-nodes"
+    assert response.status_code == 200
+    assert response.json() == [{"node_id": "!00001e79", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1}]
+    assert missing.status_code == 404
 
 
 def test_a_trace_mesh_graph_never_drew_is_a_404(  # type: ignore[no-untyped-def]

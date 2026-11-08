@@ -60,6 +60,36 @@ def test_the_boundary_is_inclusive() -> None:
     assert _guard(RECEIVED + SLACK + timedelta(seconds=1)) == RECEIVED
 
 
+def test_a_clock_that_was_never_set_is_refused() -> None:
+    """#408: a node with no time source stamps its seconds since boot.
+
+    Telemetry uses `getTime()`, which is seconds since boot plus an
+    offset that stays 0 until a time source sets it (firmware
+    v2.7.26.54e0d8d, `src/gps/RTC.cpp:440-447`;
+    `DeviceTelemetry.cpp:98`). The live case was Dome Light, `!a81f4ac3`:
+    `time` 1970-01-15 06:30:27 with `uptime_seconds` 1233027, the same
+    number. Stored as given, the row sits in a 1970 chunk and retention
+    deletes it, so the node page shows no telemetry at all.
+    """
+    claimed = datetime.fromtimestamp(1_233_027, UTC)
+    assert _guard(claimed) == RECEIVED, (
+        "a boot-relative stamp from 1970 is stored as the reading's time, "
+        "and retention deletes the row at once"
+    )
+
+
+def test_the_floor_is_the_first_firmware_commit() -> None:
+    """No Meshtastic device existed before the firmware's first commit.
+
+    meshtastic/firmware cdb7153071, 2020-02-01T16:30:53Z. A stamp from
+    that moment on is a real clock (old, maybe, but see the backlog test
+    above), and one second before it is not.
+    """
+    floor = datetime(2020, 2, 1, 16, 30, 53, tzinfo=UTC)
+    assert _guard(floor) == floor
+    assert _guard(floor - timedelta(seconds=1)) == RECEIVED
+
+
 def test_both_device_stamped_families_use_the_guard() -> None:
     """Position and telemetry are the two that carry a device clock.
 

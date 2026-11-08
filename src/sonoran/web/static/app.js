@@ -420,8 +420,17 @@ function nodeChip(node) {
       ? el('span', { class: 'short', text: node.short_name })
       : null,
   );
-  if (!id) return chip;
-  return el('button', { class: 'linky', type: 'button', title: id, onclick: () => openNode(id) }, chip);
+  if (!id || id === '^all') return chip;
+  return el('a', { class: 'linky node-link', href: nodeHref(id), title: id }, chip);
+}
+
+/*
+ * The address of a node page. A link to it is an `<a href>`, not a
+ * button that sets `location.hash`, so the browser can open it in a new
+ * tab, copy it, and show it on hover (beta-sonoran#411).
+ */
+function nodeHref(nodeId) {
+  return `#node/${nodeId}`;
 }
 
 /*
@@ -708,10 +717,9 @@ const REACTION_CAP = 4;
 function reactionSenders(reaction) {
   return el('ul', { class: 'reaction-senders' }, (reaction.senders || []).map((sender) =>
     el('li', {},
-      el('button', {
-        class: 'linky', type: 'button', title: sender.node_id,
+      el('a', {
+        class: 'linky', href: nodeHref(sender.node_id), title: sender.node_id,
         text: sender.display_name,
-        onclick: () => openNode(sender.node_id),
       }),
       sender.packet_id == null
         ? null
@@ -835,9 +843,8 @@ function messageItem(message, options = {}) {
      * packet and still a real link; it just stops competing.
      */
     el('div', { class: 'who' },
-      el('button', {
-        class: 'name', type: 'button', title: message.from_node,
-        onclick: () => openNode(message.from_node),
+      el('a', {
+        class: 'name', href: nodeHref(message.from_node), title: message.from_node,
         text: message.from_name || message.from_node,
       }),
       // Something the page wants beside the name, such as the check-in
@@ -2287,7 +2294,7 @@ function mapNodePopup(row) {
     el('div', { style: `font-size:.8rem;color:${nodeColour(row)}` },
       roleLabel(row.role) + (row.is_mqtt_gateway ? ', MQTT gateway' : '')),
     row.hw_model ? el('div', { class: 'muted', style: 'font-size:.8rem', text: row.hw_model }) : null,
-    el('button', { class: 'linky', type: 'button', text: 'Open node detail', onclick: () => openNode(row.node_id) }));
+    el('a', { class: 'linky', href: nodeHref(row.node_id), text: 'Open node detail' }));
 }
 
 /*
@@ -2318,9 +2325,49 @@ function mapNodePopup(row) {
  * already open is not rebuilt, because rebuilding it would drop the
  * keyboard focus of a reader tabbed onto "Open node detail".
  */
+/*
+ * Where to draw each node, when several share one rounded position
+ * (beta-sonoran#401). A node that sends a reduced precision position can
+ * be anywhere in its cell, so several nodes in one cell arrive with the
+ * same coordinates and their dots cover each other. Each such dot moves
+ * 2 % of its cell (the issue's figure), which stays inside the cell and
+ * claims nothing new. The direction comes from the node number (golden
+ * angle), so a dot lands in the same place on every refresh. A node
+ * alone on its position, or one sent at full precision, is not moved.
+ * Returns node_id -> [lat, lon].
+ */
+function spreadSharedPositions(rows) {
+  const SPREAD_SHARE_OF_CELL = 0.02;
+  const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+  const METRES_PER_DEGREE = 111320;
+  const count = new Map();
+  for (const row of rows) {
+    const key = `${row.lat},${row.lon}`;
+    count.set(key, (count.get(key) || 0) + 1);
+  }
+  const at = new Map();
+  for (const row of rows) {
+    const cell = precisionMetres(row.precision_bits);
+    if (count.get(`${row.lat},${row.lon}`) < 2 || cell == null) {
+      at.set(row.node_id, [row.lat, row.lon]);
+      continue;
+    }
+    const angle = (Number(row.node_num) * GOLDEN_ANGLE) % (2 * Math.PI);
+    const metres = SPREAD_SHARE_OF_CELL * cell;
+    const north = (metres * Math.cos(angle)) / METRES_PER_DEGREE;
+    const east = (metres * Math.sin(angle))
+      / (METRES_PER_DEGREE * Math.cos((row.lat * Math.PI) / 180));
+    at.set(row.node_id, [row.lat + north, row.lon + east]);
+  }
+  return at;
+}
+
 function drawMapNodes(rows) {
   const bounds = [];
   const zoom = mapState.map ? mapState.map.getZoom() : undefined;
+  const drawAt = spreadSharedPositions(
+    rows.filter((row) => row.lat != null && row.lon != null && passesRoleFilter(row)),
+  );
   // One entry per node id, kept between refreshes. A zoom change also
   // restyles through it, without refetching or rebuilding (#196).
   if (!(mapState.marks instanceof Map)) mapState.marks = new Map();
@@ -2331,15 +2378,16 @@ function drawMapNodes(rows) {
     if (!passesRoleFilter(row)) continue;
     bounds.push([row.lat, row.lon]);
     seen.add(row.node_id);
+    const point = drawAt.get(row.node_id);
     const held = marks.get(row.node_id);
     if (held) {
       held.row = row;
       const at = held.marker.getLatLng();
-      if (at.lat !== row.lat || at.lng !== row.lon) held.marker.setLatLng([row.lat, row.lon]);
+      if (at.lat !== point[0] || at.lng !== point[1]) held.marker.setLatLng(point);
       held.marker.setStyle(nodeStyle(row, zoom));
       continue;
     }
-    const entry = { marker: L.circleMarker([row.lat, row.lon], nodeStyle(row, zoom)), row };
+    const entry = { marker: L.circleMarker(point, nodeStyle(row, zoom)), row };
     // A bubble for a mouse, a sheet at the foot of a phone (#281).
     SonoranSheet.bind(entry.marker, () => mapNodePopup(entry.row), row.node_id);
     entry.marker.addTo(mapState.nodes);
@@ -4062,11 +4110,10 @@ PAGES.map = async (page) => {
       traces.traces.length
         ? traces.traces.slice(0, 25).map((trace) => el('li', {},
             el('div', {},
-              el('button', {
+              el('a', {
                 class: 'linky',
-                type: 'button',
+                href: `#traceroute/${encodeURIComponent(trace.id)}`,
                 text: `${trace.from.display_name} to ${trace.to.display_name}`,
-                onclick: () => openTraceroute(trace.id),
               })),
             el('div', { class: 'meta' },
               el('span', { text: `${trace.link_count} link${trace.link_count === 1 ? '' : 's'}` }),
@@ -10128,10 +10175,6 @@ function openPacket(fromNode, packetId) {
   location.hash = `packet/${encodeURIComponent(fromNode)}/${encodeURIComponent(packetId)}`;
 }
 
-/** Put a traceroute in the address bar. */
-function openTraceroute(traceId) {
-  location.hash = `traceroute/${encodeURIComponent(traceId)}`;
-}
 
 const packetLink = (fromNode, packetId, text) =>
   el('a', {
@@ -10149,10 +10192,7 @@ function traceroutePath(hops) {
   if (!hops || !hops.length) return empty('This traceroute recorded no path.');
   const chain = el('ol', { class: 'hops' });
   chain.append(el('li', { class: 'hop-node' },
-    el('button', {
-      class: 'linky', type: 'button', text: hops[0].from_name,
-      onclick: () => openNode(hops[0].from_node),
-    })));
+    el('a', { class: 'linky', href: nodeHref(hops[0].from_node), text: hops[0].from_name })));
   for (const hop of hops) {
     chain.append(
       el('li', { class: 'hop-link' },
@@ -10161,10 +10201,7 @@ function traceroutePath(hops) {
           ? el('span', { class: 'muted', text: 'no signal reading' })
           : snrCell(hop.snr)),
       el('li', { class: 'hop-node' },
-        el('button', {
-          class: 'linky', type: 'button', text: hop.to_name,
-          onclick: () => openNode(hop.to_node),
-        })));
+        el('a', { class: 'linky', href: nodeHref(hop.to_node), text: hop.to_name })));
   }
   return chain;
 }
@@ -10214,15 +10251,41 @@ function meshGraphTrace(trace, extra = '') {
      * measured, the request was not made at all, so neither the drawing
      * nor the "holds no drawing" sentence ever appeared (#289).
      */
-    onload: (event) => { event.target.style.display = 'block'; },
+    onload: (event) => {
+      event.target.style.display = 'block';
+      if (!trace.drawing_nodes_url) return;
+      get(trace.drawing_nodes_url)
+        .then((boxes) => wrap.append(...traceNodeLinks(boxes)))
+        // No links is the drawing as it was. The picture still shows.
+        .catch(() => {});
+    },
     onerror: (event) => {
-      event.target.replaceWith(el('p', {
+      wrap.replaceWith(el('p', {
         class: 'muted', style: 'margin:0',
         text: 'mesh-graph keeps its own database and holds no drawing for this trace.',
       }));
     },
   });
-  return panel(drawing);
+  const wrap = el('div', { class: 'trace-drawing-wrap' }, drawing);
+  return panel(wrap);
+}
+
+/*
+ * One link over each node of a trace drawing (beta-sonoran#405). `boxes`
+ * are fractions of the picture, from `/api/traceroutes/{id}/drawing-nodes`.
+ * The drawing stays an `<img>`, so mesh-graph's SVG never runs in the
+ * page. Each link is an ordinary `<a href>`, so it opens in a new tab too.
+ */
+function traceNodeLinks(boxes) {
+  const percent = (value) => `${Number((value * 100).toFixed(3))}%`;
+  return (boxes || []).map((box) => el('a', {
+    class: 'trace-node-link',
+    href: nodeHref(box.node_id),
+    'aria-label': `Open node ${box.node_id}`,
+    title: box.node_id,
+    style: `left:${percent(box.x)};top:${percent(box.y)};`
+      + `width:${percent(box.w)};height:${percent(box.h)}`,
+  }));
 }
 
 
@@ -10697,9 +10760,9 @@ function decodedPanels(packet) {
       NOT_STORED[packet.portnum]
         ? el('p', {}, NOT_STORED[packet.portnum], ' ',
             packet.portnum === 'NODEINFO_APP'
-              ? el('button', {
-                  class: 'linky', type: 'button', text: `Open ${packet.from_name || packet.from_node}`,
-                  onclick: () => openNode(packet.from_node),
+              ? el('a', {
+                  class: 'linky', href: nodeHref(packet.from_node),
+                  text: `Open ${packet.from_name || packet.from_node}`,
                 })
               : null)
         : packet.portnum === 'TRACEROUTE_APP'

@@ -116,6 +116,9 @@ async def map_nodes(
             "long_name": node.long_name,
             "lat": node.last_lat,
             "lon": node.last_lon,
+            # The map spreads nodes that share one rounded position by a
+            # share of this cell (beta-sonoran#401).
+            "precision_bits": node.last_position_precision_bits,
             "altitude": node.last_altitude,
             "last_heard": node.last_heard,
             "hw_model": node.hw_model,
