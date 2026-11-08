@@ -69,26 +69,125 @@ def _triggers(workflow: dict) -> set[str]:
     return set(on or ())
 
 
-def test_no_self_hosted_job_runs_for_a_pull_request_from_a_fork() -> None:
-    """A pull request from a fork runs its author's code on the runner.
+APPROVED_LABEL = "ci:approved"
+REPOSITORY = "ArizonaMeshtasticCommunity/sonoran"
+FORK = "someone/sonoran"
+CONTEXT = re.compile(r"\bgithub(?:\.\w+)+")
 
-    The runners are a community member's machine, with Docker on it. A
-    pull request from a fork can change any test, the Dockerfile or the
-    workflow itself, so each self-hosted job of a workflow that a pull
-    request starts must refuse a fork.
+
+def _evaluate(condition: str, github: dict) -> bool:
+    """Evaluate a job `if:` the way Actions does, for the names it uses.
+
+    A name that the event does not carry is null, as in Actions. Only
+    `==`, `!=`, `&&`, `||`, brackets and quoted strings are expected.
     """
-    checked = 0
+
+    def lookup(match: re.Match[str]) -> str:
+        value: object = github
+        for part in match.group(0).split(".")[1:]:
+            value = value.get(part) if isinstance(value, dict) else None
+        return repr(value)
+
+    python = CONTEXT.sub(lookup, condition).replace("&&", " and ").replace("||", " or ")
+    return bool(eval(python, {"__builtins__": {}}))  # the text is our own workflow
+
+
+def _push() -> dict:
+    return {"event_name": "push", "repository": REPOSITORY, "event": {}}
+
+
+def _pull_request(action: str, head: str, label: str | None = None) -> dict:
+    event: dict = {"action": action, "pull_request": {"head": {"repo": {"full_name": head}}}}
+    if label is not None:
+        event["label"] = {"name": label}
+    return {"event_name": "pull_request_target", "repository": REPOSITORY, "event": event}
+
+
+def _self_hosted_pull_request_jobs() -> list[tuple[str, str, dict]]:
+    jobs = []
     for path in WORKFLOWS:
         workflow = _load(path)
         if not _triggers(workflow) & {"pull_request", "pull_request_target"}:
             continue
         for name, job in workflow["jobs"].items():
-            if "self-hosted" not in str(job.get("runs-on")):
+            if "self-hosted" in str(job.get("runs-on")):
+                jobs.append((path.name, name, job))
+    assert jobs, "no self-hosted job of a pull request workflow was checked"
+    return jobs
+
+
+def test_a_pull_request_runs_the_workflow_of_main() -> None:
+    """A pull request must not choose the workflow that guards it.
+
+    With `pull_request`, GitHub reads the workflow from the pull
+    request, so a fork can delete the guard in its own copy. With
+    `pull_request_target`, GitHub reads it from `main`. The runner group
+    `sonoran-public` also accepts only workflows at `refs/heads/main`.
+    """
+    for path in WORKFLOWS:
+        assert "pull_request" not in _triggers(_load(path)), f"{path.name} uses pull_request"
+    triggers = _load(next(p for p in WORKFLOWS if p.name == "ci.yml"))
+    on = triggers.get("on", triggers.get(True))
+    types = set(on["pull_request_target"]["types"])
+    assert types == {"opened", "synchronize", "reopened", "labeled"}
+
+
+def test_a_fork_runs_only_when_a_triager_adds_the_label() -> None:
+    """A fork runs on the runner only for the commit that a triager approved.
+
+    The runners are a community member's machine, with Docker on it. A
+    pull request from a fork can change any test or the Dockerfile. Only
+    a person with the triage role or higher can add a label, so the
+    label is the approval. A later push is not approved: the label must
+    be added again.
+    """
+    for workflow, name, job in _self_hosted_pull_request_jobs():
+        condition = " ".join(str(job.get("if", "")).split())
+        where = f"{workflow} {name}"
+        # Would be caught: a guard that lets a fork run with no approval.
+        assert not _evaluate(condition, _pull_request("opened", FORK)), where
+        assert not _evaluate(condition, _pull_request("reopened", FORK)), where
+        # Would be caught: a guard that reads the label on every push.
+        assert not _evaluate(condition, _pull_request("synchronize", FORK)), where
+        # Would be caught: any label, or the label taken away, approves.
+        assert not _evaluate(condition, _pull_request("labeled", FORK, "bug")), where
+        assert not _evaluate(condition, _pull_request("unlabeled", FORK, APPROVED_LABEL)), where
+        assert _evaluate(condition, _pull_request("labeled", FORK, APPROVED_LABEL)), where
+
+
+def test_a_branch_of_this_repository_still_runs_without_a_label() -> None:
+    """Only a person with write access can push a branch here."""
+    for workflow, name, job in _self_hosted_pull_request_jobs():
+        condition = " ".join(str(job.get("if", "")).split())
+        where = f"{workflow} {name}"
+        assert SAME_REPOSITORY in condition, where
+        for action in ("opened", "synchronize", "reopened"):
+            assert _evaluate(condition, _pull_request(action, REPOSITORY)), f"{where} {action}"
+        # Would be caught: any other label starts a second run.
+        assert not _evaluate(condition, _pull_request("labeled", REPOSITORY, "bug")), where
+        assert _evaluate(condition, _push()), where
+
+
+HEAD = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+
+def test_a_pull_request_checks_out_its_own_commit() -> None:
+    """Would be caught: a checkout that tests `main` and reports green.
+
+    `pull_request_target` checks out `main` by default, not the pull
+    request. The commit is the head that the event names, which is the
+    commit that a triager approved. The token is not kept in `.git`.
+    """
+    checked = 0
+    for workflow, name, job in _self_hosted_pull_request_jobs():
+        for step in job.get("steps", []):
+            if not str(step.get("uses", "")).startswith("actions/checkout@"):
                 continue
-            condition = " ".join(str(job.get("if", "")).split())
-            assert SAME_REPOSITORY in condition, f"{path.name} {name} runs for a fork"
+            inputs = step.get("with", {})
+            assert inputs.get("ref") == HEAD, f"{workflow} {name}: {inputs}"
+            assert inputs.get("persist-credentials") is False, f"{workflow} {name}: {inputs}"
             checked += 1
-    assert checked, "no self-hosted job of a pull request workflow was checked"
+    assert checked
 
 
 MICROVM = ["self-hosted", "sonoran-microvm"]
@@ -176,3 +275,25 @@ def test_the_guard_still_runs_ci_on_main() -> None:
     for name, job in workflow["jobs"].items():
         condition = " ".join(str(job.get("if", "")).split())
         assert f"{PUSH} ||" in condition, f"ci.yml {name} does not run on a push"
+
+
+def test_a_pull_request_writes_no_cache_of_main() -> None:
+    """Would be caught: a fork that fills the cache that `main` reads.
+
+    `pull_request_target` runs in the cache scope of `main`. setup-node
+    turns its cache on when `package.json` names a package manager, and
+    a fork can write that field. setup-uv keeps its cache off for this
+    event by itself ('auto').
+    """
+    checked = 0
+    for workflow, name, job in _self_hosted_pull_request_jobs():
+        for step in job.get("steps", []):
+            uses = str(step.get("uses", ""))
+            inputs = step.get("with", {})
+            if uses.startswith("actions/setup-node@"):
+                assert inputs.get("package-manager-cache") is False, f"{workflow} {name}"
+                assert "cache" not in inputs, f"{workflow} {name}"
+                checked += 1
+            if uses.startswith("astral-sh/setup-uv@"):
+                assert str(inputs.get("enable-cache", "auto")) in {"auto", "false", "False"}, name
+    assert checked

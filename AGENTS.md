@@ -283,9 +283,13 @@ the working agreement with the CI provider (#308):
    PR that is not a security fix may be merged by its author.
 6. Stop and wait if the CI provider is working. Look at `gh run list` for
    jobs in progress.
-7. No CI job runs for a pull request from a fork (`ci.yml`). To test a
-   fork's change, read it, then push it to a branch of this repository.
-   Never approve a fork's workflow run that changes `.github/`.
+7. A pull request from a fork runs CI only when a person with the
+   triage role or higher adds the label `ci:approved` (`ci.yml`). The
+   run tests the head commit at that time. A later push runs nothing:
+   read the new commits, then remove the label and add it again. Read
+   the whole change first, the tests and the Dockerfile too. Never add
+   the label to a change that you did not read, and never to a change
+   to `.github/`. An agent never adds this label.
 
 Deploying is in `docs/DEPLOY.md`.
 

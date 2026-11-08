@@ -111,6 +111,9 @@ pull request costs that person machine time. So:
    features. A person merges a security pull request, never its author.
 5. **Wait** if the runner is busy with the owner's own work. Look at
    `gh run list`.
+6. **A pull request from a fork waits for a person.** CI does not run
+   until a maintainer with the triage role or higher reads your change
+   and adds the label `ci:approved`. A new push needs a new approval.
 
 This is the working agreement in `AGENTS.md` 6.2.
 
