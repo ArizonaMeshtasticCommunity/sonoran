@@ -4394,6 +4394,77 @@ async function main() {
   await proxy.close();
 
   /*
+   * Weather on the RF page. The seed writes a day of one Fine Offset
+   * WH24 sensor, whose wind, UV and light are only in rtl_433's raw
+   * line, and one APRS weather station (tools/dev/seed.py,
+   * `write_rf_weather`). A card each, the sensor first and chosen;
+   * its charts; then the station's, which sends pressure and no sun.
+   */
+  const weatherWide = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await journey(weatherWide, 'the RF page shows weather as cards and charts', async (page) => {
+    await open(page, 'rf', 2500);
+    must(await waitFor(page, () => {
+      const panel = document.querySelector('[data-rf-weather]');
+      return panel && !panel.hidden && document.querySelectorAll('.rf-weather-card').length >= 2;
+    }, 20000), 'the weather panel never showed two sources');
+    const cards = await page.evaluate(() => [...document.querySelectorAll('.rf-weather-card')].map((card) => ({
+      title: card.querySelector('.rf-weather-title').textContent,
+      pressed: card.getAttribute('aria-pressed'),
+      text: card.innerText,
+      arrow: !!card.querySelector('.rf-wind-arrow'),
+    })));
+    must(/WH24 sensor 200/.test(cards[0].title), `the first card is "${cards[0].title}", not the sensor`);
+    must(cards[0].pressed === 'true', 'the sensor is not chosen at the start');
+    must(/Wind[\s\S]*gusts/.test(cards[0].text) && cards[0].arrow, 'the sensor card shows no wind read from raw');
+    must(/UV index/.test(cards[0].text), 'the sensor card shows no UV index');
+    must(/Rain since/.test(cards[0].text), 'the sensor card shows no rain count');
+    must(cards[1].title === 'KC9UHI-13' && /Pressure/.test(cards[1].text), 'the APRS card has no pressure');
+    const charts = () => page.evaluate(() => [...document.querySelectorAll('[data-rf-weather-plot]')]
+      .map((node) => ({ key: node.dataset.rfWeatherPlot, drawn: !!node.querySelector('canvas') })));
+    must(await waitFor(page, () => document.querySelectorAll('[data-rf-weather-plot] canvas').length >= 4, 15000),
+      'the sensor\'s charts were not drawn');
+    const sensorCharts = await charts();
+    const keys = sensorCharts.map((chart) => chart.key).join(',');
+    must(keys === 'temperature,wind,rain,sun', `the sensor charts are ${keys}`);
+    must(sensorCharts.every((chart) => chart.drawn), 'a chart box is empty');
+
+    await page.locator('.rf-weather-card').nth(1).click();
+    must(await waitFor(page, () => [...document.querySelectorAll('[data-rf-weather-plot]')]
+      .map((node) => node.dataset.rfWeatherPlot).join(',') === 'temperature,wind,rain,pressure', 15000),
+    `the APRS station's charts are ${(await charts()).map((chart) => chart.key).join(',')}`);
+    must(await page.locator('.rf-weather-card').nth(1).getAttribute('aria-pressed') === 'true',
+      'the chosen card is not marked');
+    await page.locator('[data-rf-weather-hours="48"]').click();
+    must(await waitFor(page, () => /48 hours/.test(document.querySelector('[data-rf-weather-name]').textContent), 10000),
+      '48 hours did not change the charts');
+    const said = await page.locator('[data-rf-weather-explain]').innerText();
+    must(/10 minutes/.test(said), `the 48 hour note says "${said}"`);
+    return `${cards.length} cards, sensor charts ${keys}; APRS charts include pressure; 48 h uses 10 min points`;
+  });
+  await weatherWide.close();
+
+  const weatherPhone = await browser.newContext({ viewport: { width: 360, height: 760 }, hasTouch: true, isMobile: true });
+  await journey(weatherPhone, 'the weather cards and charts fit a 360 px phone', async (page) => {
+    await open(page, 'rf', 2500);
+    must(await waitFor(page, () => document.querySelectorAll('[data-rf-weather-plot] canvas').length >= 4, 20000),
+      'the charts were not drawn on a phone');
+    const got = await page.evaluate(() => {
+      const card = document.querySelector('.rf-weather-card').getBoundingClientRect();
+      const plot = document.querySelector('[data-rf-weather-plot]').getBoundingClientRect();
+      return {
+        doc: document.documentElement.scrollWidth, width: window.innerWidth,
+        card: Math.round(card.width), cardRight: Math.round(card.right), plot: Math.round(plot.width),
+        target: Math.round(card.height),
+      };
+    });
+    must(got.doc <= got.width, `the page scrolls sideways: ${got.doc} > ${got.width}`);
+    must(got.cardRight <= got.width, `a card ends at ${got.cardRight} of ${got.width}`);
+    must(got.target >= 44, `a card is ${got.target} px tall`);
+    return `${got.doc}/${got.width}, card ${got.card} px, chart ${got.plot} px`;
+  });
+  await weatherPhone.close();
+
+  /*
    * azmsh runs on both presets (#313). Ingest tags each packet with the
    * preset that carried it, and the seed writes one azmsh message on each
    * (`tools/dev/README.md`). The old filter was the topic channel, so it

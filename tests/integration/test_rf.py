@@ -1099,3 +1099,103 @@ def test_mods_are_stored_shown_as_unverified_and_hidden_on_request(
     assert report.counts == {"rf_custom": 3}
     left = _rows(migrated_engine, "SELECT station_id, mod FROM rf_custom ORDER BY 1, 2")
     assert left == [("bad-site", "fake"), ("west-site", "noise")]
+
+
+# ---- Weather (sonoran/rf/weather.py) ---------------------------------
+
+WH24_RAW = (
+    '{"model":"Fineoffset-WH24","id":200,"battery_ok":1,"temperature_C":27.2,'
+    '"humidity":33,"wind_dir_deg":86,"wind_avg_m_s":3.92,"wind_max_m_s":5.6,'
+    '"rain_mm":RAIN,"uvi":2.0,"light_lux":41775.0}'
+)
+
+
+def _wh24(when: datetime, rain_mm: float) -> dict[str, object]:
+    """A WH24 as the agent sends it: wind, UV and light only in `raw`.
+
+    `raw` is the observation's own field. Ingest moves it into `meta`
+    and drops any `raw` a station put in `meta` itself (store.py).
+    """
+    return {
+        "id": "fineoffset-wh24-200",
+        "t": when,
+        "lat": 33.5,
+        "lon": -112.0,
+        "raw": WH24_RAW.replace("RAIN", str(rain_mm)),
+        "meta": {
+            "model": "Fineoffset-WH24",
+            "temperature_c": 27.2,
+            "humidity": 33,
+            "wind_dir_deg": 86,
+            "rain_mm": rain_mm,
+        },
+    }
+
+
+def test_the_weather_api_reads_sensors_and_aprs_weather_and_nothing_else(
+    timescale_url: str, migrated_engine, clean: None
+) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC)
+    aprs_weather = {
+        "temperature_f": 73,
+        "wind_kn": 2.6,
+        "gust_kn": 6.08,
+        "wind_dir_deg": 263,
+        "humidity": 58,
+        "pressure_hpa": 1006.8,
+        "rain_today_in": 0.02,
+    }
+    asyncio.run(
+        _write(
+            timescale_url,
+            # Two readings in two 20 s buckets: the running total rose 0.3 mm.
+            _batch("north-site", "ism", [_wh24(now - timedelta(seconds=45), 781.2)]),
+            _batch("north-site", "ism", [_wh24(now, 781.5)]),
+            _batch(
+                "north-site",
+                "aprs",
+                [
+                    {"id": "KC9UHI-13", "t": now, "lat": 32.1, "lon": -110.9, "meta": aprs_weather},
+                    # A digipeater's beacon: APRS, but no weather.
+                    {
+                        "id": "N7GEE-10",
+                        "t": now,
+                        "lat": 32.2,
+                        "lon": -110.8,
+                        "meta": {"symbol": "/#"},
+                    },
+                    # A weather station the operator hides.
+                    {"id": "KE7KUS-14", "t": now, "lat": 32.9, "lon": -105.8, "meta": aprs_weather},
+                ],
+            ),
+            rules=Rules(ism_allow=frozenset({"fineoffset-wh24"})),
+        )
+    )
+    with _client(timescale_url, rf_hidden_ids=["ke7kus-14"]) as client:
+        now_body = client.get("/api/rf/weather").json()
+        day = client.get("/api/rf/weather/ism/FINEOFFSET-WH24-200?hours=24").json()
+        aprs_day = client.get("/api/rf/weather/aprs/kc9uhi-13?hours=48").json()
+        assert client.get("/api/rf/weather/adsb/a1b2c3").status_code == 404
+        assert client.get("/api/rf/weather/aprs/n7gee-10").status_code == 404, "no weather"
+        assert client.get("/api/rf/weather/aprs/ke7kus-14").status_code == 404, "hidden"
+        assert client.get("/api/rf/weather/ism/fineoffset-wh24-200?hours=49").status_code == 422
+
+    by_id = {item["id"]: item for item in now_body}
+    assert set(by_id) == {"fineoffset-wh24-200", "kc9uhi-13"}
+    sensor = by_id["fineoffset-wh24-200"]
+    assert sensor["heard_here"] is True and sensor["model"] == "Fineoffset-WH24"
+    assert sensor["readings"]["wind_ms"] == 3.92, "the WH24's wind is read from raw"
+    assert sensor["readings"]["uvi"] == 2.0
+    assert abs(sensor["rain_today_mm"] - 0.3) < 1e-6, "the rise of the running total"
+    assert sensor["rain_since"]
+    station = by_id["kc9uhi-13"]
+    assert station["heard_here"] is False and station["model"] is None
+    assert abs(station["readings"]["temperature_c"] - (73 - 32) * 5 / 9) < 1e-9
+    assert "rain_today_mm" not in station, "an APRS station sends its own, in readings"
+
+    assert day["bucket_minutes"] == 5 and day["hours"] == 24
+    assert day["points"], "the sensor's readings, bucketed"
+    assert day["points"][-1]["temperature_c"] == 27.2
+    assert abs(day["points"][-1]["rain_mm"] - 0.3) < 1e-6, "rain since the chart began"
+    assert aprs_day["bucket_minutes"] == 10
+    assert aprs_day["points"][-1]["pressure_hpa"] == 1006.8

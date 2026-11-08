@@ -337,6 +337,9 @@ EXPECTED_FORMATTERS = {
     # The busy chart's legend on a phone (#322): drops " (ours)" from a
     # series name. Plain text; ECharts draws legend names on the canvas.
     ("rf.js", "legend", "formatter"): 1,
+    # The weather charts on the RF page: the time, each series in words
+    # and units, and the wind direction. Returns tooltipLines(...).
+    ("rf.js", "tooltip", "formatter"): 1,
 }
 
 _MARKUP = re.compile(r"<[a-zA-Z/!]")

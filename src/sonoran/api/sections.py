@@ -169,6 +169,8 @@ ROUTES: dict[str, frozenset[str]] = {
     "/api/rf/stations": _RF,
     "/api/rf/sweeps": _RF,
     "/api/rf/track/{kind}/{thing_id}": _RF,
+    "/api/rf/weather": _RF,
+    "/api/rf/weather/{kind}/{thing_id}": _RF,
     # Statistics. The summary, the busiest nodes and the packet types
     # are on the dashboard as well: SHARED.
     "/api/stats/activity": _STATS,

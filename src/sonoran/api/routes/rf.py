@@ -9,10 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import Float, and_, case, cast, func, or_, select, tuple_
-from sqlalchemy.dialects.postgresql import aggregate_order_by
+from sqlalchemy.dialects.postgresql import aggregate_order_by, array
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sonoran.api.dependencies import get_session
@@ -31,6 +32,7 @@ from sonoran.db.models import (
     RfTrust,
 )
 from sonoran.radio.channels import US_END_HZ, US_START_HZ, all_channels, custom_channel
+from sonoran.rf import weather as wx
 from sonoran.rf.guard import ANY_SOURCE, NEW, QUARANTINED, TRUST_NAMES
 from sonoran.rf.schema import (
     HEARD_PRECISION_M,
@@ -360,6 +362,137 @@ async def track(
         )
     ).all()
     return {"kind": kind, "id": thing_id, "hours": hours, "points": [_point(r) for r in rows]}
+
+
+# The kinds that can carry weather (sonoran/rf/weather.py), and the APRS
+# `meta` keys that only a weather report has. A position report has none
+# of them, so the query leaves the plain beacons out before Python reads them.
+WEATHER_KINDS = ("ism", "aprs")
+APRS_WEATHER_KEYS = (
+    "temperature_f",
+    "wind_kn",
+    "gust_kn",
+    "humidity",
+    "pressure_hpa",
+    "rain_1h_in",
+    "rain_24h_in",
+    "rain_today_in",
+)
+
+
+@router.get("/weather")
+async def weather_now(
+    request: Request,
+    minutes: int = Query(default=60, ge=5, le=180),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, object]]:
+    """Every weather source heard in the window, with its newest readings.
+
+    The default is an hour, longer than the RF map's window, because an
+    APRS weather station sends every 5 to 30 minutes and would blink in
+    and out of a 5 minute window. A sensor's `rain_today_mm` is the rain
+    since midnight where the mesh is (`DISPLAY_TIMEZONE`), added up from
+    its running total; `rain_since` says when the first reading of that
+    span was, because a sensor first heard at 10:00 cannot say what fell
+    before.
+    """
+    now = datetime.now(UTC)
+    where = [
+        RfLatest.t >= now - timedelta(minutes=minutes),
+        or_(
+            RfLatest.kind == "ism",
+            and_(
+                RfLatest.kind == "aprs",
+                RfLatest.meta.op("?|")(array(APRS_WEATHER_KEYS)),
+            ),
+        ),
+    ]
+    hidden = _hidden(request)
+    if hidden:
+        where.append(RfLatest.thing_id.not_in(hidden))
+    rows = (
+        await session.scalars(select(RfLatest).where(*where).order_by(RfLatest.t.desc()).limit(200))
+    ).all()
+    zone = ZoneInfo(request.app.state.settings.display_timezone)
+    midnight = now.astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    out: list[dict[str, object]] = []
+    for row in rows:
+        values = wx.readings(row.kind, row.meta)
+        if not wx.is_weather(values):
+            continue
+        item: dict[str, object] = {
+            "kind": row.kind,
+            "id": row.thing_id,
+            **_point(row),
+            # A sensor sends no position: its point is the receiver's.
+            "heard_here": row.kind == "ism",
+            # The rtl_433 model names the sensor on its card. Text a station
+            # sent: the page sets it as text only.
+            "model": (row.meta or {}).get("model") if row.kind == "ism" else None,
+            "readings": values,
+        }
+        if "rain_total_mm" in values:
+            day = (
+                await session.execute(
+                    select(RfTrack.t, RfTrack.meta)
+                    .where(
+                        RfTrack.kind == row.kind,
+                        RfTrack.thing_id == row.thing_id,
+                        RfTrack.bucket >= midnight,
+                    )
+                    .order_by(RfTrack.t.asc())
+                )
+            ).all()
+            totals = [(t, wx.readings(row.kind, meta).get("rain_total_mm")) for t, meta in day]
+            known = [(t, total) for t, total in totals if total is not None]
+            rain = wx.rain_since(total for _, total in known)
+            if rain is not None:
+                item["rain_today_mm"] = round(rain, 3)
+                item["rain_since"] = known[0][0]
+        out.append(item)
+    return out
+
+
+@router.get("/weather/{kind}/{thing_id}")
+async def weather_series(
+    request: Request,
+    kind: str,
+    thing_id: str,
+    hours: int = Query(default=24, ge=1, le=48),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    """One weather source's readings over the last hours, oldest first.
+
+    One point per bucket (`bucket_minutes`), from `rf_track`, which keeps
+    two days (revision 0013), so 48 hours is the most there is.
+    """
+    thing_id = thing_id.lower()
+    if kind not in WEATHER_KINDS or thing_id in _hidden(request):
+        raise HTTPException(status_code=404, detail="no weather heard")
+    now = datetime.now(UTC)
+    since = now - timedelta(hours=hours)
+    rows = (
+        await session.execute(
+            select(RfTrack.t, RfTrack.meta)
+            .where(RfTrack.kind == kind, RfTrack.thing_id == thing_id, RfTrack.bucket >= since)
+            .order_by(RfTrack.t.asc())
+        )
+    ).all()
+    points = [(t, wx.readings(kind, meta)) for t, meta in rows]
+    points = [(t, values) for t, values in points if wx.is_weather(values)]
+    if not points:
+        raise HTTPException(status_code=404, detail="no weather heard")
+    minutes = wx.bucket_minutes(hours)
+    width = timedelta(minutes=minutes)
+    epoch = datetime(2000, 1, 1, tzinfo=UTC)
+    start = epoch + width * ((since - epoch) // width)
+    return {
+        "kind": kind,
+        "id": thing_id,
+        "hours": hours,
+        "bucket_minutes": minutes,
+        "points": wx.series(points, start, minutes),
+    }
 
 
 @router.get("/heard/{station}")
