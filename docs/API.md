@@ -2577,6 +2577,53 @@ and `meta` (for aircraft: `callsign`, `squawk`, `category` when sent).
 One thing's points, oldest first, one per 20 s bucket. `hours` is 1 to
 48, default 1. 404 for an unknown kind or a hidden aircraft.
 
+### 12.3.1 `GET /api/rf/weather`
+
+Every weather source heard in the last `minutes` (5 to 180, default 60),
+newest first: each `ism` sensor, and each APRS station whose `meta` holds
+a weather reading. A plain APRS beacon and a hidden id are left out.
+
+Each item: `kind`, `id`, the point fields of 12.2, `heard_here` (true for
+a sensor, which sends no position: its point is the receiver's), `model`
+(a sensor's rtl_433 model, else null) and `readings`.
+
+`readings` is in SI units, whoever sent it (`sonoran/rf/weather.py`).
+Only what the source sent is there; a missing reading is absent, never
+0. The keys: `temperature_c`, `humidity` (%), `pressure_hpa`,
+`wind_dir_deg` (where the wind blows from), `wind_ms`, `gust_ms`,
+`rain_total_mm` (a sensor's running total), `rain_1h_mm`, `rain_24h_mm`,
+`rain_today_mm` (as an APRS station counts it), `uvi`, `light_lux`,
+`solar_wm2` and `battery_ok`.
+
+| Sent as | Read from | Source of the unit |
+|---|---|---|
+| APRS weather | `meta`: `temperature_f`, `wind_kn`, `gust_kn`, `rain_*_in`, `pressure_hpa`, `luminosity_wm2` | APRS Protocol Reference 1.0.1, ch. 12; the agent turns mph into knots |
+| rtl_433 sensor | `meta` first, then the rtl_433 line in `meta.raw`: `temperature_C`, `wind_avg_m_s`, `wind_max_m_s`, `rain_mm`, `uvi`, `light_lux` | rtl_433 `docs/DATA_FORMAT.md`; the WH24 in `src/devices/fineoffset.c` |
+
+A value no sensor can mean is dropped: humidity outside 0 to 100, a
+direction outside 0 to 360, and a negative speed, rain, UV or light.
+
+A sensor with a running total also has `rain_today_mm`, the sum of its
+rises since midnight in `DISPLAY_TIMEZONE`, and `rain_since`, the time
+of the first reading counted. A fall in the total (new batteries) adds
+nothing. Absent when fewer than two readings were heard today.
+
+### 12.3.2 `GET /api/rf/weather/{kind}/{id}`
+
+One weather source's readings over the last `hours` (1 to 48, default
+24), oldest first. `rf_track` keeps 2 days, so 48 is all there is.
+`kind` is `ism` or `aprs`; 404 for another kind, a hidden id, or a
+thing that sent no weather in the window.
+
+`bucket_minutes` is 5 up to 24 hours and 10 above, which keeps a window
+near 300 points (a WH24 sends every 16 s: 10,800 points in 48 hours).
+Each point: `t` (the bucket's start), the mean of `temperature_c`,
+`humidity`, `pressure_hpa`, `wind_ms`, `uvi`, `light_lux` and
+`solar_wm2`; the highest `gust_ms`; `wind_dir_deg` as a mean of vectors
+weighted by speed, so 350° and 10° make north; `rain_mm`, the rain since
+the window began from a running total; and `rain_today_mm`, the last one
+an APRS station sent. A bucket with nothing heard is left out.
+
 ### 12.4 `GET /api/rf/heard/{station}`
 
 Where one station has heard things, on a grid of about 2 km

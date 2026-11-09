@@ -599,6 +599,29 @@ packet kind filter on the Live map (issue #48):
   so. APRS stations and sondes send their own positions, so this applies
   to sensors only.
 
+### 7.1.1 Weather
+
+Below the map, a card for each weather source heard in the last hour:
+each allowed sensor, and each APRS station that sends weather. The
+sensor comes first, because it is ours; an APRS station only passed
+through. A card shows the temperature large, then what the source sent
+and nothing else: humidity, wind with an arrow that points where the
+wind blows and the words "from N", gusts, rain, pressure, UV index. A
+reading the source does not send is left off, never shown as zero.
+
+A sensor's rain is a running total since its batteries went in, so the
+card shows the rain since the first reading of the day, and says the
+time of that reading: "Rain since 12:00 AM" after a night heard, "Rain
+since 10:14 AM" for a sensor first heard then.
+
+The chosen card has charts of the last 24 or 48 hours, from `rf_track`,
+which keeps 2 days: temperature and humidity, wind and gusts, rain,
+pressure, and UV and light. Each point is 5 or 10 minutes. A chart a
+source cannot fill is not drawn. The API reads both senders into one
+set of units (API.md 12.3.1, `sonoran/rf/weather.py`); a WH24's wind,
+UV and light are read from rtl_433's own line, because the agent does
+not lift them into `meta`.
+
 ### 7.2 Receivers
 
 A layer of our own stations, each with the area it has actually heard

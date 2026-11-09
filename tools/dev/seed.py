@@ -24,6 +24,8 @@ again as many times as you want.
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import os
 import random
 import sys
@@ -586,6 +588,93 @@ async def write_preset_messages(conn) -> None:
                 """
             ),
             values,
+        )
+
+
+async def write_rf_weather(conn) -> None:
+    """A day of weather on the RF page: one rtl_433 sensor and one APRS station.
+
+    Made up, in the shapes the agent sends (`sonoran/rf/weather.py`). The
+    sensor is a Fine Offset WH24 like station kiwa's: its wind, UV and
+    light only in `raw`, its rain a running total, with a shower in the
+    afternoon so the rain chart has a step. The APRS station sends every
+    10 minutes, in its own units. Both written straight into `rf_track`
+    and `rf_latest`, as ingest would leave them.
+    """
+    await conn.execute(text("TRUNCATE rf_track, rf_latest"))
+    rows = []
+    rain = 781.2
+    for step in range(24 * 12 + 1):
+        when = NOW - timedelta(minutes=5 * (24 * 12 - step))
+        hour = (when.hour + when.minute / 60 - 7) % 24  # Arizona, UTC-7 all year
+        warm = math.sin((hour - 9) / 24 * 2 * math.pi)
+        temp_c = round(19 + 9 * warm, 1)
+        wind = round(max(0.0, 1.5 + 1.2 * warm + RNG.uniform(-0.6, 0.6)), 2)
+        if 15 <= hour < 16:
+            rain = round(rain + 0.3, 1)
+        sun = max(0.0, math.sin((hour - 6) / 12 * math.pi)) if 6 <= hour <= 18 else 0.0
+        raw = {
+            "model": "Fineoffset-WH24",
+            "id": 200,
+            "battery_ok": 1,
+            "temperature_C": temp_c,
+            "humidity": round(45 - 15 * warm),
+            "wind_dir_deg": (60 + step * 7) % 360,
+            "wind_avg_m_s": wind,
+            "wind_max_m_s": round(wind * 1.6, 2),
+            "rain_mm": rain,
+            "uvi": round(5 * sun, 1),
+            "light_lux": round(60000 * sun),
+        }
+        meta = {
+            "model": "Fineoffset-WH24",
+            "temperature_c": temp_c,
+            "humidity": raw["humidity"],
+            "wind_dir_deg": raw["wind_dir_deg"],
+            "rain_mm": rain,
+            "battery_ok": 1,
+            "raw": json.dumps(raw),
+        }
+        rows.append(("ism", "fineoffset-wh24-200", when, 33.45, -112.07, "dev-site", meta))
+        if step % 2 == 0:
+            aprs = {
+                "symbol": "/_",
+                "temperature_f": round(temp_c * 9 / 5 + 32 - 4),
+                "wind_kn": round(wind * 1.94, 1),
+                "gust_kn": round(wind * 3.1, 1),
+                "wind_dir_deg": (200 + step * 3) % 360,
+                "humidity": round(50 - 12 * warm),
+                "pressure_hpa": round(1012 - 3 * warm, 1),
+                "rain_today_in": 0.0,
+            }
+            rows.append(("aprs", "kc9uhi-13", when, 32.15, -110.92, "dev-site", aprs))
+    for kind, thing, when, lat, lon, station, meta in rows:
+        bucket = when.replace(second=(when.second // 20) * 20, microsecond=0)
+        await conn.execute(
+            text(
+                "INSERT INTO rf_track (kind, thing_id, bucket, t, lat, lon, station_id, meta, "
+                "received_at) VALUES (:k, :i, :b, :t, :lat, :lon, :s, CAST(:m AS jsonb), :t)"
+            ),
+            {
+                "k": kind,
+                "i": thing,
+                "b": bucket,
+                "t": when,
+                "lat": lat,
+                "lon": lon,
+                "s": station,
+                "m": json.dumps(meta),
+            },
+        )
+    for kind, thing in (("ism", "fineoffset-wh24-200"), ("aprs", "kc9uhi-13")):
+        await conn.execute(
+            text(
+                "INSERT INTO rf_latest "
+                "(kind, thing_id, t, lat, lon, station_id, meta, received_at) "
+                "SELECT kind, thing_id, t, lat, lon, station_id, meta, received_at FROM rf_track "
+                "WHERE kind = :k AND thing_id = :i ORDER BY t DESC LIMIT 1"
+            ),
+            {"k": kind, "i": thing},
         )
 
 
@@ -1258,6 +1347,8 @@ async def main() -> None:
         # Every upload and packet above, tagged as ingest would (#313).
         await tag_presets(conn, NOW - timedelta(days=30))
         await write_preset_messages(conn)
+        # The RF page's weather panel.
+        await write_rf_weather(conn)
 
     async with engine.connect() as conn:
         for table in (
@@ -1270,6 +1361,7 @@ async def main() -> None:
             "environment_metrics",
             "neighbor_metrics",
             "traceroute",
+            "rf_track",
         ):
             count = (await conn.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one()
             print(f"{table:22} {count:>7}")

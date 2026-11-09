@@ -728,6 +728,29 @@
           <div class="map-shell"><div id="rf-map"></div></div>
           <p class="muted" data-rf-selected>Click a mark for its track, or a receiver for where it hears.</p>
           <div class="legend" data-rf-legend aria-label="What the marks mean"></div>
+          <!--
+            Weather. Every weather source our receivers heard in the last
+            hour, as a card, and the last day or two of the one chosen, as
+            charts. Two kinds of sender: an APRS weather station, and a
+            433 or 915 MHz sensor decoded by rtl_433. The API turns both
+            into one set of readings (`sonoran/rf/weather.py`). Built by
+            rf.js, "Weather". Hidden until a source has been heard.
+          -->
+          <section class="panel rf-weather" data-rf-weather hidden aria-labelledby="rf-weather-title">
+            <h3 id="rf-weather-title">Weather <span class="muted head-note" data-rf-weather-note></span></h3>
+            <ul class="rf-weather-cards" data-rf-weather-cards aria-label="Weather sources"></ul>
+            <div class="rf-weather-detail" data-rf-weather-detail hidden>
+              <div class="rf-weather-detail-head">
+                <h4 data-rf-weather-name></h4>
+                <div class="segmented" role="group" aria-label="How far back">
+                  <button type="button" class="toggle" data-rf-weather-hours="24" aria-pressed="true">24 hours</button>
+                  <button type="button" class="toggle" data-rf-weather-hours="48" aria-pressed="false">48 hours</button>
+                </div>
+              </div>
+              <div class="rf-weather-charts" data-rf-weather-charts></div>
+              <p class="muted" data-rf-weather-explain></p>
+            </div>
+          </section>
           <!-- Everything on the map as rows: decoded, and the raw frame it
                was decoded from. Built by rf.js, "The table". -->
           <section class="panel rf-table-panel" data-rf-table hidden aria-label="RF data table">

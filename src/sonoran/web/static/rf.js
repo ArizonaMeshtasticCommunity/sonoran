@@ -1977,6 +1977,348 @@
     });
   }
 
+  /* --- Weather --------------------------------------------------------
+
+     Every weather source our receivers heard in the last hour, as a
+     card, and the chosen one's last day or two as charts. The API sends
+     the readings in SI units, whoever sent them (`sonoran/rf/weather.py`),
+     so they are converted once here, to the reader's units. A reading a
+     source does not send is left off its card and its chart, never shown
+     as zero. */
+  const weather = { sources: [], selected: null, hours: 24, series: null, loadedAt: 0, loading: null };
+  // A chart's points are 5 or 10 minutes each, so asking more often than
+  // this only fetches the same points again.
+  const WEATHER_SERIES_EVERY_MS = 120000;
+
+  const tempOut = (c) => (SonoranUnits.fahrenheit() ? c * 9 / 5 + 32 : c);
+  const tempUnit = () => (SonoranUnits.fahrenheit() ? '°F' : '°C');
+  const speedOut = (ms) => (SonoranUnits.imperial() ? ms * 3.6 * SonoranUnits.MILES_PER_KM : ms * 3.6);
+  const speedUnit = () => (SonoranUnits.imperial() ? 'mph' : 'km/h');
+  const rainOut = (mm) => (SonoranUnits.imperial() ? mm / 25.4 : mm);
+  const rainUnit = () => (SonoranUnits.imperial() ? 'in' : 'mm');
+  const pressureOut = (hpa) => (SonoranUnits.imperial() ? hpa * 0.0295299830714 : hpa);
+  const pressureUnit = () => (SonoranUnits.imperial() ? 'inHg' : 'hPa');
+
+  function weatherName(source) {
+    if (source.kind === 'aprs') return (source.id.startsWith(';') ? source.id.slice(1) : source.id).toUpperCase();
+    // An rtl_433 id is the model and the sensor's own number, such as
+    // `fineoffset-wh24-200`. The model reads better with its capitals.
+    const model = source.model ? plainText(source.model).replace(/^Fineoffset-/i, 'Fine Offset ') : null;
+    const number = source.id.split('-').pop();
+    return model ? `${model} sensor ${number}` : `Sensor ${plainText(source.id)}`;
+  }
+
+  function weatherWhere(source) {
+    // "Received at", not "heard by": on this site "heard by" is a list of
+    // MQTT uploads (AGENTS.md 9.5.1). This is the one RF receiver.
+    return source.kind === 'aprs'
+      ? `APRS weather station, received at ${plainText(source.station || 'a receiver')}`
+      : `Received at ${plainText(source.station || 'a receiver')}`;
+  }
+
+  /* An arrow that points where the wind blows TO. A wind "from the north"
+     blows south, so the arrow turns by the direction plus 180°. The words
+     beside it say "from", which is how a forecast says it. */
+  function windArrow(degrees) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '-12 -12 24 24');
+    svg.setAttribute('class', 'rf-wind-arrow');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M0 -10 L6 4 L0 1 L-6 4 Z');
+    path.setAttribute('transform', `rotate(${(Number(degrees) + 180) % 360})`);
+    svg.append(path);
+    return svg;
+  }
+
+  function windText(r) {
+    const parts = [];
+    if (r.wind_ms != null) parts.push(SonoranUnits.speedFromMs(r.wind_ms));
+    if (r.gust_ms != null) parts.push(`gusts ${SonoranUnits.speedFromMs(r.gust_ms)}`);
+    let text = parts.join(', ');
+    if (r.wind_dir_deg != null) text = `from ${compass(r.wind_dir_deg)}${text ? `, ${text}` : ''}`;
+    return text;
+  }
+
+  function weatherCard(source) {
+    const r = source.readings || {};
+    const rows = [];
+    const row = (label, value, extra) => {
+      if (value === '' || value == null) return;
+      rows.push(el('div', { class: 'rf-weather-row' }, el('dt', { text: label }), el('dd', {}, extra || null, value)));
+    };
+    row('Humidity', r.humidity == null ? null : `${Math.round(r.humidity)} %`);
+    if (r.wind_ms != null || r.gust_ms != null || r.wind_dir_deg != null) {
+      row('Wind', windText(r), r.wind_dir_deg == null ? null : windArrow(r.wind_dir_deg));
+    }
+    if (source.rain_today_mm != null) {
+      // Counted from the sensor's first reading today, which is midnight
+      // when it was heard all night. The label says which, rather than
+      // call a count from 10:00 "today".
+      row(`Rain since ${clock(source.rain_since)}`, SonoranUnits.lengthFromMm(source.rain_today_mm));
+    } else if (r.rain_today_mm != null) {
+      row('Rain today', SonoranUnits.lengthFromMm(r.rain_today_mm));
+    }
+    if (r.rain_24h_mm != null) row('Rain, 24 hours', SonoranUnits.lengthFromMm(r.rain_24h_mm));
+    if (r.pressure_hpa != null) row('Pressure', SonoranUnits.pressureFromHpa(r.pressure_hpa));
+    if (r.uvi != null) row('UV index', String(Math.round(r.uvi * 10) / 10));
+    if (r.solar_wm2 != null) row('Sunlight', `${Math.round(r.solar_wm2)} W/m²`);
+    if (r.battery_ok === false) row('Battery', 'Low');
+    const chosen = weather.selected && weather.selected.kind === source.kind && weather.selected.id === source.id;
+    const button = el('button', {
+      type: 'button', class: 'rf-weather-card', 'aria-pressed': String(Boolean(chosen)),
+      'data-rf-weather-source': `${source.kind}/${source.id}`,
+    },
+    el('span', { class: 'rf-weather-title', text: weatherName(source) }),
+    el('span', { class: 'rf-weather-where muted', text: weatherWhere(source) }),
+    el('span', { class: 'rf-weather-temp', text: r.temperature_c == null ? 'No temperature sent' : SonoranUnits.temperatureFromC(r.temperature_c) }),
+    el('dl', { class: 'rf-weather-rows' }, rows),
+    el('span', { class: 'rf-weather-when muted', text: `Updated ${ago(source.t)}` }));
+    button.addEventListener('click', () => {
+      // Found before the redraw: drawing the cards again replaces this
+      // button, and a detached button has no page above it.
+      const page = button.closest('[data-page]');
+      weather.selected = { kind: source.kind, id: source.id };
+      weather.series = null;
+      drawWeatherCards(page);
+      loadWeatherSeries(page, true);
+    });
+    return el('li', {}, button);
+  }
+
+  function drawWeatherCards(page) {
+    const list = $('[data-rf-weather-cards]', page);
+    list.replaceChildren(...weather.sources.map(weatherCard));
+    const note = $('[data-rf-weather-note]', page);
+    note.textContent = `${weather.sources.length} heard in the last hour`;
+  }
+
+  async function loadWeather(page) {
+    const panel = $('[data-rf-weather]', page);
+    if (!panel) return;
+    let body;
+    try {
+      body = (await getJson('api/rf/weather?minutes=60')).body;
+    } catch (error) {
+      // The rest of the RF page still works; the panel says why it is empty.
+      panel.hidden = false;
+      $('[data-rf-weather-cards]', page).replaceChildren(
+        el('li', { class: 'muted', text: `The weather could not be loaded: ${error.message}. It tries again with the next refresh.` }));
+      return;
+    }
+    // A sensor first, then the APRS stations, newest first within each:
+    // the sensor is ours, an APRS station only passed through.
+    weather.sources = body.slice().sort((a, b) => (a.kind === b.kind
+      ? Date.parse(b.t) - Date.parse(a.t) : (a.kind === 'ism' ? -1 : 1)));
+    panel.hidden = !weather.sources.length;
+    if (!weather.sources.length) return;
+    const still = weather.selected && weather.sources.some(
+      (s) => s.kind === weather.selected.kind && s.id === weather.selected.id);
+    if (!still) {
+      weather.selected = { kind: weather.sources[0].kind, id: weather.sources[0].id };
+      weather.series = null;
+    }
+    drawWeatherCards(page);
+    bindWeather(page);
+    loadWeatherSeries(page, false);
+  }
+
+  function bindWeather(page) {
+    const panel = $('[data-rf-weather]', page);
+    if (panel.dataset.bound) return;
+    panel.dataset.bound = '1';
+    for (const button of panel.querySelectorAll('[data-rf-weather-hours]')) {
+      button.addEventListener('click', () => {
+        weather.hours = Number(button.dataset.rfWeatherHours);
+        for (const other of panel.querySelectorAll('[data-rf-weather-hours]')) {
+          other.setAttribute('aria-pressed', String(other === button));
+        }
+        weather.series = null;
+        loadWeatherSeries(page, true);
+      });
+    }
+  }
+
+  async function loadWeatherSeries(page, force) {
+    const chosen = weather.selected;
+    if (!chosen) return;
+    if (!force && weather.series && Date.now() - weather.loadedAt < WEATHER_SERIES_EVERY_MS) {
+      drawWeatherCharts(page);
+      return;
+    }
+    const key = `${chosen.kind}/${chosen.id}/${weather.hours}`;
+    if (weather.loading === key) return;
+    weather.loading = key;
+    try {
+      const path = `api/rf/weather/${chosen.kind}/${encodeURIComponent(chosen.id)}?hours=${weather.hours}`;
+      const body = (await getJson(path)).body;
+      // The reader may have chosen another source while this loaded.
+      if (weather.loading !== key) return;
+      weather.series = body;
+      weather.loadedAt = Date.now();
+    } catch (error) {
+      weather.series = { points: [], error: error.message };
+    } finally {
+      if (weather.loading === key) weather.loading = null;
+    }
+    drawWeatherCharts(page);
+  }
+
+  /* The charts a source's points can fill. Each lists the series it
+     draws; a chart with no point for any of them is not drawn. */
+  function weatherCharts(points) {
+    const has = (key) => points.some((p) => p[key] != null);
+    const line = (name, key, convert, extra = {}) => ({
+      name, type: 'line', showSymbol: false, connectNulls: false, ...extra,
+      data: points.map((p) => [Date.parse(p.t), p[key] == null ? null : Math.round(convert(p[key]) * 100) / 100]),
+    });
+    const charts = [];
+    if (has('temperature_c') || has('humidity')) {
+      const series = [];
+      const axes = [];
+      if (has('temperature_c')) {
+        axes.push({ type: 'value', name: tempUnit(), scale: true });
+        series.push(line('Temperature', 'temperature_c', tempOut, { yAxisIndex: 0 }));
+      }
+      if (has('humidity')) {
+        axes.push({ type: 'value', name: '%', min: 0, max: 100, splitLine: { show: false } });
+        series.push(line('Humidity', 'humidity', (v) => v, { yAxisIndex: axes.length - 1, lineStyle: { type: 'dashed' } }));
+      }
+      charts.push({ key: 'temperature', title: has('temperature_c') ? 'Temperature and humidity' : 'Humidity', axes, series,
+        units: { Temperature: ` ${tempUnit()}`, Humidity: ' %' } });
+    }
+    if (has('wind_ms') || has('gust_ms')) {
+      const series = [];
+      if (has('wind_ms')) series.push(line('Average wind', 'wind_ms', speedOut));
+      if (has('gust_ms')) series.push(line('Gusts', 'gust_ms', speedOut, { lineStyle: { type: 'dashed' } }));
+      charts.push({ key: 'wind', title: 'Wind', axes: [{ type: 'value', name: speedUnit(), min: 0 }], series,
+        units: { 'Average wind': ` ${speedUnit()}`, Gusts: ` ${speedUnit()}` },
+        // The direction has no axis of its own: it is in the tooltip,
+        // in words, for the time the reader points at.
+        direction: (index) => (points[index] && points[index].wind_dir_deg != null
+          ? `from ${compass(points[index].wind_dir_deg)}` : null) });
+    }
+    if (has('rain_mm')) {
+      charts.push({ key: 'rain', title: 'Rain since the start of the chart', axes: [{ type: 'value', name: rainUnit(), min: 0 }],
+        series: [line('Rain', 'rain_mm', rainOut, { step: 'end', areaStyle: { opacity: 0.25 } })],
+        units: { Rain: ` ${rainUnit()}` } });
+    } else if (has('rain_today_mm')) {
+      charts.push({ key: 'rain', title: 'Rain today, as the station counts it', axes: [{ type: 'value', name: rainUnit(), min: 0 }],
+        series: [line('Rain today', 'rain_today_mm', rainOut, { step: 'end', areaStyle: { opacity: 0.25 } })],
+        units: { 'Rain today': ` ${rainUnit()}` } });
+    }
+    if (has('pressure_hpa')) {
+      charts.push({ key: 'pressure', title: 'Air pressure', axes: [{ type: 'value', name: pressureUnit(), scale: true }],
+        series: [line('Pressure', 'pressure_hpa', pressureOut)], units: { Pressure: ` ${pressureUnit()}` } });
+    }
+    if (has('uvi') || has('light_lux') || has('solar_wm2')) {
+      const series = [];
+      const axes = [];
+      const units = {};
+      if (has('uvi')) {
+        axes.push({ type: 'value', name: 'UV index', min: 0 });
+        series.push(line('UV index', 'uvi', (v) => v, { yAxisIndex: 0 }));
+        units['UV index'] = '';
+      }
+      if (has('light_lux')) {
+        axes.push({ type: 'value', name: 'lux', min: 0, splitLine: { show: false } });
+        series.push(line('Light', 'light_lux', (v) => v, { yAxisIndex: axes.length - 1, lineStyle: { type: 'dashed' } }));
+        units.Light = ' lux';
+      } else if (has('solar_wm2')) {
+        axes.push({ type: 'value', name: 'W/m²', min: 0, splitLine: { show: false } });
+        series.push(line('Sunlight', 'solar_wm2', (v) => v, { yAxisIndex: axes.length - 1, lineStyle: { type: 'dashed' } }));
+        units.Sunlight = ' W/m²';
+      }
+      charts.push({ key: 'sun', title: 'Sun', axes, series, units });
+    }
+    return charts;
+  }
+
+  function drawWeatherCharts(page) {
+    const detail = $('[data-rf-weather-detail]', page);
+    const holder = $('[data-rf-weather-charts]', page);
+    const explain = $('[data-rf-weather-explain]', page);
+    const source = weather.sources.find((s) => weather.selected
+      && s.kind === weather.selected.kind && s.id === weather.selected.id);
+    if (!source) {
+      detail.hidden = true;
+      return;
+    }
+    detail.hidden = false;
+    $('[data-rf-weather-name]', page).textContent = `${weatherName(source)}: the last ${weather.hours} hours`;
+    const data = weather.series;
+    if (!data) {
+      holder.replaceChildren(el('p', { class: 'muted', text: 'Loading the charts.' }));
+      explain.textContent = '';
+      return;
+    }
+    if (data.error) {
+      holder.replaceChildren(el('p', { class: 'muted', text: `The charts could not be loaded: ${data.error}. They try again with the next refresh.` }));
+      explain.textContent = '';
+      weather.series = null;
+      return;
+    }
+    const charts = weatherCharts(data.points || []);
+    if (!charts.length || !window.echarts) {
+      holder.replaceChildren(el('p', { class: 'muted', text: 'Nothing to chart yet. A chart fills in as the source keeps sending.' }));
+      explain.textContent = '';
+      return;
+    }
+    // Keep a chart's box when it is drawn again, so a refresh does not
+    // flash the charts away and back.
+    const want = charts.map((chart) => chart.key).join(',');
+    if (holder.dataset.charts !== want) {
+      for (const node of holder.querySelectorAll('.rf-weather-plot')) {
+        const old = window.echarts.getInstanceByDom(node);
+        if (old) old.dispose();
+      }
+      holder.replaceChildren(...charts.map((chart) => el('figure', { class: 'rf-weather-chart' },
+        el('figcaption', { 'data-rf-weather-chart-title': chart.key }),
+        el('div', { class: 'rf-weather-plot', 'data-rf-weather-plot': chart.key, role: 'img' }))));
+      holder.dataset.charts = want;
+    }
+    const css = getComputedStyle(document.documentElement);
+    const token = (name, fallback) => (css.getPropertyValue(name) || '').trim() || fallback;
+    const muted = token('--muted', '#b59c88');
+    for (const chart of charts) {
+      $(`[data-rf-weather-chart-title="${chart.key}"]`, holder).textContent = chart.title;
+      const target = $(`[data-rf-weather-plot="${chart.key}"]`, holder);
+      target.setAttribute('aria-label', `${chart.title}, the last ${weather.hours} hours`);
+      let instance = window.echarts.getInstanceByDom(target);
+      if (!instance) instance = window.echarts.init(target, null, { renderer: 'canvas' });
+      else instance.resize();
+      instance.setOption({
+        animation: !REDUCED_MOTION.matches,
+        backgroundColor: 'transparent',
+        textStyle: { color: muted },
+        color: [token('--accent', '#f4703f'), token('--map-link', '#6ea9c9')],
+        tooltip: {
+          trigger: 'axis',
+          // A DOM node, as every tooltip on the site (tooltipLines in app.js).
+          formatter: (items) => {
+            const list = Array.isArray(items) ? items : [items];
+            const direction = list.length && chart.direction ? chart.direction(list[0].dataIndex) : null;
+            return tooltipLines(
+              list.length ? clock(list[0].value[0]) : null,
+              list.map((item) => {
+                const value = item.value[1];
+                return `${item.seriesName}: ${value == null ? 'not sent' : `${value}${chart.units[item.seriesName] || ''}`}`;
+              }),
+              direction ? `Wind ${direction}` : null,
+            );
+          },
+        },
+        legend: { top: 0, type: 'scroll', textStyle: { color: muted } },
+        grid: { left: 8, right: 8, top: 34, bottom: 24, containLabel: true },
+        xAxis: { type: 'time', min: Date.now() - weather.hours * 3600000, max: Date.now() },
+        yAxis: chart.axes.map((axis) => ({ ...axis, nameTextStyle: { color: muted } })),
+        series: chart.series,
+      }, true);
+    }
+    explain.textContent = `Each point is ${data.bucket_minutes} minutes: the average of what was sent in it, and the highest gust. `
+      + 'A gap means nothing was heard then. Sonoran keeps 48 hours of these readings.';
+  }
+
   async function show(page) {
     const map = ensureMap();
     setTimeout(() => map.invalidateSize(), 0);
@@ -2012,6 +2354,7 @@
     loadSweeps(page, stations.body);
     loadMods(page);
     loadNoise();
+    loadWeather(page);
     if (!stations.body.length) {
       summary.textContent = 'No RF station has reported yet. A station runs sonoran-contributor beside its SDR.';
       return;
