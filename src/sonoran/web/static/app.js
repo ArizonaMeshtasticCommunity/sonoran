@@ -7120,21 +7120,38 @@ function healthChecks(gaps, detail) {
  * panel, which is the one fact on that page that a map answers better
  * than text.
  *
- * Deliberately NOT drawn: lines to neighbours and to the nodes that
- * hear it. The issue offers that as "optional, and useful", from "data
- * the page already loads" -- but it does not. Measured against
- * `/api/nodes/{id}/detail`, neither `neighbors` nor `heard_by` carries
- * a latitude or a longitude:
+ * Lines to neighbors (beta-sonoran#412). #103 left them out because the detail
+ * endpoint carried no neighbor positions. It does now: each row of
+ * `neighbors` has `position`, read by `sonoran.api.places`. A line goes
+ * from this node to each neighbor it reported hearing, which is a real
+ * radio measurement (AGENTS.md 9.5). It says this node heard that one,
+ * not that the other hears this one.
  *
- *     neighbors  keys: node_id, display_name, snr, last_rx_time,
- *                      broadcast_interval_secs, time
- *     heard_by   keys: node_id, display_name, count, direct_count,
- *                      relayed_count, last_heard, avg_snr, best_snr,
- *                      avg_rssi
- *
- * Drawing them needs the endpoint to carry positions, which is a change
- * to the API rather than to this function.
+ * Still not drawn: lines to the gateways in `heard_by`. A gateway
+ * usually heard this node through relays (AGENTS.md 9.5, 9.20).
  */
+/** The neighbors that can be put on the map, and how many cannot (beta-sonoran#412). */
+function neighborMapMarks(neighbors) {
+  const marks = [];
+  let unplaced = 0;
+  for (const row of neighbors || []) {
+    const place = row.position;
+    if (!place || place.lat == null || place.lon == null) {
+      unplaced += 1;
+      continue;
+    }
+    marks.push({
+      node_id: row.node_id,
+      name: row.display_name || row.node_id,
+      snr: row.snr,
+      lat: place.lat,
+      lon: place.lon,
+      confidence: place.confidence,
+    });
+  }
+  return { marks, unplaced };
+}
+
 const nodeMaps = new Map();
 
 function nodeMapPanel(detail) {
@@ -7202,14 +7219,31 @@ function nodeMapPanel(detail) {
     el('p', { class: 'muted node-map-note' },
       confidence === 'coarse'
         ? 'Rounded position'
-        : `${round(position.lat, 5)}, ${round(position.lon, 5)}`));
+        : `${round(position.lat, 5)}, ${round(position.lon, 5)}`),
+    neighborKey(neighborMapMarks(detail.neighbors)));
 
   // Leaflet needs the element in the document before it measures it.
-  setTimeout(() => drawNodeMap(box, position, confidence), 0);
+  setTimeout(() => drawNodeMap(box, position, confidence, detail.neighbors), 0);
   return panel;
 }
 
-function drawNodeMap(target, position, confidence) {
+/** What the neighbor lines mean, or nothing when there are none. */
+function neighborKey({ marks, unplaced }) {
+  if (!marks.length && !unplaced) return null;
+  return el('p', { class: 'muted' },
+    marks.length
+      ? [`A line goes to each of ${count(marks.length)} `
+          + `${marks.length === 1 ? 'neighbor' : 'neighbors'}. This node heard each one direct, `
+          + 'by its own ',
+        el('span', { 'data-term': 'neighbor-info', text: 'neighbor report' }),
+        '. A line does not say the other node hears this one.']
+      : 'This node reports neighbors, but none of them shares a position.',
+    unplaced && marks.length
+      ? ` ${count(unplaced)} more ${unplaced === 1 ? 'shares' : 'share'} no position.`
+      : null);
+}
+
+function drawNodeMap(target, position, confidence, neighbors) {
   if (!target.isConnected || typeof L === 'undefined') return;
 
   /*
@@ -7266,6 +7300,29 @@ function drawNodeMap(target, position, confidence) {
     fillOpacity: confidence === 'coarse' ? 0.15 : 0.7,
     weight: 2,
   }).addTo(map);
+
+  // A line to each neighbor it reported, as Meshview draws them (beta-sonoran#412).
+  const { marks } = neighborMapMarks(neighbors);
+  for (const mark of marks) {
+    const there = [mark.lat, mark.lon];
+    const label = mark.snr == null ? 'SNR not reported' : `SNR ${round(mark.snr, 1)} dB`;
+    L.polyline([point, there], { color: PALETTE.link, weight: 2, opacity: 0.75 })
+      .addTo(map).bindTooltip(document.createTextNode(label), { sticky: true });
+    L.circleMarker(there, {
+      radius: 6,
+      color: PALETTE.link,
+      fillColor: PALETTE.link,
+      fillOpacity: mark.confidence === 'coarse' ? 0.15 : 0.7,
+      weight: 2,
+    }).addTo(map).bindPopup(el('div', {},
+      el('strong', { text: mark.name }), el('br'),
+      `This node heard it direct. ${label}.`, el('br'),
+      el('a', { href: `#node/${encodeURIComponent(mark.node_id)}`, text: 'Open its node page' })));
+  }
+  if (marks.length) {
+    map.fitBounds([point, ...marks.map((mark) => [mark.lat, mark.lon])],
+      { padding: [24, 24], maxZoom: 14 });
+  }
 
   setTimeout(() => map.invalidateSize(), 0);
 }
@@ -10527,6 +10584,172 @@ function positionMap(target, rows) {
 }
 
 /*
+ * Where a packet was heard (beta-sonoran#412), as Meshview's packet page shows it.
+ *
+ * The sender, at its last known position, and each gateway that uploaded
+ * the packet, at its own, marked with the fewest hops it was reached in.
+ *
+ * A line goes only to a gateway that heard the packet DIRECT. That is a
+ * real radio link. A relayed packet's path is unknown: only a traceroute
+ * carries one (AGENTS.md 9.20), so a relayed gateway gets its number and
+ * no line. A straight line there would claim ground nobody measured.
+ *
+ * The sender uploading its own packet is not a gateway that heard it
+ * (AGENTS.md 9.5.1), and one gateway that uploaded twice is one mark.
+ */
+function packetMapMarks(data) {
+  const places = data.places || {};
+  const from = data.packet.from_node;
+  const sender = places[from]
+    ? { node_id: from, name: data.packet.from_name || from, ...places[from] }
+    : null;
+  const byGateway = new Map();
+  for (const row of data.observations || []) {
+    if (row.self_reported) continue;
+    const heard = byGateway.get(row.gateway)
+      || { name: row.gateway_name || row.gateway, hops: null, direct: false, snr: null };
+    if (row.hops_taken != null && (heard.hops == null || row.hops_taken < heard.hops)) {
+      heard.hops = row.hops_taken;
+    }
+    if (row.direct) {
+      heard.direct = true;
+      if (row.rx_snr != null && (heard.snr == null || row.rx_snr > heard.snr)) heard.snr = row.rx_snr;
+    }
+    byGateway.set(row.gateway, heard);
+  }
+  const gateways = [];
+  let unplaced = 0;
+  for (const [id, heard] of byGateway) {
+    const place = places[id];
+    if (!place) {
+      unplaced += 1;
+      continue;
+    }
+    gateways.push({
+      node_id: id,
+      name: heard.name,
+      ...place,
+      hops: heard.direct ? 0 : heard.hops,
+      direct: heard.direct,
+      snr: heard.direct ? heard.snr : null,
+      line: Boolean(sender && heard.direct),
+    });
+  }
+  return { sender, gateways, unplaced };
+}
+
+/** The panel that holds the map, and a key in plain words. */
+function wherePanel(marks) {
+  if (!marks.sender && !marks.gateways.length) {
+    return el('div', { class: 'panel span-2' },
+      el('h3', {}, 'Where it was heard'),
+      el('p', { class: 'muted' }, 'Neither the sender nor any ',
+        el('span', { 'data-term': 'gateway', text: 'gateway' }), ' that ',
+        el('span', { 'data-term': 'upload', text: 'uploaded' }),
+        ' it shares a position, so there is nothing to put on a map.'));
+  }
+  const notes = [];
+  if (!marks.sender) notes.push('The sender shares no position, so no line can be drawn from it.');
+  if (marks.unplaced) {
+    notes.push(`${count(marks.unplaced)} more ${marks.unplaced === 1 ? 'gateway shares' : 'gateways share'} `
+      + 'no position and ' + (marks.unplaced === 1 ? 'is' : 'are') + ' not shown.');
+  }
+  return el('div', { class: 'panel span-2' },
+    el('h3', {}, 'Where it was heard'),
+    el('div', { class: 'node-map', 'data-where-heard': '' }),
+    el('p', { class: 'muted node-map-note' },
+      el('span', {}, el('span', { class: 'where-key where-key-sender' }), ' The sender'),
+      el('span', {}, el('span', { class: 'where-key where-key-direct' }), ' A ',
+        el('span', { 'data-term': 'gateway', text: 'gateway' }), ' that ',
+        el('span', { 'data-term': 'direct', text: 'heard it direct' }), ', with a line'),
+      el('span', {}, el('span', { class: 'where-key where-key-relayed', text: '2' }),
+        ' A gateway reached after that many ',
+        el('span', { 'data-term': 'hop', text: 'hops' }),
+        '. The path it took is not known, so no line is drawn.')),
+    notes.length ? el('p', { class: 'muted', text: notes.join(' ') }) : null,
+    el('p', { class: 'muted',
+      text: 'Each node is drawn where it last said it was, which may not be where it was '
+        + 'when this packet was sent. A hollow mark is a position its owner rounded.' }));
+}
+
+/** One mark's popup, built as elements so no name is read as HTML. */
+function whereHeardPopup(mark, what) {
+  return el('div', {},
+    el('strong', { text: mark.name || mark.node_id }), el('br'),
+    what, el('br'),
+    el('a', { href: `#node/${encodeURIComponent(mark.node_id)}`, text: 'Open its node page' }));
+}
+
+function drawWhereHeard(target, marks) {
+  if (!target || !target.isConnected || typeof L === 'undefined') return;
+  for (const [element, old] of packetMaps) {
+    if (element === target || !element.isConnected) {
+      old.remove();
+      packetMaps.delete(element);
+    }
+  }
+  // The page's scroll belongs to the page until the map is clicked (#103).
+  const map = L.map(target, {
+    attributionControl: true,
+    scrollWheelZoom: false,
+    dragging: !L.Browser.mobile,
+  });
+  packetMaps.set(target, map);
+  map.on('click', () => {
+    map.scrollWheelZoom.enable();
+    if (!map.dragging.enabled()) map.dragging.enable();
+  });
+  if (CONFIG.tileUrl) {
+    L.tileLayer(CONFIG.tileUrl, {
+      className: 'basemap-tiles',
+      attribution: CONFIG.tileAttribution || '',
+      maxZoom: 19,
+    }).addTo(map);
+  }
+  const { sender } = marks;
+  // The view first: Leaflet builds a marker's element only on a map that
+  // has one, and the hop count is written into that element below.
+  const bounds = marks.gateways.map((gateway) => [gateway.lat, gateway.lon]);
+  if (sender) bounds.push([sender.lat, sender.lon]);
+  if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+  else map.setView(bounds[0], 13);
+  for (const gateway of marks.gateways) {
+    const point = [gateway.lat, gateway.lon];
+    if (gateway.line) {
+      L.polyline([[sender.lat, sender.lon], point], {
+        color: PALETTE.good, weight: 2, opacity: 0.8,
+      }).addTo(map);
+    }
+    const hollow = gateway.confidence === 'coarse' ? ' where-mark-coarse' : '';
+    const what = gateway.direct
+      ? `Heard it direct${gateway.snr == null ? '' : `, SNR ${round(gateway.snr, 1)} dB`}`
+      : gateway.hops == null ? 'Heard it after relays, hops not recorded'
+        : `Heard it after ${gateway.hops} ${gateway.hops === 1 ? 'hop' : 'hops'}`;
+    const mark = L.marker(point, {
+      icon: L.divIcon({
+        className: `where-mark ${gateway.direct ? 'where-mark-direct' : 'where-mark-relayed'}${hollow}`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+      title: gateway.name,
+    }).addTo(map).bindPopup(whereHeardPopup(gateway, what));
+    // The hop count goes in as text, never as markup.
+    if (!gateway.direct) mark.getElement().textContent = gateway.hops == null ? '?' : String(gateway.hops);
+  }
+  if (sender) {
+    const point = [sender.lat, sender.lon];
+    L.circleMarker(point, {
+      radius: 9,
+      color: PALETTE.accent,
+      fillColor: PALETTE.accent,
+      fillOpacity: sender.confidence === 'coarse' ? 0.15 : 0.8,
+      weight: 3,
+    }).addTo(map).bindPopup(whereHeardPopup(sender, 'Sent this packet'));
+  }
+  setTimeout(() => map.invalidateSize(), 0);
+}
+
+/*
  * The packet page, by kind.
  *
  * What is worth showing depends on what the packet was, and the list is
@@ -10930,6 +11153,9 @@ PAGES.packet = async (page) => {
   panels.push(...[decodedPanels(packet)].flat());
   const envelope = envelopePanel(packet, packetId, data.observations);
   panels.push(envelope);
+  // Where it was heard, as Meshview shows it (beta-sonoran#412). Every kind of packet.
+  const marks = packetMapMarks(data);
+  panels.push(wherePanel(marks));
   /*
    * Who heard it goes last, before the raw data (Logan, 2026-10-17). It
    * holds every gateway's MQTT topic, and was first since the UX batch.
@@ -10940,6 +11166,7 @@ PAGES.packet = async (page) => {
 
   const mapHolder = $('[data-position-map]', body);
   if (mapHolder && packet.decoded) positionMap(mapHolder, packet.decoded.values);
+  drawWhereHeard($('[data-where-heard]', body), marks);
 
   /*
    * A traceroute packet carries a path. It loads after the page is drawn,
