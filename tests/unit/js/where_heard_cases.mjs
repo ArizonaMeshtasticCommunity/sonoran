@@ -82,8 +82,9 @@ function fakeLeaflet() {
 const PALETTE = { accent: 'accent', good: 'good', link: 'link' };
 const round = (value, digits = 1) => Number(value.toFixed(digits));
 const count = (value) => String(value);
+const stamp = (value) => `at ${value}`;
 
-const api = new Function('el', 'round', 'count', 'PALETTE', 'CONFIG', 'document', [
+const api = new Function('el', 'round', 'count', 'stamp', 'PALETTE', 'CONFIG', 'document', [
   'const packetMaps = new Map();',
   'const nodeMaps = new Map();',
   'let L;',
@@ -94,10 +95,10 @@ const api = new Function('el', 'round', 'count', 'PALETTE', 'CONFIG', 'document'
   extract('drawWhereHeard'),
   extract('neighborKey'),
   extract('drawNodeMap'),
-  'return { packetMapMarks, neighborMapMarks, wherePanel, neighborKey,',
+  'return { packetMapMarks, neighborMapMarks, wherePanel, neighborKey, whereHeardPopup,',
   '  drawWhereHeard: (leaflet, ...a) => { L = leaflet; return drawWhereHeard(...a); },',
   '  drawNodeMap: (leaflet, ...a) => { L = leaflet; return drawNodeMap(...a); } };',
-].join('\n'))(el, round, count, PALETTE, {}, fakeDocument);
+].join('\n'))(el, round, count, stamp, PALETTE, {}, fakeDocument);
 const target = () => ({ isConnected: true });
 
 let failed = 0;
@@ -211,10 +212,24 @@ eq('an old answer with no places draws nothing and does not throw',
     coarse.log.circles[0].options.fillOpacity < exact.log.circles[0].options.fillOpacity,
     `${coarse.log.circles[0].options.fillOpacity} against ${exact.log.circles[0].options.fillOpacity}`);
 }
-ok('the panel says how many gateways it left off', /1 more gateway shares no position/.test(text(api.wherePanel(marks))),
-  text(api.wherePanel(marks)));
-ok('the panel says when the sender has no position',
-  /sender shares no position/.test(text(api.wherePanel(noSender))), text(api.wherePanel(noSender)));
+/*
+ * The review of beta-sonoran#413: the map shows where each node was when the packet
+ * was sent, not where it is now. The page must say so, and must not say
+ * a node "shares no position" when it only had none back then.
+ */
+const panel = text(api.wherePanel(marks));
+ok('the panel says how many gateways it left off',
+  /1 more gateway reported no position before this packet/.test(panel), panel);
+ok('the panel says the map is of when the packet was sent',
+  /where it last said it was before this packet was sent/.test(panel), panel);
+ok('the panel never says the map is of now', !/may not be where it was/.test(panel), panel);
+ok('the panel says when the sender had no position then',
+  /sender reported no position before this packet/.test(text(api.wherePanel(noSender))),
+  text(api.wherePanel(noSender)));
+const popup = text(api.whereHeardPopup({ node_id: '!00000002', name: 'GW', time: '2026-11-15T10:00:00Z' }, 'Heard it direct'));
+ok('a mark says when its position was reported', /Position reported at 2026-11-15T10:00:00Z/.test(popup), popup);
+const noTime = text(api.whereHeardPopup({ node_id: '!00000002', name: 'GW' }, 'Heard it direct'));
+ok('a mark with no position time says nothing about one', !/Position reported/.test(noTime), noTime);
 
 // --- The node page ------------------------------------------------
 

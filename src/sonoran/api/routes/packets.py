@@ -12,7 +12,7 @@ from sqlalchemy.orm import undefer
 from sonoran.api.dependencies import get_session, require_node_num
 from sonoran.api.names import name_of, resolve_names
 from sonoran.api.packet_summary import summaries, text_of
-from sonoran.api.places import resolve_places
+from sonoran.api.places import resolve_places_at
 from sonoran.api.preset_scope import preset_filter, require_presets
 from sonoran.db.models import (
     AirQualityMetrics,
@@ -393,14 +393,17 @@ async def get_packet(
             "raw_bytes_length": None if packet.raw_bytes is None else len(packet.raw_bytes),
         },
         "gateway_count": len({item.gateway_node_num for item in observations}),
-        # Where the sender and each gateway are, for the packet map (beta-sonoran#412).
-        # Keyed by node ID. A node with no real position is absent.
+        # Where the sender and each gateway were when the packet was sent,
+        # for the packet map (beta-sonoran#412, review of beta-sonoran#413). Keyed by node ID. The
+        # time is our receive time (AGENTS.md 9.4). A node with no position
+        # from before then is absent.
         "places": {
             _node_id(num): place
             for num, place in (
-                await resolve_places(
+                await resolve_places_at(
                     session,
                     [packet.from_node_num, *(item.gateway_node_num for item in observations)],
+                    packet.first_seen_at,
                 )
             ).items()
         },

@@ -845,8 +845,10 @@ A packet page (`#packet/<from>/<packet id>`) is read in this order:
 
 "Where it was heard" (beta-sonoran#412) sits between the envelope and "Who heard
 it", for every kind of packet, as Meshview's packet page has it. It
-draws the sender and each gateway that uploaded the packet at its last
-known position. A gateway that heard the packet direct is a filled dot
+draws the sender and each gateway that uploaded the packet where each
+last said it was before the packet was sent, never where it is now
+(review of beta-sonoran#413). A node with no position from before then is left
+off. A gateway that heard the packet direct is a filled dot
 with a line from the sender, because that is a real radio link. A
 relayed gateway carries its fewest hops and no line: the path of a
 relayed packet is not known (`AGENTS.md` 9.20). The sender's own upload

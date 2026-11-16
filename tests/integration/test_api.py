@@ -2664,41 +2664,75 @@ def _seed_places(connection, rows, now) -> None:  # type: ignore[no-untyped-def]
         )
 
 
-def test_a_packet_carries_where_its_sender_and_gateways_are(  # type: ignore[no-untyped-def]
+def test_a_packet_carries_where_its_nodes_were_when_it_was_sent(  # type: ignore[no-untyped-def]
     migrated_engine, timescale_url: str
 ) -> None:
-    """The packet page draws a map of where it was heard (beta-sonoran#412).
+    """The packet map shows where each node was when the packet was sent.
 
-    9811 sent it. 9812 heard it direct, 9813 after one hop with a rounded
-    position, and 9814 has no position at all, so it is not placed.
+    beta-sonoran#412, and the review of beta-sonoran#413: "positions should be last known
+    position at the time the packet was sent - it would be unexpected to
+    open a packet from last week and the map shows the current position
+    of all the involved nodes."
+
+    The packet was received a day ago. 9811 sent it, and has moved since.
+    9812 heard it direct. 9813 heard it after one hop, with a rounded
+    position. 9814 never reported a position. 9815 reported one only
+    after the packet, so where it was then is not known.
     """
     now = datetime.now(UTC)
+    sent = now - timedelta(days=1)
+    before = sent - timedelta(hours=2)
+    after = sent + timedelta(hours=2)
+    moved = (34.00, -111.00)
     with migrated_engine.begin() as connection:
+        # Every node's current position is where it is now, not then.
         _seed_places(
             connection,
             [
-                (9811, 33.40, -111.90, None),
-                (9812, 33.45, -111.95, None),
-                (9813, 33.50, -112.00, 13),
+                (9811, *moved, None),
+                (9812, *moved, None),
+                (9813, *moved, None),
                 (9814, None, None, None),
+                (9815, *moved, None),
             ],
             now,
         )
         connection.execute(
+            text("DELETE FROM position_metrics WHERE node_num BETWEEN 9811 AND 9815")
+        )
+        history = [
+            # node, lat, lon, precision bits, time
+            (9811, 33.40, -111.90, None, before - timedelta(days=3)),
+            (9811, 33.41, -111.91, None, before),
+            (9811, *moved, None, after),
+            (9812, 33.45, -111.95, None, before),
+            (9812, *moved, None, after),
+            (9813, 33.50, -112.00, 13, before),
+            (9815, *moved, None, after),
+        ]
+        for num, lat, lon, bits, time in history:
+            connection.execute(
+                text(
+                    "INSERT INTO position_metrics (node_num, latitude, longitude, "
+                    "precision_bits, time) VALUES (:n, :lat, :lon, :bits, :t)"
+                ),
+                {"n": num, "lat": lat, "lon": lon, "bits": bits, "t": time},
+            )
+        connection.execute(
             text(
                 "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
-                "first_seen_at) VALUES (9811, 412, 1, 3, :now) ON CONFLICT DO NOTHING"
+                "first_seen_at) VALUES (9811, 412, 1, 3, :sent) ON CONFLICT DO NOTHING"
             ),
-            {"now": now},
+            {"sent": sent},
         )
-        for gateway, hop_limit in ((9812, 3), (9813, 2), (9814, 2)):
+        for gateway, hop_limit in ((9812, 3), (9813, 2), (9814, 2), (9815, 2)):
             connection.execute(
                 text(
                     "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
                     "mqtt_topic, hop_limit, rx_snr, seen_at) "
-                    "VALUES (9811, 412, :g, 'msh/US/AZ/t', :h, 5.0, :now) ON CONFLICT DO NOTHING"
+                    "VALUES (9811, 412, :g, 'msh/US/AZ/t', :h, 5.0, :sent) ON CONFLICT DO NOTHING"
                 ),
-                {"g": gateway, "h": hop_limit, "now": now},
+                {"g": gateway, "h": hop_limit, "sent": sent},
             )
 
     app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
@@ -2707,14 +2741,21 @@ def test_a_packet_carries_where_its_sender_and_gateways_are(  # type: ignore[no-
 
     places = body["places"]
     assert set(places) == {"!00002653", "!00002654", "!00002655"}, (
-        f"places holds nodes other than the sender and its placed gateways: {sorted(places)}"
+        f"places holds nodes other than those placed before the packet: {sorted(places)}"
     )
-    assert places["!00002653"] == {"lat": 33.40, "lon": -111.90, "confidence": "exact"}, (
-        "the sender is not placed"
+    sender = places["!00002653"]
+    assert (sender["lat"], sender["lon"]) == (33.41, -111.91), (
+        "the sender is drawn where it is now, or at an older position than its last one "
+        f"before the packet: {sender}"
     )
-    assert places["!00002654"]["confidence"] == "exact"
+    assert sender["confidence"] == "exact"
+    assert sender["time"] is not None, "the map cannot say how old the position was"
+    assert (places["!00002654"]["lat"], places["!00002654"]["lon"]) == (33.45, -111.95)
     assert places["!00002655"]["confidence"] == "coarse", "a rounded gateway reads as exact"
     assert "!00002656" not in places, "a gateway with no position was given one"
+    assert "!00002657" not in places, (
+        "a gateway that reported a position only after the packet is drawn where it went later"
+    )
 
 
 def test_node_neighbours_carry_their_positions(  # type: ignore[no-untyped-def]

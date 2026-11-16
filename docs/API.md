@@ -1335,8 +1335,10 @@ Response:
   "packet": { "...": "as in /api/packets, plus decoded and payload_json" },
   "gateway_count": 2,
   "places": {
-    "!a1b2c3d4": {"lat": 33.42, "lon": -111.93, "confidence": "exact"},
-    "!11223344": {"lat": 33.45, "lon": -111.99, "confidence": "coarse"}
+    "!a1b2c3d4": {"lat": 33.42, "lon": -111.93, "confidence": "exact",
+                  "time": "2026-08-01T11:40:00Z"},
+    "!11223344": {"lat": 33.45, "lon": -111.99, "confidence": "coarse",
+                  "time": "2026-07-30T08:02:00Z"}
   },
   "observations": [
     {
@@ -1361,12 +1363,16 @@ Response:
 }
 ```
 
-`places` (beta-sonoran#412) holds the last known position of the sender and of
-each gateway that uploaded the packet, keyed by node ID. A node with no
-real position is absent. `confidence` is `coarse` for a position its
-owner rounded. It is the node's last position, not where it was when it
-sent this packet. The packet page draws its "Where it was heard" map
-from it.
+`places` (beta-sonoran#412) holds where the sender and each gateway that uploaded
+the packet were when it was sent, keyed by node ID. It is each node's
+newest position in `position_metrics` at or before the packet's
+`first_seen_at`, never its current one (review of beta-sonoran#413). `time` is when
+that position was reported. A position's time is never later than when
+Sonoran received it (AGENTS.md 9.4), so a later position cannot be
+picked. `confidence` is `coarse` for a position its owner rounded. A
+node with no real position before the packet is absent, and so is one
+whose position is older than `RETENTION_DAYS_POSITION` (30 days by
+default). The packet page draws its "Where it was heard" map from it.
 
 `relayed_by` is the node that sent this gateway its copy, as the
 firmware gives it: one byte, the last of the node number (AGENTS.md

@@ -18,11 +18,12 @@ These run against a stand-in session, as `test_neighbours_are_named.py`
 does. The integration half is in `tests/integration/test_api.py`.
 """
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from sonoran.api.places import resolve_places
+from sonoran.api.places import resolve_places, resolve_places_at
 from sonoran.positions import MIN_SITE_PRECISION_BITS
 
 EXACT = 9801
@@ -111,3 +112,48 @@ async def test_only_the_nodes_asked_for_come_back() -> None:
     """
     places = await resolve_places(_Session(ROWS), [EXACT])
     assert set(places) == {EXACT}, f"nodes not asked for came back: {sorted(places)}"
+
+
+# --- Where a node was when a packet was sent (beta-sonoran#413 review) -------------
+#
+# "Positions should be the last known position at the time the packet
+# was sent. It would be unexpected to open a packet from last week and
+# the map shows the current position of all the involved nodes."
+# (tylerpieper, review of beta-sonoran#413.) `resolve_places_at` reads
+# `position_metrics`; these cases cover what it does with the rows. The
+# choice of row by time is in tests/integration/test_api.py.
+
+THEN = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_a_place_at_a_time_says_when_it_was_reported() -> None:
+    rows = [(EXACT, 33.4484, -112.074, 32, THEN)]
+    places = await resolve_places_at(_Session(rows), [EXACT], THEN)  # type: ignore[arg-type]
+    assert places[EXACT] == {
+        "lat": 33.4484,
+        "lon": -112.074,
+        "confidence": "exact",
+        "time": THEN,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_place_at_a_time_keeps_the_rounding_rule() -> None:
+    rows = [(ROUNDED, 33.45, -112.07, MIN_SITE_PRECISION_BITS - 3, THEN)]
+    places = await resolve_places_at(_Session(rows), [ROUNDED], THEN)  # type: ignore[arg-type]
+    assert places[ROUNDED]["confidence"] == "coarse"
+
+
+@pytest.mark.asyncio
+async def test_a_place_at_a_time_is_only_for_nodes_asked_for() -> None:
+    rows = [(EXACT, 33.4, -112.0, None, THEN), (ROUNDED, 33.5, -112.1, None, THEN)]
+    places = await resolve_places_at(_Session(rows), [EXACT], THEN)  # type: ignore[arg-type]
+    assert set(places) == {EXACT}
+
+
+@pytest.mark.asyncio
+async def test_a_place_at_a_time_asks_nothing_for_no_node() -> None:
+    session = _Session([])
+    assert await resolve_places_at(session, [None, BROADCAST], THEN) == {}  # type: ignore[arg-type]
+    assert session.queries == 0

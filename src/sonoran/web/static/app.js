@@ -10646,13 +10646,15 @@ function wherePanel(marks) {
       el('p', { class: 'muted' }, 'Neither the sender nor any ',
         el('span', { 'data-term': 'gateway', text: 'gateway' }), ' that ',
         el('span', { 'data-term': 'upload', text: 'uploaded' }),
-        ' it shares a position, so there is nothing to put on a map.'));
+        ' it reported a position before this packet was sent, so there is nothing to put on a map.'));
   }
   const notes = [];
-  if (!marks.sender) notes.push('The sender shares no position, so no line can be drawn from it.');
+  if (!marks.sender) {
+    notes.push('The sender reported no position before this packet, so no line can be drawn from it.');
+  }
   if (marks.unplaced) {
-    notes.push(`${count(marks.unplaced)} more ${marks.unplaced === 1 ? 'gateway shares' : 'gateways share'} `
-      + 'no position and ' + (marks.unplaced === 1 ? 'is' : 'are') + ' not shown.');
+    notes.push(`${count(marks.unplaced)} more ${marks.unplaced === 1 ? 'gateway' : 'gateways'} `
+      + 'reported no position before this packet and ' + (marks.unplaced === 1 ? 'is' : 'are') + ' not shown.');
   }
   return el('div', { class: 'panel span-2' },
     el('h3', {}, 'Where it was heard'),
@@ -10668,8 +10670,8 @@ function wherePanel(marks) {
         '. The path it took is not known, so no line is drawn.')),
     notes.length ? el('p', { class: 'muted', text: notes.join(' ') }) : null,
     el('p', { class: 'muted',
-      text: 'Each node is drawn where it last said it was, which may not be where it was '
-        + 'when this packet was sent. A hollow mark is a position its owner rounded.' }));
+      text: 'Each node is drawn where it last said it was before this packet was sent, '
+        + 'not where it is now. A hollow mark is a position its owner rounded.' }));
 }
 
 /** One mark's popup, built as elements so no name is read as HTML. */
@@ -10677,6 +10679,7 @@ function whereHeardPopup(mark, what) {
   return el('div', {},
     el('strong', { text: mark.name || mark.node_id }), el('br'),
     what, el('br'),
+    mark.time ? [`Position reported ${stamp(mark.time)}`, el('br')] : null,
     el('a', { href: `#node/${encodeURIComponent(mark.node_id)}`, text: 'Open its node page' }));
 }
 
