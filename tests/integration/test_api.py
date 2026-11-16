@@ -2637,3 +2637,116 @@ def test_a_distance_is_where_both_nodes_were_when_they_heard_each_other(  # type
     assert furthest is not None and furthest["node_id"] == "!000026cc", body
     # Where it was: about 5.6 km. Where it is now would be about 190 km.
     assert 4.5 < furthest["distance_km"] < 7.0, furthest
+
+
+# --- beta-sonoran#412: maps on the packet page and the node page -------------------
+
+
+def _seed_places(connection, rows, now) -> None:  # type: ignore[no-untyped-def]
+    """Nodes with a position, a rounded one, or none (num, lat, lon, bits)."""
+    for num, lat, lon, bits in rows:
+        connection.execute(text("DELETE FROM node WHERE node_num = :n"), {"n": num})
+        connection.execute(
+            text(
+                "INSERT INTO node (node_num, node_id, short_name, last_lat, last_lon, "
+                "last_position_precision_bits, first_seen, last_heard, updated_at) "
+                "VALUES (:n, :nid, :s, :lat, :lon, :bits, :now, :now, :now)"
+            ),
+            {
+                "n": num,
+                "nid": f"!{num:08x}",
+                "s": str(num)[-4:],
+                "lat": lat,
+                "lon": lon,
+                "bits": bits,
+                "now": now,
+            },
+        )
+
+
+def test_a_packet_carries_where_its_sender_and_gateways_are(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """The packet page draws a map of where it was heard (beta-sonoran#412).
+
+    9811 sent it. 9812 heard it direct, 9813 after one hop with a rounded
+    position, and 9814 has no position at all, so it is not placed.
+    """
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        _seed_places(
+            connection,
+            [
+                (9811, 33.40, -111.90, None),
+                (9812, 33.45, -111.95, None),
+                (9813, 33.50, -112.00, 13),
+                (9814, None, None, None),
+            ],
+            now,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO packet (from_node_num, packet_id, portnum, hop_start, "
+                "first_seen_at) VALUES (9811, 412, 1, 3, :now) ON CONFLICT DO NOTHING"
+            ),
+            {"now": now},
+        )
+        for gateway, hop_limit in ((9812, 3), (9813, 2), (9814, 2)):
+            connection.execute(
+                text(
+                    "INSERT INTO packet_seen (from_node_num, packet_id, gateway_node_num, "
+                    "mqtt_topic, hop_limit, rx_snr, seen_at) "
+                    "VALUES (9811, 412, :g, 'msh/US/AZ/t', :h, 5.0, :now) ON CONFLICT DO NOTHING"
+                ),
+                {"g": gateway, "h": hop_limit, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/packets/!00002653/412").json()
+
+    places = body["places"]
+    assert places["!00002653"] == {"lat": 33.40, "lon": -111.90, "confidence": "exact"}, (
+        "the sender is not placed"
+    )
+    assert places["!00002654"]["confidence"] == "exact"
+    assert places["!00002655"]["confidence"] == "coarse", "a rounded gateway reads as exact"
+    assert "!00002656" not in places, "a gateway with no position was given one"
+
+
+def test_node_neighbours_carry_their_positions(  # type: ignore[no-untyped-def]
+    migrated_engine, timescale_url: str
+) -> None:
+    """The node map draws a line to each neighbor it can place (beta-sonoran#412, #103)."""
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as connection:
+        _seed_places(
+            connection,
+            [
+                (9821, 33.40, -111.90, None),
+                (9822, 33.41, -111.91, None),
+                (9823, None, None, None),
+            ],
+            now,
+        )
+        connection.execute(text("DELETE FROM neighbor_metrics WHERE node_num = 9821"))
+        for neighbour in (9822, 9823):
+            connection.execute(
+                text(
+                    "INSERT INTO neighbor_metrics (node_num, neighbor_node_num, channel, "
+                    "snr, time) VALUES (9821, :n, 'LongFast', 6.5, :now)"
+                ),
+                {"n": neighbour, "now": now},
+            )
+
+    app = create_app(Settings(_env_file=None, database_url_api=_api_url(timescale_url)))
+    with TestClient(app) as client:
+        body = client.get("/api/nodes/9821/detail?hours=24").json()
+
+    by_id = {row["node_id"]: row for row in body["neighbors"]}
+    assert by_id["!0000265e"]["position"] == {
+        "lat": 33.41,
+        "lon": -111.91,
+        "confidence": "exact",
+    }, "a placed neighbor came without its position"
+    assert by_id["!0000265f"]["position"] is None, "an unplaced neighbor was given a position"
