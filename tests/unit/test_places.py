@@ -99,3 +99,15 @@ async def test_nothing_to_place_asks_the_database_nothing() -> None:
     session = _Session(ROWS)
     assert await resolve_places(session, [None, BROADCAST]) == {}
     assert session.queries == 0, "an empty lookup still queried the node table"
+
+
+@pytest.mark.asyncio
+async def test_only_the_nodes_asked_for_come_back() -> None:
+    """The packet page sends every key it gets to the browser.
+
+    The stand-in answers with every row whatever was asked, as a query
+    that lost its filter would, so a node not asked for must still be
+    left out.
+    """
+    places = await resolve_places(_Session(ROWS), [EXACT])
+    assert set(places) == {EXACT}, f"nodes not asked for came back: {sorted(places)}"

@@ -2706,6 +2706,9 @@ def test_a_packet_carries_where_its_sender_and_gateways_are(  # type: ignore[no-
         body = client.get("/api/packets/!00002653/412").json()
 
     places = body["places"]
+    assert set(places) == {"!00002653", "!00002654", "!00002655"}, (
+        f"places holds nodes other than the sender and its placed gateways: {sorted(places)}"
+    )
     assert places["!00002653"] == {"lat": 33.40, "lon": -111.90, "confidence": "exact"}, (
         "the sender is not placed"
     )

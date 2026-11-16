@@ -42,6 +42,8 @@ async def resolve_places(
     )
     places: dict[int, dict[str, object]] = {}
     for num, lat, lon, bits in rows.all():
+        if num not in wanted:
+            continue
         confidence, _ = position_confidence(lat, lon, bits, MIN_SITE_PRECISION_BITS)
         if confidence == "none":
             continue
