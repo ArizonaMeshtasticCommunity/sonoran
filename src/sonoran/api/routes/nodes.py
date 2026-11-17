@@ -33,6 +33,7 @@ from sonoran.api.dependencies import (
     require_node_num,
 )
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
+from sonoran.api.places import resolve_places
 from sonoran.api.preset_scope import Presets, preset_filter, require_presets
 from sonoran.api.schemas import NodeSummary
 from sonoran.api.sightings import direct as direct_sighting
@@ -150,6 +151,8 @@ async def _latest_neighbors(
     # Show the strongest link first. Reports with no SNR go last.
     rows.sort(key=lambda row: (row.snr is None, -(row.snr or 0.0)))
     names = await resolve_names(session, (row.neighbor_node_num for row in rows))
+    # Where each neighbor is, so the node map can draw a line to it (beta-sonoran#412).
+    places = await resolve_places(session, (row.neighbor_node_num for row in rows))
     return [
         {
             "node_id": format_node_id(row.neighbor_node_num),
@@ -158,6 +161,7 @@ async def _latest_neighbors(
             "last_rx_time": row.last_rx_time,
             "broadcast_interval_secs": row.node_broadcast_interval_secs,
             "time": row.time,
+            "position": places.get(row.neighbor_node_num),
         }
         for row in rows
     ]

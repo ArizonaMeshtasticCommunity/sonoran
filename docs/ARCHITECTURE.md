@@ -843,6 +843,23 @@ A packet page (`#packet/<from>/<packet id>`) is read in this order:
    any gateway saw, whether an ack was asked for, and the rest.
 5. **Raw data**, closed, holding everything the API returned.
 
+"Where it was heard" (beta-sonoran#412) sits between the envelope and "Who heard
+it", for every kind of packet, as Meshview's packet page has it. It
+draws the sender and each gateway that uploaded the packet where each
+last said it was before the packet was sent, never where it is now
+(review of beta-sonoran#413). A node with no position from before then is left
+off. A gateway that heard the packet direct is a filled dot
+with a line from the sender, because that is a real radio link. A
+relayed gateway carries its fewest hops and no line: the path of a
+relayed packet is not known (`AGENTS.md` 9.20). The sender's own upload
+is not a gateway mark (9.5.1). Nodes with no position are counted under
+the map and left off it.
+
+The node page's "Where it is" map draws a line to each neighbor the
+node reports in its neighbor info, at the neighbor's last position. It
+says this node heard that one. It does not draw lines to `heard_by`
+gateways, which usually heard the node through relays.
+
 What each kind shows under "What it said":
 
 | Port | Shows | Source |

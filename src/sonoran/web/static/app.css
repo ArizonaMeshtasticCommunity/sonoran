@@ -3734,6 +3734,27 @@ th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 }
 .node-map-note { display: flex; flex-wrap: wrap; gap: .6rem; align-items: baseline; margin: .55rem 0 0; }
 
+/* Where a packet was heard (beta-sonoran#412). A gateway that heard it direct is a
+   filled dot with a line; a relayed one carries its hop count. A hollow
+   mark is a rounded position, as on the node map (#96). */
+.where-mark {
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 2px solid var(--panel);
+  font: 700 .7rem/1 system-ui, sans-serif; color: var(--panel);
+  box-shadow: 0 0 4px rgb(0 0 0 / .45);
+}
+.where-mark-direct { background: var(--good); }
+.where-mark-relayed { background: var(--traffic-relayed); }
+.where-mark-coarse { background: transparent; color: var(--text); border-color: currentColor; }
+.where-key {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1rem; height: 1rem; border-radius: 50%; vertical-align: middle;
+  font: 700 .6rem/1 system-ui, sans-serif; color: var(--panel);
+}
+.where-key-sender { background: var(--accent); }
+.where-key-direct { background: var(--good); }
+.where-key-relayed { background: var(--traffic-relayed); }
+
 /* The compact health summary (#95). The full checklist below it reuses
    `.health-cards`, so only the summary half needs anything new. */
 .health-headline { font-weight: 650; margin: 0 0 .4rem; }

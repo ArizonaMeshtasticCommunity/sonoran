@@ -18,17 +18,11 @@ tree:
 After clicking through five nodes, exactly one `.leaflet-container`
 remained, so the panels are not stacking.
 
-**Not built: lines to neighbours and to the nodes that hear it.** The
-issue offers it as "optional, and useful", from "data the page already
-loads". The page does not load it — measured against
-`/api/nodes/{id}/detail`, neither collection carries a position:
-
-    neighbors  node_id, display_name, snr, last_rx_time,
-               broadcast_interval_secs, time
-    heard_by   node_id, display_name, count, direct_count,
-               relayed_count, last_heard, avg_snr, best_snr, avg_rssi
-
-That needs the endpoint to carry positions, which is an API change.
+**Not built here: lines to neighbours and to the nodes that hear it.**
+The endpoint carried no positions for them then. beta-sonoran#412 added a
+`position` to each neighbor and draws the neighbor lines; its tests are
+in `test_where_heard_maps.py`. Lines to `heard_by` gateways are still
+not drawn, because a gateway usually heard the node through relays.
 """
 
 from pathlib import Path
