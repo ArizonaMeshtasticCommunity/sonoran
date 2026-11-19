@@ -285,6 +285,10 @@ const anchors = (node) => (typeof node === 'string' ? []
 check('FIRMWARE ROW: the drawn value carries the flasher link',
   anchors(linked).some((a) => a.attrs.href === 'https://flasher.meshtastic.org/'
     && a.attrs.rel === 'noopener noreferrer'), JSON.stringify(linked));
+check('FIRMWARE ROW: the link is styled as a Sonoran link, not the browser default blue',
+  anchors(linked).every((a) => a.attrs.class === 'field-action'), JSON.stringify(linked));
+check('FIRMWARE ROW: the link text is short enough for one line on a phone',
+  behind.link.text.length <= 20, behind.link.text);
 check('FIRMWARE ROW: a link on an unflagged value is drawn too',
   anchors(api.fieldValue('x', null, { href: 'https://flasher.meshtastic.org/', text: 'go' })).length === 1);
 

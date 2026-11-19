@@ -6488,10 +6488,11 @@ function firmwareRow(firmware) {
     return {
       ...row, text, exact,
       // The flag word stays short: `.field-note` does not wrap.
-      flag: { state: 'warn', word: 'Update available' },
+      flag: { state: 'warn', word: 'Out of date' },
       link: {
         href: firmware.flasher_url || FLASHER_URL,
-        text: `The newest stable release is ${stable}. How to update`,
+        // Short, so it fits on one line beside the value on a phone.
+        text: `Update to ${stable}`,
       },
     };
   }
@@ -6828,7 +6829,7 @@ function fieldValue(text, flag, link) {
   // A row may send the reader somewhere to act on it, such as the
   // flasher for firmware that is behind (#406).
   const action = link
-    ? [' ', el('a', { href: link.href, target: '_blank', rel: 'noopener noreferrer', text: link.text })]
+    ? [' ', el('a', { class: 'field-action', href: link.href, target: '_blank', rel: 'noopener noreferrer', text: link.text })]
     : [];
   if (!flag) return action.length ? el('dd', {}, text, ...action) : el('dd', { text });
   const look = HEALTH_STATES[flag.state];

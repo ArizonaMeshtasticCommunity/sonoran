@@ -171,8 +171,18 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str]], str]] = {
     ),
     # #406: the update link is the point of the row.
     "behind_links_to_the_flasher": (
-        [("    ? [' ', el('a', { href: link.href,", "    ? [' ', el('span', { href: link.href,")],
+        [
+            (
+                "    ? [' ', el('a', { class: 'field-action', href: link.href,",
+                "    ? [' ', el('span', { class: 'field-action', href: link.href,",
+            )
+        ],
         "FIRMWARE ROW: the drawn value carries the flasher link",
+    ),
+    # The link takes the palette's link colour, not the browser's blue.
+    "update_link_is_on_brand": (
+        [("el('a', { class: 'field-action', href:", "el('a', { href:")],
+        "FIRMWARE ROW: the link is styled as a Sonoran link",
     ),
 }
 
