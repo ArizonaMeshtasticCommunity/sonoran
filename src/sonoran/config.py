@@ -427,6 +427,16 @@ class Settings(BaseSettings):
     # 30-day windows are built on every this many runs, not on each one.
     read_models_long_every: int = 3
 
+    # The newest stable firmware release (#406), for the node page's
+    # "behind the stable release" note. The jobs service fetches it from
+    # the list flasher.meshtastic.org reads; page views never do. That
+    # list is served with `s-maxage=900` and a release comes about once
+    # a month (the GitHub releases of meshtastic/firmware), so every six
+    # hours is fresh enough and costs four requests a day.
+    firmware_releases_enabled: bool = True
+    firmware_releases_interval_hours: int = 6
+    firmware_releases_url: str = "https://api.meshtastic.org/github/firmware/list"
+
     # The jobs supervisor (#371, `sonoran/jobs/supervisor.py`). Each run
     # is its own process with its own memory ceiling, and runs overlap
     # when they fit in the container's memory. False runs every job inside

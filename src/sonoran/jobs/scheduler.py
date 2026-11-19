@@ -35,6 +35,7 @@ from sonoran.jobs import (
     activity_heatmap,
     calibrate,
     coverage,
+    firmware_releases,
     gaps,
     gaps_siting,
     legacy_import,
@@ -291,6 +292,16 @@ async def _job_read_models(settings: Settings) -> None:
         await engine.dispose()
 
 
+async def _job_firmware_releases(settings: Settings) -> None:
+    engine = make_engine(settings.database_url_jobs)
+    factory = make_session_factory(engine)
+    try:
+        async with factory() as session:
+            await firmware_releases.refresh(session, settings)
+    finally:
+        await engine.dispose()
+
+
 #: Every job by name: what `run_task` and the in-process runner call.
 JOB_BODIES: dict[str, Callable[[Settings], Awaitable[None]]] = {
     "snapshot": _job_snapshot,
@@ -300,6 +311,7 @@ JOB_BODIES: dict[str, Callable[[Settings], Awaitable[None]]] = {
     "rf-rollup": _job_rf_rollup,
     "read-models": _job_read_models,
     "activity_heatmap": _job_activity_heatmap,
+    "firmware-releases": _job_firmware_releases,
 }
 
 
@@ -363,6 +375,17 @@ def build_tasks(settings: Settings, budget: supervisor.Budget | None = None) -> 
         )
     else:
         logger.info("the read models are turned off")
+
+    if settings.firmware_releases_enabled:
+        # One HTTP request, no engine (#406).
+        tasks.append(
+            task(
+                "firmware-releases",
+                lambda: max(settings.firmware_releases_interval_hours, 1) * 3600.0,
+            )
+        )
+    else:
+        logger.info("the firmware release check is turned off")
 
     return tasks
 

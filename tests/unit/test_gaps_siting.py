@@ -642,6 +642,7 @@ def test_the_siting_half_is_never_registered_as_a_peer_task() -> None:
         "gaps",
         "rf-rollup",
         "read-models",
+        "firmware-releases",
     ]
 
 
