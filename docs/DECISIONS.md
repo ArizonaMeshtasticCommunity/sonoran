@@ -1701,3 +1701,51 @@ the menu, no preset line on a page, and Settings changes the map".
 
 **What would change it again.** A maintainer asking for a page to say
 which preset it shows.
+
+## 2026-11-19 — a node's firmware version, and "behind the stable release" (#406)
+
+**What the mesh tells us.** A node gives its firmware version in one
+place: `MapReport.firmware_version` (protobufs `mqtt.proto`). Firmware
+sends a map report about itself, unencrypted, on `<root>/2/map/`
+(meshtastic/firmware v2.7.26.54e0d8d `src/mqtt/MQTT.h:106` and
+`src/mqtt/MQTT.cpp` `perhapsReportToMap`), only when its owner turns on
+map reporting, by default once an hour (`src/mesh/Default.h:32`).
+NodeInfo carries no version.
+
+**What we measured.** Ingest dropped every map report: `parse_topic`
+rejected the topic, and azmsh-dev held 0 `MAP_REPORT_APP` packets
+against 115,002 NodeInfo packets. A read-only 20-minute sample of
+`msh/US/AZ/#` on the azmsh broker (2026-11-19, about 04:40 UTC) held 8
+map reports from 8 nodes: 2.6.11, 2.6.4 (two nodes), 2.7.16, 2.7.26,
+2.8.0.47db0e3 (a revoked release), 2.8.1, and 2.8.3 (newer than any
+published release). One topic root had a trailing space
+(`msh/US/AZ/Phoenix /2/map/`).
+
+**The stable release.** From `https://api.meshtastic.org/github/firmware/list`,
+the list flasher.meshtastic.org reads (meshtastic/web-flasher
+`stores/firmwareStore.ts`). On 2026-11-19 it named stable
+`v2.7.26.54e0d8d` and alpha `v2.8.2.d5f1619`. The GitHub releases API
+agrees (`/releases/latest` is `v2.7.26.54e0d8d`, `prerelease: false`).
+Meshtastic titles its stable releases "Beta", so the page says "stable
+release" and never "beta". The jobs service fetches it every six hours;
+page views never do. The list is served with `s-maxage=900`.
+
+**Decided.**
+- Only an exact version from a map report is stored. The CRC-32 guess
+  in #406 is left out: while stable is 2.7.26 it cannot say "behind",
+  and a vanity key can make it wrong (returnzork on #406).
+- A map report is not stored as a packet and does not count as the node
+  being heard: it comes from the node's own MQTT link, not the mesh.
+- A report whose `from` is not its envelope's gateway is ignored:
+  firmware only reports its own node.
+- Only major.minor.patch are compared. "Behind" is a yellow Check, not
+  red: an older release still works. "Newer" is never called behind.
+
+**What it cannot tell us.** The version of a node with map reporting
+off; whether an owner chose an old release on purpose; and a version
+newer than the last map report until the next one arrives.
+
+**Held by** `tests/unit/test_firmware_status.py`, `tests/unit/test_topics.py`,
+`tests/integration/test_firmware.py` and the FIRMWARE ROW cases in
+`tests/unit/js/node_fields_cases.mjs`.
+
