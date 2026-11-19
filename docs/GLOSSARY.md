@@ -39,7 +39,7 @@ Each word below has a tooltip in the dashboard. An element with
 | `node-id` | Node ID | The node's own number, written after a "!", such as !a1b2c3d4. It does not change when the owner renames the node. |
 | `node-info` | NodeInfo | The packet in which a node gives its names, hardware, role and public key. A node sends it soon after it starts, and then every few hours. |
 | `telemetry` | Telemetry | Readings a node sends about itself and its sensors, such as battery, voltage, channel use and temperature. [Learn more](https://meshtastic.org/docs/configuration/module/telemetry/) |
-| `firmware` | Firmware | The software that runs on the radio. Some features need a newer version. |
+| `firmware` | Firmware | The software that runs on the radio. Some features need a newer version. Update it with the official web flasher at flasher.meshtastic.org. [Learn more](https://meshtastic.org/docs/getting-started/flashing-firmware/) |
 | `licensed` | Licensed (ham) mode | The owner has an amateur radio licence and turned on licensed mode. The node then sends without encryption, because amateur radio rules forbid it. [Learn more](https://meshtastic.org/docs/configuration/radio/device/) |
 | `position-precision` | Position precision | How exactly a node shares where it is. Many owners round it on purpose, so the dot on the map is only near the node, inside a circle as wide as the rounding. [Learn more](https://meshtastic.org/docs/configuration/radio/channels/#position-precision) |
 | `role` | Device role | The job a node is set to do in the mesh. Most nodes should be Client, the default. Router roles are for fixed nodes on high, clear sites. [Learn more](https://meshtastic.org/docs/configuration/radio/device/) |

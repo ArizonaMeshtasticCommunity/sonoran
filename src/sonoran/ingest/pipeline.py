@@ -9,11 +9,13 @@ from sonoran.config import get_settings
 from sonoran.crypto.decrypt import DecryptionError, decode_key, decrypt_packet
 from sonoran.db.session import make_engine, make_session_factory
 from sonoran.decode.envelope import ParsedEnvelope, parse_envelope
+from sonoran.decode.map_report import map_report_version
 from sonoran.decode.payload_state import PayloadState
 from sonoran.decode.payloads import decode_payload, parse_data
 from sonoran.decode.stored import stored_payload
 from sonoran.ingest.dedup import ObservationInput, PacketInput, StoredPacket, store_packet
 from sonoran.ingest.handlers import HandlerContext, store_mesh_packet_metrics, store_payload
+from sonoran.ingest.handlers.map_report import store_firmware_version
 from sonoran.ingest.handlers.presence import store_gateway, store_heard
 from sonoran.ingest.preset_writes import load_gateway_presets, store_vote
 from sonoran.ingest.presets import PresetTracker
@@ -349,6 +351,45 @@ async def process_message(
     return stored
 
 
+async def process_map_report(session: AsyncSession, message: RawMqttMessage) -> bool:
+    """Store the firmware version from one map report (#406).
+
+    Return whether a version was stored. Only the version is kept: the
+    packet is not stored, and the report does not count as the node
+    being heard, because it comes from the node's own MQTT link and
+    not from the mesh.
+    """
+    if message.topic.payload_format != "map":
+        return False
+    report = map_report_version(message.payload)
+    if report is None:
+        return False
+    return await store_firmware_version(
+        session, report.node_num, report.firmware_version, message.received_at
+    )
+
+
+async def route_message(
+    session: AsyncSession,
+    message: RawMqttMessage,
+    keys: list[bytes],
+    store_text_messages: bool = False,
+    mesh_future_slack_seconds: int = 300,
+    presets: PresetTracker | None = None,
+) -> StoredPacket | None:
+    """Send one MQTT message to the code for its topic.
+
+    A map report (#406) goes to `process_map_report`, which stores no
+    packet. Everything else goes to `process_message`.
+    """
+    if message.topic.payload_format == "map":
+        await process_map_report(session, message)
+        return None
+    return await process_message(
+        session, message, keys, store_text_messages, mesh_future_slack_seconds, presets
+    )
+
+
 async def main() -> None:
     """Run the ingest loop and isolate failures to one MQTT message."""
     settings = get_settings()
@@ -365,7 +406,7 @@ async def main() -> None:
         async for message in message_stream(settings):
             async with session_factory() as session:
                 try:
-                    stored = await process_message(
+                    stored = await route_message(
                         session,
                         message,
                         keys,

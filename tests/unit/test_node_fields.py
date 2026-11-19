@@ -117,7 +117,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str]], str]] = {
     ),
     # A word beside the colour is the WCAG 1.4.1 requirement.
     "colour_is_not_the_only_signal": (
-        [("      ` ${flag.word}`));", "      ''));")],
+        [("      ` ${flag.word}`),", "      ''),")],
         "WORDS: a flagged channel_utilization carries a word",
     ),
     # The Power card going back to its own comparison.
@@ -157,6 +157,32 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str]], str]] = {
             ("const AIR_TX_CHECK = 10;", "const AIR_TX_CHECK = 12;"),
         ],
         "SAME NUMBER: the air_util_tx hint states AIR_TX_CHECK as it is now (12 %)",
+    ),
+    # #406: an alpha is not out of date. A row that treated anything not
+    # "current" as behind would tell alpha testers to downgrade.
+    "newer_is_not_behind": (
+        [
+            (
+                "if (firmware.status === 'behind') {",
+                "if (firmware.status === 'behind' || firmware.status === 'newer') {",
+            )
+        ],
+        'FIRMWARE ROW: newer than stable is never "behind" and never red',
+    ),
+    # #406: the update link is the point of the row.
+    "behind_links_to_the_flasher": (
+        [
+            (
+                "    ? [' ', el('a', { class: 'field-action', href: link.href,",
+                "    ? [' ', el('span', { class: 'field-action', href: link.href,",
+            )
+        ],
+        "FIRMWARE ROW: the drawn value carries the flasher link",
+    ),
+    # The link takes the palette's link colour, not the browser's blue.
+    "update_link_is_on_brand": (
+        [("el('a', { class: 'field-action', href:", "el('a', { href:")],
+        "FIRMWARE ROW: the link is styled as a Sonoran link",
     ),
 }
 

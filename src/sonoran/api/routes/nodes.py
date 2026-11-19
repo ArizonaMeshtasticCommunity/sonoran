@@ -32,6 +32,7 @@ from sonoran.api.dependencies import (
     parse_node_id,
     require_node_num,
 )
+from sonoran.api.firmware import node_firmware
 from sonoran.api.names import display_name, format_node_id, name_of, resolve_names
 from sonoran.api.places import resolve_places
 from sonoran.api.preset_scope import Presets, preset_filter, require_presets
@@ -999,6 +1000,9 @@ async def node_detail(
             "last_channel": node.last_channel,
             "last_mqtt_topic": node.last_mqtt_topic,
             "position": _position(node),
+            # The version from the node's newest map report, against the
+            # stable release (#406).
+            "firmware": await node_firmware(session, node_num),
         },
         "window_hours": hours,
         "neighbors": await _latest_neighbors(session, node_num, limit=100, since=since),

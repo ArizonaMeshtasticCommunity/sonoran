@@ -1230,6 +1230,16 @@ dl.kv.fields { align-items: baseline; }
 .field-flag.state-warn { color: var(--warn); }
 .field-flag .field-note { font-size: .8rem; font-weight: 650; white-space: nowrap; }
 .field-flag .field-glyph { font-weight: 700; }
+/*
+ * The one thing a reader can do about a row, such as updating firmware
+ * that is behind (#406). The palette's link colour with an underline,
+ * like a glossary link, on its own line under the value and its note.
+ */
+.field-action {
+  display: block; width: fit-content; margin-top: .15rem;
+  color: var(--accent); font-weight: 600;
+  text-decoration: underline; text-underline-offset: .15em;
+}
 
 .feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; max-height: 26rem; overflow-y: auto; }
 /*

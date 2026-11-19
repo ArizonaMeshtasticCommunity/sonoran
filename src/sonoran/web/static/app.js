@@ -6351,7 +6351,7 @@ function fieldList(rows) {
     last_channel: 'channel', position: 'position-precision',
     channel_utilization: 'channel-utilization', air_util_tx: 'airtime',
   };
-  const list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text, flag, term, exact }) => [
+  const list = el('dl', { class: 'kv fields' }, rows.flatMap(({ key, label, text, flag, term, exact, link }) => [
     el('dt', {
       'data-label': label,
       'data-hint': FIELD_HINTS[key] || null,
@@ -6359,7 +6359,7 @@ function fieldList(rows) {
       'data-exact': exact || null,
       'data-exact-text': exact ? text : null,
     }, label),
-    fieldValue(text, flag),
+    fieldValue(text, flag, link),
   ]));
   revealHints(list);
   return list;
@@ -6460,6 +6460,52 @@ function messagesPanel(detail) {
 }
 
 /*
+ * The Firmware row (#406).
+ *
+ * The API decides the status (`sonoran/firmware.py`): it compares the
+ * version in the node's newest map report with the stable release the
+ * jobs service fetched from the list flasher.meshtastic.org reads. This
+ * only says it in words. "Behind" is a Check, not red: an older
+ * release still works on the mesh, and some owners stay on one on
+ * purpose. "Newer" is an alpha or the owner's own build. It is never
+ * called behind.
+ */
+const FLASHER_URL = 'https://flasher.meshtastic.org/';
+
+/** `2.7.26.54e0d8d` -> `2.7.26`. Text that is not a version stays as sent. */
+function shortVersion(version) {
+  const match = /^v?(\d+\.\d+\.\d+)/.exec(String(version).trim());
+  return match ? match[1] : String(version);
+}
+
+function firmwareRow(firmware) {
+  const row = { key: 'firmware', label: 'Firmware', term: 'firmware' };
+  if (!firmware || !firmware.version) return { ...row, text: 'Not reported' };
+  const text = shortVersion(firmware.version);
+  const exact = firmware.version === text ? null : firmware.version;
+  const stable = firmware.stable_version ? shortVersion(firmware.stable_version) : null;
+  if (firmware.status === 'behind') {
+    return {
+      ...row, text, exact,
+      // The flag word stays short: `.field-note` does not wrap.
+      flag: { state: 'warn', word: 'Out of date' },
+      link: {
+        href: firmware.flasher_url || FLASHER_URL,
+        // Short, so it fits on one line beside the value on a phone.
+        text: `Update to ${stable}`,
+      },
+    };
+  }
+  if (firmware.status === 'current') {
+    return { ...row, text, exact, flag: { state: 'ok', word: 'Up to date' } };
+  }
+  if (firmware.status === 'newer') {
+    return { ...row, text: `${text} (newer than stable: a test version)`, exact };
+  }
+  return { ...row, text, exact };
+}
+
+/*
  * The Identity rows (#254).
  *
  * Placeholders are capitalised: "Unknown", "Not reported", "Never".
@@ -6477,6 +6523,7 @@ function identityRows(node) {
     { key: 'long_name', label: 'Long name', text: node.long_name || 'Not reported' },
     { key: 'short_name', label: 'Short name', text: node.short_name || 'Not reported' },
     { key: 'hw_model', label: 'Hardware', text: node.hw_model || 'Unknown' },
+    firmwareRow(node.firmware),
     /*
      * The plain name only (AGENTS.md 3B). The exact value, such as
      * ROUTER_LATE, is in the field's panel with what the role does.
@@ -6711,10 +6758,10 @@ const AIR_TX_HIGH = CHANNEL_USE_POLITE;
  *   NodeInfo from one on a board newer than our vendored protobufs:
  *   `_enum_name` in ingest/handlers/nodeinfo.py stores both as NULL.
  *   Red would blame the owner for our own gap.
- * - Role, firmware and last heard. Role is a judgement about where a
- *   node stands, not a number. Firmware is not on this page. How old a
- *   "last heard" may be depends on intervals the owner chose and the
- *   page cannot see.
+ * - Role and last heard. Role is a judgement about where a node
+ *   stands, not a number. How old a "last heard" may be depends on
+ *   intervals the owner chose and the page cannot see. Firmware has
+ *   its own row and its own words (`firmwareRow`, #406).
  */
 const FIELD_FLAGS = {
   channel_utilization(value) {
@@ -6778,14 +6825,20 @@ function altitudeFlag(node) {
  * The word is visible text, not a `title` or an `aria-label`, so the
  * accessible name and what a sighted reader sees are the same thing.
  */
-function fieldValue(text, flag) {
-  if (!flag) return el('dd', { text });
+function fieldValue(text, flag, link) {
+  // A row may send the reader somewhere to act on it, such as the
+  // flasher for firmware that is behind (#406).
+  const action = link
+    ? [' ', el('a', { class: 'field-action', href: link.href, target: '_blank', rel: 'noopener noreferrer', text: link.text })]
+    : [];
+  if (!flag) return action.length ? el('dd', {}, text, ...action) : el('dd', { text });
   const look = HEALTH_STATES[flag.state];
   return el('dd', { class: `field-flag state-${flag.state}` },
     el('span', { class: 'field-value', text }), ' ',
     el('span', { class: 'field-note' },
       el('span', { class: 'field-glyph', 'aria-hidden': 'true', text: look.glyph }),
-      ` ${flag.word}`));
+      ` ${flag.word}`),
+    ...action);
 }
 
 /* --- What each Identity and Device field means (#256) ------------ */
@@ -6812,6 +6865,14 @@ function fieldValue(text, flag) {
  * arrive without one.
  */
 const FIELD_HINTS = {
+  // mqtt.proto MapReport.firmware_version; ingest keeps the newest
+  // (#406). Firmware sends a map report only with map reporting on,
+  // once an hour by default (src/mesh/Default.h:32 at v2.7.26.54e0d8d).
+  firmware: 'The version of the Meshtastic software on the radio. '
+    + 'A node shares it only in a map report, which it sends when its owner turns on map reporting '
+    + 'in the MQTT settings. Sonoran compares it with the newest stable release on flasher.meshtastic.org. '
+    + 'An older release still works, but a newer one has fixes. '
+    + '"Newer than stable" is a test version or the owner\'s own build.',
   // NodeDB.cpp builds the number from the last four bytes of the MAC.
   node_id: 'The node\'s own number, written in hexadecimal after a "!". '
     + 'The radio makes it from its hardware address, so renaming the node does not change it. '

@@ -553,7 +553,15 @@ Returns every value that the node detail page shows. One request
 replaces many. Fields:
 
 - `node` — the node summary, plus `is_licensed`, `first_seen`,
-  `last_channel`, `last_mqtt_topic`, and `position`.
+  `last_channel`, `last_mqtt_topic`, `position`, and `firmware` (#406):
+  - `version` — from the node's newest map report, or null when it sent none.
+  - `reported_at` — when ingest received that report.
+  - `status` — `current`, `behind`, `newer` (an alpha or the owner's own
+    build) or `unknown` (no report, a version that cannot be read, or no
+    stable release fetched yet). Only major, minor and patch are compared.
+  - `stable_version`, `stable_url`, `stable_checked_at` — the newest
+    stable release the jobs service fetched, or null.
+  - `flasher_url` — the official web flasher.
 - `neighbors` — the newest report for each neighbor, strongest SNR
   first. Each has `node_id`, `display_name`, `snr`, `last_rx_time`,
   and `position` (beta-sonoran#412): `lat`, `lon` and `confidence` (`exact` or
