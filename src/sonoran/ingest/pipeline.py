@@ -369,6 +369,27 @@ async def process_map_report(session: AsyncSession, message: RawMqttMessage) -> 
     )
 
 
+async def route_message(
+    session: AsyncSession,
+    message: RawMqttMessage,
+    keys: list[bytes],
+    store_text_messages: bool = False,
+    mesh_future_slack_seconds: int = 300,
+    presets: PresetTracker | None = None,
+) -> StoredPacket | None:
+    """Send one MQTT message to the code for its topic.
+
+    A map report (#406) goes to `process_map_report`, which stores no
+    packet. Everything else goes to `process_message`.
+    """
+    if message.topic.payload_format == "map":
+        await process_map_report(session, message)
+        return None
+    return await process_message(
+        session, message, keys, store_text_messages, mesh_future_slack_seconds, presets
+    )
+
+
 async def main() -> None:
     """Run the ingest loop and isolate failures to one MQTT message."""
     settings = get_settings()
@@ -385,11 +406,7 @@ async def main() -> None:
         async for message in message_stream(settings):
             async with session_factory() as session:
                 try:
-                    if message.topic.payload_format == "map":
-                        await process_map_report(session, message)
-                        await session.commit()
-                        continue
-                    stored = await process_message(
+                    stored = await route_message(
                         session,
                         message,
                         keys,
