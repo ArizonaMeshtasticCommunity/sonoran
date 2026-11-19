@@ -115,6 +115,8 @@ One row per node. Latest known state.
 | `last_preset_at` | timestamptz | nullable. The receive time of that packet |
 | `uplink_preset` | text | nullable. For a gateway: the preset its newest preset-named topic named. Ingest reads it back at start |
 | `uplink_preset_at` | timestamptz | nullable. When that upload arrived |
+| `firmware_version` | text | nullable. The firmware version from this node's newest map report (#406), as sent, for example `2.7.26.54e0d8d`. Only a map report writes it, and only short printable text is kept. NULL for a node that never sent one: a node sends map reports only with map reporting turned on |
+| `firmware_version_at` | timestamptz | nullable. When ingest received that map report |
 | `first_seen` | timestamptz | not null |
 | `updated_at` | timestamptz | not null |
 
@@ -435,6 +437,7 @@ nodes x windows x presets.
 | `gaps_siting_candidate` | `preset`, `position` | One candidate place, in the order the job ranked it: every field of `gaps.siting.Candidate` as a column | `jobs/gaps_siting.py` |
 | `coverage_calibration` | `id` (always 1) | The fit as a whole: bias, scatter, rounds, summary | `jobs/calibrate.py` |
 | `coverage_calibration_node` | `node_num` | What the measurements say about one node | `jobs/calibrate.py` |
+| `firmware_release` | `channel` (only `stable` today) | The newest stable firmware release: `version`, `page_url` (its meshtastic/firmware release page) and `fetched_at`. From the list flasher.meshtastic.org reads (#406). A failed fetch keeps the last good row | `jobs/firmware_releases.py` |
 
 **Foreign keys.** Every child row belongs to its run or answer and is
 deleted with it (`ON DELETE CASCADE`), so deleting a run is one

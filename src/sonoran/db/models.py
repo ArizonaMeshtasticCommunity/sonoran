@@ -90,10 +90,34 @@ class Node(Base):
     uplink_preset_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), deferred=True
     )
+    # The firmware version from this node's newest map report, and when
+    # ingest received that report (#406). NULL until the node sends one:
+    # a node sends a map report only when its owner turns on map
+    # reporting. Only a map report writes these. See `sonoran/firmware.py`.
+    firmware_version: Mapped[str | None] = mapped_column(Text, deferred=True)
+    firmware_version_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), deferred=True
+    )
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (Index("ix_node_short_name", "short_name"),)
+
+
+class FirmwareRelease(Base):
+    """The newest official firmware release, per release channel (#406).
+
+    The `firmware-releases` job replaces these rows from the list that
+    flasher.meshtastic.org reads. Only `stable` is kept today. A failed
+    fetch leaves the last good rows in place.
+    """
+
+    __tablename__ = "firmware_release"
+
+    channel: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[str] = mapped_column(Text)
+    page_url: Mapped[str] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class PacketKey(Base):
