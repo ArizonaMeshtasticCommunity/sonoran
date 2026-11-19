@@ -70,3 +70,11 @@ def test_calibration_keeps_its_task_when_coverage_is_off() -> None:
         "read-models",
         "firmware-releases",
     ]
+
+
+def test_the_firmware_release_check_runs_every_six_hours_and_can_be_turned_off() -> None:
+    """#406: four requests a day, and a switch for a box with no internet."""
+    tasks = {t.name: t for t in scheduler.build_tasks(Settings(_env_file=None))}
+    assert tasks["firmware-releases"].next_delay() == 6 * 3600.0
+    off = scheduler.build_tasks(Settings(_env_file=None, firmware_releases_enabled=False))
+    assert "firmware-releases" not in [t.name for t in off]

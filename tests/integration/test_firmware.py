@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sonoran.api.app import create_app
 from sonoran.config import Settings
 from sonoran.db.session import make_engine, make_session_factory
-from sonoran.ingest.pipeline import process_map_report
+from sonoran.ingest.pipeline import process_map_report, route_message
 from sonoran.jobs import firmware_releases
 from sonoran.meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
 from sonoran.mqtt.client import RawMqttMessage
@@ -44,6 +44,7 @@ def _map_message(
     *,
     gateway: int | None = None,
     encrypted: bool = False,
+    portnum: int = portnums_pb2.MAP_REPORT_APP,  # type: ignore[attr-defined]
     at: datetime = NOW,
     topic: str = "msh/US/AZ/Phoenix/2/map/",
 ) -> RawMqttMessage:
@@ -54,9 +55,11 @@ def _map_message(
     packet: Any = mesh_pb2.MeshPacket(id=0x1234, to=0xFFFFFFFF)  # type: ignore[attr-defined]
     setattr(packet, "from", from_num)
     if encrypted:
-        packet.encrypted = b"\x01\x02\x03\x04"
+        # The report's own bytes, but in the encrypted field: firmware
+        # never sends a map report this way.
+        packet.encrypted = report.SerializeToString()
     else:
-        packet.decoded.portnum = portnums_pb2.MAP_REPORT_APP  # type: ignore[attr-defined]
+        packet.decoded.portnum = portnum
         packet.decoded.payload = report.SerializeToString()
     envelope: Any = mqtt_pb2.ServiceEnvelope(  # type: ignore[attr-defined]
         packet=packet,
@@ -81,7 +84,11 @@ def clean(migrated_engine):  # type: ignore[no-untyped-def]
 
 
 def _ingest(timescale_url: str, *messages: RawMqttMessage) -> None:
-    """Run the messages through ingest as the write-only ingest role."""
+    """Run the messages through ingest's router as the write-only ingest role.
+
+    `route_message` is what `main()` calls for every MQTT message, so
+    this covers the dispatch on the topic as well as the handler.
+    """
 
     async def go() -> None:
         engine = make_engine(role_url(timescale_url, "azmsh_ingest"))
@@ -89,7 +96,7 @@ def _ingest(timescale_url: str, *messages: RawMqttMessage) -> None:
             factory = make_session_factory(engine)
             for message in messages:
                 async with factory() as session:
-                    await process_map_report(session, message)
+                    await route_message(session, message, [])
                     await session.commit()
         finally:
             await engine.dispose()
@@ -142,8 +149,39 @@ def test_a_report_about_another_node_is_ignored(
 def test_an_encrypted_map_packet_is_ignored(
     timescale_url: str, migrated_engine: Any, clean: None
 ) -> None:
-    _ingest(timescale_url, _map_message(NODE, "", encrypted=True))
+    _ingest(timescale_url, _map_message(NODE, "2.6.4.b89355f", encrypted=True))
     assert _firmware_row(migrated_engine, NODE) is None
+
+
+def test_a_packet_on_another_port_is_ignored(
+    timescale_url: str, migrated_engine: Any, clean: None
+) -> None:
+    """A valid MapReport body under another port number is not a map report."""
+    _ingest(
+        timescale_url,
+        _map_message(
+            NODE,
+            "2.6.4.b89355f",
+            portnum=portnums_pb2.TEXT_MESSAGE_APP,  # type: ignore[attr-defined]
+        ),
+    )
+    assert _firmware_row(migrated_engine, NODE) is None
+
+
+def test_process_map_report_refuses_another_topic(
+    timescale_url: str, migrated_engine: Any, clean: None
+) -> None:
+    message = _map_message(NODE, "2.6.4.b89355f", topic="msh/US/AZ/2/e/LongFast/!0f1a0001")
+
+    async def go() -> bool:
+        engine = make_engine(role_url(timescale_url, "azmsh_ingest"))
+        try:
+            async with make_session_factory(engine)() as session:
+                return await process_map_report(session, message)
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(go()) is False
 
 
 def test_a_report_with_no_usable_version_keeps_the_old_one(
@@ -160,24 +198,39 @@ def test_a_report_with_no_usable_version_keeps_the_old_one(
     assert row.firmware_version_at == NOW
 
 
-def test_a_report_never_touches_the_names_nodeinfo_gave(
+def test_a_report_changes_nothing_but_the_version(
     timescale_url: str, migrated_engine: Any, clean: None
 ) -> None:
-    """NodeInfo owns the identity. A map report only adds the version."""
+    """NodeInfo owns the identity, and the mesh decides "last heard".
+
+    A map report comes from the node's own MQTT link, not the mesh, so it
+    adds the version and nothing else, and stores no packet.
+    """
+    earlier = NOW - timedelta(days=1)
+    columns = "long_name, short_name, hw_model, role, last_heard, last_channel"
     with migrated_engine.begin() as c:
         c.execute(
             text(
-                "INSERT INTO node (node_num, node_id, long_name, first_seen, updated_at)"
-                " VALUES (:n, :i, 'From NodeInfo', :t, :t)"
+                "INSERT INTO node (node_num, node_id, long_name, short_name, hw_model, role,"
+                " last_heard, last_channel, first_seen, updated_at) VALUES (:n, :i,"
+                " 'From NodeInfo', 'NI', 'RAK4631', 'ROUTER', :t, 'MediumFast', :t, :t)"
             ),
-            {"n": NODE, "i": f"!{NODE:08x}", "t": NOW - timedelta(days=1)},
+            {"n": NODE, "i": f"!{NODE:08x}", "t": earlier},
         )
+        before = c.execute(
+            text(f"SELECT {columns} FROM node WHERE node_num = :n"), {"n": NODE}
+        ).one()
     _ingest(timescale_url, _map_message(NODE, "2.7.26.54e0d8d"))
     with migrated_engine.begin() as c:
-        name = c.execute(
-            text("SELECT long_name FROM node WHERE node_num = :n"), {"n": NODE}
+        after = c.execute(
+            text(f"SELECT {columns} FROM node WHERE node_num = :n"), {"n": NODE}
+        ).one()
+        packets = c.execute(
+            text("SELECT count(*) FROM packet_key WHERE from_node_num = :n"), {"n": NODE}
         ).scalar_one()
-    assert name == "From NodeInfo"
+    assert tuple(after) == tuple(before)
+    assert packets == 0
+    assert _firmware_row(migrated_engine, NODE).firmware_version == "2.7.26.54e0d8d"
 
 
 def _settings(timescale_url: str) -> Settings:
@@ -213,6 +266,20 @@ def test_the_job_stores_the_stable_release(
     _run_job(timescale_url, httpx.MockTransport(lambda r: httpx.Response(200, json=LIST_BODY)))
     rows = _stable(migrated_engine)
     assert [(r.channel, r.version) for r in rows] == [("stable", "2.7.26.54e0d8d")]
+
+
+def test_a_new_stable_release_replaces_the_old_one(
+    timescale_url: str, migrated_engine: Any, clean: None
+) -> None:
+    newer = {"releases": {"stable": [{"id": "v2.7.27.1234567"}]}}
+    _run_job(timescale_url, httpx.MockTransport(lambda r: httpx.Response(200, json=LIST_BODY)))
+    with migrated_engine.begin() as c:
+        first = c.execute(text("SELECT fetched_at FROM firmware_release")).scalar_one()
+    _run_job(timescale_url, httpx.MockTransport(lambda r: httpx.Response(200, json=newer)))
+    with migrated_engine.begin() as c:
+        rows = list(c.execute(text("SELECT channel, version, fetched_at FROM firmware_release")))
+    assert [(r.channel, r.version) for r in rows] == [("stable", "2.7.27.1234567")]
+    assert rows[0].fetched_at > first
 
 
 @pytest.mark.parametrize(
@@ -289,3 +356,19 @@ def test_no_stable_release_yet_is_unknown_not_behind(
     assert firmware["version"] == "2.6.4.b89355f"
     assert firmware["status"] == "unknown"
     assert firmware["stable_version"] is None
+
+
+def test_the_node_page_never_calls_out_to_the_internet(
+    timescale_url: str, migrated_engine: Any, clean: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stable release comes from the table the job wrote, not a fetch."""
+    _run_job(timescale_url, httpx.MockTransport(lambda r: httpx.Response(200, json=LIST_BODY)))
+    _ingest(timescale_url, _map_message(NODE, "2.6.4.b89355f"))
+
+    async def no_network(self: Any, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        raise AssertionError(f"the API fetched {request.url} during a page view")
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", no_network)
+    firmware = _detail(timescale_url, NODE)["node"]["firmware"]
+    assert firmware["stable_version"] == "2.7.26.54e0d8d"
+    assert firmware["status"] == "behind"

@@ -137,3 +137,15 @@ def test_a_page_url_off_github_is_replaced() -> None:
     assert release.page_url == (
         "https://github.com/meshtastic/firmware/releases/tag/v2.7.26.54e0d8d"
     )
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_stable_is_chosen_by_number_not_by_text(order: int) -> None:
+    """'v2.7.9' is the larger string and the older release.
+
+    Would catch `max()` over the tag strings, which the list above cannot.
+    """
+    entries = [{"id": "v2.7.9.aaaaaaa"}, {"id": "v2.7.26.54e0d8d"}][::order]
+    release = stable_from_release_list({"releases": {"stable": entries}})
+    assert release is not None
+    assert release.version == "2.7.26.54e0d8d"
