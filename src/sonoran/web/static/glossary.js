@@ -245,7 +245,9 @@
     },
     firmware: {
       label: 'Firmware',
-      plain: 'The software that runs on the radio. Some features need a newer version.',
+      plain: 'The software that runs on the radio. Some features need a newer version. '
+        + 'Update it with the official web flasher at flasher.meshtastic.org.',
+      more: 'https://meshtastic.org/docs/getting-started/flashing-firmware/',
       words: ['firmware'],
     },
     licensed: {

@@ -60,10 +60,11 @@ const names = [
   'BATTERY_LOW', 'BATTERY_WEAK', 'ON_MAINS_ABOVE',
   'CHANNEL_USE_POLITE', 'CHANNEL_USE_MAX', 'AIR_TX_CHECK', 'AIR_TX_HIGH',
   'ALTITUDE_NOT_OURS', 'HEALTH_STATES', 'DEVICE_LABELS', 'FIELD_FLAGS', 'FIELD_HINTS',
+  'FLASHER_URL',
 ];
 const functions = [
   'reading', 'batteryState', 'fieldFlag', 'altitudeFlag', 'fieldValue',
-  'deviceRows', 'identityRows', 'fieldList',
+  'deviceRows', 'identityRows', 'fieldList', 'shortVersion', 'firmwareRow',
 ];
 const api = new Function(...Object.keys(stubs), [
   ...names.map(constant),
@@ -228,6 +229,64 @@ for (const [key, words] of [
 ]) {
   check(`SAYS: the ${key} hint answers what Will asked of it (${words})`, words.test(H[key]));
 }
+
+/* --- Firmware: behind the stable release (#406) ------------------ */
+
+/*
+ * The versions are the ones map reports carried on the azmsh broker on
+ * 2026-11-19. The API decides the status (sonoran/firmware.py); the row
+ * only has to say it in words and send a reader to the flasher.
+ */
+const fw = (version, status, stable = '2.7.26.54e0d8d') => api.firmwareRow({
+  version, status, stable_version: stable, flasher_url: 'https://flasher.meshtastic.org/',
+});
+const behind = fw('2.6.4.b89355f', 'behind');
+check('FIRMWARE ROW: shows the plain release, the build hash only in the exact value',
+  behind.text === '2.6.4' && behind.exact === '2.6.4.b89355f', JSON.stringify(behind));
+check('FIRMWARE ROW: behind is a "Check", not red: an old release still works',
+  behind.flag && behind.flag.state === 'warn', JSON.stringify(behind.flag));
+check('FIRMWARE ROW: behind names the stable release it is behind',
+  behind.link && behind.link.text.includes('2.7.26'), JSON.stringify(behind.link));
+check('FIRMWARE ROW: the flag word is short, because a field note does not wrap',
+  behind.flag && behind.flag.word.length <= 20, JSON.stringify(behind.flag));
+check('FIRMWARE ROW: behind links to the official flasher',
+  behind.link && behind.link.href === 'https://flasher.meshtastic.org/', JSON.stringify(behind.link));
+const current = fw('2.7.26.54e0d8d', 'current');
+check('FIRMWARE ROW: current says so and is green',
+  current.flag && current.flag.state === 'ok' && /up to date/i.test(current.flag.word),
+  JSON.stringify(current.flag));
+check('FIRMWARE ROW: current offers no update link', !current.link);
+const newer = fw('2.8.1.8e6a88d', 'newer');
+check('FIRMWARE ROW: newer than stable is never "behind" and never red',
+  !(newer.flag && ['warn', 'bad'].includes(newer.flag.state)), JSON.stringify(newer));
+check('FIRMWARE ROW: newer says in words that it is a test version',
+  /test/i.test(`${newer.text} ${newer.flag ? newer.flag.word : ''}`), JSON.stringify(newer));
+const none = fw(null, 'unknown');
+check('FIRMWARE ROW: no report reads "Not reported", with no colour',
+  none.text === 'Not reported' && !none.flag, JSON.stringify(none));
+const noStable = fw('2.6.4.b89355f', 'unknown', null);
+check('FIRMWARE ROW: a version with no stable release known is shown, and not judged',
+  noStable.text === '2.6.4' && !noStable.flag, JSON.stringify(noStable));
+check('FIRMWARE ROW: an API with no firmware block draws "Not reported"',
+  api.firmwareRow(undefined).text === 'Not reported');
+check('FIRMWARE ROW: a version we cannot read is shown as sent',
+  api.shortVersion('weird-build') === 'weird-build');
+const withFw = api.identityRows({ node_id: '!1', position: null, firmware: {
+  version: '2.6.4.b89355f', status: 'behind', stable_version: '2.7.26.54e0d8d',
+  flasher_url: 'https://flasher.meshtastic.org/' } });
+check('FIRMWARE ROW: Identity draws the firmware row right after Hardware',
+  withFw.findIndex((r) => r.key === 'firmware') === withFw.findIndex((r) => r.key === 'hw_model') + 1,
+  JSON.stringify(withFw.map((r) => r.key)));
+check('FIRMWARE ROW: the hint says how a node shares its version (map reporting)',
+  /map report/i.test(api.FIELD_HINTS.firmware || ''), api.FIELD_HINTS.firmware);
+const linked = api.fieldValue('2.6.4', behind.flag, behind.link);
+const anchors = (node) => (typeof node === 'string' ? []
+  : [...(node.tag === 'a' ? [node] : []), ...node.kids.flatMap(anchors)]);
+check('FIRMWARE ROW: the drawn value carries the flasher link',
+  anchors(linked).some((a) => a.attrs.href === 'https://flasher.meshtastic.org/'
+    && a.attrs.rel === 'noopener noreferrer'), JSON.stringify(linked));
+check('FIRMWARE ROW: a link on an unflagged value is drawn too',
+  anchors(api.fieldValue('x', null, { href: 'https://flasher.meshtastic.org/', text: 'go' })).length === 1);
 
 /* The harness guard: a harness that found nothing to check passes. */
 if (ran < 80) {

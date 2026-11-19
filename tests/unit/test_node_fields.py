@@ -117,7 +117,7 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str]], str]] = {
     ),
     # A word beside the colour is the WCAG 1.4.1 requirement.
     "colour_is_not_the_only_signal": (
-        [("      ` ${flag.word}`));", "      ''));")],
+        [("      ` ${flag.word}`),", "      ''),")],
         "WORDS: a flagged channel_utilization carries a word",
     ),
     # The Power card going back to its own comparison.
@@ -157,6 +157,22 @@ MUTATIONS: dict[str, tuple[list[tuple[str, str]], str]] = {
             ("const AIR_TX_CHECK = 10;", "const AIR_TX_CHECK = 12;"),
         ],
         "SAME NUMBER: the air_util_tx hint states AIR_TX_CHECK as it is now (12 %)",
+    ),
+    # #406: an alpha is not out of date. A row that treated anything not
+    # "current" as behind would tell alpha testers to downgrade.
+    "newer_is_not_behind": (
+        [
+            (
+                "if (firmware.status === 'behind') {",
+                "if (firmware.status === 'behind' || firmware.status === 'newer') {",
+            )
+        ],
+        'FIRMWARE ROW: newer than stable is never "behind" and never red',
+    ),
+    # #406: the update link is the point of the row.
+    "behind_links_to_the_flasher": (
+        [("    ? [' ', el('a', { href: link.href,", "    ? [' ', el('span', { href: link.href,")],
+        "FIRMWARE ROW: the drawn value carries the flasher link",
     ),
 }
 
